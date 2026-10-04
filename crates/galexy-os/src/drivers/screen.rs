@@ -293,6 +293,12 @@ pub fn backspace() {
     with_lock(|screen| screen.backspace());
 }
 
+/// Returns the framebuffer layout the screen renders into, if initialized.
+pub fn framebuffer_info() -> Option<bootloader_api::info::FrameBufferInfo> {
+    let guard = SCREEN.lock();
+    guard.as_ref().map(|screen| screen.fb.info)
+}
+
 /// Format-hook used by the `print!`/`println!` macros.
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {

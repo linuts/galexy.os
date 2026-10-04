@@ -12,6 +12,7 @@
 
 mod paging;
 
+pub mod heap;
 pub use paging::{map_page, phys_to_virt, translate, unmap_page};
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -86,6 +87,9 @@ pub fn init(boot_info: &BootInfo) {
     FREE_COUNT.store(free, Ordering::Relaxed);
     READY.store(true, Ordering::Relaxed);
     serial_println!("[mm] frame allocator ready: {} free frames", free);
+
+    // Virtual memory is up: bring the heap online too.
+    heap::init();
 }
 
 /// Allocates a physical 4 KiB frame, first-fit.

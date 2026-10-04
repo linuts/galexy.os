@@ -2,32 +2,20 @@
 //!
 //! Characters typed on the keyboard are echoed to the screen as they arrive;
 //! Enter flushes the line and echoes it back with a prefix. Backspace edits.
+//! Lines are heap-allocated (kernel heap must be up before `poll` runs).
 
-use crate::drivers::{keyboard, screen};
+use alloc::string::String;
 use spin::Mutex;
 
-/// Maximum length of one line, in characters (no heap yet).
-const LINE_MAX: usize = 128;
+use crate::drivers::{keyboard, screen};
 
 /// Prompt color.
-const PROMPT_COLOR: screen::Color = screen::Color::new(0x7C, 0xA0, 0xFF);
+pub(crate) const PROMPT_COLOR: screen::Color = screen::Color::new(0x7C, 0xA0, 0xFF);
 /// Normal text color.
 const TEXT_COLOR: screen::Color = screen::Color::new(0xE0, 0xE0, 0xE0);
 
 /// Current line under construction.
-static LINE: Mutex<LineBuffer> = Mutex::new(LineBuffer::EMPTY);
-
-struct LineBuffer {
-    chars: [char; LINE_MAX],
-    len: usize,
-}
-
-impl LineBuffer {
-    const EMPTY: LineBuffer = LineBuffer {
-        chars: ['\0'; LINE_MAX],
-        len: 0,
-    };
-}
+static LINE: Mutex<String> = Mutex::new(String::new());
 
 /// Prints the startup prompt.
 pub fn init() {
@@ -45,40 +33,32 @@ pub fn poll() {
     while let Some(c) = keyboard::pop_key() {
         match c {
             '\n' | '\r' => {
-                line.flush_and_echo();
+                flush_and_echo(&line);
+                line.clear();
             }
             '\u{0008}' => {
-                if line.len > 0 {
-                    line.len -= 1;
+                if line.pop().is_some() {
                     screen::backspace();
                 }
             }
             c => {
-                if line.len < LINE_MAX {
-                    let slot = line.len;
-                    line.chars[slot] = c;
-                    line.len = slot + 1;
-                    screen::out_char(c);
-                }
+                line.push(c);
+                screen::out_char(c);
             }
         }
     }
 }
 
-impl LineBuffer {
-    /// Echoes the buffered line back, then resets it.
-    fn flush_and_echo(&mut self) {
-        screen::out_str("\n");
-        screen::set_color(PROMPT_COLOR);
-        screen::out_str("echo: ");
-        screen::set_color(TEXT_COLOR);
-        for &c in &self.chars[..self.len] {
-            screen::out_char(c);
-        }
-        screen::out_str("\n");
-        screen::set_color(PROMPT_COLOR);
-        screen::out_str("galexy> ");
-        screen::set_color(TEXT_COLOR);
-        self.len = 0;
-    }
+/// Echoes the flushed line back, then prints a fresh prompt.
+fn flush_and_echo(text: &str) {
+    screen::set_color(TEXT_COLOR);
+    screen::out_str("\n");
+    screen::set_color(PROMPT_COLOR);
+    screen::out_str("echo: ");
+    screen::set_color(TEXT_COLOR);
+    screen::out_str(text);
+    screen::out_str("\n");
+    screen::set_color(PROMPT_COLOR);
+    screen::out_str("galexy> ");
+    screen::set_color(TEXT_COLOR);
 }

@@ -153,7 +153,24 @@ Init order: GDT/TSS → IDT → PICs → timer config → `sti`.
   (`arch::set_page_fault_handler`) — demand paging will use the same seam.
 - Fresh virtual space: the bootloader's dynamic mappings fill P4 indices
   from 0 upward, physical memory is fixed at index 32, recursive at 511 —
-  test/scratch mappings should use a high-but-canonical index (e.g. 100).
+  test/scratch mappings should use a high-but-canonical index (e.g. 100,
+  heap uses 43).
+
+### arch/mm/heap — "the heap" (arch/)
+
+- `linked_list_allocator::LockedHeap` as the `#[global_allocator`; 400 KiB
+  at a fixed fresh virtual area (P4 entry 43), mapped by our mapper from
+  frame-allocator frames during `mm::init` (memory bring-up is one call).
+- `echo` is the first heap consumer (String line buffers); the scheduler's
+  task queues are the planned next one. Host unit tests never touch the
+  heap (no_std tests of `galexy-core` are allocation-free by rule).
+
+### banner — "the boot showcase"
+
+- Runs after full init; every `[ok]` line reads live state from the owning
+  subsystem (framebuffer layout from `screen`, free frames from `mm`,
+  heap-start translation from the mapper, heap size from `heap`). Adding a
+  subsystem = adding a line here.
 
 ### echo — "the shell"
 

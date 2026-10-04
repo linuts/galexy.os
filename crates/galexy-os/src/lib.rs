@@ -9,13 +9,20 @@
 #![feature(abi_x86_interrupt)]
 #![deny(clippy::all)]
 
+// Kernel heap lives in `arch::mm::heap`; this makes `alloc` (String, Vec,
+// Box, ...) usable everywhere in the kernel.
+extern crate alloc;
+
+// Textual order matters: declare macros first so every module below can
+// use print!/println!.
+#[macro_use]
+mod macros;
+
 pub mod arch;
+pub mod banner;
 pub mod drivers;
 pub mod echo;
 pub mod sched;
-
-#[macro_use]
-mod macros;
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
 use core::panic::PanicInfo;

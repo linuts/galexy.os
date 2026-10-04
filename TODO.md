@@ -75,8 +75,22 @@ Tracking document for concrete work items. Big-picture direction lives in
       offset (agreement asserted) → translate check → unmap → unmapped
       access faults (handler swapped to success-exit); verified (exit 33)
 
+## Milestone 8 — Heap ✅
+
+- [x] `arch/mm/heap.rs`: `linked_list_allocator` `LockedHeap` as
+      `#[global_allocator]`, 400 KiB at fresh P4 entry 43
+      (`0x5555_5555_0000`), pages mapped via our mapper + frame allocator
+- [x] `extern crate alloc` in the kernel lib; echo line buffer → `String`
+- [x] `bin/test-heap.rs`: Box/Vec/String roundtrips + drop-and-reuse;
+      verified (exit 33)
+- [x] Boot banner (`banner.rs`): feature showcase reading REAL subsystem
+      state (framebuffer layout, frames free, paging translate of the heap
+      start, heap size); echo shell prompt follows
+
 ## Known limitations / follow-ups
 
+- [ ] Heap is a fixed 400 KiB area — grow-on-demand (allocator `grow`)
+      comes with the scheduler phase if needed
 - [ ] Framebuffer is used as the bootloader mapped it (deliberate — BootInfo
       exposes no physical framebuffer address; a principled remap would have
       to match the `FrameBufferReserved` memory region; revisit with the

@@ -67,6 +67,24 @@ fn paging_test_passes() {
 }
 
 #[test]
+fn heap_test_passes() {
+    let (code, serial) = boot(&image("test-heap"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-heap should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-heap] passed"),
+        "test-heap success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[heap] ready"),
+        "heap init marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn main_kernel_boots_and_timer_ticks() {
     // The interactive kernel never exits; verify liveness markers instead.
     let serial = boot_liveness(&image("galexy-os"), Duration::from_secs(20));
