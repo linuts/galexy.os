@@ -236,6 +236,18 @@ loop MUST stay interrupts-ENABLED — with IF=0 the dead thread sleeps in
 `hlt` forever, nothing ever preempts it, and the whole machine wedges
 (found by `bin/test-threadexit.rs`).
 
+**User tasks (Step A).** Same rotation, same lifecycle. `spawn_user_task`
+grants a fresh user region: one free P4 entry scanned top-down below 256
+(boot dynamics fill upward from 0; our fixed maps sit at 32/43/511) —
+512 GiB per task: code page at +0 (PRESENT\|USER), user stack (4 pages,
+RW\|NX\|USER) at +1 GiB, an RW scratch page right above (kernel-pollable
+for tests — Step A tasks share the active address space; per-task CR3 is
+Step B). The task carries its own KERNEL-MODE stack (heap-backed Vec):
+timer IRQs from ring 3 push onto it via TSS.RSP0 (set at every switch-in
+to the task, cleared for main/kernel threads), and the syscall entry
+targets it via the kstack registry. Scheduler reaps it identically —
+plus it unmaps + frees the user pages by address.
+
 **Ring-3 readiness** (structure only until userland): GDT carries DPL-3
 user code/data segments, appended consecutively (`user SS = user CS + 8`,
 the SYSRET quirk); `arch::set_tss_rsp0`/`tss_rsp0` update/read the live
@@ -267,10 +279,38 @@ banner reports live counts.
 The dispatch table: number → behavior. Mechanism (MSR/STAR/LSTAR/naked
 entry) is `arch/` business (rule 7); this file is policy. The table
 consumes `galexy-abi` constants — numbers, `Cap` layout, error codes are
-ABI-stabilized there (rule 8). Currently a skeleton: `exit`/`yield`/
-`write`/`cap_info` exist with `Unsupported` bodies until Step A wires the
-entry shim; `cap_info` already echoes handles back (dispatch integration
-proving ground).
+ABI-stabilized there (rule 8). Register contract: args in the frame
+(RDI/RSI/RDX), result stamped back (RAX = value, RDX = 1 ok / 0 err).
+
+Live behaviors: `exit` (tombstone + handoff — the reaper frees the task's
+user stack pages, scratch, code page + kernel stack), `yield` (real
+rotation switch via `sched::syscall_handoff`), `write` (cap authority:
+console index + WRITE right; 1 KiB cap; page-walk validation of the user
+buffer via `translate`; printable-ASCII staging; screen output);
+`cap_info` echoes handles (dispatch proving ground). Unknown numbers →
+Unsupported. Kernel-origin syscalls are impossible-by-structure: the arch
+shim dies loudly instead.
+
+### arch/syscall — "the mechanism" (arch/)
+
+- MSR bring-up (order matters): `STAR::write_raw(user_cs, kernel_cs)`
+  (SYSRET forces RPL 3 on both CS and SS — our consecutive GDT layout
+  makes the hardware `SS = CS + 8` land on user data), `LSTAR` → naked
+  entry, `FMASK = 0` (full user RFLAGS through), `EFER.SCE` last.
+- Naked entry: `cli` FIRST (the whole syscall is atomic vs the timer;
+  resumed tasks restore IF from their own saved RFLAGS), then switch to
+  the CURRENT task's kernel stack via the kstack registry
+  (`set_task_kstack`, updated on every switch-in to a user task — the
+  entry RSP is the user stack and can't be pushed onto), then the uniform
+  frame: SS (static user SS), RSP (stashed), RFLAGS (r11), CS (static
+  user CS), RIP (rcx), GPRs r15..rax. The first iteration forgot the CS
+  push — the cpl()==3 assert in `sched::syscalls::service` caught it
+  immediately (cheap tripwears pay).
+- Dispatch result: 0 resumes the outgoing frame (pop + iretq), a pointer
+  switches (yield/exit handoff — the decomposition used by the timer too).
+- Ring-3 segment hygiene: SYSCALL leaves DS/ES/FS/GS as the kernel's
+  bootstrap selectors; user code must not do segment-based addressing
+  (TODO'd).
 
 ### banner — "the boot showcase"
 

@@ -48,46 +48,41 @@ Debt scrubbed BEFORE userland so Step A starts on clean ground (details in
 5. **`galexy-abi` crate** ✅ — syscall numbers + capability model + error
    codes frozen and host-tested BEFORE any ring-3 code exists.
 
-## Phase 3 — User space (RECORDED PLAN, not yet started)
+## Phase 3 — User space
 
-### Step A — privilege rings + syscalls (first)
+### Step A — privilege rings + syscalls ✅
 
-ABI decisions already FROZEN (Milestone 12, `crates/galexy-abi/`):
-capabilities day one (`Cap` = 48-bit index + 16-bit rights; console=1,
-self=2; rights bits permanent), numbered syscall table (exit=0, yield=1,
-write=2, cap_info=3), error codes 1..5. `sched/syscalls.rs` consumes it —
-Step A wires mechanism only.
+ABI decisions frozen (Milestone 12, `crates/galexy-abi/`); the mechanism +
+first real program landed in Milestone 13:
 
-1. GDT user code/data segments (DPL 3; SYSRET's `user SS = user CS + 8`
-   must land on our user data segment) ✅ land-paved (segments already in
-   the GDT, consecutive, proven by `bin/test-rings.rs`)
-2. `TSS.RSP0` goes live: ring 3→0 transitions push IRQ frames on the
-   current task's kernel stack; the switch-in updates RSP0 per task
-   (setter already proven — only the per-task hook remains) ✅ land-paved
-3. SYSCALL/SYSRET: `EFER.SCE` (MSR write in arch init), `STAR`
-   (kernel CS / user CS), `LSTAR` → naked entry, `FMASK`; the naked entry
-   builds a uniform IRETQ frame (`rcx`→RIP, `r11`&→RFLAGS, user RSP/SS) so
-   the switch machinery stays single-shaped
-4. Dispatch (`rax`): mechanism in `arch/`, table in `sched/syscalls.rs`
-   (boundary rule 7) — the dispatch skeleton already exists; Step A makes
-   `exit`, `yield`, and `write(console_cap, ...)` real
-5. `spawn_user_task`: frame-allocate + map code (present+user) and stack
-   (writable+user+NX) pages at a fresh user virtual region; fabricate the
-   initial user-mode frame via the same `init_stack` path
-6. First program: hand-assembled flat blob (~6 instructions, zero
-   toolchain deps), embedded as a `const` — its print call goes through
-   `write(console_cap, buf, len)` from day one, never a magic framebuffer
-   syscall
-7. `bin/test-user.rs`: user task prints via syscall, exits via syscall,
-   gets timer-preempted while spinning; kernel continues; exit 33
+1. GDT user code/data segments ✅ (consecutive, `user SS = user CS + 8`)
+2. `TSS.RSP0` live: per-task kernel stacks; switch-in updates RSP0 ✅
+3. SYSCALL/SYSRET: `STAR` (write_raw user_cs / kernel_cs), `LSTAR` → naked
+   entry, `FMASK` 0, `EFER.SCE` last ✅ — the naked entry switches to the
+   task's kernel stack first (RSP is the user stack at entry), pushes the
+   uniform frame (same shape as the timer frame), Rust dispatch returns
+   0 = resume / pointer = switch ✅
+4. Dispatch: `sched/syscalls.rs` binds `galexy-abi` numbers to behavior —
+   exit (tombstone + handoff), yield (real rotation switch), write
+   (cap authority + page-walk-validated user buffer + screen), cap_info
+   (echo) ✅; unknown → Unsupported ✅
+5. `spawn_user_task` ✅ — code/stack/scratch pages mapped at a fresh user
+   P4 entry (scanned top-down); the initial ring-3 frame rides on the
+   user stack ✅
+6. First program ✅ — hand-assembled blob printing "Hello from ring 3!"
+   through `write(console_cap, ...)`, yielding, exiting
+7. `bin/test-user.rs` ✅ — the full lifecycle, preempted and reaped;
+   plus `test-userpreempt.rs` (ring 3 vs timer) and `test-syscall.rs`
+   (msr+frame end to end); all verified (exit 33)
 
-### Step B — real isolation (after Step A verifies)
+### Step B — real isolation (next)
 
 1. Per-task CR3: `FreshL4` per task (proven in Milestone 12 — self-recursive
    entry, kernel higher-half shared); user region per task mapped via
-   `with_table`
+   `with_table`; page-table tree walk so the reaper can free whole spaces
+   (currently the spawn's table frames stay allocated)
 2. CR3 in `Context` + swap in the timer switch (Redox pattern: swap only
-   when different)
+   when different); user DS/ES/FS/GS hygiene at ring-3 entry
 3. Per-task user stacks/program pages; preemptively-scheduled isolated
    user task end to end; guard pages become unmapped low pages of each
    stack (the canary check graduates to real fault-on-overflow)

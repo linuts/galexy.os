@@ -2,8 +2,10 @@
 
 A small, modular operating system written in Rust. Bootable on BIOS and UEFI,
 with a pixel-framebuffer TTY, PS/2 keyboard input, memory management,
-cooperative tasks and timer-preemptive kernel threads — currently a shell
-with live system stats, growing toward user space and beyond.
+cooperative tasks, timer-preemptive kernel threads and — as of the first
+milestone of its userland — real ring-3 tasks printing through syscalls.
+Currently a shell with live system stats plus a user program that prints
+through `write(console_cap, ...)`, growing toward per-task isolation.
 
 ## Features
 
@@ -23,15 +25,17 @@ with live system stats, growing toward user space and beyond.
 - [x] Cooperative round-robin tasks + timer-preemptive kernel threads with
       a real lifecycle: exited threads are reaped (stacks return to the
       heap), slots are stable tombstones, stack canary surfaces overflows
-- [x] Ring-3 groundwork: GDT user segments, TSS.RSP0 control, frame CPL
-      introspection (no userland yet)
+- [x] User space (first step): ring-3 tasks in the same rotation,
+      SYSCALL/SYSRET (`exit`, `yield`, `write`, `cap_info`), capability
+      authority kernel-side, per-task kernel stacks via TSS.RSP0, first
+      program prints "Hello from ring 3!" and exits via syscall
 - [x] `galexy-abi`: the syscall ABI — numbered syscalls + capability model
       (no fds; capabilities day one) — frozen and host-tested before any
       ring-3 code exists
 - [x] Shell with commands (`help`, `stats`, `threads`, ...) + live status
       bar ("quiet OS" demo)
 - [x] Test harness: host unit tests + per-kernel QEMU integration tests
-- [ ] User space
+- [ ] Per-task address-space isolation (per-task CR3, Step B)
 
 ## Quick start
 

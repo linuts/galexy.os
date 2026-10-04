@@ -186,11 +186,72 @@ The galexy-abi ABI decisions (capabilities day one) are locked below and in
 - [x] Docs: layout tree (galexy-abi + userspace contracts), boundary rule
       8 (ABI stability), DESIGN/ROADMAP/README synced
 
+## Milestone 13 — First user task: rings + syscalls ✅
+
+ROADMAP Step A, executed. **Ring 3 code runs, syscalls work, printing
+works, exit reaps.** Every commit left the boot suite green.
+
+- [x] **User tasks in the unified rotation** (`sched/`): `spawn_user_task`
+      maps a code page (PRESENT\|USER), a 4-page user stack
+      (RW\|NX\|USER) and an RW scratch page at a fresh user region
+      (free P4 entry scanned top-down, 512 GiB per task; code at +0,
+      stack at +1 GiB). Tasks: `is_user` + dedicated kernel-mode stack
+      (heap `Vec`, canary-painted) — timer IRQs from ring 3 push onto it
+      via TSS.RSP0 (set on every switch-in to a user task; cleared for
+      main/kernel threads). Initial ring-3 frame fabricated by
+      `context::init_user_frame` (RIP = code vaddr, user selectors,
+      RFLAGS IF=1). kstack registry additionally published for the
+      syscall entry (`arch::syscall::set_task_kstack`).
+      `bin/test-userpreempt.rs`: blob spins in ring 3, timer keeps
+      switching through it, both quanta sides accumulate; verified
+- [x] **SYSCALL/SYSRET mechanism** (`arch/syscall.rs`): `STAR`
+      (`write_raw(user_cs, kernel_cs)` — SYSRET forces RPL 3 on both CS
+      and SS; our consecutive GDT layout satisfies `SS = CS + 8`),
+      `LSTAR` → naked entry, `FMASK = 0` (full user RFLAGS carried), then
+      `EFER.SCE` last. Naked entry: `cli` → switch to the task kernel
+      stack (RSP is the user stack at entry) → push the uniform frame
+      (SS, RSP, RFLAGS=r11, CS, RIP=rcx, then GPRs — same shape as the
+      timer frame) → Rust dispatch (`rdi` = frame, `rsi` = number) → 0 =
+      pop+iretq resume, pointer = switch. Frame bug found by the
+      cpl-assert on first run: the CS push was missing (0x202's low bits
+      decoded as CPL 2). Kernel-origin syscalls (main/kernel threads)
+      fail loudly. `bin/test-syscall.rs`: cap_info echoes the console
+      cap's bits into the task's scratch page, kernel polls it through
+      the shared address space; verified
+- [x] **Syscall behaviors** (`sched/syscalls.rs`):
+      - `exit(code)` → tombstone + handoff, never resumes; reaper frees
+        user stack pages, scratch, code page, kernel stack + fx. Known
+        debt (pre-existing): page-table frames consumed by the spawn's
+        mapping chain stay allocated (FreshL4 tree walk, Step B).
+      - `yield()` → the real rotation from inside the syscall
+        (`sched::syscall_handoff`): save context/fx, advance round-robin,
+        switch — result stamped into the frame before the handoff.
+      - `write(console_cap, addr, len)` → cap authority (index + WRITE
+        right), length cap (1 KiB), page-walk validation of the user
+        buffer via `translate`, ASCII-printable staging buffer, screen
+        output; result `rax = len, rdx = ok`. Bad cap → BadCap,
+        missing right → AccessDenied, unmapped page → BadBuffer,
+        non-printable/oversized → BadValue.
+      - Register/return contract: `RAX = value`, `RDX = 1 ok / 0 err`.
+- [x] **First user program** (`bin/test-user.rs`): hand-assembled blob —
+      write("Hello from ring 3!", 18) → yield → write again → scratch
+      mark → exit. Kernel asserts: scratch marks done, task
+      exited-by-syscall serial marker, reaped, 6 data frames returned to
+      the allocator; verified (exit 33; 18 QEMU tests now)
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [ ] UEFI: timer + keyboard dead under UEFI — legacy PIC doesn't exist;
       needs APIC under `arch/` (boot-only behavior now guarded by the UEFI
-      smoke test)
+      smoke test; userland is BIOS-path for now, syscalls work the same)
+- [ ] SYSCALL leaves DS/ES/FS/GS as kernel bootstrap selectors when the
+      task resumes in ring 3 — user code must not do segment-based
+      addressing; proper user segment reload is future segment work
+- [ ] `write` printable-ASCII rule is a stand-in for a real console
+      charset policy (newlines unsupported yet — the blob prints one line)
+- [ ] Page-table frames consumed by user-task spawn mappings stay
+      allocated (reaper doesn't walk trees; FreshL4 debt, Step B)
 - [ ] Thread guard pages: a too-deep thread silently corrupts the heap
       (canary detects on reap now, but guard pages land with Step B where
       stacks are independently mapped anyway)
