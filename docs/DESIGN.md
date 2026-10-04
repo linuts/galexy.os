@@ -139,6 +139,22 @@ Init order: GDT/TSS → IDT → PICs → timer config → `sti`.
   (`(0xFFFF << 48) | (511 << 39)` — MUST be sign-extended AND 512-GiB
   aligned, or the bootloader panics at boot). Paging phase consumes this.
 
+### arch/mm/paging — "virtual memory" (arch/)
+
+- `OffsetPageTable` over the bootloader-created active tables: L4 table
+  located via CR3 + the physical-memory offset; mapper lives behind
+  `MAPPER: Mutex<Option<...>>` and is main-loop-only (IRQ handlers never
+  touch it — recheck when preemption lands).
+- `map_page(page, frame)` maps with PRESENT|WRITABLE|NO_EXECUTE and flushes
+  the TLB; page-table frames come from the frame allocator via a trait
+  adapter. `unmap_page` flushes and returns the frame. `translate(virt)` for
+  lookups.
+- Tests can swap the page-fault handler at runtime
+  (`arch::set_page_fault_handler`) — demand paging will use the same seam.
+- Fresh virtual space: the bootloader's dynamic mappings fill P4 indices
+  from 0 upward, physical memory is fixed at index 32, recursive at 511 —
+  test/scratch mappings should use a high-but-canonical index (e.g. 100).
+
 ### echo — "the shell"
 
 Main loop: `echo::poll()` drains the key queue — printable chars echo to the

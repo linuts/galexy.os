@@ -12,6 +12,8 @@ pub mod mm;
 mod pics;
 mod timer;
 
+pub use idt::set_page_fault_handler;
+
 /// Initializes the whole interrupt subsystem and enables interrupts.
 pub fn init() {
     gdt::init();

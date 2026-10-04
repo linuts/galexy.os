@@ -38,8 +38,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert_ne!(frame_a, frame_b, "distinct frames");
     assert_eq!(mm::free_frames(), initial_free - 2);
 
-    let addr_a = mm::phys_to_virt(frame_a.start_address(), phys_offset);
-    let addr_b = mm::phys_to_virt(frame_b.start_address(), phys_offset);
+    let addr_a = mm::phys_to_virt(frame_a.start_address(), phys_offset).as_u64();
+    let addr_b = mm::phys_to_virt(frame_b.start_address(), phys_offset).as_u64();
     // SAFETY: allocated frames are Usable and otherwise unmapped; exclusive
     // access is guaranteed by the allocator contract.
     unsafe {
@@ -64,9 +64,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("[test-memory] passed");
 
     // Double-free must panic (would exit Failed otherwise); the marker
-    // matches the panic location (the assert lives in arch/mm.rs — note:
-    // assert! payloads are fmt::Arguments, not str, so we match the file).
-    galexy_os::expect_panic("arch/mm.rs");
+    // matches the panic location (the assert lives in arch/mm/mod.rs —
+    // note: assert! payloads are fmt::Arguments, not str, so we match the
+    // file).
+    galexy_os::expect_panic("arch/mm/mod.rs");
     mm::deallocate_frame(frame_b);
     unreachable!("double free should have panicked");
 }

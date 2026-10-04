@@ -53,6 +53,20 @@ fn memory_test_passes() {
 }
 
 #[test]
+fn paging_test_passes() {
+    let (code, serial) = boot(&image("test-paging"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-paging should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-paging] page fault fired as expected"),
+        "unmapped-access fault marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn main_kernel_boots_and_timer_ticks() {
     // The interactive kernel never exits; verify liveness markers instead.
     let serial = boot_liveness(&image("galexy-os"), Duration::from_secs(20));

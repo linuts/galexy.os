@@ -61,12 +61,30 @@ Tracking document for concrete work items. Big-picture direction lives in
 - [ ] Extend bitmap coverage beyond 512 MiB when RAM grows (documented
       serial warning already)
 
+## Milestone 7 — Paging ✅
+
+- [x] `arch/mm/paging.rs`: `OffsetPageTable` over the bootloader's active
+      page tables (L4 via CR3 + physical-memory offset; recursive entry
+      available at P4 index 511)
+- [x] `map_page` / `unmap_page` (TLB flushes) + `translate`; page-table
+      frames come from our frame allocator via a trait adapter
+- [x] Page-fault handler reports CR2 (faulting address) precisely
+- [x] Runtime handler replacement (`arch::set_page_fault_handler`) — used by
+      tests, will be used by demand paging
+- [x] `bin/test-paging.rs`: map → write/read via virtual page AND physical
+      offset (agreement asserted) → translate check → unmap → unmapped
+      access faults (handler swapped to success-exit); verified (exit 33)
+
 ## Known limitations / follow-ups
 
+- [ ] Framebuffer is used as the bootloader mapped it (deliberate — BootInfo
+      exposes no physical framebuffer address; a principled remap would have
+      to match the `FrameBufferReserved` memory region; revisit with the
+      heap phase)
 - [ ] UEFI: timer + keyboard don't work yet — legacy PIC doesn't exist under
       UEFI; needs APIC setup under `arch/` (see bootloader migration doc)
-- [ ] `physical_memory_offset` is `None`: enable `map_physical_memory` in
-      `BootConfig` (runner build.rs) when the memory phase starts
+- [ ] Page mapping concurrency: mapper ops are main-loop-only right now;
+      IRQ handlers never touch MAPPER (verify again with preemption)
 - [ ] Screen: text-mode cursor (blinking), tab handling, ANSI-ish output
 - [ ] Keyboard queue overflow silently drops keys — fine for now, revisit
 - [ ] Echo uses a fixed 128-char line buffer — replace with heap strings once

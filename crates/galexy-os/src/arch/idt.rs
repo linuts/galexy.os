@@ -1,6 +1,6 @@
 //! Interrupt Descriptor Table: fault and device interrupt handlers.
 
-use spin::LazyLock;
+use spin::{LazyLock, Mutex};
 use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
@@ -9,7 +9,10 @@ use super::pics::{KEYBOARD_INTERRUPT_ID, TIMER_INTERRUPT_ID};
 use super::{pics, timer};
 use crate::drivers::keyboard;
 
-static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
+/// The IDT sits behind a mutex so tests (and later, demand paging) can
+/// replace handlers at runtime; loading uses `load_unsafe` because the
+/// static's identity guarantees the lifetime.
+static IDT: LazyLock<Mutex<InterruptDescriptorTable>> = LazyLock::new(|| {
     let mut idt = InterruptDescriptorTable::new();
     idt.breakpoint.set_handler_fn(breakpoint_handler);
     idt.page_fault.set_handler_fn(page_fault_handler);
@@ -22,12 +25,15 @@ static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
     // Legacy PIC vectors: IRQ0 = timer, IRQ1 = keyboard.
     idt[TIMER_INTERRUPT_ID].set_handler_fn(timer_handler);
     idt[KEYBOARD_INTERRUPT_ID].set_handler_fn(keyboard_handler);
-    idt
+    Mutex::new(idt)
 });
 
 /// Loads the IDT.
 pub fn init() {
-    IDT.load();
+    let idt = IDT.lock();
+    // SAFETY: the IDT is never moved (it lives in the static) — the lifetime
+    // constraint `load` normally enforces holds.
+    unsafe { idt.load_unsafe() };
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
@@ -38,16 +44,29 @@ extern "x86-interrupt" fn page_fault_handler(
     stack_frame: InterruptStackFrame,
     error_code: PageFaultErrorCode,
 ) {
+    use x86_64::registers::control::Cr2;
+    let faulting_address = Cr2::read();
     crate::serial_println!(
         "EXCEPTION: PAGE FAULT ({:?}) while accessing {:#?}\n{:#?}",
         error_code,
-        stack_frame.instruction_pointer,
+        faulting_address,
         stack_frame
     );
     // The faulting instruction would just fault again; park here.
     loop {
         x86_64::instructions::hlt();
     }
+}
+
+/// Installs `handler` as the page-fault handler (replacing the default
+/// report-and-park one). For tests and, later, demand paging.
+pub fn set_page_fault_handler(
+    handler: extern "x86-interrupt" fn(InterruptStackFrame, PageFaultErrorCode),
+) {
+    let mut idt = IDT.lock();
+    // SAFETY: `handler` is a valid x86-interrupt handler; installing a
+    // handler in a live IDT is the supported use of `set_handler_fn`.
+    idt.page_fault.set_handler_fn(handler);
 }
 
 extern "x86-interrupt" fn double_fault_handler(

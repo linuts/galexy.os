@@ -7,6 +7,12 @@
 //! Frames outside that range or outside `Usable` regions can never be
 //! allocated, and deallocating them panics — so bootloader-owned and
 //! kernel-owned memory is protected by construction.
+//!
+//! Virtual memory (page mapping) lives in the [`paging`] submodule.
+
+mod paging;
+
+pub use paging::{map_page, phys_to_virt, translate, unmap_page};
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -39,10 +45,12 @@ static READY: AtomicBool = AtomicBool::new(false);
 /// Must be called exactly once, before any allocation. Requires
 /// `physical_memory_offset` to be mapped (see `BOOTLOADER_CONFIG`).
 pub fn init(boot_info: &BootInfo) {
-    assert!(
-        boot_info.physical_memory_offset.into_option().is_some(),
-        "physical memory must be mapped (see BOOTLOADER_CONFIG)"
-    );
+    let phys_offset = boot_info
+        .physical_memory_offset
+        .into_option()
+        .expect("physical memory must be mapped (see BOOTLOADER_CONFIG)");
+
+    paging::init(phys_offset);
 
     // Lock order: USED before USABLE (the only nested locking in this module).
     let mut used = USED.lock();
@@ -121,12 +129,4 @@ pub fn deallocate_frame(frame: PhysFrame<Size4KiB>) {
 /// Number of currently free frames.
 pub fn free_frames() -> usize {
     FREE_COUNT.load(Ordering::Relaxed)
-}
-
-/// Converts a physical address to a virtual one for direct access.
-///
-/// Safe only for frames the allocator handed out (they are `Usable` and
-/// otherwise unmapped), per the `BootInfo::physical_memory_offset` contract.
-pub fn phys_to_virt(addr: PhysAddr, phys_offset: u64) -> u64 {
-    addr.as_u64() + phys_offset
 }
