@@ -20,7 +20,10 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use spin::Mutex;
 use x86_64::instructions::interrupts;
+use x86_64::structures::paging::{Page, PageTableFlags, PhysFrame, Size4KiB};
+use x86_64::VirtAddr;
 
+use crate::arch::mm;
 use crate::serial_println;
 
 /* ---------------- cooperative tasks ---------------- */
@@ -154,9 +157,31 @@ struct Thread {
     ticks: AtomicU64,
     /// FXSAVE area — freed by the reaper once the thread exits.
     fx: *mut FxArea,
-    /// Owns the stack memory; the saved context points inside it. The Vec
-    /// struct may move, its buffer never does. Freed by the reaper.
+    /// `true` for ring-3 tasks: the fabricated context runs in user mode
+    /// and preemption pushes onto `kstack` via TSS.RSP0.
+    is_user: bool,
+    /// Kernel threads: the 32 KiB mode+context stack (heap-backed), canary
+    /// painted at the bottom. User tasks: EMPTY (their context lives on
+    /// mapped user-space pages).
     stack: Vec<u8>,
+    /// User tasks only: the kernel-mode stack for ring 3→0 transitions
+    /// (TSS.RSP0 target). Empty for kernel threads.
+    kstack: Vec<u8>,
+    /// User tasks only: aligned top of `kstack` (the RSP0 value).
+    kstack_top: u64,
+    /// User tasks only: user-stack base (BOTTOM address) + page count —
+    /// the reaper unmaps + frees these.
+    user_stack: Option<UserStack>,
+    /// User tasks only: mapped code page + its frame — the reaper unmaps
+    /// the page + frees the frame.
+    user_code: Option<(Page, PhysFrame<Size4KiB>)>,
+}
+
+/// User-stack descriptor for the reaper's unmap+free pass.
+struct UserStack {
+    /// BOTTOM address of the mapped stack region.
+    base: VirtAddr,
+    pages: usize,
 }
 
 // SAFETY: `fx` is an exclusively-owned allocation, dereferenced only by the
@@ -174,6 +199,9 @@ static CURRENT: AtomicUsize = AtomicUsize::new(0);
 static MAIN_CTX: AtomicU64 = AtomicU64::new(0);
 /// Round-robin cursor: index of the last-served thread (usize::MAX = none).
 static LAST_SERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// RSP0 value corresponding to the CURRENT task's kernel stack (user tasks
+/// only; 0 = main loop / kernel thread). THE syscall entry's switch target.
+static CURRENT_RSP0: AtomicU64 = AtomicU64::new(0);
 
 /// Main loop's FXSAVE area (FxArea is 16-aligned).
 static MAIN_FX: Mutex<FxArea> = Mutex::new(FxArea::new());
@@ -217,9 +245,15 @@ pub fn reap() {
             }
             // Canary check BEFORE the stack is freed: a deep overflow writes
             // the magic word last (stack grows downward, canary is at the
-            // very bottom).
-            let stack_ptr = t.stack.as_ptr();
-            let canary = unsafe { (stack_ptr as *const u64).read_unaligned() };
+            // very bottom). User tasks: heap check applies to `kstack`
+            // instead (their `stack` is empty; the user stack has no heap
+            // canary — it's isolated pages).
+            let canary_stack: *const u8 = if t.is_user {
+                t.kstack.as_ptr()
+            } else {
+                t.stack.as_ptr()
+            };
+            let canary = unsafe { (canary_stack as *const u64).read_unaligned() };
             if canary != STACK_CANARY {
                 panic!("reap: stack canary corrupted for thread '{}' (stack overflow)", t.name);
             }
@@ -230,8 +264,27 @@ pub fn reap() {
             // The saved context lives ON this stack; null it so any stray
             // reader fails loudly instead of jumping into freed memory.
             t.ctx.store(0, Ordering::Relaxed);
+            if let Some(us) = t.user_stack.take() {
+                // Unmap + free the user stack pages (mapper ops are
+                // IRQ-gated internally; nested gate fine).
+                for i in 0..us.pages {
+                    let page = Page::containing_address(us.base + (i * 4096) as u64);
+                    if let Ok(frame) = mm::unmap_page(page) {
+                        mm::deallocate_frame(frame);
+                    }
+                }
+            }
+            if let Some((code_page, code_frame)) = t.user_code.take() {
+                // Unmap the code page and return its frame.
+                if let Ok(frame) = mm::unmap_page(code_page) {
+                    debug_assert_eq!(frame.start_address(), code_frame.start_address());
+                    mm::deallocate_frame(frame);
+                }
+            }
             let stack = core::mem::take(&mut t.stack);
             drop(stack); // returns the 32 KiB to the heap
+            let kstack = core::mem::take(&mut t.kstack);
+            drop(kstack); // user tasks: kernel-mode stack back to the heap
             freed += 1;
         }
         drop(threads);
@@ -262,9 +315,112 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) {
             ctx: AtomicU64::new(ctx),
             ticks: AtomicU64::new(0),
             fx,
+            is_user: false,
             stack,
+            kstack: Vec::new(),
+            kstack_top: 0,
+            user_stack: None,
+            user_code: None,
         });
         serial_println!("[sched] thread '{}' ready", name);
+    });
+}
+
+/// User stack size in 4 KiB pages.
+const USER_STACK_PAGES: usize = 4;
+/// User stack offset inside the task's P4 region (1 GiB in — keeps the
+/// code page and stack far apart; the region is 512 GiB).
+const USER_STACK_OFFSET: u64 = 1 << 30;
+
+/// Spawns a ring-3 task running `code` (a flat machine-code blob, mapped
+/// executable in its own user region of the ACTIVE address space — per-task
+/// CR3 isolation is Step B).
+///
+/// Layout per task: one free P4 entry `N` (scanned top-down in the user
+/// half), code mapped at `(N<<39) + 0`, user stack at `+1 GiB`. The
+/// fabricated context (on the user stack) enters ring 3; preemption pushes
+/// onto this task's own kernel stack via TSS.RSP0 (set on switch-in).
+/// IRQ-gated like every registration.
+pub fn spawn_user_task(name: &'static str, code: &[u8]) {
+    // Code grows into a single page: the blob ABI.
+    assert!(
+        code.len() <= 4096,
+        "spawn_user_task: blob exceeds one page ({} bytes)",
+        code.len()
+    );
+    interrupts::without_interrupts(|| {
+        let p4_index = mm::top_user_p4_index().expect("no free user P4 entry left");
+        let region = VirtAddr::new((p4_index as u64) << 39);
+
+        // Code page: PRESENT | USER, executable (no NX, no writable).
+        let code_frame = mm::allocate_frame().expect("no frame for user code");
+        // SAFETY: the frame is allocator-owned (exclusive access per
+        // contract), so writing through the phys map is exclusive.
+        unsafe {
+            let dst = mm::frame_virt(code_frame.start_address()).as_mut_ptr::<u8>();
+            core::ptr::copy_nonoverlapping(code.as_ptr(), dst, code.len());
+        }
+        let code_page = Page::containing_address(region);
+        mm::map_page_flags(
+            code_page,
+            code_frame,
+            PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE,
+        )
+        .expect("user code map failed");
+
+        // User stack: PRESENT | WRITABLE | NX | USER, at region + 1 GiB.
+        let stack_base = region + USER_STACK_OFFSET;
+        for i in 0..USER_STACK_PAGES {
+            let frame = mm::allocate_frame().expect("no frame for user stack");
+            let page = Page::containing_address(stack_base + (i * 4096) as u64);
+            mm::map_page_flags(
+                page,
+                frame,
+                PageTableFlags::PRESENT
+                    | PageTableFlags::WRITABLE
+                    | PageTableFlags::USER_ACCESSIBLE
+                    | PageTableFlags::NO_EXECUTE,
+            )
+            .expect("user stack map failed");
+        }
+
+        // Initial ring-3 frame: fabricated at the user stack top, RIP at
+        // the blob entry, user selectors.
+        let stack_top = (stack_base + (USER_STACK_PAGES * 4096) as u64).as_u64() & !0xF;
+        let (cs, ss) = context::user_cs_ss();
+        let ctx = unsafe { context::init_user_frame(stack_top, region.as_u64(), cs, ss) };
+
+        // Kernel-mode stack for ring 3→0 crossings (timer IRQ from ring 3,
+        // later syscalls): heap-backed, 32 KiB, heap canary at bottom.
+        let mut kstack = vec![0u8; THREAD_STACK_SIZE];
+        kstack[..8].copy_from_slice(&STACK_CANARY.to_le_bytes());
+        let kstack_top = (kstack.as_ptr() as u64 + kstack.len() as u64) & !0xF;
+
+        let fx = Box::into_raw(Box::new(FxArea::new()));
+        THREADS.lock().push(Thread {
+            name,
+            state: AtomicU8::new(STATE_RUNNING),
+            ctx: AtomicU64::new(ctx),
+            ticks: AtomicU64::new(0),
+            fx,
+            is_user: true,
+            stack: Vec::new(),
+            kstack,
+            kstack_top,
+            user_stack: Some(UserStack {
+                base: stack_base,
+                pages: USER_STACK_PAGES,
+            }),
+            user_code: Some((code_page, code_frame)),
+        });
+        serial_println!(
+            "[sched] user task '{}' ready (p4={}, code @ {:#x}, ustack top {:#x}, kstack top {:#x})",
+            name,
+            p4_index,
+            region.as_u64(),
+            stack_top,
+            kstack_top
+        );
     });
 }
 
@@ -381,17 +537,29 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
             return None;
         }
 
-        let (who, ctx, fx_ptr) = match next_slot {
+        let (who, ctx, fx_ptr, rsp0) = match next_slot {
             0 => (
                 0usize,
                 MAIN_CTX.load(Ordering::Relaxed),
                 (&*MAIN_FX.lock()) as *const FxArea as u64,
+                None,
             ),
             s => {
                 let t = &threads[s - 1];
-                (s, t.ctx.load(Ordering::Relaxed), t.fx as u64)
+                let rsp0 = t.is_user.then_some(t.kstack_top);
+                (s, t.ctx.load(Ordering::Relaxed), t.fx as u64, rsp0)
             }
         };
+        // Ring-3 readiness BEFORE entering the chosen task: a user task's
+        // ring 3→0 crossings (timer IRQ, later syscalls) push onto ITS OWN
+        // kernel stack via TSS.RSP0. Kernel threads/main leave RSP0 at
+        // whatever the last user switch-in set — they never cross rings.
+        if let Some(top) = rsp0 {
+            crate::arch::set_tss_rsp0(VirtAddr::new(top));
+            CURRENT_RSP0.store(top, Ordering::Relaxed);
+        } else if who == 0 {
+            CURRENT_RSP0.store(0, Ordering::Relaxed);
+        }
         CURRENT.store(who, Ordering::Relaxed);
         context::fx_restore(fx_ptr as *const u8);
         Some(ctx)

@@ -191,6 +191,24 @@ fn rings_test_passes() {
 }
 
 #[test]
+fn userpreempt_test_passes() {
+    let (code, serial) = boot(&image("test-userpreempt"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-userpreempt should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-userpreempt] passed"),
+        "test-userpreempt success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("ready (p4="),
+        "user task spawn marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn uefi_image_boots_and_reports() {
     // UEFI boots (kernel runs, serial works); timer/keyboard are dead until
     // the APIC work — so this asserts boot markers only, not liveness.

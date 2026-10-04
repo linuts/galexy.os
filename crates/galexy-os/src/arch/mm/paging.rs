@@ -108,8 +108,18 @@ pub enum PageError {
 
 /// Maps `frame` to `page` with PRESENT | WRITABLE | NO_EXECUTE.
 pub fn map_page(page: Page<Size4KiB>, frame: PhysFrame<Size4KiB>) -> Result<(), PageError> {
-    use x86_64::structures::paging::mapper::MapToError;
     let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE;
+    map_page_flags(page, frame, flags)
+}
+
+/// Maps `frame` to `page` with explicit flags (the USER_ACCESSIBLE / NX
+/// permutation space user tasks need).
+pub fn map_page_flags(
+    page: Page<Size4KiB>,
+    frame: PhysFrame<Size4KiB>,
+    flags: PageTableFlags,
+) -> Result<(), PageError> {
+    use x86_64::structures::paging::mapper::MapToError;
     let mut result = Ok(());
     with_mapper(|mapper| {
         let mut frame_alloc = PageTableFrameAllocator;
@@ -154,6 +164,38 @@ pub fn translate(virt: VirtAddr) -> Option<PhysAddr> {
 /// otherwise unmapped), per the `BootInfo::physical_memory_offset` contract.
 pub fn phys_to_virt(phys: PhysAddr, phys_offset: u64) -> VirtAddr {
     VirtAddr::new(phys.as_u64() + phys_offset)
+}
+
+/// Virtual address of an allocator-owned frame through the physical-memory
+/// mapping (no offset parameter needed). Exclusive access per the frame
+/// allocator's contract.
+pub fn frame_virt(phys: PhysAddr) -> VirtAddr {
+    phys_offset() + phys.as_u64()
+}
+
+/// The highest FREE P4 entry index in the user half (`< 256`), scanning
+/// top-down. Bootload dynamics fill P4 upward from 0 (kernel, framebuffers
+/// mapped low), fixed mappings are phys memory at 32 / recursive at 511 /
+/// heap at 43 — so fresh 512-GiB user regions come from the top of the
+/// user half downward. Each pick is immediately PRESENT in the L4 (the
+/// caller maps into it right away), so consecutive picks return distinct
+/// indices.
+pub fn top_user_p4_index() -> Option<u16> {
+    assert!(READY.load(Ordering::Relaxed), "paging: mapper not initialized");
+    let phys = phys_offset();
+    let (l4_frame, _) = Cr3::read();
+    let l4 = phys + l4_frame.start_address().as_u64();
+    // SAFETY: the L4 table is the CPU's active one; read-only scan through
+    // the phys map (same access pattern the FreshL4 clone uses).
+    unsafe {
+        let table = &*(l4.as_ptr::<PageTable>());
+        for i in (0..256u16).rev() {
+            if table[usize::from(i)].is_unused() {
+                return Some(i);
+            }
+        }
+    }
+    None
 }
 
 /// Adapter: feeds the x86_64 crate's mapping machinery from our frame
