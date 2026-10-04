@@ -22,10 +22,11 @@ Backspace edits, machine never triple-faults.
 
 ## Phase 2 — Concurrency & scheduling
 
-1. **Cooperative scheduler first** — task queue, yield points, simple round
-   robin between two dummy tasks.
-2. **Preemptive scheduler** — timer handler swaps in scheduling; TSS stacks
-   already exist from M3; per-task kernel stacks + context switch.
+1. **Cooperative scheduler first** ✅ — task queue, yield points, simple
+   round robin between counting tasks; heap-backed run queue.
+2. **Preemptive scheduler** (next) — timer handler swaps in scheduling;
+   TSS stacks already exist from M3; per-task kernel stacks + context
+   switch (hand-rolled asm save/restore of callee-saved regs + RSP).
 3. **Lock discipline audit** — every `spin::Mutex` checked for
    dead-lock-with-interrupts hazards; document the policy in `DESIGN.md`.
 

@@ -20,11 +20,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     );
     galexy_os::arch::mm::init(boot_info); // frames + paging + heap
     galexy_os::arch::init(); // interrupts last to init: handlers depend on drivers
+    galexy_os::sched::init();
+    galexy_os::sched::demo::spawn_all();
     banner::show();
     loop {
-        // Serve input while keys are queued, then sleep until the next
-        // interrupt wakes us.
+        // Serve input, sweep tasks, then sleep until the next interrupt.
         echo::poll();
+        galexy_os::sched::run();
         x86_64::instructions::hlt();
     }
 }

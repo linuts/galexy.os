@@ -165,6 +165,21 @@ Init order: GDT/TSS → IDT → PICs → timer config → `sti`.
   task queues are the planned next one. Host unit tests never touch the
   heap (no_std tests of `galexy-core` are allocation-free by rule).
 
+### sched — "the scheduler" (`sched/`)
+
+Cooperative round-robin, the foundation for preemption:
+
+- `Task` = `fn(&mut TaskCtx) -> TaskStatus` + per-task scratch state
+  (`TaskCtx`: 8 u64 slots for the step's state machine). The queue is a
+  heap-backed `VecDeque` (first non-shell `alloc` consumer).
+- `run_once()`: pop front → one step → re-queue at back if `Yield`, drop if
+  `Done`. `run()` sweeps the whole queue once per main-loop iteration.
+- **Concurrency rule: only the main loop touches `sched` state.** IRQ
+  handlers must not call into `sched`; the lock audit before preemption
+  re-verifies every lock for hold-across-interrupt hazards.
+- Demo tickers (`sched/demo.rs`) prove interleaving on screen; the banner
+  reports live task counts.
+
 ### banner — "the boot showcase"
 
 - Runs after full init; every `[ok]` line reads live state from the owning

@@ -70,6 +70,19 @@ pub fn show() {
     print!("{} KiB\n", heap_size / 1024);
     screen::set_color(TEXT_COLOR);
 
+    // Scheduler
+    screen::set_color(OK_COLOR);
+    print!("[ok] ");
+    screen::set_color(TEXT_COLOR);
+    print!("scheduler: ");
+    screen::set_color(VALUE_COLOR);
+    print!(
+        "{} tasks running, {} spawned\n",
+        crate::sched::active_tasks(),
+        crate::sched::spawned_total()
+    );
+    screen::set_color(TEXT_COLOR);
+
     screen::out_str("\nType a line — Enter echoes it back, Backspace edits.\n\n");
 
     // First prompt

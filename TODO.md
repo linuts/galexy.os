@@ -87,8 +87,27 @@ Tracking document for concrete work items. Big-picture direction lives in
       state (framebuffer layout, frames free, paging translate of the heap
       start, heap size); echo shell prompt follows
 
+## Milestone 9 — Cooperative scheduler ✅
+
+- [x] `sched/mod.rs`: round-robin `VecDeque` run queue; `spawn(name, step)`,
+      `run_once()` (pop → step → re-queue if Yield), `run()` sweep,
+      `active_tasks()`/`spawned_total()` stats
+- [x] Task model: `fn(&mut TaskCtx) -> TaskStatus` state machines with
+      per-task scratch slots (heap-backed queue — first alloc consumer
+      beyond echo)
+- [x] Demo tickers (`sched/demo.rs`) interleaving on screen; banner gets
+      `[ok] scheduler: N tasks`
+- [x] `bin/test-sched.rs`: deterministic trace `ABABAA` (interleaving
+      proven), completion, re-spawn after drain; verified (exit 33)
+
 ## Known limitations / follow-ups
 
+- [ ] Preemptive scheduling (next): per-task kernel stacks + context switch
+      in the timer handler (the documented hook); lock audit before then
+- [ ] `run()` sweep runs a fixed number of `run_once` steps — scheduling
+      fairness nuance when tasks finish mid-sweep (documented, fine for now)
+- [ ] TaskCtx is 8 fixed u64 slots — a proper boxed state enum once tasks
+      get richer
 - [ ] Heap is a fixed 400 KiB area — grow-on-demand (allocator `grow`)
       comes with the scheduler phase if needed
 - [ ] Framebuffer is used as the bootloader mapped it (deliberate — BootInfo
