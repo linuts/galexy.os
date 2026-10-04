@@ -18,7 +18,7 @@ pub fn show() {
     screen::clear_screen();
 
     screen::set_color(TITLE_COLOR);
-    print!("════════ galexy.os ════════\n");
+    print!("========== galexy.os ==========\n");
     screen::set_color(TEXT_COLOR);
 
     // Framebuffer
@@ -83,7 +83,7 @@ pub fn show() {
     );
     screen::set_color(TEXT_COLOR);
 
-    screen::out_str("\nType a line — Enter echoes it back, Backspace edits.\n\n");
+    screen::out_str("\nType a line - Enter echoes it back, Backspace edits.\n\n");
 
     // First prompt
     screen::set_color(crate::echo::PROMPT_COLOR);

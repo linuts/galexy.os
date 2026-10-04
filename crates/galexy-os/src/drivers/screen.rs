@@ -87,6 +87,11 @@ impl ScreenWriter {
     }
 
     /// Renders one glyph at the cursor.
+    ///
+    /// Glyph rasters at this size have thin strokes whose pixels never reach
+    /// full intensity (measured: glyph 'a' peaks at 223/255), so intensities
+    /// are normalized per glyph to the raster's peak — glyph cores render at
+    /// full fg color instead of a washed-out fraction of it.
     fn draw_glyph(&mut self, c: char) {
         let raster = match get_raster(c, FONT_WEIGHT, FONT_HEIGHT) {
             Some(raster) => raster,
@@ -96,6 +101,15 @@ impl ScreenWriter {
                 None => return,
             },
         };
+        let peak = raster
+            .raster()
+            .iter()
+            .flat_map(|line| line.iter().copied())
+            .max()
+            .unwrap_or(0);
+        if peak == 0 {
+            return; // blank glyph (e.g. space)
+        }
 
         let x_origin = self.char_x * self.char_width;
         let y_origin = self.char_y * LINE_HEIGHT;
@@ -114,33 +128,75 @@ impl ScreenWriter {
                 if x >= info.width || y >= info.height {
                     continue;
                 }
-                let pixel = self.fg.scaled(intensity);
+                // Normalize to the raster's own peak: cores → full color.
+                let boosted = ((intensity as u32 * 255) / peak as u32).min(255) as u8;
+                let pixel = self.fg.scaled(boosted);
                 let idx = (y * info.stride + x) * info.bytes_per_pixel;
-                match info.pixel_format {
-                    bootloader_api::info::PixelFormat::Rgb => {
-                        buffer[idx] = pixel.r;
-                        buffer[idx + 1] = pixel.g;
-                        buffer[idx + 2] = pixel.b;
-                    }
-                    bootloader_api::info::PixelFormat::Bgr => {
-                        buffer[idx] = pixel.b;
-                        buffer[idx + 1] = pixel.g;
-                        buffer[idx + 2] = pixel.r;
-                    }
-                    bootloader_api::info::PixelFormat::U8 => {
-                        let lum = (pixel.r as u16 + pixel.g as u16 + pixel.b as u16) / 3;
-                        buffer[idx] = lum as u8;
-                    }
-                    bootloader_api::info::PixelFormat::Unknown {
-                        red_position,
-                        green_position,
-                        blue_position,
-                    } => {
-                        buffer[idx + (red_position / 8) as usize] = pixel.r;
-                        buffer[idx + (green_position / 8) as usize] = pixel.g;
-                        buffer[idx + (blue_position / 8) as usize] = pixel.b;
-                    }
-                    _ => {}
+                Self::write_pixel(buffer, idx, info, pixel);
+            }
+        }
+    }
+
+    /// Writes one RGB pixel at byte offset `idx` in the framebuffer,
+    /// respecting the reported pixel format.
+    fn write_pixel(
+        buffer: &mut [u8],
+        idx: usize,
+        info: bootloader_api::info::FrameBufferInfo,
+        pixel: Color,
+    ) {
+        match info.pixel_format {
+            bootloader_api::info::PixelFormat::Rgb => {
+                buffer[idx] = pixel.r;
+                buffer[idx + 1] = pixel.g;
+                buffer[idx + 2] = pixel.b;
+            }
+            bootloader_api::info::PixelFormat::Bgr => {
+                buffer[idx] = pixel.b;
+                buffer[idx + 1] = pixel.g;
+                buffer[idx + 2] = pixel.r;
+            }
+            bootloader_api::info::PixelFormat::U8 => {
+                let lum = (pixel.r as u16 + pixel.g as u16 + pixel.b as u16) / 3;
+                buffer[idx] = lum as u8;
+            }
+            bootloader_api::info::PixelFormat::Unknown {
+                red_position,
+                green_position,
+                blue_position,
+            } => {
+                buffer[idx + (red_position / 8) as usize] = pixel.r;
+                buffer[idx + (green_position / 8) as usize] = pixel.g;
+                buffer[idx + (blue_position / 8) as usize] = pixel.b;
+            }
+            _ => {}
+        }
+    }
+
+    /// Clears one character cell to background (black) — used by backspace,
+    /// because drawing a space glyph writes nothing (zero-intensity skip).
+    fn clear_cell(&mut self) {
+        let x_origin = self.char_x * self.char_width;
+        let y_origin = self.char_y * LINE_HEIGHT;
+
+        // SAFETY: single access at a time, enforced by the global lock.
+        let buffer = &mut *self.fb.buffer;
+        let info = self.fb.info;
+        let bpp = info.bytes_per_pixel;
+
+        for row in 0..FONT_HEIGHT.val() {
+            let y = y_origin + row;
+            if y >= info.height {
+                break;
+            }
+            for col in 0..self.char_width {
+                let x = x_origin + col;
+                if x >= info.width {
+                    break;
+                }
+                let idx = (y * info.stride + x) * bpp;
+                for byte in &mut buffer[idx..idx + bpp] {
+                    *byte = 0;
                 }
             }
         }
@@ -164,7 +220,7 @@ impl ScreenWriter {
             return;
         }
         self.char_x -= 1;
-        self.draw_glyph(' ');
+        self.clear_cell();
     }
 
     /// Shifts all pixels up by one line height and clears the last line.
@@ -297,6 +353,16 @@ pub fn backspace() {
 pub fn framebuffer_info() -> Option<bootloader_api::info::FrameBufferInfo> {
     let guard = SCREEN.lock();
     guard.as_ref().map(|screen| screen.fb.info)
+}
+
+/// Returns the (bootloader-mapped) virtual address of the framebuffer, if
+/// initialized. Read-only inspection (tests); writes must go through the
+/// screen API.
+pub fn framebuffer_addr() -> Option<u64> {
+    let guard = SCREEN.lock();
+    guard
+        .as_ref()
+        .map(|screen| screen.fb.buffer.as_ptr() as u64)
 }
 
 /// Format-hook used by the `print!`/`println!` macros.

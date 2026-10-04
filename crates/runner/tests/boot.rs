@@ -85,6 +85,20 @@ fn heap_test_passes() {
 }
 
 #[test]
+fn screen_test_passes() {
+    let (code, serial) = boot(&image("test-screen"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-screen should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-screen] passed"),
+        "test-screen success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn sched_test_passes() {
     let (code, serial) = boot(&image("test-sched"));
     assert_eq!(
