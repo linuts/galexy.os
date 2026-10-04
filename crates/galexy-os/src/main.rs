@@ -31,8 +31,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             last_second = second;
             shell::render_status_bar();
         }
-        // Serve input, sweep tasks, then sleep until the next interrupt.
+        // Serve input, reap exited threads, sweep tasks, then sleep until
+        // the next interrupt.
         shell::poll();
+        sched::reap();
         sched::run();
         x86_64::instructions::hlt();
     }

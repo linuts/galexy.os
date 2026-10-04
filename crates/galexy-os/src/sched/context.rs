@@ -156,10 +156,18 @@ pub unsafe fn init_stack(stack_top: u64, entry: extern "C" fn(), cs: u64, ss: u6
 /// Stack size a fresh task needs for its initial context (incl. scratch).
 pub const INITIAL_CONTEXT_SIZE: u64 = 1024;
 
-/// First-run landing pad: runs the task's entry, then parks if it returns
-/// (kernel threads are not expected to return; no reaper yet).
+/// First-run landing pad: runs the task's entry, then marks the thread
+/// exited (the scheduler's reaper frees the stack from the main loop; see
+/// `sched::reap`). The naked timer handler is what "returns" here — this
+/// function never returns to it.
 extern "C" fn trampoline(entry: extern "C" fn()) {
     entry();
+    super::thread_exit();
+    // Zombie loop: MUST keep interrupts ENABLED. A disabled `hlt` here would
+    // wedge the machine — the dead thread is running until the next timer
+    // tick, and only that tick (which skips it via the rotation) lets the
+    // main loop run again. With IF=1, the next tick preempts the zombie,
+    // skips it forever, and the reaper later frees its stack.
     loop {
         x86_64::instructions::hlt();
     }

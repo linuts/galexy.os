@@ -16,7 +16,7 @@ use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use spin::Mutex;
 use x86_64::instructions::interrupts;
 
@@ -127,26 +127,45 @@ impl FxArea {
     }
 }
 
+/// Thread lifecycle states (AtomicU8 values).
+///
+/// Tombstone design: slots are NEVER removed from [`THREADS`] — removal
+/// would shift indexes used by the timer switch (`CURRENT`, `LAST_SERVED`)
+/// and corrupt rotation state mid-flight. Dead threads stay as `Freed`
+/// tombstones (a few bytes each); slots/tids stay stable forever.
+const STATE_RUNNING: u8 = 0;
+const STATE_EXITED: u8 = 1; // returned from its entry; reaped by the main loop
+const STATE_FREED: u8 = 2; // stack + fx freed; rotation-skipped tombstone
+
+/// Magic word painted at the very bottom of each thread's stack (lowest
+/// address). A stack that overflows far enough to corrupt the heap walks
+/// downward through this word first — reaping detects the clobber.
+const STACK_CANARY: u64 = 0xCA_7A_B1E_5_00D_F00D;
+
 struct Thread {
     /// For status/ps display.
     name: &'static str,
+    /// Lifecycle state (see STATE_* consts).
+    state: AtomicU8,
     /// Saved context pointer; valid while the thread is NOT running.
     ctx: AtomicU64,
     /// Timer ticks charged to this thread (CPU-time attribution).
     ticks: AtomicU64,
-    /// Leaked (stable) FXSAVE area — freed never (kernel-lifetime threads).
+    /// FXSAVE area — freed by the reaper once the thread exits.
     fx: *mut FxArea,
     /// Owns the stack memory; the saved context points inside it. The Vec
-    /// struct may move, its buffer never does.
-    _stack: Vec<u8>,
+    /// struct may move, its buffer never does. Freed by the reaper.
+    stack: Vec<u8>,
 }
 
-// SAFETY: `fx` is a leaked, exclusively-owned allocation, dereferenced only
-// by the single-core timer switch under the IRQ gate.
+// SAFETY: `fx` is an exclusively-owned allocation, dereferenced only by the
+// single-core timer switch under the IRQ gate; `stack` likewise is only
+// freed from main-loop context.
 unsafe impl Send for Thread {}
 
 /// All preemptive threads, in round-robin order. Touched by the main loop
-/// and the timer handler — access is IRQ-gated (see lock audit).
+/// and the timer handler — access is IRQ-gated (see lock audit). Slots are
+/// tombstones on death (see STATE_* docs); never removed.
 static THREADS: Mutex<Vec<Thread>> = Mutex::new(Vec::new());
 /// 0 = main loop is current; otherwise thread index + 1.
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
@@ -160,12 +179,77 @@ static MAIN_FX: Mutex<FxArea> = Mutex::new(FxArea::new());
 /// CPU ticks charged to the main loop.
 static MAIN_TICKS: AtomicU64 = AtomicU64::new(0);
 
+/// Marks the CURRENT thread as exited. Called by the trampoline when a
+/// thread's entry returns — the thread keeps executing until the next timer
+/// tick (the rotation then skips it forever; the main loop's [`reap`]
+/// frees its stack + fx area).
+///
+/// Must run on a thread's own stack — calling from the main loop is a bug
+/// (panics; main has no Thread slot to tombstone).
+pub fn thread_exit() {
+    let slot = CURRENT.load(Ordering::Relaxed);
+    assert!(slot != 0, "thread_exit: called from the main loop");
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        threads[slot - 1].state.store(STATE_EXITED, Ordering::Release);
+        serial_println!("[sched] thread '{}' exited", threads[slot - 1].name);
+    });
+}
+
+/// Frees resources of every exited thread (stack Vec + FXSAVE area) and
+/// leaves `Freed` tombstones in place. Called from the main loop (e.g. the
+/// shell's periodic sweep); IRQ-gated per the lock-audit rule.
+///
+/// Safety net on the way: if a thread's stack canary was clobbered (stack
+/// overflow deep enough to leave its Vec), reaping panics loudly instead of
+/// silently returning corrupted heap blocks to the allocator.
+pub fn reap() {
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let mut freed = 0usize;
+        for t in threads.iter_mut() {
+            if t.state
+                .compare_exchange(STATE_EXITED, STATE_FREED, Ordering::AcqRel, Ordering::Relaxed)
+                .is_err()
+            {
+                continue; // running or already freed
+            }
+            // Canary check BEFORE the stack is freed: a deep overflow writes
+            // the magic word last (stack grows downward, canary is at the
+            // very bottom).
+            let stack_ptr = t.stack.as_ptr();
+            let canary = unsafe { (stack_ptr as *const u64).read_unaligned() };
+            if canary != STACK_CANARY {
+                panic!("reap: stack canary corrupted for thread '{}' (stack overflow)", t.name);
+            }
+            // SAFETY: the fx area was leaked at spawn; its slot is a
+            // tombstone now — no code will dereference it again.
+            unsafe { drop(Box::from_raw(t.fx)) };
+            t.fx = core::ptr::null_mut();
+            // The saved context lives ON this stack; null it so any stray
+            // reader fails loudly instead of jumping into freed memory.
+            t.ctx.store(0, Ordering::Relaxed);
+            let stack = core::mem::take(&mut t.stack);
+            drop(stack); // returns the 32 KiB to the heap
+            freed += 1;
+        }
+        drop(threads);
+        if freed > 0 {
+            serial_println!("[sched] reaped {} thread stack(s)", freed);
+        }
+    });
+}
+
 /// Spawns a preemptive kernel thread running `entry` (which parks if it
 /// returns). Allocates + maps the thread stack; IRQ-gated while registering.
 pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) {
     interrupts::without_interrupts(|| {
         // Zero pages straight into the heap (no big stack temp).
-        let stack = vec![0u8; THREAD_STACK_SIZE];
+        let mut stack = vec![0u8; THREAD_STACK_SIZE];
+        // Canary at the very bottom of the stack (lowest address) — the
+        // first word a deep downward overflow would clobber.
+        let canary_bytes = STACK_CANARY.to_le_bytes();
+        stack[..8].copy_from_slice(&canary_bytes);
         // Round the stack top down to 16 bytes (SSE alignment).
         let top = (stack.as_ptr() as u64 + stack.len() as u64) & !0xF;
         let (cs, ss) = context::kernel_cs_ss();
@@ -173,21 +257,28 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) {
         let fx = Box::into_raw(Box::new(FxArea::new()));
         THREADS.lock().push(Thread {
             name,
+            state: AtomicU8::new(STATE_RUNNING),
             ctx: AtomicU64::new(ctx),
             ticks: AtomicU64::new(0),
             fx,
-            _stack: stack,
+            stack,
         });
         serial_println!("[sched] thread '{}' ready", name);
     });
 }
 
-/// Number of preemptive threads. IRQ-gated (timer handler uses this table).
+/// Number of live (running) preemptive threads.
 pub fn threads_count() -> usize {
-    interrupts::without_interrupts(|| THREADS.lock().len())
+    interrupts::without_interrupts(|| {
+        THREADS
+            .lock()
+            .iter()
+            .filter(|t| t.state.load(Ordering::Relaxed) == STATE_RUNNING)
+            .count()
+    })
 }
 
-/// `(name, ticks)` for every thread, in round-robin order.
+/// `(name, ticks)` for every RUNNING thread, in round-robin order.
 ///
 /// IRQ-gated: the timer handler takes this same lock (lock-audit rule —
 /// the gate lives in the API, not at call sites).
@@ -196,6 +287,7 @@ pub fn thread_stats() -> alloc::vec::Vec<(&'static str, u64)> {
         THREADS
             .lock()
             .iter()
+            .filter(|t| t.state.load(Ordering::Relaxed) == STATE_RUNNING)
             .map(|t| (t.name, t.ticks.load(Ordering::Relaxed)))
             .collect()
     })
@@ -251,20 +343,42 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
         }
 
         // Unified round-robin over ALL participants: main (slot 0), then
-        // threads (slots 1..=n). Switching "to main" = returning MAIN_CTX.
+        // threads (slots 1..=n). Exited/freed slots are skipped (tombstones;
+        // see STATE_* docs). Switching "to main" = returning MAIN_CTX.
         let n = threads.len();
         if n == 0 {
             return None;
         }
         let last = LAST_SERVED.load(Ordering::Relaxed);
-        let next_slot = if last == usize::MAX {
+        let mut next_slot = if last == usize::MAX {
             1 // first tick ever: serve the first thread
         } else if last + 1 > n {
             0 // wrap to main
         } else {
             last + 1
         };
+        // Skip tombstones; main (slot 0) is always eligible, so the scan
+        // terminates after at most n+1 steps.
+        let mut scans = n + 1;
+        while scans > 0 {
+            let eligible = match next_slot {
+                0 => true,
+                s => threads[s - 1].state.load(Ordering::Acquire) == STATE_RUNNING,
+            };
+            if eligible {
+                break;
+            }
+            next_slot = if next_slot + 1 > n { 0 } else { next_slot + 1 };
+            scans -= 1;
+        }
+        debug_assert!(scans > 0, "rotation scan terminated without main");
         LAST_SERVED.store(next_slot, Ordering::Relaxed);
+
+        // Switching to ourselves (all other slots dead) = no switch.
+        let current = CURRENT.load(Ordering::Relaxed);
+        if next_slot == current {
+            return None;
+        }
 
         let (who, ctx, fx_ptr) = match next_slot {
             0 => (
