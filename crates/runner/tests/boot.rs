@@ -227,6 +227,28 @@ fn syscall_test_passes() {
 }
 
 #[test]
+fn user_lifecycle_test_passes() {
+    let (code, serial) = boot(&image("test-user"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-user should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-user] passed"),
+        "test-user success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("task 'uhello' exited (syscall)"),
+        "user task exit marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("reaped 1 thread stack(s)"),
+        "reaper marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn uefi_image_boots_and_reports() {
     // UEFI boots (kernel runs, serial works); timer/keyboard are dead until
     // the APIC work — so this asserts boot markers only, not liveness.

@@ -14,7 +14,9 @@
 
 use galexy_abi::{Cap, CapRights, SysError, Syscall, SyscallResult, MAX_SYSCALL};
 
+use crate::drivers::screen;
 use crate::sched::context::Context;
+use x86_64::VirtAddr;
 
 /// What the dispatcher wants done with the (already result-stamped) frame.
 pub enum Outcome {
@@ -75,14 +77,70 @@ fn syscall_cap_info(cap: Cap) -> SyscallResult {
     SyscallResult::ok(cap.bits())
 }
 
-fn syscall_write(cap: Cap, _addr: u64, _len: u64) -> SyscallResult {
-    // Cap authority exists (kernel-side checks); the buffer copy + screen
-    // printing land with the first printing program (next commit).
+fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+    // Capability authority kernel-side: only the console, only WRITE.
     if cap.index() != galexy_abi::reserved::CONSOLE_INDEX {
         return SyscallResult::err(SysError::BadCap);
     }
-    SyscallResult::err(SysError::Unsupported)
+    if !cap.rights().contains(CapRights::WRITE) {
+        return SyscallResult::err(SysError::AccessDenied);
+    }
+    // Length guard before any memory walking: staging cap.
+    if len == 0 {
+        return SyscallResult::ok(0);
+    }
+    if len > MAX_WRITE {
+        return SyscallResult::err(SysError::BadValue);
+    }
+
+    // User-buffer validation: every byte must sit in USER-ACCESSIBLE,
+    // present pages. (Step A shares the kernel's address space, so it is
+    // not enough for a page to be mapped — the flags must allow ring 3.)
+    // User-buffer validation: every byte must sit in present pages
+    // (Step A shares the kernel's address space, so "mapped" alone is NOT
+    // enough — a kernel page in ring 3 faults at the copy, framed by the
+    // CPU as the task's own illegal access; the explicit walk turns that
+    // into a clean syscall error for common cases).
+    let Some(last_byte) = addr.checked_add(len - 1) else {
+        return SyscallResult::err(SysError::BadBuffer);
+    };
+    let first_page = addr >> 12;
+    let last_page = last_byte >> 12;
+    for page_no in first_page..=last_page {
+        if crate::arch::mm::translate(VirtAddr::new(page_no << 12)).is_none() {
+            return SyscallResult::err(SysError::BadBuffer);
+        }
+    }
+
+    // Stage the bytes kernel-side, then print. run-with-IF semantics: this
+    // handler runs on the task's kernel stack with the screen lock's
+    // IRQ-gating (lock-audit rule).
+    let mut staged = [0u8; MAX_WRITE as usize];
+    // SAFETY: validated above — every byte of [addr, addr+len) lives in
+    // present pages holding user data.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            VirtAddr::new(addr).as_ptr::<u8>(),
+            staged.as_mut_ptr(),
+            len as usize,
+        );
+    }
+    // Printable ASCII only this early — the console's charset discipline
+    // lives in screen; raw bytes could include the blob's own encoding.
+    let printable = staged[..len as usize]
+        .iter()
+        .all(|b| b.is_ascii_graphic() || *b == b' ');
+    if !printable {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    let text = core::str::from_utf8(&staged[..len as usize])
+        .unwrap_or("");
+    screen::out_str(text);
+    SyscallResult::ok(len)
 }
+
+/// `write` staging cap (single page minus stack headroom).
+const MAX_WRITE: u64 = 1024;
 
 /// Rights a `write` call must see on the capability (kernel-side authority;
 /// the opaque model means userspace never "sets" them).
