@@ -6,12 +6,13 @@
 //! Porting to another architecture means replacing this module tree — and
 //! only this module tree.
 
-mod gdt;
+pub mod gdt;
 mod idt;
 pub mod mm;
 mod pics;
 pub mod timer;
 
+pub use gdt::{set_tss_rsp0, tss_rsp0, user_cs_ss};
 pub use idt::set_page_fault_handler;
 pub use timer::tick as timer_tick;
 pub use timer::ticks as timer_ticks;

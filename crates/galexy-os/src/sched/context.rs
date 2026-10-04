@@ -37,6 +37,20 @@ pub struct Context {
     pub ss: u64,
 }
 
+impl Context {
+    /// The privilege level this frame returns into (`0` or `3` — bits 0..1
+    /// of the saved CS selector; ring 1/2 are unused by this OS).
+    ///
+    /// Frame shape is IDENTICAL for both rings: ring 0→0 and ring 3→0
+    /// interrupts push the same 5-word IRQ frame (iret semantics). What
+    /// differs per ring for ring 3→0 crossings is WHERE the frame lands
+    /// (TSS.RSP0, not the user stack) and which selectors are valid —
+    /// decided by the CPU, not this layout.
+    pub fn cpl(&self) -> u8 {
+        (self.cs & 0b11) as u8
+    }
+}
+
 /// FXSAVE area size in bytes (512, 16-byte aligned).
 pub const FX_AREA_SIZE: usize = 512;
 
@@ -177,4 +191,9 @@ extern "C" fn trampoline(entry: extern "C" fn()) {
 pub fn kernel_cs_ss() -> (u64, u64) {
     use x86_64::instructions::segmentation::{Segment, CS, SS};
     (CS::get_reg().0 as u64, SS::get_reg().0 as u64)
+}
+
+/// `(user_cs, user_ss)` selectors with RPL 3 (set by `arch::gdt`).
+pub fn user_cs_ss() -> (u64, u64) {
+    crate::arch::user_cs_ss()
 }
