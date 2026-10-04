@@ -13,7 +13,7 @@
 mod paging;
 
 pub mod heap;
-pub use paging::{map_page, phys_to_virt, translate, unmap_page};
+pub use paging::{map_page, phys_to_virt, translate, unmap_page, FreshL4, with_table};
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 

@@ -145,6 +145,20 @@ fn preempt_test_passes() {
 }
 
 #[test]
+fn freshl4_test_passes() {
+    let (code, serial) = boot(&image("test-freshl4"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-freshl4 should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-freshl4] passed"),
+        "test-freshl4 success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn uefi_image_boots_and_reports() {
     // UEFI boots (kernel runs, serial works); timer/keyboard are dead until
     // the APIC work — so this asserts boot markers only, not liveness.
