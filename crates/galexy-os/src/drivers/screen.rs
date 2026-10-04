@@ -224,11 +224,15 @@ impl ScreenWriter {
     }
 
     /// Shifts all pixels up by one line height and clears the last line.
+    ///
+    /// NOTE: `stride` is in PIXELS (bootloader doc), not bytes — the shift
+    /// amount must include `bytes_per_pixel`. (This used to be the overlap
+    /// bug: each scroll moved 6 pixel-rows instead of 18.)
     fn scroll_up(&mut self) {
         let buffer = &mut *self.fb.buffer;
         let info = self.fb.info;
 
-        let line_bytes = LINE_HEIGHT * info.stride;
+        let line_bytes = LINE_HEIGHT * info.stride * info.bytes_per_pixel;
         if line_bytes < buffer.len() {
             buffer.copy_within(line_bytes.., 0);
         }
@@ -236,6 +240,31 @@ impl ScreenWriter {
         let tail_start = buffer.len().saturating_sub(line_bytes);
         for byte in &mut buffer[tail_start..] {
             *byte = 0;
+        }
+    }
+
+    /// Fills one text line's pixels with a solid color, cursor to its start.
+    fn fill_row(&mut self, row: usize) {
+        self.clear_row_pixels(row);
+        self.char_x = 0;
+        self.char_y = row;
+    }
+
+    /// Paints all pixels of one text line's slot with the current fg color.
+    fn clear_row_pixels(&mut self, row: usize) {
+        let buffer = &mut *self.fb.buffer;
+        let info = self.fb.info;
+        let bpp = info.bytes_per_pixel;
+        let y0 = row * LINE_HEIGHT;
+        for row_px in 0..LINE_HEIGHT {
+            let y = y0 + row_px;
+            if y >= info.height {
+                break;
+            }
+            for x in 0..info.width {
+                let idx = (y * info.stride + x) * bpp;
+                Self::write_pixel(buffer, idx, info, self.fg);
+            }
         }
     }
 
@@ -295,6 +324,13 @@ pub fn init(boot_info: &mut bootloader_api::info::BootInfo) {
 
     let info = fb.info();
     let buffer = fb.into_buffer();
+    // Geometry invariant (scroll math depends on it): the reported byte
+    // length must exactly cover height rows of stride pixels.
+    assert_eq!(
+        buffer.len(),
+        info.height * info.stride * info.bytes_per_pixel,
+        "framebuffer geometry mismatch (byte_len vs height*stride*bpp)"
+    );
 
     let mut writer = ScreenWriter {
         fb: FramebufferSpec { buffer, info },
@@ -316,6 +352,31 @@ where
     if let Some(writer) = guard.as_mut() {
         f(writer);
     }
+}
+
+/// Current cursor position, in character cells.
+pub fn pos() -> (usize, usize) {
+    let mut pos = (0, 0);
+    with_lock(|screen| pos = (screen.char_x, screen.char_y));
+    pos
+}
+
+/// Moves the cursor to a character cell (no output). For status-bar redraws
+/// and fixed-position UI.
+pub fn set_pos(char_x: usize, char_y: usize) {
+    with_lock(|screen| {
+        screen.char_x = char_x;
+        screen.char_y = char_y;
+    });
+}
+
+/// Fills one text line's pixels with a solid color and moves the cursor to
+/// that line's start — the base for status bars (write text over it after).
+pub fn fill_row(row: usize, color: Color) {
+    with_lock(|screen| {
+        screen.fg = color;
+        screen.fill_row(row);
+    });
 }
 
 /// Writes one character to the screen.
