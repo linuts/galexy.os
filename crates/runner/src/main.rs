@@ -1,31 +1,32 @@
 //! The runner host crate: builds disk images (via build.rs) and boots the
 //! normal kernel in QEMU (`cargo run`). Boot tests live in `tests/`.
 
+/// Looks up `name`'s image path in the `GALEXY_IMAGES` manifest
+/// (`name:bios_path,uefi_path` entries); `kind` selects bios/uefi.
+fn image_path(name: &str, kind: &str) -> String {
+    let slot = match kind {
+        "bios" => 0,
+        "uefi" => 1,
+        _ => panic!("unknown image kind {kind}"),
+    };
+    env!("GALEXY_IMAGES")
+        .split(';')
+        .find_map(|entry| {
+            let (entry_name, rest) = entry.split_once(':')?;
+            if entry_name != name {
+                return None;
+            }
+            rest.split(',').nth(slot).map(|p| p.to_string())
+        })
+        .unwrap_or_else(|| panic!("no {name} {kind} image built"))
+}
+
 fn main() {
     let uefi = std::env::args().any(|arg| arg == "--uefi");
     let img_path = if uefi {
-        // Manifest entries are `name:bios_path,uefi_path`.
-        env!("GALEXY_IMAGES")
-            .split(';')
-            .find_map(|entry| {
-                let (name, rest) = entry.split_once(':')?;
-                if name != "galexy-os" {
-                    return None;
-                }
-                rest.split_once(',').map(|(_, uefi)| uefi.to_string())
-            })
-            .expect("no galexy-os uefi image built")
+        image_path("galexy-os", "uefi")
     } else {
-        env!("GALEXY_IMAGES")
-            .split(';')
-            .find_map(|entry| {
-                let (name, rest) = entry.split_once(':')?;
-                if name != "galexy-os" {
-                    return None;
-                }
-                rest.split_once(',').map(|(bios, _)| bios.to_string())
-            })
-            .expect("no galexy-os bios image built")
+        image_path("galexy-os", "bios")
     };
 
     let mut cmd = std::process::Command::new("qemu-system-x86_64");

@@ -62,5 +62,5 @@ enforce these.
 ## Git
 
 - Commit message style: `milestone: short imperative summary` (e.g.
-  `m2: vga scrolling`).
+  `mm: frame allocator over boot memory map`).
 - Never commit build artifacts; `target/` and `*.img` are gitignored.

@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{boot, boot_liveness, image, QEMU_EXIT_SUCCESS};
+use common::{boot, boot_liveness, boot_uefi, image, QEMU_EXIT_SUCCESS};
 use std::time::Duration;
 
 #[test]
@@ -123,6 +123,31 @@ fn preempt_test_passes() {
     assert!(
         serial.contains("[test-preempt] passed"),
         "test-preempt success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn uefi_image_boots_and_reports() {
+    // UEFI boots (kernel runs, serial works); timer/keyboard are dead until
+    // the APIC work — so this asserts boot markers only, not liveness.
+    //
+    // OVMF's first-boot device enumeration is flaky under QEMU (the disk is
+    // sometimes "Not Found" when BDS builds boot options) — retry up to 3x.
+    let image = image("galexy-os");
+    let mut last = String::new();
+    for _ in 0..3 {
+        last = boot_uefi(&image, Duration::from_secs(25));
+        if last.contains("boot info: rsdp_addr") {
+            break;
+        }
+    }
+    assert!(
+        last.contains("boot info: rsdp_addr"),
+        "UEFI boot info marker missing after 3 attempts; serial:\n{last}"
+    );
+    assert!(
+        last.contains("[mm] frame allocator ready"),
+        "UEFI memory bring-up marker missing; serial:\n{last}"
     );
 }
 

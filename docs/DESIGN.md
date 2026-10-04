@@ -16,7 +16,7 @@ crates/
 │       ├── lib.rs       # shared init, panic handler, QEMU exit plumbing
 │       ├── main.rs      # normal kernel: wiring only (init order + main loop)
 │       ├── bin/         # test kernels: one bin per QEMU integration test
-│       ├── echo.rs      # the "shell": consumes driver input, produces screen output
+│       ├── shell.rs     # the "shell": consumes driver input, produces screen output
 │       ├── arch/        # THE PORT WALL: x86_64 hardware code lives only here
 │       ├── drivers/     # device drivers (screen, serial, keyboard, ...)
 │       └── sched/       # scheduler (planned; hook point documented in code)
@@ -32,21 +32,30 @@ crates/
 1. **`main.rs` is a wiring file.** Logic never accumulates there — it moves
    into the owning layer module.
 2. **`arch/` is the port wall.** Only `arch/` touches I/O ports, CPU control
-   registers, or platform specifics. Drivers and primitives call `arch`
-   APIs. Porting to another arch = rewriting `arch/` alone.
+   registers, MSRs, or platform specifics. Drivers and primitives call
+   `arch` APIs. Porting to another arch = rewriting `arch/` alone.
 3. **Drivers never call drivers.** Shared behavior goes through `galexy-core`
-   types/traits; shared *policies* stay in the caller (`echo`).
+   types/traits; shared *policies* stay in the caller (`shell`).
 4. **`galexy-core` stays alloc-free** and platform-independent (no `arch`
    deps) — it's the bottom of the dependency stack:
-   `bins → lib → (echo, sched, drivers)`, `drivers → arch, galexy-core`,
-   `sched → galexy-core`, `galexy-core → (nothing)`.
+   `bins → lib → (shell, banner, sched, drivers)`,
+   `drivers → arch, galexy-core`, `sched → arch, galexy-core`,
+   `galexy-core → (nothing)`.
 5. **Crate-lift policy.** A module becomes its own workspace crate only when
    it gains a *second consumer* (e.g. `kcore` → `galexy-core` when the test
    harness needed host-testable primitives; a driver splits out when
    userspace visibility is needed). Lift stable boundaries only — never "to
    make it look organized".
 6. **Userspace programs are always their own crates** under
-   `crates/userspace/` — never modules of the kernel.
+   `crates/userspace/` — never modules of the kernel. Until a loader exists,
+   first user programs are hand-assembled flat blobs embedded in the kernel;
+   the contract for `crates/userspace/` (one crate per program, linked
+   against a small `galexy-rt` runtime, loaded by the kernel) applies from
+   the first real program onward.
+7. **Syscall layering** (user space, planned): the syscall *mechanism*
+   (MSR setup, naked entry, frame building) lives in `arch/`; the dispatch
+   table (which syscall does what) lives in `sched/syscalls.rs` — it is
+   scheduler-adjacent policy, not hardware.
 
 ## Boot flow
 
@@ -161,7 +170,7 @@ Init order: GDT/TSS → IDT → PICs → timer config → `sti`.
 - `linked_list_allocator::LockedHeap` as the `#[global_allocator`; 400 KiB
   at a fixed fresh virtual area (P4 entry 43), mapped by our mapper from
   frame-allocator frames during `mm::init` (memory bring-up is one call).
-- `echo` is the first heap consumer (String line buffers); the scheduler's
+- `shell` is the first heap consumer (String line buffers); the scheduler's
   task queues are the planned next one. Host unit tests never touch the
   heap (no_std tests of `galexy-core` are allocation-free by rule).
 

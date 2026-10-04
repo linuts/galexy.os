@@ -43,8 +43,6 @@ pub fn image(name: &str) -> Image {
 
 /// Exit code the `isa-debug-exit` device produces for `QemuExitCode::Success`.
 pub const QEMU_EXIT_SUCCESS: i32 = 33;
-/// Exit code the `isa-debug-exit` device produces for `QemuExitCode::Failed`.
-pub const QEMU_EXIT_FAILED: i32 = 35;
 
 /// How long a kernel may run before it is treated as hung.
 const TEST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -56,12 +54,12 @@ fn serial_log_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("galexy-serial-{}-{n}.log", name.replace('-', "_")))
 }
 
-/// Builds the QEMU command for `image`: headless, COM1 to `serial_path`,
+/// Builds the QEMU command for `img_path`: headless, COM1 to `serial_path`,
 /// writable-overlays (`-snapshot`) so parallel tests never conflict.
-fn qemu_command(image: &Image, serial_path: &PathBuf) -> Command {
+fn qemu_command(img_path: &str, serial_path: &PathBuf) -> Command {
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.arg("-drive")
-        .arg(format!("format=raw,file={}", image.bios))
+        .arg(format!("format=raw,file={img_path}"))
         .arg("-snapshot")
         .arg("-display")
         .arg("none")
@@ -83,7 +81,7 @@ fn qemu_command(image: &Image, serial_path: &PathBuf) -> Command {
 /// `None` means timeout/kill) and everything the guest wrote to COM1.
 pub fn boot(image: &Image) -> (Option<i32>, String) {
     let serial_path = serial_log_path(&image.name);
-    let mut child = qemu_command(image, &serial_path)
+    let mut child = qemu_command(&image.bios, &serial_path)
         .spawn()
         .expect("failed to launch qemu-system-x86_64 (install qemu-desktop)");
 
@@ -114,11 +112,34 @@ pub fn boot(image: &Image) -> (Option<i32>, String) {
     (code, serial)
 }
 
+/// Boots `image` under UEFI (OVMF) and kills the guest after `timeout`.
+/// Returns the serial output.
+pub fn boot_uefi(image: &Image, timeout: Duration) -> String {
+    const OVMF_FD_DEFAULT: &str = "/usr/share/ovmf/x64/OVMF.4m.fd";
+    let ovmf_fd = std::env::var("OVMF_FD").unwrap_or_else(|_| OVMF_FD_DEFAULT.into());
+
+    let serial_path = serial_log_path(&image.name);
+    let mut cmd = qemu_command(&image.uefi, &serial_path);
+    cmd.arg("-bios").arg(ovmf_fd);
+    let mut child = cmd.spawn().expect("failed to launch qemu-system-x86_64");
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if child.try_wait().expect("try_wait failed").is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+
+    std::fs::read_to_string(&serial_path).unwrap_or_default()
+}
+
 /// Boots `image` and kills the guest after `timeout` instead of failing —
 /// for liveness checks of the interactive kernel (it never exits on its own).
 pub fn boot_liveness(image: &Image, timeout: Duration) -> String {
     let serial_path = serial_log_path(&image.name);
-    let mut child = qemu_command(image, &serial_path)
+    let mut child = qemu_command(&image.bios, &serial_path)
         .spawn()
         .expect("failed to launch qemu-system-x86_64");
     let deadline = Instant::now() + timeout;

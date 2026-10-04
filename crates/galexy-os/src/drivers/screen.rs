@@ -394,8 +394,6 @@ pub fn out_str(s: &str) {
 }
 
 /// Clears the screen.
-// Part of the terminal-shaped module API; no consumer yet.
-#[allow(dead_code)]
 pub fn clear_screen() {
     with_lock(|screen| screen.clear());
 }

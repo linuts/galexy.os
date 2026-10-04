@@ -10,8 +10,6 @@
 //! FPU/SSE: kernel code may auto-vectorize (e.g. memcpy), so XMM state is
 //! preserved with FXSAVE/FXRSTOR around the switch, into per-task save areas.
 
-use x86_64::VirtAddr;
-
 /// Full CPU context of a preempted task, as laid out on its stack by the
 /// naked timer wrapper (rising addresses: pushed GPRs first, then the IRQ
 /// frame pushed by the CPU).
@@ -171,9 +169,4 @@ extern "C" fn trampoline(entry: extern "C" fn()) {
 pub fn kernel_cs_ss() -> (u64, u64) {
     use x86_64::instructions::segmentation::{Segment, CS, SS};
     (CS::get_reg().0 as u64, SS::get_reg().0 as u64)
-}
-
-/// The saved-context address of a task's stack for VirtAddr conversions.
-pub fn ctx_virt(addr: u64) -> VirtAddr {
-    VirtAddr::new(addr)
 }

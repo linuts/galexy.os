@@ -135,27 +135,19 @@ Tracking document for concrete work items. Big-picture direction lives in
 
 ## Known limitations / follow-ups
 
+- [ ] UEFI: timer + keyboard dead under UEFI — legacy PIC doesn't exist;
+      needs APIC under `arch/` (boot-only behavior now guarded by the UEFI
+      smoke test)
+- [ ] Thread guard pages: a too-deep thread silently corrupts the heap
+- [ ] Thread reaper: returning threads park; stacks leak
 - [ ] Status bar can overwrite the typing line when the screen is full
       (cursor is restored, but the in-progress line's glyphs are clipped)
-- [ ] Thread stacks are heap `Box`es (no guard pages) — a thread that
-      recurses too deep corrupts the heap silently; guard pages = future
-- [ ] Threads never terminate (no reaper; returning threads park) — task
-      exit + stack reclamation comes with userspace
-- [ ] `run()` sweep runs a fixed number of `run_once` steps — scheduling
-      fairness nuance when tasks finish mid-sweep (documented, fine for now)
-- [ ] TaskCtx is 8 fixed u64 slots — a proper boxed state enum once tasks
-      get richer
-- [ ] Heap is a fixed 400 KiB area — grow-on-demand (allocator `grow`)
-      comes with the scheduler phase if needed
+- [ ] Heap is a fixed 400 KiB area — grow-on-demand when needed
 - [ ] Framebuffer is used as the bootloader mapped it (deliberate — BootInfo
-      exposes no physical framebuffer address; a principled remap would have
-      to match the `FrameBufferReserved` memory region; revisit with the
-      heap phase)
-- [ ] UEFI: timer + keyboard don't work yet — legacy PIC doesn't exist under
-      UEFI; needs APIC setup under `arch/` (see bootloader migration doc)
+      exposes no physical framebuffer address; revisit with isolation work)
 - [ ] Page mapping concurrency: mapper ops are main-loop-only right now;
-      IRQ handlers never touch MAPPER (verify again with preemption)
+      IRQ handlers never touch MAPPER (verify again with ring 3)
 - [ ] Screen: text-mode cursor (blinking), tab handling, ANSI-ish output
 - [ ] Keyboard queue overflow silently drops keys — fine for now, revisit
-- [ ] Echo uses a fixed 128-char line buffer — replace with heap strings once
-      alloc lands
+- [ ] Cooperative-scheduler nits: `run()` sweep fairness mid-sweep;
+      TaskCtx's 8 fixed u64 slots (boxed state enum when tasks get richer)

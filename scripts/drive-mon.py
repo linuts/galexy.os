@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 """Reads one HMP command per line from stdin and sends them to the QEMU
-monitor socket at /tmp/opencode/mon.sock, waiting for (gdb/qemu) prompt."""
+monitor socket at $WORKDIR/mon.sock (default /tmp/opencode).
 
-import socket, sys, time
+A bare `screendump` line is rewritten to use $DUMPPATH (default
+$WORKDIR/shot.ppm), matching boot-test.sh's conventions."""
 
-SOCK = '/tmp/opencode/mon.sock'
+import os
+import socket
+import sys
+import time
+
+WORKDIR = os.environ.get('WORKDIR', '/tmp/opencode')
+DUMPPATH = os.environ.get('DUMPPATH', os.path.join(WORKDIR, 'shot.ppm'))
+SOCK = os.path.join(WORKDIR, 'mon.sock')
 
 s = socket.socket(socket.AF_UNIX)
 s.connect(SOCK)
@@ -17,6 +25,8 @@ for line in sys.stdin:
     line = line.strip()
     if not line:
         continue
+    if line == 'screendump':
+        line = 'screendump ' + DUMPPATH
     s.send((line + '\n').encode())
     time.sleep(0.3)
     try:

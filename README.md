@@ -1,8 +1,9 @@
 # galexy.os
 
 A small, modular operating system written in Rust. Bootable on BIOS and UEFI,
-with a basic VGA text-mode TTY and PS/2 keyboard input — currently an echo
-shell, growing toward scheduling and beyond.
+with a pixel-framebuffer TTY, PS/2 keyboard input, memory management,
+cooperative tasks and timer-preemptive kernel threads — currently a shell
+with live system stats, growing toward user space and beyond.
 
 ## Features
 
@@ -12,7 +13,8 @@ shell, growing toward scheduling and beyond.
 - [x] Serial port logging (for debugging, never on screen)
 - [x] Interrupts: GDT, IDT, remapped PICs, ~1 kHz PIT timer tick
 - [x] PS/2 keyboard input with scancode translation
-- [x] Echo shell: type a line, Enter echoes it back, Backspace edits
+- [x] Shell: line editing (Backspace), commands (`help`, `stats`, `threads`,
+      `tasks`, `clear`, `about`), echo fallback for unknown lines
 - [x] Physical frame allocator over the bootloader memory map
 - [x] Paging: map/unmap pages with TLB flushes, page-fault reporting (CR2)
 - [x] Kernel heap (`alloc`): String/Vec/Box work everywhere
@@ -93,13 +95,14 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
 │   │       ├── lib.rs               # shared init, panic handler, exit_qemu
 │   │       ├── main.rs              # normal kernel: wiring + main loop
 │   │       ├── bin/                 # test kernels (one per QEMU test)
-│   │       ├── echo.rs              # the echo "shell"
-│   │       ├── arch/                # the port wall: GDT/TSS, IDT, PICs, PIT
+│   │       ├── shell.rs             # the shell: commands + status bar
+│   │       ├── banner.rs            # boot feature showcase
+│   │       ├── arch/                # the port wall: GDT/TSS, IDT, PICs, PIT, mm
 │   │       ├── drivers/             # screen, serial, keyboard
 │   │       ├── macros.rs            # print!/println! plumbing
-│   │       └── sched/               # scheduler (planned; hook point documented)
-│   ├── galexy-core/                 # kernel primitives (Ring, ...), host-testable
-│   ├── userspace/                   # ring-3 programs later (planned)
+│   │       └── sched/               # tasks, preemptive threads, context asm
+│   ├── galexy-core/                 # kernel primitives (Ring, Bitmap), host-testable
+│   ├── userspace/                   # ring-3 programs later (planned; see DESIGN)
 │   └── runner/                      # host crate: images, QEMU, boot tests
 │       ├── build.rs                 # bootloader image builder (per kernel bin)
 │       ├── src/main.rs              # QEMU invocation (--uefi flag)
