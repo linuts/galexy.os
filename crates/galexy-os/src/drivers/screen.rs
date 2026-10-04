@@ -416,6 +416,14 @@ pub fn framebuffer_info() -> Option<bootloader_api::info::FrameBufferInfo> {
     guard.as_ref().map(|screen| screen.fb.info)
 }
 
+/// Terminal size in character cells (rows, cols), if initialized.
+pub fn terminal_size() -> Option<(usize, usize)> {
+    let guard = SCREEN.lock();
+    guard
+        .as_ref()
+        .map(|screen| (screen.max_char_y(), screen.max_char_x()))
+}
+
 /// Returns the (bootloader-mapped) virtual address of the framebuffer, if
 /// initialized. Read-only inspection (tests); writes must go through the
 /// screen API.

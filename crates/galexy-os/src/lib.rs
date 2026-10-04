@@ -21,8 +21,8 @@ mod macros;
 pub mod arch;
 pub mod banner;
 pub mod drivers;
-pub mod echo;
 pub mod sched;
+pub mod shell;
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
 use core::panic::PanicInfo;

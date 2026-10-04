@@ -184,9 +184,15 @@ returns 0 to resume the outgoing task. Each thread owns:
 
 **Lock audit rule (preemption)**: the ONLY preemptor is the timer IRQ, so
 *any lock held by preemptable code must be held with interrupts off*
-(`without_interrupts`). Applied to: `screen::_print`, keyboard queue
-ops, the heap (`InterruptSafeAlloc` GlobalAlloc adapter), and the thread
-table. The scheduler switch itself holds NO lock across the RSP swap.
+(`without_interrupts`). The gate lives in the module's public API — never
+at call sites (a call-site gate gets forgotten by the next caller; this
+caused a real wedge: `thread_stats` once took the sched table ungated).
+Applied to: `screen::_print`, keyboard queue ops, the heap
+(`InterruptSafeAlloc` GlobalAlloc adapter + stats accessors), the sched
+table accessors, and `shell::render_status_bar` (gated as a whole). The
+scheduler switch itself holds NO lock across the RSP swap. Locks the
+timer handler never touches (e.g. the screen lock) may be held across
+preemption safely.
 Previously-missed `ltr`: the TSS must be loaded after `lgdt` or IST
 dispatch reads a stale descriptor.
 
@@ -200,13 +206,15 @@ banner reports live counts.
   heap-start translation from the mapper, heap size from `heap`). Adding a
   subsystem = adding a line here.
 
-### echo — "the shell"
+### shell — "the shell" (`shell.rs`)
 
-Main loop: `echo::poll()` drains the key queue — printable chars echo to the
-screen and buffer up; Enter flushes the line as `echo: <text>` and prints a
-fresh `galexy> ` prompt; Backspace erases via `screen::backspace()`. Lines
-are fixed 128-char buffers until `alloc` lands. Later, the shell becomes a
-task the scheduler runs.
+Main loop: drains the key queue — printable chars echo + buffer up; Enter
+dispatches (`help`, `stats`, `tasks`, `threads`, `clear`, `about`;
+unknown lines echo back — the original echo-shell behavior); Backspace
+erases. The status bar (`render_status_bar`) redraws the bottom line
+in-place once per second (uptime + per-thread tick counts + frames free)
+with cursor save/restore — the "quiet OS" demo: everything observable as
+live numbers, zero background noise.
 
 ## Concurrency model (pre-scheduler, single-core)
 

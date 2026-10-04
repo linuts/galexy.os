@@ -29,3 +29,8 @@ pub fn tick() {
         crate::serial_println!("[timer] {}s up", n / 1000);
     }
 }
+
+/// Number of timer ticks since boot (monotonic, ~1 kHz resolution).
+pub fn ticks() -> u64 {
+    TICKS.load(Ordering::Relaxed)
+}

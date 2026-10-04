@@ -14,6 +14,7 @@ pub mod timer;
 
 pub use idt::set_page_fault_handler;
 pub use timer::tick as timer_tick;
+pub use timer::ticks as timer_ticks;
 
 /// Signals end-of-interrupt for the timer vector (called by the timer
 /// switch before entering the next task).

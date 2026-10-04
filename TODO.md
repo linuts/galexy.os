@@ -119,8 +119,24 @@ Tracking document for concrete work items. Big-picture direction lives in
 - [x] `bin/test-preempt.rs`: two never-yielding counter threads, both
       progress + round-robin fairness asserted; verified (exit 33)
 
+## Milestone 11 — Quiet OS demo ✅
+
+- [x] Per-thread CPU tick accounting (charged in the timer switch; main
+      loop = slot 0); `thread_stats()`/`main_ticks()`
+- [x] Status bar: fixed bottom line, redrawn in place every second
+      (uptime ticks, per-thread ticks, frames free) with cursor
+      save/restore — IRQ-gated as a whole (lock-audit rule)
+- [x] `echo.rs` -> `shell.rs`: `help`, `stats`, `tasks`, `threads`,
+      `clear`, `about`; unknown lines still echo; silent demo threads
+      (noise removed from boot)
+- [x] Live demo verified across 3 screendumps: bar numbers change over
+      time, command output legible, heartbeats continue (wedge fixed:
+      `thread_stats` was taking the sched table lock ungated!)
+
 ## Known limitations / follow-ups
 
+- [ ] Status bar can overwrite the typing line when the screen is full
+      (cursor is restored, but the in-progress line's glyphs are clipped)
 - [ ] Thread stacks are heap `Box`es (no guard pages) — a thread that
       recurses too deep corrupts the heap silently; guard pages = future
 - [ ] Threads never terminate (no reaper; returning threads park) — task

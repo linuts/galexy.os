@@ -128,8 +128,12 @@ impl FxArea {
 }
 
 struct Thread {
+    /// For status/ps display.
+    name: &'static str,
     /// Saved context pointer; valid while the thread is NOT running.
     ctx: AtomicU64,
+    /// Timer ticks charged to this thread (CPU-time attribution).
+    ticks: AtomicU64,
     /// Leaked (stable) FXSAVE area — freed never (kernel-lifetime threads).
     fx: *mut FxArea,
     /// Owns the stack memory; the saved context points inside it. The Vec
@@ -153,6 +157,8 @@ static LAST_SERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 /// Main loop's FXSAVE area (FxArea is 16-aligned).
 static MAIN_FX: Mutex<FxArea> = Mutex::new(FxArea::new());
+/// CPU ticks charged to the main loop.
+static MAIN_TICKS: AtomicU64 = AtomicU64::new(0);
 
 /// Spawns a preemptive kernel thread running `entry` (which parks if it
 /// returns). Allocates + maps the thread stack; IRQ-gated while registering.
@@ -166,7 +172,9 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) {
         let ctx = unsafe { context::init_stack(top, entry, cs, ss) };
         let fx = Box::into_raw(Box::new(FxArea::new()));
         THREADS.lock().push(Thread {
+            name,
             ctx: AtomicU64::new(ctx),
+            ticks: AtomicU64::new(0),
             fx,
             _stack: stack,
         });
@@ -174,9 +182,28 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) {
     });
 }
 
-/// Number of preemptive threads.
+/// Number of preemptive threads. IRQ-gated (timer handler uses this table).
 pub fn threads_count() -> usize {
-    THREADS.lock().len()
+    interrupts::without_interrupts(|| THREADS.lock().len())
+}
+
+/// `(name, ticks)` for every thread, in round-robin order.
+///
+/// IRQ-gated: the timer handler takes this same lock (lock-audit rule —
+/// the gate lives in the API, not at call sites).
+pub fn thread_stats() -> alloc::vec::Vec<(&'static str, u64)> {
+    interrupts::without_interrupts(|| {
+        THREADS
+            .lock()
+            .iter()
+            .map(|t| (t.name, t.ticks.load(Ordering::Relaxed)))
+            .collect()
+    })
+}
+
+/// CPU ticks charged to the main loop (slot 0 of the rotation).
+pub fn main_ticks() -> u64 {
+    MAIN_TICKS.load(Ordering::Relaxed)
 }
 
 /// The timer switch: saves the outgoing task's context + FPU state (main
@@ -198,6 +225,16 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
     let next_ctx = interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
         let current = CURRENT.load(Ordering::Relaxed);
+
+        // CPU-time attribution: this tick goes to whoever was running.
+        match current {
+            0 => {
+                MAIN_TICKS.fetch_add(1, Ordering::Relaxed);
+            }
+            i => {
+                threads[i - 1].ticks.fetch_add(1, Ordering::Relaxed);
+            }
+        }
 
         // Save the outgoing task's context + FPU state.
         match current {

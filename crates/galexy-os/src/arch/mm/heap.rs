@@ -70,3 +70,15 @@ pub fn init() {
 pub fn stats() -> (u64, u64) {
     (HEAP_START, HEAP_SIZE as u64)
 }
+
+/// Bytes currently allocated on the heap. IRQ-gated (heap lock).
+pub fn used_bytes() -> usize {
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| INNER.lock().used())
+}
+
+/// Bytes currently free on the heap. IRQ-gated (heap lock).
+pub fn free_bytes() -> usize {
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| INNER.lock().free())
+}

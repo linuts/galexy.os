@@ -17,7 +17,8 @@ shell, growing toward scheduling and beyond.
 - [x] Paging: map/unmap pages with TLB flushes, page-fault reporting (CR2)
 - [x] Kernel heap (`alloc`): String/Vec/Box work everywhere
 - [x] Cooperative round-robin tasks + timer-preemptive kernel threads
-- [x] Boot banner: feature showcase on boot
+- [x] Shell with commands (`help`, `stats`, `threads`, ...) + live status
+      bar ("quiet OS" demo)
 - [x] Test harness: host unit tests + per-kernel QEMU integration tests
 - [ ] User space
 

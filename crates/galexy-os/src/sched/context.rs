@@ -161,9 +161,7 @@ pub const INITIAL_CONTEXT_SIZE: u64 = 1024;
 /// First-run landing pad: runs the task's entry, then parks if it returns
 /// (kernel threads are not expected to return; no reaper yet).
 extern "C" fn trampoline(entry: extern "C" fn()) {
-    crate::serial_println!("[sched] trampoline entered");
     entry();
-    crate::serial_println!("[sched] thread returned; parking");
     loop {
         x86_64::instructions::hlt();
     }

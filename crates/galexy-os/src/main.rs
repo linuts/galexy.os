@@ -1,10 +1,10 @@
-//! The normal galexy.os kernel: boot, init, feature banner, echo shell.
+//! The normal galexy.os kernel: boot, init, feature banner, shell loop.
 
 #![no_std]
 #![no_main]
 
 use bootloader_api::{entry_point, BootInfo};
-use galexy_os::{banner, drivers::screen, echo, serial_println};
+use galexy_os::{banner, drivers::screen, sched, serial_println, shell};
 
 entry_point!(kernel_main, config = &galexy_os::BOOTLOADER_CONFIG);
 
@@ -20,13 +20,20 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     );
     galexy_os::arch::mm::init(boot_info); // frames + paging + heap
     galexy_os::arch::init(); // interrupts last to init: handlers depend on drivers
-    galexy_os::sched::init();
-    galexy_os::sched::demo::spawn_all();
+    sched::init();
+    sched::demo::spawn_all(); // silent preemptive threads
     banner::show();
+    let mut last_second = 0u64;
     loop {
+        // Status bar refresh, once per second (timer-driven).
+        let second = galexy_os::arch::timer_ticks() / 1000;
+        if second != last_second {
+            last_second = second;
+            shell::render_status_bar();
+        }
         // Serve input, sweep tasks, then sleep until the next interrupt.
-        echo::poll();
-        galexy_os::sched::run();
+        shell::poll();
+        sched::run();
         x86_64::instructions::hlt();
     }
 }

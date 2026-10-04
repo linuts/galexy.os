@@ -84,10 +84,16 @@ pub fn show() {
     );
     screen::set_color(TEXT_COLOR);
 
-    screen::out_str("\nType a line - Enter echoes it back, Backspace edits.\n\n");
+    // Shell
+    screen::set_color(OK_COLOR);
+    print!("[ok] ");
+    screen::set_color(TEXT_COLOR);
+    print!("shell: type 'help' for commands\n");
+
+    screen::out_str("\n\n");
 
     // First prompt
-    screen::set_color(crate::echo::PROMPT_COLOR);
+    screen::set_color(crate::shell::PROMPT_COLOR);
     screen::out_str("galexy> ");
     screen::set_color(TEXT_COLOR);
 }
