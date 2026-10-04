@@ -8,6 +8,7 @@
 
 mod gdt;
 mod idt;
+pub mod mm;
 mod pics;
 mod timer;
 

@@ -45,6 +45,22 @@ Tracking document for concrete work items. Big-picture direction lives in
       markers, including a liveness check of the interactive kernel
 - [ ] More test kernels as subsystems land (interrupt latency, memory map)
 
+## Milestone 6 — Physical memory (frame allocator) ✅
+
+- [x] `galexy-core::Bitmap` (fixed bitset, `fill`/`set`/`test`/first-clear)
+      with host unit tests (10/10 across Bitmap + Ring)
+- [x] Shared `BootloaderConfig`: kernel stack 256 KiB, physical memory mapped
+      at fixed `0x0000_4000_0000_0000`, recursive page table at canonical
+      P4-index-511 address (note: must be sign-extended + 512-GiB aligned!)
+- [x] `arch/mm.rs`: first-fit frame allocator over `BootInfo` memory map,
+      `.bss`-resident bitmap pair (used/usable), double-free + non-usable
+      dealloc panics
+- [x] `bin/test-memory.rs`: alloc → write/read roundtrip via phys offset →
+      dealloc → first-fit reuse → expected double-free panic; verified
+      (31239 free frames, exit 33)
+- [ ] Extend bitmap coverage beyond 512 MiB when RAM grows (documented
+      serial warning already)
+
 ## Known limitations / follow-ups
 
 - [ ] UEFI: timer + keyboard don't work yet — legacy PIC doesn't exist under

@@ -8,7 +8,7 @@ use bootloader_api::{entry_point, BootInfo};
 use galexy_core::Ring;
 use galexy_os::{drivers::screen, exit_qemu, println, serial_println, QemuExitCode};
 
-entry_point!(test_main_entry);
+entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
 fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galexy_os::init();

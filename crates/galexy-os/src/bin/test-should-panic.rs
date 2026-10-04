@@ -7,7 +7,7 @@
 use bootloader_api::{entry_point, BootInfo};
 use galexy_os::{expect_panic, serial_println};
 
-entry_point!(test_main_entry);
+entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
 fn test_main_entry(_boot_info: &'static mut BootInfo) -> ! {
     galexy_os::init();

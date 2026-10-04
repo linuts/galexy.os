@@ -13,8 +13,10 @@ shell, growing toward scheduling and beyond.
 - [x] Interrupts: GDT, IDT, remapped PICs, ~1 kHz PIT timer tick
 - [x] PS/2 keyboard input with scancode translation
 - [x] Echo shell: type a line, Enter echoes it back, Backspace edits
-- [ ] Physical memory manager
+- [x] Physical frame allocator over the bootloader memory map
+- [x] Test harness: host unit tests + per-kernel QEMU integration tests
 - [ ] Paging / virtual memory
+- [ ] Heap (`alloc`)
 - [ ] Preemptive scheduler
 - [ ] User space
 

@@ -123,6 +123,22 @@ Init order: GDT/TSS → IDT → PICs → timer config → `sti`.
   heartbeats over serial once per second. **Scheduler phase swaps this
   handler body, nothing else changes.**
 
+### arch/mm — "physical memory" (arch/)
+
+- Frame allocator over the `BootInfo` memory map: only `Usable` regions are
+  allocatable, tracked in `.bss`-resident bitmap pair (`USED`/`USABLE`,
+  fixed lock order USED→USABLE), 512 MiB coverage (beyond that: serial
+  warning + frames stay unused).
+- `allocate_frame()` is first-fit; `deallocate_frame` panics on double-free
+  and on non-`Usable` frames — bootloader/kernel memory protected by
+  construction.
+- Access contract: `physical_memory_offset` (fixed `0x0000_4000_0000_0000`
+  via `BOOTLOADER_CONFIG`) converts allocated-frame physical addresses to
+  virtual ones. Allocated frames are otherwise unmapped → exclusive access.
+- The recursive page table is mapped at the canonical P4-index-511 address
+  (`(0xFFFF << 48) | (511 << 39)` — MUST be sign-extended AND 512-GiB
+  aligned, or the bootloader panics at boot). Paging phase consumes this.
+
 ### echo — "the shell"
 
 Main loop: `echo::poll()` drains the key queue — printable chars echo to the

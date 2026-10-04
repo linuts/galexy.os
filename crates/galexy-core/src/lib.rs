@@ -9,9 +9,13 @@
 #![deny(clippy::all)]
 #![deny(missing_docs)]
 
+mod bitmap;
 mod ring;
 
 #[cfg(test)]
+mod bitmap_test;
+#[cfg(test)]
 mod ring_test;
 
+pub use bitmap::Bitmap;
 pub use ring::Ring;

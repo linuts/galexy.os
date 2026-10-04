@@ -17,9 +17,26 @@ pub mod sched;
 #[macro_use]
 mod macros;
 
+use bootloader_api::config::{BootloaderConfig, Mapping};
 use core::panic::PanicInfo;
 use spin::Mutex;
 use x86_64::instructions::port::Port;
+
+/// Bootloader configuration shared by every kernel binary.
+///
+/// Requests fixed mappings for physical memory (gives us
+/// `BootInfo::physical_memory_offset`) and the recursive page table
+/// (groundwork for the paging phase).
+pub static BOOTLOADER_CONFIG: BootloaderConfig = {
+    let mut config = BootloaderConfig::new_default();
+    config.kernel_stack_size = 256 * 1024; // default 80 KiB is tight for mm init
+    config.mappings.physical_memory = Some(Mapping::FixedAddress(0x0000_4000_0000_0000));
+    // Canonical, 512-GiB-aligned address whose P4 index is 511: the classic
+    // top-of-address-space recursive page-table mapping.
+    config.mappings.page_table_recursive =
+        Some(Mapping::FixedAddress((0xFFFF << 48) | (511 << 39)));
+    config
+};
 
 /// Exit codes delivered to QEMU through the `isa-debug-exit` device
 /// (registered by the runner at I/O port `0xF4`).
@@ -52,8 +69,9 @@ pub fn exit_qemu(exit_code: QemuExitCode) -> ! {
 /// intentional panic; the panic handler matches it against the panic location.
 static EXPECTED_PANIC: Mutex<Option<&'static str>> = Mutex::new(None);
 
-/// Registers that the next panic is intentional and must occur in a file
-/// whose path contains `marker`; such panics exit QEMU with Success.
+/// Registers that the next panic is intentional: the panic handler matches
+/// `marker` against the panic location's file path or the panic message; a
+/// match exits QEMU with Success instead of Failed.
 pub fn expect_panic(marker: &'static str) {
     *EXPECTED_PANIC.lock() = Some(marker);
 }
@@ -73,10 +91,13 @@ fn panic(info: &PanicInfo) -> ! {
     serial_println!("[PANIC] {}", info);
     let expected = EXPECTED_PANIC.lock().take();
     let location = info.location().map(|loc| loc.file());
-    if let (Some(marker), Some(file)) = (expected, location) {
-        if file.contains(marker) {
-            exit_qemu(QemuExitCode::Success);
-        }
+    let message = info.message().as_str();
+    let matched = expected.is_some_and(|marker| {
+        location.is_some_and(|file| file.contains(marker))
+            || message.is_some_and(|msg| msg.contains(marker))
+    });
+    if matched {
+        exit_qemu(QemuExitCode::Success);
     }
     exit_qemu(QemuExitCode::Failed);
 }

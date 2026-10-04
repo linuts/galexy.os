@@ -6,7 +6,7 @@
 use bootloader_api::{entry_point, BootInfo};
 use galexy_os::{drivers::screen, echo, println, serial_println};
 
-entry_point!(kernel_main);
+entry_point!(kernel_main, config = &galexy_os::BOOTLOADER_CONFIG);
 
 /// Runs once at boot: initializes subsystems in dependency order, then serves
 /// as the main loop.
