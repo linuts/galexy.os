@@ -1,0 +1,82 @@
+//! ABI stability, numbering, and roundtrip checks under `cargo test -p galexy-abi`.
+#![cfg(test)]
+
+use super::*;
+
+#[test]
+fn syscall_numbers_are_unique_and_dense() {
+    // Every entry at index N must behave as syscall number N; the enum
+    // variants must not repeat. Dense 0..=len because dispatch tables
+    // index by number.
+    let mut seen = [false; 64];
+    for (n, call) in SYSCALLS.iter().enumerate() {
+        assert!(n < 64, "ABI slotted past its 64-call cap: {n}");
+        let variant = *call as usize;
+        assert_eq!(variant, n, "Syscall variant order != SYSCALLS order at {n}");
+        assert!(!seen[variant], "duplicate syscall number {n}");
+        seen[variant] = true;
+    }
+    assert_eq!(MAX_SYSCALL, (SYSCALLS.len() - 1) as u64);
+}
+
+#[test]
+fn exit_is_zero_and_removal_is_never_a_renumber() {
+    // `exit` must stay syscall 0 — a task's very first code path.
+    assert!(matches!(SYSCALLS[0], Syscall::Exit));
+}
+
+#[test]
+fn cap_roundtrips() {
+    let rights = CapRights::READ.union(CapRights::WRITE);
+    let cap = Cap::new(0x1234, rights);
+    assert_eq!(cap.index(), 0x1234);
+    assert_eq!(cap.rights(), rights);
+    assert_eq!(cap.bits() >> 48, rights.bits() as u64);
+    // A big index gets clamped into the 48-bit field without corrupting
+    // the rights half.
+    let clamped = Cap::new(0xFFFF_0000_0000_0001, rights);
+    assert_eq!(clamped.index(), 1);
+    assert_eq!(clamped.rights(), rights);
+}
+
+#[test]
+fn null_cap_is_never_something() {
+    let null = Cap::null();
+    assert_eq!(null.bits(), 0);
+    assert_eq!(null.index(), 0);
+    assert_eq!(null.rights(), CapRights::NONE);
+}
+
+#[test]
+fn rights_masks() {
+    assert!(CapRights::ALL.contains(CapRights::WRITE));
+    assert!(CapRights::WRITE.contains(CapRights::WRITE));
+    assert!(!CapRights::READ.contains(CapRights::WRITE));
+    assert!(!CapRights::NONE.contains(CapRights::READ));
+    assert_eq!(CapRights::READ.union(CapRights::SIGNAL).bits(), 0b101);
+}
+
+#[test]
+fn reserved_caps_have_permanent_indexes() {
+    // These ARE the ABI for future programs; changing them must be a
+    // conscious ABI break. Pin them.
+    assert_eq!(reserved::CONSOLE_INDEX, 1);
+    assert_eq!(reserved::SELF_INDEX, 2);
+    let console = reserved::console(CapRights::WRITE);
+    assert_eq!(console.index(), 1);
+    let self_cap = reserved::self_cap();
+    assert_eq!(self_cap.index(), 2);
+    assert!(self_cap.rights().contains(CapRights::READ));
+}
+
+#[test]
+fn result_codes_roundtrip() {
+    for code in [SysError::BadCap as u64, 2, 3, 4, 5] {
+        let r = SyscallResult { ok: false, value: code };
+        assert_eq!(r.to_result(), Err(SysError::from_code(code)));
+    }
+    let ok = SyscallResult::ok(0x9999);
+    assert_eq!(ok.to_result(), Ok(0x9999));
+    assert_eq!(SyscallResult::err(SysError::AccessDenied).value, 2);
+    assert!(!SyscallResult::err(SysError::BadBuffer).ok);
+}

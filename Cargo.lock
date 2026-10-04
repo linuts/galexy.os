@@ -175,6 +175,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "galexy-abi"
+version = "0.1.0"
+
+[[package]]
 name = "galexy-core"
 version = "0.1.0"
 
@@ -183,6 +187,7 @@ name = "galexy-os"
 version = "0.1.0"
 dependencies = [
  "bootloader_api",
+ "galexy-abi",
  "galexy-core",
  "linked_list_allocator",
  "noto-sans-mono-bitmap",
