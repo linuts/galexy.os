@@ -77,8 +77,9 @@ pub fn show() {
     print!("scheduler: ");
     screen::set_color(VALUE_COLOR);
     print!(
-        "{} tasks running, {} spawned\n",
+        "{} tasks, {} threads, {} spawned\n",
         crate::sched::active_tasks(),
+        crate::sched::threads_count(),
         crate::sched::spawned_total()
     );
     screen::set_color(TEXT_COLOR);

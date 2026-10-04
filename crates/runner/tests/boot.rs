@@ -113,6 +113,20 @@ fn sched_test_passes() {
 }
 
 #[test]
+fn preempt_test_passes() {
+    let (code, serial) = boot(&image("test-preempt"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-preempt should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-preempt] passed"),
+        "test-preempt success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn main_kernel_boots_and_timer_ticks() {
     // The interactive kernel never exits; verify liveness markers instead.
     let serial = boot_liveness(&image("galexy-os"), Duration::from_secs(20));

@@ -16,9 +16,9 @@ shell, growing toward scheduling and beyond.
 - [x] Physical frame allocator over the bootloader memory map
 - [x] Paging: map/unmap pages with TLB flushes, page-fault reporting (CR2)
 - [x] Kernel heap (`alloc`): String/Vec/Box work everywhere
+- [x] Cooperative round-robin tasks + timer-preemptive kernel threads
 - [x] Boot banner: feature showcase on boot
 - [x] Test harness: host unit tests + per-kernel QEMU integration tests
-- [ ] Preemptive scheduler
 - [ ] User space
 
 ## Quick start

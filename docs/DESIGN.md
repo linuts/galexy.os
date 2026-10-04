@@ -167,18 +167,31 @@ Init order: GDT/TSS → IDT → PICs → timer config → `sti`.
 
 ### sched — "the scheduler" (`sched/`)
 
-Cooperative round-robin, the foundation for preemption:
+Two models, layered:
 
-- `Task` = `fn(&mut TaskCtx) -> TaskStatus` + per-task scratch state
-  (`TaskCtx`: 8 u64 slots for the step's state machine). The queue is a
-  heap-backed `VecDeque` (first non-shell `alloc` consumer).
-- `run_once()`: pop front → one step → re-queue at back if `Yield`, drop if
-  `Done`. `run()` sweeps the whole queue once per main-loop iteration.
-- **Concurrency rule: only the main loop touches `sched` state.** IRQ
-  handlers must not call into `sched`; the lock audit before preemption
-  re-verifies every lock for hold-across-interrupt hazards.
-- Demo tickers (`sched/demo.rs`) prove interleaving on screen; the banner
-  reports live task counts.
+**Cooperative tasks** — round-robin over voluntarily-yielding state
+machines (`fn(&mut TaskCtx) -> TaskStatus`), stepped from the main loop
+via a heap-backed `VecDeque`. Only the main loop touches them.
+
+**Preemptive threads** (`sched/context.rs`) — the timer handler is a NAKED
+function: the CPU has pushed the IRQ frame; the naked asm pushes all GPRs,
+calls the Rust scheduler with the frame pointer, and either swaps RSP to
+the next thread's saved context (pops + `iretq` straight into it) or
+returns 0 to resume the outgoing task. Each thread owns:
+- a 32 KiB heap (`Box`/`vec!`) stack — the context block lives on it
+- a leaked 16-aligned FXSAVE area (kernel code may auto-vectorize)
+- main is participant slot 0 of the unified rotation.
+
+**Lock audit rule (preemption)**: the ONLY preemptor is the timer IRQ, so
+*any lock held by preemptable code must be held with interrupts off*
+(`without_interrupts`). Applied to: `screen::_print`, keyboard queue
+ops, the heap (`InterruptSafeAlloc` GlobalAlloc adapter), and the thread
+table. The scheduler switch itself holds NO lock across the RSP swap.
+Previously-missed `ltr`: the TSS must be loaded after `lgdt` or IST
+dispatch reads a stale descriptor.
+
+Demo tickers/threads (`sched/demo.rs`) prove interleaving on screen; the
+banner reports live counts.
 
 ### banner — "the boot showcase"
 

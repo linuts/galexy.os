@@ -100,10 +100,31 @@ Tracking document for concrete work items. Big-picture direction lives in
 - [x] `bin/test-sched.rs`: deterministic trace `ABABAA` (interleaving
       proven), completion, re-spawn after drain; verified (exit 33)
 
+## Milestone 10 — Preemptive kernel threads ✅
+
+- [x] `sched/context.rs`: naked-asm timer handler — full CPU context
+      (r15..rax + rip/cs/rflags/rsp/ss) saved on each task's own stack,
+      RSP swapped mid-handler, `iretq` straight into the next task;
+      FXSAVE/FXRSTOR around switches (auto-vectorization safety);
+      initial frames fabricated on fresh stacks (trampoline entry)
+- [x] `sched`: round-robin over main + threads (`spawn_thread`), unified
+      rotation, per-thread 32 KiB `Box` stacks
+- [x] Lock audit applied (only preemptor = timer IRQ → locks must be
+      IRQ-gated): `screen::_print`, keyboard queue, heap `GlobalAlloc`
+      adapter, thread table; policy documented in `docs/DESIGN.md`
+- [x] `ltr` fix: TSS now loaded after `lgdt` (was stale — IST dispatch
+      read a stale descriptor!)
+- [x] Demo threads interleave on screen purely by preemption; banner:
+      `[ok] scheduler: N tasks, N threads`
+- [x] `bin/test-preempt.rs`: two never-yielding counter threads, both
+      progress + round-robin fairness asserted; verified (exit 33)
+
 ## Known limitations / follow-ups
 
-- [ ] Preemptive scheduling (next): per-task kernel stacks + context switch
-      in the timer handler (the documented hook); lock audit before then
+- [ ] Thread stacks are heap `Box`es (no guard pages) — a thread that
+      recurses too deep corrupts the heap silently; guard pages = future
+- [ ] Threads never terminate (no reaper; returning threads park) — task
+      exit + stack reclamation comes with userspace
 - [ ] `run()` sweep runs a fixed number of `run_once` steps — scheduling
       fairness nuance when tasks finish mid-sweep (documented, fine for now)
 - [ ] TaskCtx is 8 fixed u64 slots — a proper boxed state enum once tasks

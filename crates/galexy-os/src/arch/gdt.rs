@@ -9,6 +9,7 @@
 
 use spin::LazyLock;
 use x86_64::instructions::segmentation::{Segment, CS, DS, ES, FS, GS, SS};
+use x86_64::instructions::tables::load_tss;
 use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
@@ -38,14 +39,15 @@ static TSS: LazyLock<TaskStateSegment> = LazyLock::new(|| {
 struct Selectors {
     code: SegmentSelector,
     data: SegmentSelector,
+    tss: SegmentSelector,
 }
 
 static GDT: LazyLock<(GlobalDescriptorTable, Selectors)> = LazyLock::new(|| {
     let mut gdt = GlobalDescriptorTable::new();
     let code = gdt.append(Descriptor::kernel_code_segment());
     let data = gdt.append(Descriptor::kernel_data_segment());
-    let _tss = gdt.append(Descriptor::tss_segment(&TSS));
-    (gdt, Selectors { code, data })
+    let tss = gdt.append(Descriptor::tss_segment(&TSS));
+    (gdt, Selectors { code, data, tss })
 });
 
 /// Loads the GDT and refreshes all segment registers.
@@ -61,5 +63,8 @@ pub fn init() {
         ES::set_reg(selectors.data);
         FS::set_reg(selectors.data);
         GS::set_reg(selectors.data);
+        // The task register must be (re)loaded after lgdt — without it the
+        // IST dispatch (double fault) reads a stale descriptor.
+        load_tss(selectors.tss);
     }
 }

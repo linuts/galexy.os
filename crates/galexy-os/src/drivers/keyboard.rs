@@ -21,22 +21,31 @@ static KEYBOARD: Mutex<PS2Keyboard<layouts::Us104Key, ScancodeSet1>> =
 static KEY_QUEUE: Mutex<Ring<char, QUEUE_CAPACITY>> = Mutex::new(Ring::new());
 
 /// Feeds a raw scancode into the decoder. Called from the IRQ1 handler.
+///
+/// Lock-audit rule: the keyboard locks may never be held across a preemption
+/// — `without_interrupts` is a no-op here (IRQ gate) but keeps the rule
+/// explicit if this ever gains a non-IRQ caller.
 pub fn add_scancode(scancode: u8) {
-    let decoded = {
-        let mut keyboard = KEYBOARD.lock();
-        match keyboard.add_byte(scancode) {
-            Ok(Some(key_event)) => keyboard.process_keyevent(key_event),
-            _ => None,
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| {
+        let decoded = {
+            let mut keyboard = KEYBOARD.lock();
+            match keyboard.add_byte(scancode) {
+                Ok(Some(key_event)) => keyboard.process_keyevent(key_event),
+                _ => None,
+            }
+        };
+        if let Some(DecodedKey::Unicode(c)) = decoded {
+            // Overflow drops the key by design; not an error for the decoder.
+            let _ = KEY_QUEUE.lock().push(c);
         }
-    };
-    let Some(decoded) = decoded else { return };
-    if let DecodedKey::Unicode(c) = decoded {
-        // Overflow drops the key by design; not an error for the decoder.
-        let _ = KEY_QUEUE.lock().push(c);
-    }
+    });
 }
 
 /// Drains one decoded character, if any.
+///
+/// Lock-audit rule: queued-lock access must not be preemptable.
 pub fn pop_key() -> Option<char> {
-    KEY_QUEUE.lock().pop()
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| KEY_QUEUE.lock().pop())
 }

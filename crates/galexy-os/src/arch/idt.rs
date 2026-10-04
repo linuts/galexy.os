@@ -3,10 +3,11 @@
 use spin::{LazyLock, Mutex};
 use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
+use x86_64::VirtAddr;
 
 use super::gdt;
+use super::pics;
 use super::pics::{KEYBOARD_INTERRUPT_ID, TIMER_INTERRUPT_ID};
-use super::{pics, timer};
 use crate::drivers::keyboard;
 
 /// The IDT sits behind a mutex so tests (and later, demand paging) can
@@ -22,18 +23,26 @@ static IDT: LazyLock<Mutex<InterruptDescriptorTable>> = LazyLock::new(|| {
             .set_handler_fn(double_fault_handler)
             .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
     }
-    // Legacy PIC vectors: IRQ0 = timer, IRQ1 = keyboard.
-    idt[TIMER_INTERRUPT_ID].set_handler_fn(timer_handler);
+    // Timer (IRQ0) is a NAKED handler: it switches task contexts directly
+    // (see sched/context.rs), so it bypasses the x86-interrupt ABI and is
+    // installed by raw address.
+    // Keyboard (IRQ1) stays a regular x86-interrupt handler.
     idt[KEYBOARD_INTERRUPT_ID].set_handler_fn(keyboard_handler);
     Mutex::new(idt)
 });
 
-/// Loads the IDT.
+/// Loads the IDT, installing the naked timer handler by address.
 pub fn init() {
-    let idt = IDT.lock();
+    let mut idt = IDT.lock();
+    // SAFETY: installing a valid handler address in the live IDT.
+    unsafe {
+        let timer_fn: unsafe extern "C" fn() = crate::sched::context::timer_handler_naked;
+        idt[TIMER_INTERRUPT_ID].set_handler_addr(VirtAddr::from_ptr(timer_fn as *const ()));
+    }
+    drop(idt);
     // SAFETY: the IDT is never moved (it lives in the static) — the lifetime
     // constraint `load` normally enforces holds.
-    unsafe { idt.load_unsafe() };
+    unsafe { IDT.lock().load_unsafe() };
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
@@ -74,11 +83,6 @@ extern "x86-interrupt" fn double_fault_handler(
     _error_code: u64,
 ) -> ! {
     panic!("EXCEPTION: DOUBLE FAULT\n{:#?}", stack_frame);
-}
-
-extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
-    timer::tick();
-    pics::end_of_interrupt(TIMER_INTERRUPT_ID);
 }
 
 extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame) {

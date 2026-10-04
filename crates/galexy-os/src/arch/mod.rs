@@ -10,9 +10,16 @@ mod gdt;
 mod idt;
 pub mod mm;
 mod pics;
-mod timer;
+pub mod timer;
 
 pub use idt::set_page_fault_handler;
+pub use timer::tick as timer_tick;
+
+/// Signals end-of-interrupt for the timer vector (called by the timer
+/// switch before entering the next task).
+pub fn end_timer_interrupt() {
+    pics::end_of_interrupt(pics::TIMER_INTERRUPT_ID);
+}
 
 /// Brings up the whole interrupt subsystem and enables interrupts.
 pub fn init() {

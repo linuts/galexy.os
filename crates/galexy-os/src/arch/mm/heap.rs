@@ -5,7 +5,10 @@
 //! mappings are physical memory at 32 and recursive at 511). Backing frames
 //! come from the frame allocator, mapped via the paging mapper.
 
+use core::alloc::{GlobalAlloc, Layout};
+
 use linked_list_allocator::LockedHeap;
+use x86_64::instructions::interrupts;
 use x86_64::structures::paging::{Page, Size4KiB};
 use x86_64::VirtAddr;
 
@@ -18,8 +21,27 @@ const HEAP_PAGES: usize = 100;
 /// Heap size in bytes (400 KiB).
 const HEAP_SIZE: usize = HEAP_PAGES * 4096;
 
+static INNER: LockedHeap = LockedHeap::empty();
+
+/// Lock-audit adapter (see docs/DESIGN.md): the ONLY preemptor is the timer
+/// IRQ, so every lock that preemptable code can hold must be held with
+/// interrupts off. Allocation can happen anywhere — wrap it.
+pub struct InterruptSafeAlloc;
+
+// SAFETY: all operations delegate to INNER under without_interrupts; the
+// inner allocator is itself thread-safe via its own lock.
+unsafe impl GlobalAlloc for InterruptSafeAlloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        interrupts::without_interrupts(|| INNER.alloc(layout))
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        interrupts::without_interrupts(|| INNER.dealloc(ptr, layout))
+    }
+}
+
 #[global_allocator]
-static ALLOCATOR: LockedHeap = LockedHeap::empty();
+static ALLOCATOR: InterruptSafeAlloc = InterruptSafeAlloc;
 
 /// Maps the heap pages and activates the global allocator.
 ///
@@ -35,7 +57,7 @@ pub fn init() {
     // SAFETY: [HEAP_START, +HEAP_SIZE) is exclusively mapped above; the
     // allocator takes ownership of the whole range.
     unsafe {
-        ALLOCATOR.lock().init(HEAP_START as *mut u8, HEAP_SIZE);
+        INNER.lock().init(HEAP_START as *mut u8, HEAP_SIZE);
     }
     serial_println!(
         "[heap] ready: {} KiB at {:#x}",

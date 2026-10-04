@@ -366,8 +366,14 @@ pub fn framebuffer_addr() -> Option<u64> {
 }
 
 /// Format-hook used by the `print!`/`println!` macros.
+///
+/// Lock-audit rule (docs/DESIGN.md): the screen lock must not be held across
+/// a preemption (the timer IRQ) — printing happens with interrupts off.
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
-    with_lock(|screen| screen.write_fmt(args).expect("printing to screen failed"));
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| {
+        with_lock(|screen| screen.write_fmt(args).expect("printing to screen failed"))
+    });
 }
