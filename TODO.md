@@ -36,7 +36,7 @@ Tracking document for concrete work items. Big-picture direction lives in
 ## Known limitations / follow-ups
 
 - [ ] UEFI: timer + keyboard don't work yet — legacy PIC doesn't exist under
-      UEFI; needs APIC setup (see bootloader migration doc)
+      UEFI; needs APIC setup under `arch/` (see bootloader migration doc)
 - [ ] `physical_memory_offset` is `None`: enable `map_physical_memory` in
       `BootConfig` (runner build.rs) when the memory phase starts
 - [ ] `#[test_case]` test harness (exit port + test runner) — worth ~1
@@ -45,3 +45,5 @@ Tracking document for concrete work items. Big-picture direction lives in
 - [ ] Keyboard queue overflow silently drops keys — fine for now, revisit
 - [ ] Echo uses a fixed 128-char line buffer — replace with heap strings once
       alloc lands
+- [ ] `kcore` → `galexy-core` crate lift when userspace becomes its first
+      second consumer (crate-lift policy in `docs/DESIGN.md`)

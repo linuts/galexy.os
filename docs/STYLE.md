@@ -20,12 +20,14 @@ enforce these.
 
 ## Module organization
 
-- One module per directory (`vga/`, `interrupts/`, ...), `mod.rs` re-exports
-  the public surface only.
+- One module per directory (`arch/`, `drivers/`, `kcore/`, `sched/`, ...),
+  `mod.rs` re-exports the public surface only.
+- **Layer boundaries are law** (see `docs/DESIGN.md`): `main.rs` is wiring
+  only; only `arch/` touches ports/registers; drivers never call drivers;
+  `kcore` has no layer dependencies.
 - Each module exposes the **narrowest** API it can. Cross-module calls go
   through the owning module's public functions, never through its internals.
-- Statics: `spin::Mutex` / `spin::Once` lazily-initialized statics; the
-  `static` + `init()` + accessor pattern (blog_os style). No global mutable
+- Statics: `spin::Mutex` / `LazyLock` initialization; no global mutable
   `static mut` anywhere, ever.
 - `main.rs` is a wiring file: it calls `init()` functions and then loops. All
   logic lives in modules.

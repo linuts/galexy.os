@@ -7,7 +7,7 @@ use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, Pag
 use super::gdt;
 use super::pics::{KEYBOARD_INTERRUPT_ID, TIMER_INTERRUPT_ID};
 use super::{pics, timer};
-use crate::keyboard;
+use crate::drivers::keyboard;
 
 static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
     let mut idt = InterruptDescriptorTable::new();

@@ -3,6 +3,46 @@
 How the pieces fit. This file explains the *why*; `STYLE.md` explains the
 *how it's written*.
 
+## Layout philosophy
+
+galexy.os is organized by **layer**, not by POSIX convention (`usr/`, `dev/`,
+`etc/` and friends are rejected). There are exactly four kernel layers plus
+the kernel's wiring file:
+
+```
+crates/
+├── galexy-os/           # the kernel (bin)
+│   └── src/
+│       ├── main.rs      # wiring only: init order + main loop (stays ~100 lines forever)
+│       ├── echo.rs      # the "shell": consumes driver input, produces screen output
+│       ├── kcore/       # kernel primitives (alloc-free types shared across layers)
+│       ├── arch/        # THE PORT WALL: x86_64 hardware code lives only here
+│       ├── drivers/     # device drivers (screen, serial, keyboard, ...)
+│       └── sched/       # scheduler (planned; hook point documented in code)
+├── userspace/           # ring-3 programs later, one crate per program (planned)
+└── runner/              # host tooling: builds BIOS+UEFI images, launches QEMU
+```
+
+## Boundary rules (enforced by structure, checked in review)
+
+1. **`main.rs` is a wiring file.** Logic never accumulates there — it moves
+   into the owning layer module.
+2. **`arch/` is the port wall.** Only `arch/` touches I/O ports, CPU control
+   registers, or platform specifics. Drivers and primitives call `arch`
+   APIs. Porting to another arch = rewriting `arch/` alone.
+3. **Drivers never call drivers.** Shared behavior goes through `kcore`
+   types/traits; shared *policies* stay in the caller (`echo`).
+4. **`kcore` stays alloc-free** and may not depend on `arch`, `drivers`,
+   `sched`, or the shell — it's the bottom of the dependency stack:
+   `main → (echo, sched, drivers, kcore)`, `drivers → arch, kcore`,
+   `sched → kcore`, `kcore → (nothing)`.
+5. **Crate-lift policy.** A module becomes its own workspace crate only when
+   it gains a *second consumer* (e.g. `kcore` → `galexy-core` when userspace
+   wants the same types; a driver splits out when userspace visibility is
+   needed). Lift stable boundaries only — never "to make it look organized".
+6. **Userspace programs are always their own crates** under
+   `crates/userspace/` — never modules of the kernel.
+
 ## Boot flow
 
 ```
@@ -24,7 +64,7 @@ BIOS/UEFI
 
 ## Module contracts
 
-### screen — "the screen"
+### screen — "the screen" (`drivers/`)
 
 Bootloader v0.11 provides a **pixel framebuffer** (1280x720 BGR in QEMU); the
 legacy VGA text mode is gone, so glyphs are rendered with
@@ -45,18 +85,17 @@ State (cursor, color, framebuffer snapshot) lives behind a single
 `spin::Mutex` global; scrolling copies the buffer up by one line height.
 Swap-in candidates later: text-mode cursor, tab stops, an ANSI-ish layer.
 
-### serial — "the side channel"
+### serial — "the side channel" (`drivers/`)
 
 `uart_16550` at COM1. Used for panics, boot info, and debug output. **Rule:**
 nothing user-facing ever prints here; it's invisible to the OS user by
 design. The serial writer shares no lock with the screen, so interrupt
 handlers can log through it safely.
 
-### keyboard — "the input decoder"
+### keyboard — "the input decoder" (`drivers/`)
 
 IRQ1 handler → `pc_keyboard` (US layout, scancode set 1) → Unicode chars
-pushed into a fixed ring buffer. Consumers ask for characters via
-`keyboard::pop_key()`:
+pushed into a `kcore::Ring`. Consumers drain via `keyboard::pop_key()`:
 
 ```rust
 pub fn add_scancode(scancode: u8)   // called from the IRQ handler only
@@ -66,7 +105,7 @@ pub fn pop_key() -> Option<char>    // drains decoded input
 Locks are tiny and never nested (decode under one lock, push under another),
 so IRQ context is safe. Queue overflow drops the newest key (documented).
 
-### interrupts — "the plumbing"
+### arch — "the plumbing"
 
 Init order: GDT/TSS → IDT → PICs → timer config → `sti`.
 

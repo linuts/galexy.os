@@ -2,7 +2,7 @@
 
 #[macro_export]
 macro_rules! print {
-    ($($arg:tt)*) => ($crate::screen::_print(format_args!($($arg)*)));
+    ($($arg:tt)*) => ($crate::drivers::screen::_print(format_args!($($arg)*)));
 }
 
 #[macro_export]

@@ -81,17 +81,22 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
 ├── crates/
 │   ├── galexy-os/                   # the kernel (bin)
 │   │   └── src/
-│   │       ├── main.rs              # entry: receives BootInfo, wires everything up
+│   │       ├── main.rs              # wiring only: init order + main loop
+│   │       ├── echo.rs              # the echo "shell"
+│   │       ├── kcore/               # kernel primitives (ring buffers, ...)
+│   │       ├── arch/                # the port wall: GDT/TSS, IDT, PICs, PIT
+│   │       ├── drivers/             # screen, serial, keyboard
 │   │       ├── macros.rs            # print!/println! plumbing
-│   │       ├── screen/              # framebuffer text output (the "screen")
-│   │       ├── serial.rs            # 16550 UART debug output
-│   │       ├── keyboard.rs          # PS/2 decode, char ring buffer
-│   │       ├── interrupts/          # GDT/TSS, IDT, PICs, timer, handlers
-│   │       └── echo.rs              # the echo "shell"
+│   │       └── sched/               # scheduler (planned; hook point documented)
+│   ├── userspace/                   # ring-3 programs later (planned)
 │   └── runner/                      # host crate: builds disk images, runs QEMU
 │       ├── build.rs                 # bootloader BIOS+UEFI image builder
 │       └── src/main.rs              # QEMU invocation (--uefi flag)
 ```
+
+Layer rules (drivers only talk to `arch` + `kcore`; `arch` is the only place
+ports are touched; userspace programs are separate crates) live in
+`docs/DESIGN.md`.
 
 ## Design principles
 

@@ -3,8 +3,7 @@
 //! Characters typed on the keyboard are echoed to the screen as they arrive;
 //! Enter flushes the line and echoes it back with a prefix. Backspace edits.
 
-use crate::keyboard;
-use crate::screen;
+use crate::drivers::{keyboard, screen};
 use spin::Mutex;
 
 /// Maximum length of one line, in characters (no heap yet).

@@ -1,20 +1,20 @@
 //! galexy.os kernel entry point.
 //!
-//! `kernel_main` receives the `BootInfo` handed over by the bootloader
-//! (physical memory map, framebuffer, ...) and is where all subsystems get
-//! initialized, in dependency order.
+//! This file is **wiring only**: subsystem init in dependency order, then the
+//! main loop. All logic lives in `kcore/`, `arch/`, `drivers/`, `sched/`,
+//! and the shell module — see `docs/DESIGN.md` for the boundary rules.
 
 #![no_std]
 #![no_main]
 #![feature(abi_x86_interrupt)]
 #![deny(clippy::all)]
 
+mod arch;
+mod drivers;
 mod echo;
-mod interrupts;
-mod keyboard;
+mod kcore;
 mod macros;
-mod screen;
-mod serial;
+mod sched;
 
 use bootloader_api::{entry_point, BootInfo};
 use core::panic::PanicInfo;
@@ -24,15 +24,15 @@ entry_point!(kernel_main);
 /// Runs once at boot: initializes subsystems in dependency order, then serves
 /// as the main loop.
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
-    init();
-    screen::init(boot_info);
+    drivers::serial::init(); // serial first: everything logs through it
+    drivers::screen::init(boot_info);
     println!("Hello from galexy.os!");
     serial_println!(
         "boot info: rsdp_addr = {:?}, physical_memory_offset = {:?}",
         boot_info.rsdp_addr,
         boot_info.physical_memory_offset
     );
-    interrupts::init();
+    arch::init(); // interrupts last to init: handlers depend on drivers
     echo::init();
     loop {
         // Serve input while keys are queued, then sleep until the next
@@ -40,11 +40,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         echo::poll();
         x86_64::instructions::hlt();
     }
-}
-
-/// Brings up subsystems; called before any I/O.
-pub fn init() {
-    serial::init();
 }
 
 /// Panic handler: last resort. Reports the panic over serial (safe while

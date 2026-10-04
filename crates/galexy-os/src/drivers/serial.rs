@@ -1,4 +1,5 @@
-//! Serial (COM1, 16550 UART) debug output.
+//! Serial (COM1, 16550 UART) debug output — a hardware driver speaking
+//! through the `arch` port wall via `uart_16550`.
 //!
 //! Serial is the debugging side channel: user-facing output never goes here.
 //! Because the serial writer shares no lock with the VGA writer, interrupt
@@ -52,7 +53,7 @@ pub fn _print(args: fmt::Arguments) {
 #[macro_export]
 macro_rules! serial_print {
     ($($arg:tt)*) => {
-        $crate::serial::_print(format_args!($($arg)*))
+        $crate::drivers::serial::_print(format_args!($($arg)*))
     };
 }
 
