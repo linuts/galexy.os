@@ -85,6 +85,24 @@ fn heap_test_passes() {
 }
 
 #[test]
+fn heap_grow_test_passes() {
+    let (code, serial) = boot(&image("test-heapgrow"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-heapgrow should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-heapgrow] passed"),
+        "test-heapgrow success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[heap] grown:"),
+        "heap growth marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn screen_test_passes() {
     let (code, serial) = boot(&image("test-screen"));
     assert_eq!(
