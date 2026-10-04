@@ -125,6 +125,13 @@ pub fn user_cs_ss() -> (u64, u64) {
     )
 }
 
+/// `(kernel_cs, user_cs)` RAW selectors (no RPL bits) for `STAR`: the
+/// syscall/sysret mechanism consumes bases, not RPL-decorated selectors.
+pub fn syscall_selectors() -> (u16, u16) {
+    let selectors = &GDT.1;
+    (selectors.code.0, selectors.user_code.0)
+}
+
 /// Writes `rsp0` into the live TSS.
 ///
 /// The TSS lives behind a Mutex — its `GlobalDescriptorTable` descriptor was

@@ -1,0 +1,168 @@
+//! SYSCALL/SYSRET mechanism (x86_64): MSR configuration + the naked entry
+//! that builds a uniform context frame.
+//!
+//! Registers at SYSCALL entry (fixed CPU semantics):
+//! - `rcx` = user RIP, `r11` = user RFLAGS (explicitly NOT saved by the
+//!   instruction), `rsp` = user RSP (unchanged), other GPRs = user values,
+//!   DS/ES/FS/GS untouched (still the kernel bootstrap selectors — user
+//!   code must not use segment-based addressing; ring-3 segment hygiene is
+//!   future ABI work).
+//!
+//! Entry protocol: switch to the CURRENT task's kernel stack (registry
+//! updated on every switch-in to a user task), push the uniform frame
+//! (same shape as the timer's interrupt frame), then run the Rust dispatch
+//! (policy in `sched::syscalls`, per boundary rule 7). The dispatch returns
+//! either 0 (resume the outgoing frame) or a context pointer (switch:
+//! yield/exit handoff).
+
+use core::sync::atomic::{AtomicU64, Ordering};
+
+use x86_64::registers::model_specific;
+
+use crate::serial_println;
+
+/// Kernel stack top of the CURRENT task (`0` = main loop / kernel thread —
+/// a syscall there is a kernel bug, checked in Rust, not the asm).
+static TASK_KSTACK: AtomicU64 = AtomicU64::new(0);
+/// Scratch legs for the naked entry (user RSP / user RAX mid-flight).
+static SAVED_RSP: AtomicU64 = AtomicU64::new(0);
+static SAVED_RAX: AtomicU64 = AtomicU64::new(0);
+/// The user CS selector (RPL 3, iretq's return target) pushed into every
+/// uniform frame's CS slot.
+static USER_CS: AtomicU64 = AtomicU64::new(0);
+/// The user SS selector pushed into the uniform frame (SYSRET computes the
+/// CS half in hardware; SS is our constant).
+static USER_SS: AtomicU64 = AtomicU64::new(0);
+
+/// Publishes the CURRENT task's kernel stack top (switch-in hook). `0`
+/// clears (main loop / kernel thread).
+pub fn set_task_kstack(top: u64) {
+    TASK_KSTACK.store(top, Ordering::Relaxed);
+}
+
+/// MSR configuration (order matters): `STAR` (kernel/user CS bases), then
+/// `LSTAR` (entry address), then `EFER.SCE` last — MSRs must be consistent
+/// before the instruction is enabled. `FMASK` left at 0: the uniform frame
+/// carries the full user RFLAGS (interrupt state included).
+pub fn init() {
+    let (kernel_cs, user_cs) = crate::arch::syscall_selectors();
+    // STAR[47:32] = kernel CS (SS auto = CS + 8 = kernel data ✓);
+    // STAR[63:48] = user CS (SYSRET forces RPL 3 on both CS and SS, and our
+    // GDT guarantees user CS + 8 == user data ✓).
+    // SAFETY: MSR writes configure the syscall mechanism; the GDT layout is
+    // proven by test-rings before any user task exists.
+    unsafe { model_specific::Star::write_raw(user_cs, kernel_cs) };
+    model_specific::LStar::write(x86_64::VirtAddr::new(
+        syscall_entry_naked as *const () as usize as u64,
+    ));
+    // SAFETY: enabling SCE; STAR/LSTAR are consistent above.
+    unsafe {
+        model_specific::Efer::update(|f| *f |= model_specific::EferFlags::SYSTEM_CALL_EXTENSIONS);
+    }
+    let (user_cs_raw, user_ss_raw) = crate::arch::user_cs_ss();
+    USER_SS.store(user_ss_raw, Ordering::Relaxed);
+    USER_CS.store(user_cs_raw, Ordering::Relaxed);
+    serial_println!(
+        "[syscall] SYSCALL/SYSRET live (star cs {:#x}/{:#x}, lstar {:#x})",
+        kernel_cs,
+        user_cs,
+        syscall_entry_naked as *const () as usize as u64
+    );
+}
+
+/// The naked SYSCALL entry: see the module docs for the register state.
+///
+/// # Safety
+///
+/// naked function; must only ever be installed as `IA32_LSTAR`.
+#[unsafe(naked)]
+pub unsafe extern "C" fn syscall_entry_naked() {
+    core::arch::naked_asm!(
+        // Kernel-origin syscalls are checked in Rust (fail loudly there);
+        // first order: interrupts off + switch to the task kernel stack.
+        "cli",
+        // Stash user rsp + rax, load the task's kernel stack top.
+        "mov QWORD PTR [rip + {saved_rsp}], rsp",
+        "mov QWORD PTR [rip + {saved_rax}], rax",
+        "mov rsp, QWORD PTR [rip + {task_kstack}]",
+        // Uniform frame, pushed downward; rising layout matches
+        // context::Context exactly: SS, RSP, RFLAGS, CS, RIP, r15..rax.
+        "push QWORD PTR [rip + {user_ss}]", // SS
+        "push QWORD PTR [rip + {saved_rsp}]", // RSP = user rsp
+        "push r11", // RFLAGS = user rflags
+        "push QWORD PTR [rip + {user_cs}]", // CS = user (RPL 3 — iretq returns to ring 3)
+        "push rcx", // RIP = user rip
+        "push QWORD PTR [rip + {saved_rax}]", // rax (the syscall number)
+        "push rbx",
+        "push rcx", // r11/rcx are clobbered by SYSCALL per the ABI anyway
+        "push rdx",
+        "push rsi",
+        "push rdi",
+        "push rbp",
+        "push r8",
+        "push r9",
+        "push r10",
+        "push r11",
+        "push r12",
+        "push r13",
+        "push r14",
+        "push r15",
+        // Rust dispatch: rdi = frame, rsi = syscall number (rax untouched).
+        "mov rdi, rsp",
+        "mov rsi, rax",
+        "call {rust}",
+        // rax = next ctx (0 = resume outgoing frame).
+        "cmp rax, 0",
+        "je 2f",
+        "mov rsp, rax",
+        "2:",
+        "pop r15", "pop r14", "pop r13", "pop r12",
+        "pop r11", "pop r10", "pop r9", "pop r8",
+        "pop rbp", "pop rdi", "pop rsi", "pop rdx",
+        "pop rcx", "pop rbx", "pop rax",
+        "iretq",
+        saved_rsp = sym SAVED_RSP,
+        saved_rax = sym SAVED_RAX,
+        task_kstack = sym TASK_KSTACK,
+        user_ss = sym USER_SS,
+        user_cs = sym USER_CS,
+        rust = sym syscall_rust,
+    );
+}
+
+/// The Rust half: routing + handoff decisions (policy in
+/// `sched::syscalls::service`).
+///
+/// # Safety
+///
+/// Called only from the naked entry above; `frame` is the just-built frame
+/// on the current task's kernel stack.
+unsafe extern "C" fn syscall_rust(frame: *mut crate::sched::context::Context, sysno: u64) -> u64 {
+    let frame = unsafe { &mut *frame };
+
+    // A syscall is only legal from a ring-3 task context. Kernel-origin
+    // SYSCALL = kernel bug (or an ABI cheat): fail loudly.
+    let slot = crate::sched::current_slot();
+    if slot == 0 {
+        serial_println!("[syscall] BUG: syscall from kernel context (rax={:#x})", sysno);
+        crate::exit_qemu(crate::QemuExitCode::Failed);
+    }
+    if !crate::sched::slot_is_user(slot) {
+        serial_println!("[syscall] BUG: syscall from a kernel thread (rax={:#x})", sysno);
+        crate::exit_qemu(crate::QemuExitCode::Failed);
+    }
+
+    match crate::sched::syscalls::service(frame, sysno) {
+        crate::sched::syscalls::Outcome::Resume => 0,
+        crate::sched::syscalls::Outcome::Handoff => {
+            // SAFETY: the frame is the current task's uniform context on
+            // its kernel stack (built by the naked entry just now).
+            unsafe { crate::sched::syscall_handoff(frame, false) }
+        }
+        crate::sched::syscalls::Outcome::Exit => {
+            // SAFETY: as above; exit tombstones the task — the handoff
+            // guarantees a nonzero target (never returns to the dead task).
+            unsafe { crate::sched::syscall_handoff(frame, true) }
+        }
+    }
+}

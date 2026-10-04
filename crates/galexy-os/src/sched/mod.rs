@@ -175,6 +175,9 @@ struct Thread {
     /// User tasks only: mapped code page + its frame — the reaper unmaps
     /// the page + frees the frame.
     user_code: Option<(Page, PhysFrame<Size4KiB>)>,
+    /// User tasks only: mapped scratch page + frame — reaped like the code
+    /// page.
+    user_scratch: Option<(Page, PhysFrame<Size4KiB>)>,
 }
 
 /// User-stack descriptor for the reaper's unmap+free pass.
@@ -199,9 +202,6 @@ static CURRENT: AtomicUsize = AtomicUsize::new(0);
 static MAIN_CTX: AtomicU64 = AtomicU64::new(0);
 /// Round-robin cursor: index of the last-served thread (usize::MAX = none).
 static LAST_SERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
-/// RSP0 value corresponding to the CURRENT task's kernel stack (user tasks
-/// only; 0 = main loop / kernel thread). THE syscall entry's switch target.
-static CURRENT_RSP0: AtomicU64 = AtomicU64::new(0);
 
 /// Main loop's FXSAVE area (FxArea is 16-aligned).
 static MAIN_FX: Mutex<FxArea> = Mutex::new(FxArea::new());
@@ -281,6 +281,12 @@ pub fn reap() {
                     mm::deallocate_frame(frame);
                 }
             }
+            if let Some((scratch_page, scratch_frame)) = t.user_scratch.take() {
+                if let Ok(frame) = mm::unmap_page(scratch_page) {
+                    debug_assert_eq!(frame.start_address(), scratch_frame.start_address());
+                    mm::deallocate_frame(frame);
+                }
+            }
             let stack = core::mem::take(&mut t.stack);
             drop(stack); // returns the 32 KiB to the heap
             let kstack = core::mem::take(&mut t.kstack);
@@ -321,6 +327,7 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) {
             kstack_top: 0,
             user_stack: None,
             user_code: None,
+            user_scratch: None,
         });
         serial_println!("[sched] thread '{}' ready", name);
     });
@@ -332,25 +339,46 @@ const USER_STACK_PAGES: usize = 4;
 /// code page and stack far apart; the region is 512 GiB).
 const USER_STACK_OFFSET: u64 = 1 << 30;
 
-/// Spawns a ring-3 task running `code` (a flat machine-code blob, mapped
-/// executable in its own user region of the ACTIVE address space — per-task
-/// CR3 isolation is Step B).
+/// Result of a user-task spawn: the virtual addresses ring-3 code was
+/// granted (so the caller can embed them in machine-code blobs).
+#[derive(Debug, Clone, Copy)]
+pub struct UserRegion {
+    /// Code page base (RIP entry point of the task).
+    pub code: VirtAddr,
+    /// One RW|USER|NX scratch page for user↔kernel-shared data (Step A
+    /// tasks share the kernel's address space, so the kernel can poll it).
+    pub scratch: VirtAddr,
+}
+
+/// Spawns a ring-3 task. `build` receives the granted addresses and
+/// returns the code bytes to map (≤ one page).
 ///
 /// Layout per task: one free P4 entry `N` (scanned top-down in the user
-/// half), code mapped at `(N<<39) + 0`, user stack at `+1 GiB`. The
-/// fabricated context (on the user stack) enters ring 3; preemption pushes
-/// onto this task's own kernel stack via TSS.RSP0 (set on switch-in).
-/// IRQ-gated like every registration.
-pub fn spawn_user_task(name: &'static str, code: &[u8]) {
-    // Code grows into a single page: the blob ABI.
-    assert!(
-        code.len() <= 4096,
-        "spawn_user_task: blob exceeds one page ({} bytes)",
-        code.len()
-    );
+/// half), code mapped at `(N<<39) + 0`, user stack at `+1 GiB`, scratch
+/// page right above the stack. The fabricated context (on the user stack)
+/// enters ring 3; preemption pushes onto this task's own kernel stack via
+/// TSS.RSP0 (set on switch-in). IRQ-gated like every registration.
+pub fn spawn_user_task(
+    name: &'static str,
+    build: impl FnOnce(UserRegion) -> Vec<u8>,
+) -> UserRegion {
     interrupts::without_interrupts(|| {
         let p4_index = mm::top_user_p4_index().expect("no free user P4 entry left");
         let region = VirtAddr::new((p4_index as u64) << 39);
+        let stack_base = region + USER_STACK_OFFSET;
+        let scratch = stack_base + (USER_STACK_PAGES * 4096) as u64 + 4096;
+        let granted = UserRegion {
+            code: region,
+            scratch,
+        };
+        let code = build(granted);
+
+        // Code grows into a single page: the blob ABI.
+        assert!(
+            code.len() <= 4096,
+            "spawn_user_task: blob exceeds one page ({} bytes)",
+            code.len()
+        );
 
         // Code page: PRESENT | USER, executable (no NX, no writable).
         let code_frame = mm::allocate_frame().expect("no frame for user code");
@@ -369,7 +397,6 @@ pub fn spawn_user_task(name: &'static str, code: &[u8]) {
         .expect("user code map failed");
 
         // User stack: PRESENT | WRITABLE | NX | USER, at region + 1 GiB.
-        let stack_base = region + USER_STACK_OFFSET;
         for i in 0..USER_STACK_PAGES {
             let frame = mm::allocate_frame().expect("no frame for user stack");
             let page = Page::containing_address(stack_base + (i * 4096) as u64);
@@ -384,6 +411,26 @@ pub fn spawn_user_task(name: &'static str, code: &[u8]) {
             .expect("user stack map failed");
         }
 
+        // Scratch page: PRESENT | WRITABLE | NX | USER (right above the
+        // stack pages). Zeroed first: allocator frames can carry stale
+        // bytes, and consumers poll this page for their first non-zero
+        // write.
+        let scratch_frame = mm::allocate_frame().expect("no frame for user scratch");
+        // SAFETY: allocator-owned frame (exclusive access per contract).
+        unsafe {
+            let dst = mm::frame_virt(scratch_frame.start_address()).as_mut_ptr::<u64>();
+            core::ptr::write_bytes(dst, 0, 512);
+        }
+        mm::map_page_flags(
+            Page::containing_address(scratch),
+            scratch_frame,
+            PageTableFlags::PRESENT
+                | PageTableFlags::WRITABLE
+                | PageTableFlags::USER_ACCESSIBLE
+                | PageTableFlags::NO_EXECUTE,
+        )
+        .expect("user scratch map failed");
+
         // Initial ring-3 frame: fabricated at the user stack top, RIP at
         // the blob entry, user selectors.
         let stack_top = (stack_base + (USER_STACK_PAGES * 4096) as u64).as_u64() & !0xF;
@@ -391,7 +438,7 @@ pub fn spawn_user_task(name: &'static str, code: &[u8]) {
         let ctx = unsafe { context::init_user_frame(stack_top, region.as_u64(), cs, ss) };
 
         // Kernel-mode stack for ring 3→0 crossings (timer IRQ from ring 3,
-        // later syscalls): heap-backed, 32 KiB, heap canary at bottom.
+        // later syscalls): heap-backed, 32 KiB, canary at bottom.
         let mut kstack = vec![0u8; THREAD_STACK_SIZE];
         kstack[..8].copy_from_slice(&STACK_CANARY.to_le_bytes());
         let kstack_top = (kstack.as_ptr() as u64 + kstack.len() as u64) & !0xF;
@@ -412,6 +459,7 @@ pub fn spawn_user_task(name: &'static str, code: &[u8]) {
                 pages: USER_STACK_PAGES,
             }),
             user_code: Some((code_page, code_frame)),
+            user_scratch: Some((Page::containing_address(scratch), scratch_frame)),
         });
         serial_println!(
             "[sched] user task '{}' ready (p4={}, code @ {:#x}, ustack top {:#x}, kstack top {:#x})",
@@ -421,7 +469,8 @@ pub fn spawn_user_task(name: &'static str, code: &[u8]) {
             stack_top,
             kstack_top
         );
-    });
+        granted
+    })
 }
 
 /// Number of live (running) preemptive threads.
@@ -450,9 +499,100 @@ pub fn thread_stats() -> alloc::vec::Vec<(&'static str, u64)> {
     })
 }
 
-/// CPU ticks charged to the main loop (slot 0 of the rotation).
+/// CPU ticks charged to the main loop (slot 0).
 pub fn main_ticks() -> u64 {
     MAIN_TICKS.load(Ordering::Relaxed)
+}
+
+/// The current rotation slot (0 = main loop; otherwise thread index + 1).
+pub fn current_slot() -> usize {
+    CURRENT.load(Ordering::Relaxed)
+}
+
+/// Is the CURRENT slot a ring-3 task? (`slot` per [`current_slot`].)
+pub fn slot_is_user(slot: usize) -> bool {
+    if slot == 0 {
+        return false;
+    }
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        slot <= threads.len() && threads[slot - 1].is_user
+    })
+}
+
+/// Syscall-side context handoff (called from `arch`'s syscall dispatch on
+/// the syscalling task's kernel stack, while its uniform frame is at `rsp`).
+///
+/// - `exit=false` (yield): the task stays schedulable, hand over the CPU
+///   now — the real round-robin switch from inside a syscall.
+/// - `exit=true` (exit): tombstone the task; the reaper frees its stacks.
+///
+/// Returns the context pointer to enter (guarantees a switch: main is
+/// always the fallback — the caller is never main). The incoming RSP0 /
+/// kstack registry are updated like the timer switch does. NOT irq-gated on
+/// entry (the naked syscall entry runs with IF=0); the internal gate keeps
+/// the lock-audit rule.
+///
+/// # Safety
+///
+/// `frame` must be the CURRENT task's uniform context frame on its kernel
+/// stack, exactly as built by the syscall entry.
+pub unsafe fn syscall_handoff(frame: *mut context::Context, exit: bool) -> u64 {
+    let slot = CURRENT.load(Ordering::Relaxed);
+    assert!(slot != 0, "syscall_handoff: no task current (cpl bug?)");
+    let pending_ctx = interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+
+        // Save the outgoing task's context + FPU state into its slot
+        // (yield keeps it schedulable; exit tombstones it).
+        let t = &threads[slot - 1];
+        t.ctx.store(frame as u64, Ordering::Relaxed);
+        context::fx_save(t.fx as *mut u8);
+        if exit {
+            t.state.store(STATE_EXITED, Ordering::Release);
+            serial_println!("[sched] task '{}' exited (syscall)", t.name);
+        }
+
+        // Advance the rotation: first eligible slot strictly after the
+        // outgoing one (main at slot 0 is always the fallback, and the
+        // caller is never main — so this scan ALWAYS finds a switch).
+        let n = threads.len();
+        let mut cand = if slot >= n { 0 } else { slot + 1 };
+        let mut scans = n + 1;
+        while scans > 0 {
+            let eligible =
+                cand == 0 || threads[cand - 1].state.load(Ordering::Acquire) == STATE_RUNNING;
+            if eligible {
+                break;
+            }
+            cand = if cand + 1 > n { 0 } else { cand + 1 };
+            scans -= 1;
+        }
+        debug_assert!(scans > 0, "handoff rotation scan unwound without main");
+        LAST_SERVED.store(cand, Ordering::Relaxed);
+
+        let (who, ctx, rsp0) = match cand {
+            0 => (0usize, MAIN_CTX.load(Ordering::Relaxed), None),
+            s => {
+                let t2 = &threads[s - 1];
+                let rsp0 = t2.is_user.then_some(t2.kstack_top);
+                (s, t2.ctx.load(Ordering::Relaxed), rsp0)
+            }
+        };
+        assert!(ctx != 0, "handoff: entering a task with no saved context");
+        crate::arch::syscall::set_task_kstack(rsp0.unwrap_or(0));
+        if let Some(top) = rsp0 {
+            crate::arch::set_tss_rsp0(VirtAddr::new(top));
+        }
+        CURRENT.store(who, Ordering::Relaxed);
+        let fx_ptr = match cand {
+            0 => (&*MAIN_FX.lock()) as *const FxArea as u64,
+            s => threads[s - 1].fx as u64,
+        };
+        context::fx_restore(fx_ptr as *const u8);
+        ctx
+    });
+    pending_ctx
 }
 
 /// The timer switch: saves the outgoing task's context + FPU state (main
@@ -551,14 +691,12 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
             }
         };
         // Ring-3 readiness BEFORE entering the chosen task: a user task's
-        // ring 3→0 crossings (timer IRQ, later syscalls) push onto ITS OWN
-        // kernel stack via TSS.RSP0. Kernel threads/main leave RSP0 at
-        // whatever the last user switch-in set — they never cross rings.
+        // ring 3→0 crossings (timer IRQ via TSS.RSP0, later the syscall
+        // entry via the kstack registry) must push onto ITS OWN kernel
+        // stack. Kernel threads/main reset the registry.
+        crate::arch::syscall::set_task_kstack(rsp0.unwrap_or(0));
         if let Some(top) = rsp0 {
             crate::arch::set_tss_rsp0(VirtAddr::new(top));
-            CURRENT_RSP0.store(top, Ordering::Relaxed);
-        } else if who == 0 {
-            CURRENT_RSP0.store(0, Ordering::Relaxed);
         }
         CURRENT.store(who, Ordering::Relaxed);
         context::fx_restore(fx_ptr as *const u8);

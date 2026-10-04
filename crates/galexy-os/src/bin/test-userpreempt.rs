@@ -48,7 +48,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galexy_os::arch::init();
     sched::init();
 
-    sched::spawn_user_task("user-blob", &USER_BLOB);
+    sched::spawn_user_task("user-blob", |_| USER_BLOB.to_vec());
     let stats = sched::thread_stats();
     assert!(
         stats.iter().any(|&(name, _)| name == "user-blob"),

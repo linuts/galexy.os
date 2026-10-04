@@ -209,6 +209,24 @@ fn userpreempt_test_passes() {
 }
 
 #[test]
+fn syscall_test_passes() {
+    let (code, serial) = boot(&image("test-syscall"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-syscall should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-syscall] passed"),
+        "test-syscall success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("SYSCALL/SYSRET live"),
+        "syscall MSR init marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn uefi_image_boots_and_reports() {
     // UEFI boots (kernel runs, serial works); timer/keyboard are dead until
     // the APIC work — so this asserts boot markers only, not liveness.
