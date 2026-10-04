@@ -133,20 +133,73 @@ Tracking document for concrete work items. Big-picture direction lives in
       time, command output legible, heartbeats continue (wedge fixed:
       `thread_stats` was taking the sched table lock ungated!)
 
+## Milestone 12 — Ring-3 readiness ✅
+
+Foundations scrubbed BEFORE any userland lands; every item QEMU-tested.
+The galexy-abi ABI decisions (capabilities day one) are locked below and in
+`docs/DESIGN.md`.
+
+- [x] Heap grows on demand: `arch/mm/heap.rs` maps 64 KiB chunks past the
+      initial 400 KiB (P4 entry 43 spans 512 GiB) via `LockedHeap::extend`;
+      OOM in `alloc` triggers one growth + retry. `bin/test-heapgrow.rs`
+      pushes 5 MiB through it (~12.8x initial); verified (exit 33)
+- [x] Paging hardening: map/unmap/translate IRQ-gated in the API
+      (lock-audit rule — callable from any context now, including IRQs);
+      `FreshL4` builds a near-verbatim copy of the active L4 with a
+      SELF-POINTING recursive entry (a verbatim copy would address the OLD
+      tree once loaded in CR3); `with_table` maps through NON-active trees.
+      `bin/test-freshl4.rs`: clone + self-recursive + higher-half shared +
+      fresh-tree-only mapping invisible to the active tree; verified
+- [x] Thread lifecycle: reaper + tombstones + canary guard
+      - slots are NEVER removed (`CURRENT`/`LAST_SERVED` indexes must stay
+        stable mid-switch) — exited threads stay as `Freed` tombstone
+        structs (stable slot = future TID); rotation scans forward past
+        dead slots, terminates on main
+      - `thread_exit()` tombstones from the thread itself; main-loop
+        `sched::reap()` frees stack + FXSAVE area and checks the stack
+        canary (deep overflow → loud panic instead of silent heap rot)
+      - WEDGE FIX (found by the new test): the zombie's park loop MUST
+        keep IF=1 — `hlt` with interrupts off sleeps forever (the dead
+        thread is running until the next tick skips it; with IF=0 nothing
+        ever preempts it and the whole machine sleeps)
+      - `bin/test-threadexit.rs`: 3 threads return from their entry, all
+        reaped, 3x32 KiB stacks + fx areas back on the heap free list;
+        verified (exit 33)
+- [x] Ring-3 plumbing (structure only, no userland yet): GDT gains DPL-3
+      user code/data segments (consecutive: `user SS = user CS + 8`, the
+      SYSRET quirk); `arch::set_tss_rsp0`/`tss_rsp0` (TSS now behind an
+      UnsafeCell — CPU reads it via descriptor while Rust updates RSP0);
+      `Context::cpl()` decodes the frame's privilege (identical frame
+      shape for both rings). `bin/test-rings.rs`: selectors live + TSS.RSP0
+      roundtrip + cpl decode; verified (exit 33)
+- [x] `galexy-abi` crate: THE syscall ABI, frozen before any ring-3 code
+      - capabilities day one: opaque u64 `Cap` (48-bit index + 16-bit
+        rights), rights mask (READ/WRITE/SIGNAL/WAIT/EXEC — bits never
+        renumbered), reserved indexes (console=1, self=2) permanent
+      - syscall table `SYSCALLS` (index = number): exit=0, yield=1,
+        write=2, cap_info=3 (template), slot 4 reserved; host tests assert
+        unique/dense/ordered numbering, `exit` stays 0, cap layout
+        roundtrips, error codes (BadCap=1, AccessDenied=2, BadBuffer=3,
+        Unsupported=4, BadValue=5) roundtrip
+      - kernel side: `sched/syscalls.rs` dispatch skeleton consumes the
+        ABI (mechanism stays in `arch/` for Step A)
+- [x] Docs: layout tree (galexy-abi + userspace contracts), boundary rule
+      8 (ABI stability), DESIGN/ROADMAP/README synced
+
 ## Known limitations / follow-ups
 
 - [ ] UEFI: timer + keyboard dead under UEFI — legacy PIC doesn't exist;
       needs APIC under `arch/` (boot-only behavior now guarded by the UEFI
       smoke test)
 - [ ] Thread guard pages: a too-deep thread silently corrupts the heap
-- [ ] Thread reaper: returning threads park; stacks leak
+      (canary detects on reap now, but guard pages land with Step B where
+      stacks are independently mapped anyway)
+- [ ] Tombstone slots live forever (a few bytes per dead thread) — fine
+      until tasks churn; a free-list of slots is the fix if ever needed
 - [ ] Status bar can overwrite the typing line when the screen is full
       (cursor is restored, but the in-progress line's glyphs are clipped)
-- [ ] Heap is a fixed 400 KiB area — grow-on-demand when needed
 - [ ] Framebuffer is used as the bootloader mapped it (deliberate — BootInfo
       exposes no physical framebuffer address; revisit with isolation work)
-- [ ] Page mapping concurrency: mapper ops are main-loop-only right now;
-      IRQ handlers never touch MAPPER (verify again with ring 3)
 - [ ] Screen: text-mode cursor (blinking), tab handling, ANSI-ish output
 - [ ] Keyboard queue overflow silently drops keys — fine for now, revisit
 - [ ] Cooperative-scheduler nits: `run()` sweep fairness mid-sweep;

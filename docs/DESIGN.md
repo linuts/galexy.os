@@ -19,13 +19,23 @@ crates/
 │       ├── shell.rs     # the "shell": consumes driver input, produces screen output
 │       ├── arch/        # THE PORT WALL: x86_64 hardware code lives only here
 │       ├── drivers/     # device drivers (screen, serial, keyboard, ...)
-│       └── sched/       # scheduler (planned; hook point documented in code)
-├── galexy-core/         # kernel primitives (alloc-free, host-testable; lifted
-│                        #   from the former kcore module when tests arrived)
-├── userspace/           # ring-3 programs later, one crate per program (planned)
+│       └── sched/       # scheduler + syscall dispatch table (policy layer)
+├── galexy-abi/          # THE SYSCALL ABI: numbers, capability model, error
+│                        #   codes. The ONLY kernel<->userspace shared surface.
+│                        #   no_std, zero deps, host-testable. Frozen before any
+│                        #   ring-3 code existed (Milestone 12).
+├── galexy-core/         # kernel primitives (alloc-free, host-testable; Ring,
+│                        #   Bitmap)
+├── userspace/           # ring-3 programs, one crate per program (+ a
+│                        #   galexy-rt runtime; lands with Step A/B)
 └── runner/              # host tooling: builds BIOS+UEFI images, launches QEMU,
                          #   hosts the boot tests (tests/boot.rs)
 ```
+
+Dependency order: `galexy-core, galexy-abi → (nothing)`;
+`galexy-os → {core, abi}`; `galexy-rt → abi`; user programs → `galexy-rt`.
+Userspace programs NEVER link against the kernel — `galexy-abi` is the only
+contract between them.
 
 ## Boundary rules (enforced by structure, checked in review)
 
@@ -52,10 +62,19 @@ crates/
    the contract for `crates/userspace/` (one crate per program, linked
    against a small `galexy-rt` runtime, loaded by the kernel) applies from
    the first real program onward.
-7. **Syscall layering** (user space, planned): the syscall *mechanism*
-   (MSR setup, naked entry, frame building) lives in `arch/`; the dispatch
-   table (which syscall does what) lives in `sched/syscalls.rs` — it is
-   scheduler-adjacent policy, not hardware.
+7. **Syscall layering**: the syscall *mechanism* (MSR setup, naked entry,
+   frame building) lives in `arch/`; the dispatch table (which syscall does
+   what) lives in `sched/syscalls.rs` — it is scheduler-adjacent policy,
+   not hardware. The ABI itself lives in `galexy-abi` and never changes
+   from inside either side without a version bump.
+8. **ABI stability (capabilities day one).** The `galexy-abi` decisions —
+   opaque `Cap` handles (48-bit index + 16-bit rights), reserved indexes
+   (console=1, self=2), syscall numbers (exit=0, yield=1, write=2,
+   cap_info=3), error codes (BadCap=1, AccessDenied=2, BadBuffer=3,
+   Unsupported=4, BadValue=5) — are permanent. New syscalls APPEND;
+   renumbering/renaming = ABI major bump. NO file descriptors at this ABI
+   level: resources are capabilities kernel-side, validated on every call,
+   revoked easily. Files/ports/handles-to-come all become caps.
 
 ## Boot flow
 
@@ -151,28 +170,39 @@ Init order: GDT/TSS → IDT → PICs → timer config → `sti`.
 ### arch/mm/paging — "virtual memory" (arch/)
 
 - `OffsetPageTable` over the bootloader-created active tables: L4 table
-  located via CR3 + the physical-memory offset; mapper lives behind
-  `MAPPER: Mutex<Option<...>>` and is main-loop-only (IRQ handlers never
-  touch it — recheck when preemption lands).
+  located via CR3 + the physical-memory offset. **Every page op
+  (map/unmap/translate) runs IRQ-gated in the API** — the lock-audit rule
+  made page ops callable from any kernel context, including IRQs.
 - `map_page(page, frame)` maps with PRESENT|WRITABLE|NO_EXECUTE and flushes
   the TLB; page-table frames come from the frame allocator via a trait
-  adapter. `unmap_page` flushes and returns the frame. `translate(virt)` for
-  lookups.
-- Tests can swap the page-fault handler at runtime
-  (`arch::set_page_fault_handler`) — demand paging will use the same seam.
+  adapter. `unmap_page` flushes and returns the frame. `translate(virt)`
+  for lookups.
+- `FreshL4` — per-task address-space groundwork (Step B): allocates a frame
+  and clones the active L4 into it, then re-points the recursive entry
+  (P4 511) at the FRESH frame — a verbatim copy would leave the recursive
+  mapping addressing the OLD tree once the fresh table is loaded into CR3
+  (kernel higher-half entries are shared frames either way). Tests can map
+  into a fresh (non-active, coherent) tree via the `unsafe with_table()`
+  mapper (no TLB flush — no CPU can address it); `FreshL4::drop` currently
+  leaks its frame (tree walk = Step B work, documented debt).
 - Fresh virtual space: the bootloader's dynamic mappings fill P4 indices
   from 0 upward, physical memory is fixed at index 32, recursive at 511 —
-  test/scratch mappings should use a high-but-canonical index (e.g. 100,
-  heap uses 43).
+  test/scratch mappings use a high-but-canonical index (heap 43, tests
+  100, task regions head above that).
+- Tests can swap the page-fault handler at runtime
+  (`arch::set_page_fault_handler`) — demand paging will use the same seam.
 
 ### arch/mm/heap — "the heap" (arch/)
 
-- `linked_list_allocator::LockedHeap` as the `#[global_allocator`; 400 KiB
-  at a fixed fresh virtual area (P4 entry 43), mapped by our mapper from
-  frame-allocator frames during `mm::init` (memory bring-up is one call).
+- `linked_list_allocator::LockedHeap` as the `#[global_allocator`,
+  IRQ-gated `InterruptSafeAlloc` adapter. Starts at 400 KiB in a fixed
+  virtual area (P4 entry 43) and **grows on demand**: a failed `alloc`
+  maps a 64 KiB chunk right past the current end (frames from the frame
+  allocator) and `Heap::extend`s the allocator (the whole P4 entry spans
+  512 GiB, so the growth path needs no new top-level structures).
 - `shell` is the first heap consumer (String line buffers); the scheduler's
-  task queues are the planned next one. Host unit tests never touch the
-  heap (no_std tests of `galexy-core` are allocation-free by rule).
+  task queues are the next one. Host unit tests never touch the heap
+  (no_std tests of `galexy-core` are allocation-free by rule).
 
 ### sched — "the scheduler" (`sched/`)
 
@@ -188,8 +218,32 @@ calls the Rust scheduler with the frame pointer, and either swaps RSP to
 the next thread's saved context (pops + `iretq` straight into it) or
 returns 0 to resume the outgoing task. Each thread owns:
 - a 32 KiB heap (`Box`/`vec!`) stack — the context block lives on it
-- a leaked 16-aligned FXSAVE area (kernel code may auto-vectorize)
+- a leaked-at-spawn FXSAVE area (kernel code may auto-vectorize), freed by
+  the reaper on exit
 - main is participant slot 0 of the unified rotation.
+
+**Lifecycle (tombstones).** Slots are NEVER removed from the thread vec:
+`CURRENT`/`LAST_SERVED` index into it mid-switch, so shifting entries would
+corrupt in-flight state. A thread whose entry RETURNS tombstones itself
+(`thread_exit`, called by the trampoline); the rotation scans forward past
+dead slots (bounded — main is always eligible at slot 0); the main loop's
+`sched::reap()` frees stack + fx of every exited thread and checks the
+stack canary (a deep overflow walks downward through the magic word at the
+stack's very bottom first — reaping turns silent heap corruption into a
+loud panic). Dead slots remain as `Freed` structs (a few bytes) — stable
+slot index = future TID. THE ZOMBIE RULE: after `thread_exit`, the park
+loop MUST stay interrupts-ENABLED — with IF=0 the dead thread sleeps in
+`hlt` forever, nothing ever preempts it, and the whole machine wedges
+(found by `bin/test-threadexit.rs`).
+
+**Ring-3 readiness** (structure only until userland): GDT carries DPL-3
+user code/data segments, appended consecutively (`user SS = user CS + 8`,
+the SYSRET quirk); `arch::set_tss_rsp0`/`tss_rsp0` update/read the live
+TSS (UnsafeCell holder — the CPU reads it through the descriptor while
+Rust updates RSP0, single-core + IRQ-gated); `Context::cpl()` decodes the
+frame's privilege — the frame SHAPE is identical for both rings (iret
+semantics push the same 5 words; ring 3→0 crossings differ only in WHERE
+the CPU puts the frame: TSS.RSP0).
 
 **Lock audit rule (preemption)**: the ONLY preemptor is the timer IRQ, so
 *any lock held by preemptable code must be held with interrupts off*
@@ -207,6 +261,16 @@ dispatch reads a stale descriptor.
 
 Demo tickers/threads (`sched/demo.rs`) prove interleaving on screen; the
 banner reports live counts.
+
+### sched/syscalls — "the spice must flow from a table" (sched/)
+
+The dispatch table: number → behavior. Mechanism (MSR/STAR/LSTAR/naked
+entry) is `arch/` business (rule 7); this file is policy. The table
+consumes `galexy-abi` constants — numbers, `Cap` layout, error codes are
+ABI-stabilized there (rule 8). Currently a skeleton: `exit`/`yield`/
+`write`/`cap_info` exist with `Unsupported` bodies until Step A wires the
+entry shim; `cap_info` already echoes handles back (dispatch integration
+proving ground).
 
 ### banner — "the boot showcase"
 

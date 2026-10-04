@@ -16,9 +16,18 @@ with live system stats, growing toward user space and beyond.
 - [x] Shell: line editing (Backspace), commands (`help`, `stats`, `threads`,
       `tasks`, `clear`, `about`), echo fallback for unknown lines
 - [x] Physical frame allocator over the bootloader memory map
-- [x] Paging: map/unmap pages with TLB flushes, page-fault reporting (CR2)
-- [x] Kernel heap (`alloc`): String/Vec/Box work everywhere
-- [x] Cooperative round-robin tasks + timer-preemptive kernel threads
+- [x] Paging: map/unmap pages with TLB flushes, page-fault reporting (CR2),
+      fresh page-table trees (per-task isolation groundwork)
+- [x] Kernel heap (`alloc`): String/Vec/Box work everywhere; grows on
+      demand past the initial 400 KiB
+- [x] Cooperative round-robin tasks + timer-preemptive kernel threads with
+      a real lifecycle: exited threads are reaped (stacks return to the
+      heap), slots are stable tombstones, stack canary surfaces overflows
+- [x] Ring-3 groundwork: GDT user segments, TSS.RSP0 control, frame CPL
+      introspection (no userland yet)
+- [x] `galexy-abi`: the syscall ABI — numbered syscalls + capability model
+      (no fds; capabilities day one) — frozen and host-tested before any
+      ring-3 code exists
 - [x] Shell with commands (`help`, `stats`, `threads`, ...) + live status
       bar ("quiet OS" demo)
 - [x] Test harness: host unit tests + per-kernel QEMU integration tests
@@ -58,6 +67,7 @@ Note: under UEFI the timer/keyboard are not wired up yet (needs APIC, see
 
 ```sh
 cargo test -p galexy-core   # host unit tests of kernel primitives (instant)
+cargo test -p galexy-abi    # syscall-ABI stability + capability-model tests
 cargo test -p runner        # boots every kernel binary in headless QEMU
 ```
 
@@ -90,6 +100,9 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
 │   ├── ROADMAP.md                   # where this is going
 │   └── DESIGN.md                    # how the pieces fit
 ├── crates/
+│   ├── galexy-abi/                  # THE syscall ABI: numbers, capability
+│   │                                #   model, error codes (kernel<->user
+│   │                                #   contract, host-testable)
 │   ├── galexy-os/                   # the kernel: lib + bins
 │   │   └── src/
 │   │       ├── lib.rs               # shared init, panic handler, exit_qemu
@@ -100,9 +113,10 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
 │   │       ├── arch/                # the port wall: GDT/TSS, IDT, PICs, PIT, mm
 │   │       ├── drivers/             # screen, serial, keyboard
 │   │       ├── macros.rs            # print!/println! plumbing
-│   │       └── sched/               # tasks, preemptive threads, context asm
+│   │       └── sched/               # tasks, preemptive threads, context asm,
+│   │                                #   syscall dispatch table
 │   ├── galexy-core/                 # kernel primitives (Ring, Bitmap), host-testable
-│   ├── userspace/                   # ring-3 programs later (planned; see DESIGN)
+│   ├── userspace/                   # ring-3 programs later (see DESIGN rule 6/8)
 │   └── runner/                      # host crate: images, QEMU, boot tests
 │       ├── build.rs                 # bootloader image builder (per kernel bin)
 │       ├── src/main.rs              # QEMU invocation (--uefi flag)
