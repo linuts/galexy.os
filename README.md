@@ -48,11 +48,16 @@ with `OVMF_FD=/path/to/OVMF.fd cargo run -- --uefi`.
 Note: under UEFI the timer/keyboard are not wired up yet (needs APIC, see
 `TODO.md`); the kernel boots and reports over serial.
 
-### Headless automated test
+### Tests
 
-`scripts/boot-test.sh` boots an image headless, feeds monitor commands from
-stdin (e.g. `sendkey ...`), captures the serial log in
-`/tmp/opencode/serial.log` and supports `screendump` for framebuffer checks.
+```sh
+cargo test -p galexy-core   # host unit tests of kernel primitives (instant)
+cargo test -p runner        # boots every kernel binary in headless QEMU
+```
+
+Test kernels are regular binaries under `crates/galexy-os/src/bin/`; the
+runner builds one disk image per binary and asserts exit codes + serial
+output. Panics in test kernels automatically fail the run.
 
 ### Build the bootable images only
 
@@ -79,24 +84,23 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
 │   ├── ROADMAP.md                   # where this is going
 │   └── DESIGN.md                    # how the pieces fit
 ├── crates/
-│   ├── galexy-os/                   # the kernel (bin)
+│   ├── galexy-os/                   # the kernel: lib + bins
 │   │   └── src/
-│   │       ├── main.rs              # wiring only: init order + main loop
+│   │       ├── lib.rs               # shared init, panic handler, exit_qemu
+│   │       ├── main.rs              # normal kernel: wiring + main loop
+│   │       ├── bin/                 # test kernels (one per QEMU test)
 │   │       ├── echo.rs              # the echo "shell"
-│   │       ├── kcore/               # kernel primitives (ring buffers, ...)
 │   │       ├── arch/                # the port wall: GDT/TSS, IDT, PICs, PIT
 │   │       ├── drivers/             # screen, serial, keyboard
 │   │       ├── macros.rs            # print!/println! plumbing
 │   │       └── sched/               # scheduler (planned; hook point documented)
+│   ├── galexy-core/                 # kernel primitives (Ring, ...), host-testable
 │   ├── userspace/                   # ring-3 programs later (planned)
-│   └── runner/                      # host crate: builds disk images, runs QEMU
-│       ├── build.rs                 # bootloader BIOS+UEFI image builder
-│       └── src/main.rs              # QEMU invocation (--uefi flag)
+│   └── runner/                      # host crate: images, QEMU, boot tests
+│       ├── build.rs                 # bootloader image builder (per kernel bin)
+│       ├── src/main.rs              # QEMU invocation (--uefi flag)
+│       └── tests/boot.rs            # boots every kernel binary headless
 ```
-
-Layer rules (drivers only talk to `arch` + `kcore`; `arch` is the only place
-ports are touched; userspace programs are separate crates) live in
-`docs/DESIGN.md`.
 
 ## Design principles
 

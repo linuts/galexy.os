@@ -4,6 +4,7 @@
 ///
 /// Capacity is compile-time; all allocation-free. Intended for IRQ-produced /
 /// main-loop-consumed queues (keyboard input now; scheduler queues later).
+#[derive(Debug)]
 pub struct Ring<T, const N: usize> {
     data: [Option<T>; N],
     head: usize,
@@ -41,5 +42,11 @@ impl<T, const N: usize> Ring<T, N> {
         self.head = (self.head + 1) % N;
         self.len -= 1;
         value
+    }
+}
+
+impl<T, const N: usize> Default for Ring<T, N> {
+    fn default() -> Self {
+        Self::new()
     }
 }

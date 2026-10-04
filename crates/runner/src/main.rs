@@ -1,25 +1,40 @@
-//! Host-side runner: builds the disk images (via build.rs) and boots them in
-//! QEMU. `cargo run` boots the BIOS image; `cargo run -- --uefi` boots UEFI.
-
-use std::env;
-use std::process::{exit, Command};
-
-const OVMF_FD_DEFAULT: &str = "/usr/share/ovmf/x64/OVMF.4m.fd";
+//! The runner host crate: builds disk images (via build.rs) and boots the
+//! normal kernel in QEMU (`cargo run`). Boot tests live in `tests/`.
 
 fn main() {
-    let uefi = env::args().any(|arg| arg == "--uefi");
-    let image = if uefi {
-        env!("UEFI_PATH")
+    let uefi = std::env::args().any(|arg| arg == "--uefi");
+    let img_path = if uefi {
+        // Manifest entries are `name:bios_path,uefi_path`.
+        env!("GALEXY_IMAGES")
+            .split(';')
+            .find_map(|entry| {
+                let (name, rest) = entry.split_once(':')?;
+                if name != "galexy-os" {
+                    return None;
+                }
+                rest.split_once(',').map(|(_, uefi)| uefi.to_string())
+            })
+            .expect("no galexy-os uefi image built")
     } else {
-        env!("BIOS_PATH")
+        env!("GALEXY_IMAGES")
+            .split(';')
+            .find_map(|entry| {
+                let (name, rest) = entry.split_once(':')?;
+                if name != "galexy-os" {
+                    return None;
+                }
+                rest.split_once(',').map(|(bios, _)| bios.to_string())
+            })
+            .expect("no galexy-os bios image built")
     };
 
-    let mut cmd = Command::new("qemu-system-x86_64");
+    let mut cmd = std::process::Command::new("qemu-system-x86_64");
     if uefi {
-        let ovmf_fd = env::var("OVMF_FD").unwrap_or_else(|_| OVMF_FD_DEFAULT.into());
+        const OVMF_FD_DEFAULT: &str = "/usr/share/ovmf/x64/OVMF.4m.fd";
+        let ovmf_fd = std::env::var("OVMF_FD").unwrap_or_else(|_| OVMF_FD_DEFAULT.to_string());
         cmd.arg("-bios").arg(ovmf_fd);
     }
-    cmd.arg("-drive").arg(format!("format=raw,file={image}"));
+    cmd.arg("-drive").arg(format!("format=raw,file={img_path}"));
     // Surface guest COM1 on the host terminal for debugging.
     cmd.arg("-serial").arg("stdio");
     // Make triple faults visible instead of silently rebooting.
@@ -32,6 +47,6 @@ fn main() {
         "failed to launch qemu-system-x86_64 (install qemu-desktop: pacman -S qemu-desktop)",
     );
     if !status.success() {
-        exit(status.code().unwrap_or(1));
+        std::process::exit(status.code().unwrap_or(1));
     }
 }

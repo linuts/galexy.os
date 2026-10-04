@@ -11,9 +11,9 @@ Tracking document for concrete work items. Big-picture direction lives in
 - [x] `#![no_std]`/`#![no_main]` kernel with panic handler (serial-reported)
 - [x] Boot to "Hello from galexy.os!" — verified in QEMU (BIOS + UEFI)
 
-## Milestone 2 — Display module ✅ (as `screen/`, framebuffer-based)
+## Milestone 2 — Display module ✅ (as `drivers/screen`, framebuffer-based)
 
-- [x] `screen/` module: pixel framebuffer writer + Noto Sans Mono glyphs
+- [x] Pixel framebuffer writer + Noto Sans Mono glyphs
 - [x] Newline handling + scroll when hitting bottom (verified: 40+ lines)
 - [x] `spin::Mutex`-guarded global screen, `_print` hook
 - [x] `print!/println!` macros via `core::fmt::Write`
@@ -25,7 +25,7 @@ Tracking document for concrete work items. Big-picture direction lives in
 - [x] IDT: breakpoint, page fault (parks + serial report), double fault
 - [x] PIC remapping (`pic8259`), spurious IRQ handling via pic8259
 - [x] Timer handler (PIT @ ~1 kHz) with tick counter + 1s serial heartbeat
-- [x] Keyboard IRQ handler (raw scancode → `DecodedKey` → char ring buffer)
+- [x] Keyboard IRQ handler (raw scancode → `DecodedKey` → `kcore::Ring`)
 
 ## Milestone 4 — Echo shell ✅
 
@@ -33,17 +33,25 @@ Tracking document for concrete work items. Big-picture direction lives in
 - [x] Enter echoes the typed line with `echo:` prefix, new prompt after
 - [x] Verified interactively in QEMU (monitor `sendkey` + screendump)
 
+## Milestone 5 — Test harness ✅
+
+- [x] `galexy-core` crate lift: `Ring<T, N>` with host unit tests
+      (`cargo test -p galexy-core`)
+- [x] Kernel lib+bin split: shared init, panic handler, `exit_qemu` via
+      `isa-debug-exit` port 0xF4 (Success=0x10 → QEMU exit 33)
+- [x] Test kernel binaries (`src/bin/test-basic.rs`, `test-should-panic.rs`)
+- [x] Runner-side boot tests: build.rs builds an image per kernel binary;
+      `cargo test -p runner` boots each headless, asserts exit codes + serial
+      markers, including a liveness check of the interactive kernel
+- [ ] More test kernels as subsystems land (interrupt latency, memory map)
+
 ## Known limitations / follow-ups
 
 - [ ] UEFI: timer + keyboard don't work yet — legacy PIC doesn't exist under
       UEFI; needs APIC setup under `arch/` (see bootloader migration doc)
 - [ ] `physical_memory_offset` is `None`: enable `map_physical_memory` in
       `BootConfig` (runner build.rs) when the memory phase starts
-- [ ] `#[test_case]` test harness (exit port + test runner) — worth ~1
-      milestone before memory work
 - [ ] Screen: text-mode cursor (blinking), tab handling, ANSI-ish output
 - [ ] Keyboard queue overflow silently drops keys — fine for now, revisit
 - [ ] Echo uses a fixed 128-char line buffer — replace with heap strings once
       alloc lands
-- [ ] `kcore` → `galexy-core` crate lift when userspace becomes its first
-      second consumer (crate-lift policy in `docs/DESIGN.md`)

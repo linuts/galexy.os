@@ -4,7 +4,7 @@
 //! decoded characters through [`pop_key`]. Locks are kept tiny and never
 //! nested, so this is safe to call from interrupt context.
 
-use crate::kcore::Ring;
+use galexy_core::Ring;
 use pc_keyboard::{layouts, DecodedKey, HandleControl, PS2Keyboard, ScancodeSet1};
 use spin::Mutex;
 

@@ -175,10 +175,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "galexy-core"
+version = "0.1.0"
+
+[[package]]
 name = "galexy-os"
 version = "0.1.0"
 dependencies = [
  "bootloader_api",
+ "galexy-core",
  "noto-sans-mono-bitmap",
  "pc-keyboard",
  "pic8259",

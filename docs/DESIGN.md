@@ -11,16 +11,20 @@ the kernel's wiring file:
 
 ```
 crates/
-├── galexy-os/           # the kernel (bin)
+├── galexy-os/           # the kernel: lib (shared code) + bins (entries)
 │   └── src/
-│       ├── main.rs      # wiring only: init order + main loop (stays ~100 lines forever)
+│       ├── lib.rs       # shared init, panic handler, QEMU exit plumbing
+│       ├── main.rs      # normal kernel: wiring only (init order + main loop)
+│       ├── bin/         # test kernels: one bin per QEMU integration test
 │       ├── echo.rs      # the "shell": consumes driver input, produces screen output
-│       ├── kcore/       # kernel primitives (alloc-free types shared across layers)
 │       ├── arch/        # THE PORT WALL: x86_64 hardware code lives only here
 │       ├── drivers/     # device drivers (screen, serial, keyboard, ...)
 │       └── sched/       # scheduler (planned; hook point documented in code)
+├── galexy-core/         # kernel primitives (alloc-free, host-testable; lifted
+│                        #   from the former kcore module when tests arrived)
 ├── userspace/           # ring-3 programs later, one crate per program (planned)
-└── runner/              # host tooling: builds BIOS+UEFI images, launches QEMU
+└── runner/              # host tooling: builds BIOS+UEFI images, launches QEMU,
+                         #   hosts the boot tests (tests/boot.rs)
 ```
 
 ## Boundary rules (enforced by structure, checked in review)
@@ -30,16 +34,17 @@ crates/
 2. **`arch/` is the port wall.** Only `arch/` touches I/O ports, CPU control
    registers, or platform specifics. Drivers and primitives call `arch`
    APIs. Porting to another arch = rewriting `arch/` alone.
-3. **Drivers never call drivers.** Shared behavior goes through `kcore`
+3. **Drivers never call drivers.** Shared behavior goes through `galexy-core`
    types/traits; shared *policies* stay in the caller (`echo`).
-4. **`kcore` stays alloc-free** and may not depend on `arch`, `drivers`,
-   `sched`, or the shell — it's the bottom of the dependency stack:
-   `main → (echo, sched, drivers, kcore)`, `drivers → arch, kcore`,
-   `sched → kcore`, `kcore → (nothing)`.
+4. **`galexy-core` stays alloc-free** and platform-independent (no `arch`
+   deps) — it's the bottom of the dependency stack:
+   `bins → lib → (echo, sched, drivers)`, `drivers → arch, galexy-core`,
+   `sched → galexy-core`, `galexy-core → (nothing)`.
 5. **Crate-lift policy.** A module becomes its own workspace crate only when
-   it gains a *second consumer* (e.g. `kcore` → `galexy-core` when userspace
-   wants the same types; a driver splits out when userspace visibility is
-   needed). Lift stable boundaries only — never "to make it look organized".
+   it gains a *second consumer* (e.g. `kcore` → `galexy-core` when the test
+   harness needed host-testable primitives; a driver splits out when
+   userspace visibility is needed). Lift stable boundaries only — never "to
+   make it look organized".
 6. **Userspace programs are always their own crates** under
    `crates/userspace/` — never modules of the kernel.
 
@@ -137,11 +142,23 @@ task the scheduler runs.
 
 ## Testing strategy
 
-- `scripts/boot-test.sh`: headless QEMU, injects HMP commands (`sendkey`,
-  `screendump`), captures COM1 via `-serial stdio`.
-- Kernel `#[test_case]` harness is planned (see TODO) before memory work.
-- Pure logic (scancode decode, ring buffer) should get in-kernel tests once
-  the harness exists.
+Two tiers, chosen after studying the bootloader crate's own test suite:
+
+- **Host unit tests** (`cargo test -p galexy-core`): pure, alloc-free logic
+  (e.g. `Ring<T, N>`) — instant, no QEMU.
+- **QEMU integration tests** (`cargo test -p runner`): each test is a small
+  kernel *binary* under `crates/galexy-os/src/bin/` that boots the full
+  stack, asserts, and exits via `exit_qemu` (`isa-debug-exit`, port 0xF4).
+  `runner/build.rs` builds one disk image per kernel binary and exposes them
+  via the `GALEXY_IMAGES` manifest; `runner/tests/boot.rs` boots each
+  headless and asserts exit codes + serial markers. Any panic in a test
+  kernel becomes a Failed exit automatically (Success instead when
+  `expect_panic` was registered).
+- Headless interactive verification (`scripts/boot-test.sh`): injects HMP
+  commands (`sendkey`, `screendump`), captures COM1 — for manual checks.
+
+QEMU exit-code mapping (empirically verified): `Success` (0x10) → exit 33,
+`Failed` (0x11) → exit 35.
 
 ## Known sharp edges
 

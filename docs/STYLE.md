@@ -20,15 +20,21 @@ enforce these.
 
 ## Module organization
 
-- One module per directory (`arch/`, `drivers/`, `kcore/`, `sched/`, ...),
-  `mod.rs` re-exports the public surface only.
+- One module per directory (`arch/`, `drivers/`, ...), `mod.rs` re-exports
+  the public surface only.
 - **Layer boundaries are law** (see `docs/DESIGN.md`): `main.rs` is wiring
   only; only `arch/` touches ports/registers; drivers never call drivers;
-  `kcore` has no layer dependencies.
+  `galexy-core` has no layer dependencies.
 - Each module exposes the **narrowest** API it can. Cross-module calls go
   through the owning module's public functions, never through its internals.
 - Statics: `spin::Mutex` / `LazyLock` initialization; no global mutable
   `static mut` anywhere, ever.
+- **`galexy-core` dependency rule:** `galexy-core` stays alloc-free,
+  platform-independent, and has zero layer dependencies; everything else may
+  use it.
+- **Test kernels:** one integration test = one binary under `src/bin/` +
+  one `#[test]` in `crates/runner/tests/`. Test kernels must `exit_qemu`
+  with an explicit code; unexpected panics fail automatically.
 - `main.rs` is a wiring file: it calls `init()` functions and then loops. All
   logic lives in modules.
 
