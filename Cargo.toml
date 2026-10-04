@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["crates/runner", "crates/galexy-os"]
+default-members = ["crates/runner"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

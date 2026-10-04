@@ -1,0 +1,17 @@
+[package]
+name = "galexy-os"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bootloader_api = "0.11"
+x86_64 = "0.15"
+spin = "0.12"
+uart_16550 = "0.8"
+noto-sans-mono-bitmap = "0.3"
+pic8259 = "0.11"
+pc-keyboard = "0.9"
+
+[[bin]]
+name = "galexy-os"
+path = "src/main.rs"
