@@ -62,6 +62,17 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         assert!(buf.iter().all(|&b| b == 0xAB), "buffer {bi} corrupted");
     }
 
+    // SMP M19 marker: every growth chunk is mapped kernel-half, so the
+    // shootdown IPI broadcast must have run for real (the harness boots at
+    // -smp 2 — the AP's lock-free handler acked every one of these).
+    let broadcasts = galexy_os::arch::mm::shootdown::broadcast_count();
+    serial_println!("[test-heapgrow] shootdown broadcasts: {}", broadcasts);
+    assert!(
+        broadcasts >= 1,
+        "heap growth must broadcast shootdowns (got {})",
+        broadcasts
+    );
+
     println!(
         "[test-heapgrow] heap {} -> {} bytes",
         initial_size, end_size

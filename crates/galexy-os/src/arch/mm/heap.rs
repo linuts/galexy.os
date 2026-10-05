@@ -42,19 +42,30 @@ static INNER: LockedHeap = LockedHeap::empty();
 /// interrupts off. Allocation can happen anywhere — wrap it.
 pub struct InterruptSafeAlloc;
 
-// SAFETY: all operations delegate to INNER under without_interrupts; the
-// inner allocator is itself thread-safe via its own lock. `alloc` may map
-// more heap space on exhaustion (grow-on-demand).
+// SAFETY: all operations delegate to INNER; the inner allocator is itself
+// thread-safe via its own lock. `alloc` may map more heap space on
+// exhaustion (grow-on-demand).
+//
+// GATE SPLIT (SMP M19): the fast path holds the gate (lock-audit rule —
+// the heap lock must never be held by preemptable code with IF=1), but the
+// OOM path runs LOCK-FREE between gates: `grow` maps under the gate, then
+// broadcasts its shootdowns with NO lock held and NO gate held (the
+// shootdown deadlock rule — a target blocked IF=0 on a lock held by the
+// initiator could never ack the IPI). Naked/IRQ paths never reach the OOM
+// path at all (they do not allocate).
 unsafe impl GlobalAlloc for InterruptSafeAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        interrupts::without_interrupts(|| {
-            let ptr = INNER.alloc(layout);
-            if ptr.is_null() {
-                grow();
-                return INNER.alloc(layout);
+        loop {
+            let ptr = interrupts::without_interrupts(|| INNER.alloc(layout));
+            if !ptr.is_null() {
+                return ptr;
             }
-            ptr
-        })
+            if !grow() {
+                return core::ptr::null_mut();
+            }
+            // A chunk landed (ours, or another CPU's in-flight growth we
+            // waited out) — the retry may fit now; otherwise grow again.
+        }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
@@ -90,19 +101,40 @@ pub fn init() {
 }
 
 /// Grows the heap by one [`GROW_CHUNK_PAGES`] chunk: maps fresh pages at the
-/// end of the current range, then feeds them to the allocator.
+/// end of the current range (kernel half — broadcast-remapped, SMP M19),
+/// then feeds them to the allocator.
 ///
-/// Runs with interrupts off (GlobalAlloc adapter contract). No-ops when a
-/// growth step is already in flight (a second failing alloc simply fails) or
-/// when the cap is reached. Frames live in the frame allocator; failing to
-/// get them or map them propagates as an allocation failure (null).
+/// SMP protocol: the GROWING flag serializes growth machine-wide. When a
+/// second CPU hits OOM mid-growth, it does NOT fail — it waits (with
+/// interrupts ENABLED, so it can still ack the other CPU's shootdown IPIs;
+/// waiting IF=0 here would deadlock the broadcaster) for the in-flight
+/// chunk to land and reports progress so the caller retries its alloc.
+///
+/// Gate discipline: mapping + extend run under the gate (mapper/heap
+/// locks); the shootdown broadcast runs LOCK-FREE between them (no Rust
+/// lock may be held across it — see `mm::shootdown`). Naked/IRQ paths never
+/// allocate, so they never reach here. Returns `true` when the heap gained
+/// at least one page since the caller's failed alloc.
 fn grow() -> bool {
-    if !READY.load(Ordering::Relaxed)
-        || GROWING
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-    {
+    if !READY.load(Ordering::Relaxed) {
         return false;
+    }
+    if GROWING
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        // Another CPU is mid-growth. Wait for its chunk to land (its
+        // broadcast needs our handler: spin with IF=1). Watchdog: a stuck
+        // grower is a kernel bug — fail loudly instead of hanging.
+        let deadline = crate::arch::timer_ticks() + 2000; // ~2 machine-seconds
+        while GROWING.load(Ordering::Relaxed) {
+            x86_64::instructions::interrupts::enable();
+            core::hint::spin_loop();
+            if crate::arch::timer_ticks() > deadline {
+                panic!("heap: stuck behind in-flight growth (deadlocked grower?)");
+            }
+        }
+        return true; // progress happened; the caller's retry may fit now
     }
     let current = HEAP_CURRENT_SIZE.load(Ordering::Relaxed);
     let current_pages = current / 4096;
@@ -112,33 +144,52 @@ fn grow() -> bool {
     }
 
     let start = VirtAddr::new(HEAP_START + current as u64);
+    // Map the chunk under the gate: the mapper lock + frame allocator are
+    // IRQ-gated by their own APIs; the gate here keeps the whole map loop
+    // atomic against the timer switch (the caller holds no locks we need).
     let mut mapped = 0usize;
-    for i in 0..GROW_CHUNK_PAGES {
-        let page = Page::<Size4KiB>::containing_address(start + (i as u64) * 4096);
-        let Some(frame) = super::allocate_frame() else {
-            break;
-        };
-        if super::map_page(page, frame).is_err() {
-            break;
+    let mut broadcast_vas = [0u64; GROW_CHUNK_PAGES];
+    interrupts::without_interrupts(|| {
+        for (i, va) in broadcast_vas.iter_mut().enumerate() {
+            let page = Page::<Size4KiB>::containing_address(start + (i as u64) * 4096);
+            let Some(frame) = super::allocate_frame() else {
+                break;
+            };
+            if super::map_page(page, frame).is_err() {
+                break;
+            }
+            *va = page.start_address().as_u64();
+            mapped += 1;
         }
-        mapped += 1;
-    }
+    });
     if mapped == 0 {
         GROWING.store(false, Ordering::Release);
         return false;
     }
 
+    // Shootdown broadcast: LOCK-FREE and holding NO lock by design (the
+    // deadlock rule). Fresh mappings technically cannot sit stale in other
+    // CPUs' TLBs, but broadcasting here MECHANIZES the "kernel half is
+    // map-only" assumption — every kernel-half remap flows through the
+    // shootdown path from day one.
+    let vas: alloc::vec::Vec<x86_64::VirtAddr> = broadcast_vas[..mapped]
+        .iter()
+        .map(|&v| x86_64::VirtAddr::new(v))
+        .collect();
+    let seq = super::shootdown::shootdown_others(&vas);
+
     // SAFETY: [HEAP_START + current, +mapped*4096) was mapped above and has
     // never been handed to the allocator; `extend` claims it as one hole.
-    unsafe { INNER.lock().extend(mapped * 4096) };
+    interrupts::without_interrupts(|| unsafe { INNER.lock().extend(mapped * 4096) });
     let new_size = current + mapped * 4096;
     HEAP_CURRENT_SIZE.store(new_size, Ordering::Relaxed);
     GROWING.store(false, Ordering::Release);
     serial_println!(
-        "[heap] grown: {} KiB (+{} KiB, {} pages)",
+        "[heap] grown: {} KiB (+{} KiB, {} pages, shootdown seq {})",
         new_size / 1024,
         mapped * 4,
-        mapped
+        mapped,
+        seq
     );
     true
 }

@@ -178,6 +178,24 @@ pub fn map_page_flags(
     result
 }
 
+/// Maps one KERNEL-half page (PRESENT | WRITABLE | NO_EXECUTE) and broadcasts
+/// a TLB shootdown for it to every other CPU. The kernel half is shared
+/// memory across all CPUs and task trees — a remap here is visible machine-
+/// wide, so the local `map_page` flush is not enough.
+///
+/// Caller contract (the shootdown deadlock rule): NO Rust spin lock may be
+/// held across the call — targets ack through lock-free IPI handlers, but a
+/// target blocked IF=0 on a lock held by the initiator could never run its
+/// handler. Lock holds stay short + IPI-free.
+pub fn map_kernel_page_broadcast(
+    page: Page<Size4KiB>,
+    frame: PhysFrame<Size4KiB>,
+) -> Result<(), PageError> {
+    map_page(page, frame)?; // mapper lock + local flush; released on return
+    super::shootdown::shootdown_others(&[page.start_address()]);
+    Ok(())
+}
+
 /// Unmaps `page` and returns the frame it pointed at (TLB flushed).
 pub fn unmap_page(page: Page<Size4KiB>) -> Result<PhysFrame<Size4KiB>, PageError> {
     let mut result = Err(PageError::NotMapped);
