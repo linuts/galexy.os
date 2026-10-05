@@ -18,7 +18,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     println!("[test-heap] running");
     serial_println!("[test-heap] running");
 
-    galexy_os::arch::init(); // interrupts + IDT before memory work
+    galexy_os::arch::init(boot_info); // interrupts + IDT before memory work
     galexy_os::arch::mm::init(boot_info); // frames + paging + heap
 
     // Box roundtrip.

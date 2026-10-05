@@ -23,7 +23,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     // Fault handlers BEFORE memory work: a fault reports over serial
     // instead of triple-faulting into a silent reset.
-    galexy_os::arch::init();
+    galexy_os::arch::init(boot_info);
 
     mm::init(boot_info);
     let initial_free = mm::free_frames();

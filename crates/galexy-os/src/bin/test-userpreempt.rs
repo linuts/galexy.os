@@ -45,7 +45,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     // GDT with user segments loads here — must be up before the user task
     // exists (its selectors already carry DPL 3 regardless, but the CPU's
     // iretq target must exist in the descriptor table).
-    galexy_os::arch::init();
+    galexy_os::arch::init(boot_info);
     sched::init();
 
     sched::spawn_user_task("user-blob", |_| USER_BLOB.to_vec());

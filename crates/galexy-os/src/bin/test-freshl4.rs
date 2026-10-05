@@ -33,7 +33,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     println!("[test-freshl4] running");
     serial_println!("[test-freshl4] running");
 
-    galexy_os::arch::init();
+    galexy_os::arch::init(boot_info);
     galexy_os::arch::mm::init(boot_info);
 
     // 1+2: fresh tree + self-pointing recursive entry.

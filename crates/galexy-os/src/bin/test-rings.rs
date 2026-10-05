@@ -24,7 +24,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("[test-rings] running");
 
     arch::mm::init(boot_info);
-    arch::init(); // GDT/IDT bring-up lives here
+    arch::init(boot_info); // GDT/IDT bring-up lives here
 
     // 1: user selectors: DPL3 (selectors carry their RPL from user_cs_ss),
     // consecutive in the GDT (CSS+8 == SS) for the SYSRET quirk.

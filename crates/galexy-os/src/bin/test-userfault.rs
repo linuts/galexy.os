@@ -26,7 +26,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("[test-userfault] running");
 
     galexy_os::arch::mm::init(boot_info);
-    galexy_os::arch::init();
+    galexy_os::arch::init(boot_info);
     sched::init();
 
     let baseline = galexy_os::arch::mm::free_frames();

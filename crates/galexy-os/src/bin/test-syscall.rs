@@ -26,7 +26,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("[test-syscall] running");
 
     galexy_os::arch::mm::init(boot_info);
-    galexy_os::arch::init(); // MSRs (STAR/LSTAR/EFER.SCE) live here
+    galexy_os::arch::init(boot_info); // MSRs (STAR/LSTAR/EFER.SCE) live here
     sched::init();
 
     // The capability the blob will probe: the console cap with WRITE right.

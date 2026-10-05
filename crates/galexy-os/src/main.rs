@@ -35,7 +35,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     }
 
     galexy_os::arch::mm::init(boot_info); // frames + paging + heap
-    galexy_os::arch::init(); // interrupts last to init: handlers depend on drivers
+    galexy_os::arch::init(boot_info); // interrupts last to init: handlers depend on drivers
     sched::init();
     sched::demo::spawn_all(); // silent preemptive threads
     banner::show();

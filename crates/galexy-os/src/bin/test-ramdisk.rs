@@ -33,7 +33,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     // The phys map is up BEFORE the frame allocator matters; mm::init
     // brings everything online (the phys mapping is fixed in the config).
-    galexy_os::arch::init();
+    galexy_os::arch::init(boot_info);
     galexy_os::arch::mm::init(boot_info);
 
     // Ramdisk bytes: `ramdisk_addr` is a VIRTUAL address the bootloader

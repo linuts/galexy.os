@@ -38,7 +38,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("[test-preempt] running");
 
     galexy_os::arch::mm::init(boot_info); // frames + paging + heap
-    galexy_os::arch::init(); // interrupts: the timer is the preemptor
+    galexy_os::arch::init(boot_info); // interrupts: the timer is the preemptor
     sched::init();
     // Spawn the threads.
     sched::spawn_thread("count-a", thread_a);

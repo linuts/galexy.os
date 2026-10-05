@@ -85,6 +85,39 @@ fn heap_test_passes() {
 }
 
 #[test]
+fn acpi_test_passes() {
+    // MADT discovery is architecture truth for both boot paths: run it on
+    // the BIOS image AND the UEFI image (OVMF's tables must parse too).
+    let (code, serial) = boot(&image("test-acpi"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-acpi should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-acpi] passed"),
+        "test-acpi success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[acpi] madt ready"),
+        "MADT discovery marker missing; serial:\n{serial}"
+    );
+
+    // The UEFI image boots OVMF; its tables must validate the same way.
+    let mut last = String::new();
+    for _ in 0..3 {
+        last = boot_uefi(&image("test-acpi"), Duration::from_secs(30));
+        if last.contains("[test-acpi] passed") {
+            break;
+        }
+    }
+    assert!(
+        last.contains("[test-acpi] passed"),
+        "test-acpi under UEFI never passed after 3 attempts; serial:\n{last}"
+    );
+}
+
+#[test]
 fn heap_grow_test_passes() {
     let (code, serial) = boot(&image("test-heapgrow"));
     assert_eq!(

@@ -59,7 +59,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("[test-treechurn] running");
 
     galexy_os::arch::mm::init(boot_info);
-    galexy_os::arch::init();
+    galexy_os::arch::init(boot_info);
     sched::init();
 
     let console_cap_bits = galexy_abi::reserved::console(CapRights::WRITE).bits();
