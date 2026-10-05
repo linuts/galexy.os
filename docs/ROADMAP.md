@@ -97,11 +97,22 @@ first real program landed in Milestone 13:
 - Heap growth ✅ done (grow-on-demand since Milestone 12)
 - Thread reaper ✅ done (tombstones + canary since Milestone 12)
 
+### Step C — real programs ✅ (Milestone 15)
+
+1. `galexy-rt` runtime (entry!, syscall wrappers, panic handler) ✅
+2. ELF loader (xmas-elf, static ET_EXEC, per-segment flags, strict
+   same-P4-entry policy) ✅
+3. Ramdisk: runner packs user-program ELFs into a tar;
+   `BootInfo.ramdisk_addr` read kernel-side; `TarCursor` in galexy-core ✅
+4. `hello` — a real Rust user program, loaded + lifecycle-complete ✅
+
 ## Phase 4 — Beyond
 
-- Filesystem: read-only first (RAM disk or simple partition). Resources get
-  capabilities (ABI already shaped for it — no fds, ever).
-- Networking: no-timing-rush; driver work only after scheduling is solid.
+- Filesystem capabilities: `open(name) → Cap(file)` + `read(cap, ...)` —
+  the capability-day-one machinery exercised by real resources.
+- APIC so UEFI boots get timer/keyboard; the door to SMP.
+- Shell `run <program>` command + userland print hygiene (ANSI-ish
+  console layer).
 
 ## Standing principles
 

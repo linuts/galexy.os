@@ -26,8 +26,9 @@ crates/
 │                        #   ring-3 code existed (Milestone 12).
 ├── galexy-core/         # kernel primitives (alloc-free, host-testable; Ring,
 │                        #   Bitmap)
-├── userspace/           # ring-3 programs, one crate per program (+ a
-│                        #   galexy-rt runtime; lands with Step A/B)
+├── userspace/           # ring-3 programs, one package per program
+│   ├── galexy-rt/       #   the runtime: entry!, syscall wrappers, panic handler
+│   └── hello/           #   the first real Rust user program
 └── runner/              # host tooling: builds BIOS+UEFI images, launches QEMU,
                          #   hosts the boot tests (tests/boot.rs)
 ```
@@ -57,11 +58,16 @@ contract between them.
    userspace visibility is needed). Lift stable boundaries only — never "to
    make it look organized".
 6. **Userspace programs are always their own crates** under
-   `crates/userspace/` — never modules of the kernel. Until a loader exists,
-   first user programs are hand-assembled flat blobs embedded in the kernel;
-   the contract for `crates/userspace/` (one crate per program, linked
-   against a small `galexy-rt` runtime, loaded by the kernel) applies from
-   the first real program onward.
+   `crates/userspace/` — never modules of the kernel. Convention: one
+   package dir per program (`dir == package == binary name`); each links
+   `galexy-rt` (runtime) + `galexy-abi` (contract) — NEVER the kernel.
+   The runner consumes program bins via artifact bindeps (same mechanism
+   as kernel bins) and packs them into the tar ramdisk; the kernel loads
+   them as static ET_EXEC ELFs (`sched/loader.rs`) at
+   `galexy_abi::USER_IMAGE_BASE` — a FIXED virtual load address (per-task
+   trees make everyone sharing the base safe). Loader strictness: every
+   PT_LOAD must sit under the program's own P4 entry — a segment outside
+   would map through kernel-SHARED subtree tables (pollution = rejection).
 7. **Syscall layering**: the syscall *mechanism* (MSR setup, naked entry,
    frame building) lives in `arch/`; the dispatch table (which syscall does
    what) lives in `sched/syscalls.rs` — it is scheduler-adjacent policy,

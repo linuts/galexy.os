@@ -286,6 +286,59 @@ the crasher.** Suite grew to 19 QEMU boot tests, green per commit.
       dies, main keeps rotating, tree fully reclaimed; verified (exit 33)
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 15 — Real userland: runtime + ELF loader + ramdisk ✅
+
+User programs are REAL RUST CRATES now — no more hand-assembled blobs
+(blobs remain as the loader's test-side sibling). Suite: 21 QEMU boot
+tests + 16 core host tests, green per commit.
+
+- [x] **Ramdisk**: runner's build.rs packs user-program ELFs (artifact
+      bindeps, one package dir per program: `dir == pkg == bin`) plus a
+      standing `banner.txt` marker into an uncompressed tar
+      (`tar` crate in build-deps; header must be sized+checksummed —
+      `append_data` on a bare `new_gnu()` header silently records size 0!).
+      `set_ramdisk` for BIOS+UEFI images; the kernel reads
+      `BootInfo.ramdisk_addr/len` (a VIRTUAL address the bootloader mapped
+      — treat like the framebuffer, NOT physical). Kernel-side test
+      (`bin/test-ramdisk.rs`): tar walk via the phys map... via the direct
+      mapping; banner.txt roundtrips byte-for-byte
+- [x] **Tar cursor** (`galexy-core::TarCursor`): read-only USTAR walk
+      (512-byte headers, octal sizes, regular files only, extension
+      entries + directories skipped, zero-block end). 16 host tests
+- [x] **`galexy-rt`** (`crates/userspace/galexy-rt`): the ring-3 runtime —
+      inline-asm syscall wrapper (register contract: rax in/out value,
+      rdx in/out ok-flag, rcx/r11 clobbered by the instruction),
+      `write_console` (console cap from the ABI), `yield_now`, `exit`,
+      the `entry!` macro (no_mangle `_start` → main → exit), user panic
+      handler (console report + exit 1). Dependency bottom:
+      `galexy-rt → galexy-abi` — never the kernel
+- [x] **`hello`** (`crates/userspace/hello`): the first real Rust user
+      program — `entry!` + `write_console` + return 0. Built as a STATIC
+      NON-PIE ELF (`--image-base=USER_IMAGE_BASE` + `--no-pie` — note:
+      plain `-Ttext` anchors only text, leaving the ELF-header segment at
+      lld's 2 MiB default, OUTSIDE the program's P4 entry!) linked at the
+      ABI's fixed base
+- [x] **`USER_IMAGE_BASE`** (`galexy-abi`): the fixed virtual load address
+      for every user program (per-task trees make sharing the base safe);
+      P4 entry 25 of the user half; append-only ABI addition
+- [x] **Kernel ELF loader** (`sched/loader.rs`, `xmas-elf`): static
+      ET_EXEC only; every PT_LOAD mapped into the task's own tree with
+      per-segment flags (RX/RW + USER + PRESENT, BSS tails zeroed +
+      page slack), STRICT same-P4-entry policy (segments outside the
+      program's P4 entry would map through kernel-SHARED subtree tables —
+      rejected loudly), entry validated inside the image region.
+      Task model identical: kernel stack + canary via `register_user_task`
+      (the sched-owned seam), CR3 own tree, tree-walk reaping
+- [x] **Real-program test** (`bin/test-realprogram.rs`): hello's ELF from
+      the tar → spawn_program → runs (print on screen through the
+      syscall!) → exits 0 via the shim → tombstone + tree walk + reaped;
+      verified (exit 33)
+- [x] Bug found + fixed en route: the fabricated frame recorded RSP from
+      the frame's WRITE position (a phys-map image!) — split
+      `init_user_frame(write_top, user_rsp, ...)`; latent in the blob
+      path too (Step A/B blobs just never pushed)
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [ ] UEFI: timer + keyboard dead under UEFI — legacy PIC doesn't exist;

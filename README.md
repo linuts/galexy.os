@@ -2,9 +2,10 @@
 
 A small, modular operating system written in Rust. Bootable on BIOS and UEFI,
 with a pixel-framebuffer TTY, PS/2 keyboard input, memory management,
-cooperative tasks, timer-preemptive kernel threads, and an isolated
-userland: ring-3 tasks with their own address spaces, printing through
-syscalls, killed cleanly when they crash — the OS survives user bugs.
+cooperative tasks, timer-preemptive kernel threads, and a real userland:
+ring-3 tasks with their own address spaces, actual Rust programs loaded as
+ELF from a tar ramdisk, printing through the syscall ABI, killed cleanly
+when they crash — the OS survives user bugs.
 
 ## Features
 
@@ -36,8 +37,11 @@ syscalls, killed cleanly when they crash — the OS survives user bugs.
 - [x] Shell with commands (`help`, `stats`, `threads`, ...) + live status
       bar ("quiet OS" demo)
 - [x] Test harness: host unit tests + per-kernel QEMU integration tests
-- [ ] Programs beyond blobs (ELF loader + `galexy-rt` runtime)
-- [ ] Filesystem (read-only first, capability-shaped)
+- [x] Programs beyond blobs: `galexy-rt` runtime (`entry!`, syscall
+      wrappers, user panic handler), kernel ELF loader (static ET_EXEC,
+      per-segment flags, strict same-P4-entry policy), tar ramdisk packed
+      by the runner, and `hello` — a real Rust user program — running a
+      full lifecycle through the loader
 
 ## Quick start
 
