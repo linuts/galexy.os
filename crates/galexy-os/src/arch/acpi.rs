@@ -41,6 +41,9 @@ pub struct Madt {
     boot_cpu_apic_id: u8,
     /// Number of enabled Local APIC records.
     cpus: u8,
+    /// APIC IDs of the enabled processors, in MADT order (the first is the
+    /// BSP — the SMP bring-up consumes this).
+    enabled_ids: [u8; 8],
     /// `overrides[irq]` = the GSI this ISA line is wired to, when the wiring
     /// differs from `IRQ == GSI`.
     overrides: [Option<u32>; ISA_LINES],
@@ -70,6 +73,12 @@ impl Madt {
     /// Number of enabled processors in the MADT.
     pub fn cpus(&self) -> u8 {
         self.cpus
+    }
+
+    /// APIC IDs of the enabled processors, in MADT order (index 0 = BSP).
+    /// The slice is exactly `cpus()` long.
+    pub fn enabled_ids(&self) -> &[u8] {
+        &self.enabled_ids[..usize::from(self.cpus)]
     }
 
     /// The GSI an ISA interrupt line is wired to (override or identity).
@@ -231,6 +240,7 @@ fn parse_madt(phys: u64, phys_offset: u64) -> Madt {
     let mut lapic_base = le(bytes, 36, 4);
     let mut boot_cpu: Option<u8> = None;
     let mut cpus = 0u8;
+    let mut enabled_ids = [0u8; 8];
     let mut ioapic: Option<(u64, u32)> = None;
     let mut overrides = [None; ISA_LINES];
 
@@ -251,6 +261,9 @@ fn parse_madt(phys: u64, phys_offset: u64) -> Madt {
                 if flags & 1 != 0 {
                     if boot_cpu.is_none() {
                         boot_cpu = Some(id);
+                    }
+                    if usize::from(cpus) < 8 {
+                        enabled_ids[usize::from(cpus)] = id;
                     }
                     cpus += 1;
                 }
@@ -301,6 +314,7 @@ fn parse_madt(phys: u64, phys_offset: u64) -> Madt {
         ioapic_gsi_base,
         boot_cpu_apic_id,
         cpus,
+        enabled_ids,
         overrides,
     }
 }

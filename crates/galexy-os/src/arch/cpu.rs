@@ -25,7 +25,8 @@
 //! On a single-CPU boot, only slot 0 is touched ("pinned at spawn" scheduler
 //! follows in a later commit, so nothing distinguishes CPU 0 from an AP yet).
 
-use core::arch::asm;
+use core::arch::{asm, global_asm};
+use x86_64::PhysAddr;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::serial_println;
@@ -180,35 +181,39 @@ fn fsgsbase_supported() -> bool {
 ///
 /// MUST run AFTER `gdt::init` (the GS selector load resets the base to the
 /// descriptor's — WRGSBASE must be the last GS-base writer).
-pub fn init_bsp() {
-    // CR4.FSGSBASE must be SET before any RDGSBASE/WRGSBASE is legal:
-    // the CPUID bit only says the CPU CAN do it (firmware leaves the CR4
-    // bit clear). Every crossing of gs:[*] (syscall entry, later all
-    // switch paths) needs this live.
+/// Shared per-CPU bring-up (BSP init + every AP): CR4 gate, feature assert,
+/// slot fill, WRGSBASE, roundtrip verify. MUST run AFTER `gdt::bring_up` on
+/// that CPU (the GS selector load resets the base — WRGSBASE must be the
+/// last GS-base writer).
+pub fn init_percpu(cpu_index: usize, apic_id: u32) {
+    // CR4.FSGSBASE must be SET before any RDGSBASE/WRGSBASE is legal: the
+    // CPUID bit only says the CPU CAN do it (firmware leaves the CR4 bit
+    // clear). Every crossing of gs:[*] (syscall entry, later all switch
+    // paths) needs this live.
     let mut cr4 = x86_64::registers::control::Cr4::read();
     cr4.insert(x86_64::registers::control::Cr4Flags::FSGSBASE);
     // SAFETY: setting CR4.FSGSBASE on a CPU that reports the CPUID feature;
-    // no live per-CPU accessors exist yet (this runs before any).
+    // no live per-CPU consumers exist on this CPU yet (its own bring-up).
     unsafe { x86_64::registers::control::Cr4::write(cr4) };
-    serial_println!("[cpu] CR4.FSGSBASE enabled");
 
     assert!(
         fsgsbase_supported(),
         "cpu: FSGSBASE unsupported — per-CPU mechanism requires it (CPUID 7.0.EBX bit 0)"
     );
 
-    let slot = &SLOTS[0];
+    let slot = &SLOTS[cpu_index];
     let slot_addr = slot as *const PerCpu as u64;
     slot.self_ptr.store(slot_addr, Ordering::Relaxed);
-    slot.cpu_index.store(0, Ordering::Relaxed);
+    slot.cpu_index.store(cpu_index as u32, Ordering::Relaxed);
+    slot.apic_id.store(apic_id, Ordering::Relaxed);
     // SAFETY: WRGSBASE is gated by the feature assert above; `slot` is this
     // CPU's own slice entry (never aliased by another CPU).
     unsafe { asm!("wrgsbase {}", in(reg) slot_addr) };
 
-    // Roundtrip: the GS base must now read back as the slot address, and
-    // the memory the base points at (gs:[0]) must hold that same address
-    // (self-referential sanity). NOTE: this path cannot call `current()`
-    // (its GS_READY net isn't set yet) — read through the slot directly.
+    // Roundtrip: the GS base must read back as the slot address, and the
+    // memory at the base (gs:[0]) must hold that same address. NOTE: this
+    // path cannot call `current()` yet (the GS_READY net isn't set until
+    // the first CPU completes) — read through the slot directly.
     let readback = gs_base();
     assert_eq!(readback, slot_addr, "cpu: WRGSBASE roundtrip failed");
     assert_eq!(
@@ -218,6 +223,379 @@ pub fn init_bsp() {
     );
 
     GS_READY.store(true, Ordering::Release);
-    ONLINE.store(1, Ordering::Relaxed);
-    serial_println!("[cpu] per-cpu GS live (slot 0 @ {:#x})", readback);
+    let _ = ONLINE.fetch_add(1, Ordering::Relaxed);
+    serial_println!("[cpu] per-cpu GS live (slot {} @ {:#x})", cpu_index, readback);
+}
+
+/// BSP bring-up entry (slot 0; called by `arch::init`).
+pub fn init_bsp() {
+    let bsp_id = crate::arch::acpi::madt().boot_cpu_apic_id();
+    init_percpu(0, bsp_id as u32);
+}
+
+/* ---------------- AP bring-up (INIT/SIPI + trampoline) ---------------- */
+
+/// Physical address of the 16→32→64-bit trampoline page (SIPI target).
+/// MUST be 4 KiB aligned and under 1 MiB (vector = phys >> 12).
+const TRAMPOLINE_PHYS: u64 = 0x8000;
+/// UIFFF Bootstrap AP page tables: L4 with (a) a 1-GiB identity low map
+/// (the trampoline's own continuation + handoff slots) and (b) VERBATIM
+/// kernel L4 entries beyond that (kernel image + phys map + MMIO pages +
+/// recursion all shared). Built once before the first AP; every AP loads
+/// the SAME cr3.
+static AP_CR3: AtomicU64 = AtomicU64::new(0);
+/// Per-AP boot stacks (BSP keeps the bootloader's). Index 0 = logical CPU 1.
+const AP_STACK_SIZE: usize = 64 * 1024;
+static AP_STACKS: [PerCpuStack; MAX_CPUS - 1] = [const { PerCpuStack::new() }; MAX_CPUS - 1];
+
+/// Stack type with alignment for the FXSAVE-friendly 16-byte ending.
+#[repr(C, align(16))]
+struct PerCpuStack([u8; AP_STACK_SIZE]);
+
+impl PerCpuStack {
+    const fn new() -> Self {
+        Self([0; AP_STACK_SIZE])
+    }
+}
+
+// SAFETY: written only by its owning CPU (hardware stack memory, the CPU
+// is the sole writer; no Rust reader aliases a live stack).
+unsafe impl Sync for PerCpuStack {}
+
+/// The online magic an AP writes into its handoff slot once its per-CPU
+/// init has completed (the BSP's startup loop waits for exactly this).
+const AP_ONLINE_MAGIC: u64 = 0xC0FF_EE01;
+
+// Fixed trampoline page layout (RUST writes the data slots through the
+// phys map BEFORE copying the code blob in; offsets are absolute page
+// offsets so both the asm and Rust agree without any linker games):
+//   page+0x000        the 5-byte far jump (to blob offset 5)
+//   page+0x005..      .code16 real-mode section (≤ 0x100 bytes)
+//   page+0x100        .code32 bridge (aligned)
+//   page+0x200        .code64 continuation (aligned)
+//   page+0xE00        micro-GDTR: u16 limit + 3-byte base (m16&24 form)
+//   page+0xE20        micro-GDT: null, code32 (base 0x8000, limit 0xFFF),
+//                     code64 (flat, L=1)
+//   page+0xF00        handoff: cr3 | stack top | fn | rank | magic slot
+//
+// Position-independence: the blob is assembled at the kernel's link VMA
+// but RUNS at 0x8000 — so label VALUES are wrong by the delta between the
+// two. The design therefore uses NO label completes as absolute targets:
+// every control-flow cross-mode transition pushes + `retf`s values
+// computed at RUNTIME from a `pop eip` (the CS bases chosen here make
+// EIP == page offset where it matters), and intra-mode jumps are RELATIVE
+// label encodings.
+//
+// The ONE deliberate deviation: the VERY FIRST far jump is a raw 0xEA
+// byte encode (SIPI lands at 0:0x8000 = blob offset 0; the far jmp
+// normalizes CS to 0x0800 so `cs:` offsets reach the data slots).
+global_asm!(
+    ".section .text.trampoline,\"ax\",@progbits",
+    "TRAMP_START:",
+    ".code16",
+    // SIPI starts at CS:IP = 0:0x8000 → linear 0x8000 = blob+0. The far
+    // jump's precise 5-byte encoding targets blob+5 (tramp16) with
+    // CS changed to 0x0800 (base 0x8000): from now on, cs:off = page+off.
+    ".byte 0xEA, 0x05, 0x00, 0x00, 0x08",
+    "tramp16:",
+    "cli",
+    // Real-mode lgdt reads m16&24 (u16 limit + 24-bit base) — the data
+    // slots the kernel wrote at +0xE00 (gdtr) and +0xE20 (GDT).
+    "lgdt cs:[0xE00]",
+    // CR4.PAE (long-mode prerequisite; INIT leaves CR4 = 0).
+    "mov eax, cr4",
+    "or eax, 0x20",
+    "mov cr4, eax",
+    // CR3: the bootstrap AP tables (phys < 4 GiB; the handoff carries the
+    // u64 at +0xF00 — the low dword is all we need for cr3's load).
+    "mov eax, DWORD PTR cs:[0xF00]",
+    "mov cr3, eax",
+    // EFER.LME (bit 8) + EFER.NXE (bit 11): the AP's tables carry the
+    // SHARED kernel subtrees, whose data/BSS PT_LOAD pages are NX-marked —
+    // with NXE clear, every NX PTE is a reserved-bit page fault (e=0xA!)
+    // instead of an intended no-execute mapping.
+    "mov ecx, 0xC0000080",
+    "rdmsr",
+    "or eax, 0x900",
+    "wrmsr",
+    // CR0.PG | CR0.PE in ONE write (PG requires PE): with PAE + LME this
+    // is the transition to long-mode-active (16-bit compatibility).
+    "mov eax, cr0",
+    "or eax, 0x80000001",
+    "mov cr0, eax",
+    // 16 → 32: far return into the 32-bit code selector (0x08 = the
+    // micro-GDT entry with base 0x8000, limit 0xFFF; D=1). 16-bit far
+    // return pops IP16 then CS16: push the target's page offset LAST.
+    // (0xCB is the 16-bit-operand encoding by default — the assembler's
+    // mnemonic resolution emitted a 0x66-prefixed 32-bit return here, so
+    // the byte is pinned explicitly.)
+    "push 0x08",
+    "push 0x100",
+    ".byte 0xCB",
+    ".balign 256",
+    ".code32",
+    "TRAMP32:", // blob/page offset 0x100 (balign guarantees it)
+    // 32-bit compat with CS = the base-0x8000 selector: EIP == page
+    // offset, linear = 0x8000 + EIP. Compute the .code64 target linear
+    // (fits the identity-mapped low page) with label differences:
+    "call nextE",
+    "nextE:",
+    "pop eax", // eax = page offset of (nextE + 5) — the point AFTER the call
+    "sub eax, 5",
+    // LAYOUT CONTRACT STEPS (asserted in Rust next to the copy): tramp32
+    // = blob+0x100, cont64 = blob+0x200.
+    "sub eax, 0x100",          // eax = (nextE - tramp32)
+    "add eax, 0x200",          // eax = cont64's page offset
+    "add eax, 0x8000",         // → cont64's LINEAR address
+    // 32 → 64: far return into the 64-bit CS (0x10, L=1 flat). retf
+    // (32-bit operand) pops EIP (zero-extended into RIP) then CS.
+    "push 0x10",
+    "push eax",
+    "retf",
+    ".balign 256",
+    ".code64",
+    "CONT64:", // blob/page offset 0x200
+    // Long mode; the identity 1-GiB map covers the page. Handoff slots
+    // (absolute low-memory addresses via the identity map):
+    //   0x8F00 cr3 (unused here) · 0x8F08 stack top · 0x8F10 fn
+    //   0x8F18 rank · 0x8F20 magic slot (ap_main writes it).
+    "mov rsp, QWORD PTR [0x8F08]",
+    "mov rdi, QWORD PTR [0x8F18]",
+    "mov rax, QWORD PTR [0x8F10]",
+    "call rax", // ap_main(rank) — never returns
+    "hlt",
+    "absurd:",
+    "hlt",
+    "jmp absurd",
+    "TRAMP_END:",
+);
+
+// SAFETY: symbols attached to the global-asm blob above (never relocated —
+// only their addresses are taken, for the copy loop + layout contracts).
+unsafe extern "C" {
+    static TRAMP32: u8;
+    static CONT64: u8;
+}
+
+// SAFETY: symbols attached to the global-asm blob above (never reloc'd —
+// only their addresses are taken, for the copy loop's byte range).
+unsafe extern "C" {
+    static TRAMP_START: u8;
+    static TRAMP_END: u8;
+}
+
+/// Copies the trampoline blob from its link-image location into the SIPI
+/// target page, writes the micro-GDT + handoff for `rank`, and returns the
+/// page's physical base. Called once per AP (sequentially).
+unsafe fn stage_trampoline(rank: usize, stack_top: u64) {
+    const TRAMP_PHYS: u64 = 0x8000;
+    let dst = super::mm::frame_virt(PhysAddr::new(TRAMP_PHYS)).as_mut_ptr::<u8>();
+    // The blob occupies [TRAMP_START, TRAMP_END). Layout contracts — the
+    // asm's raw pushes/jumps read fixed 0x100 steps (verified, not assumed):
+    let base = core::ptr::addr_of!(TRAMP_START) as *const u8 as u64;
+    assert_eq!(
+        core::ptr::addr_of!(TRAMP32) as u64 - base,
+        0x100,
+        "trampoline: the 32-bit bridge must sit at blob offset 0x100"
+    );
+    assert_eq!(
+        core::ptr::addr_of!(CONT64) as u64 - base,
+        0x200,
+        "trampoline: the 64-bit continuation must sit at blob offset 0x200"
+    );
+    let src = core::ptr::addr_of!(TRAMP_START) as *const u8;
+    let len = core::ptr::addr_of!(TRAMP_END) as u64 - src as u64;
+    // The blob must end below the data slots (the 16-bit section reaching
+    // tramp32 at +0x100 was verified by the balign + asserts above).
+    assert!(
+        len <= 0xE00,
+        "trampoline: the code blob overgrew its page ({len} bytes)"
+    );
+    // SAFETY: the SIPI target page is host RAM below 1 MiB (Usable), owned
+    // at bring-up; the phys map gives kernel-side write access to it.
+    unsafe {
+        core::ptr::copy_nonoverlapping(src, dst, len as usize);
+    }
+
+    // Fixed-slot writer (contract coordinates with the asm via page offsets).
+    let put = |slot: u64, value: u64| {
+        let addr = dst.add(slot as usize) as *mut u64;
+        // SAFETY: slot addresses are the fixed contract with the asm.
+        unsafe { addr.write_volatile(value) };
+    };
+    // micro-GDT at 0xE20 (3 entries) + gdtr (m16&24) at 0xE00.
+    let gdt_phys = TRAMP_PHYS + 0xE20;
+    let put_entry = |i: usize, v: u64| {
+        let addr = dst.add(0xE20 + i * 8) as *mut u64;
+        // SAFETY: fixed slot; part of the trampoline page contract.
+        unsafe { addr.write_volatile(v) };
+    };
+    put_entry(0, 0); // null
+    // code32: base = page base, limit = 0xFFF, D=1, type 9A, G=0.
+    put_entry(1, encode_flat_code(TRAMP_PHYS, 0x0FFF, false));
+    // code64: L=1 flat code (base/limit ignored in long mode).
+    put_entry(2, 0x00AF_9A00_0000_FFFF);
+    // gdtr (m16&24 form): u16 limit + 24-bit base = spread over 0xE00..E05.
+    let put_u16 = |slot: u64, v: u16| {
+        let addr = dst.add(slot as usize) as *mut u16;
+        // SAFETY: fixed slot.
+        unsafe { addr.write_volatile(v) };
+    };
+    put_u16(0xE00, 0x17); // limit = 3 entries * 8 - 1
+    put_u16(0xE02, (gdt_phys & 0xFFFF) as u16);
+    put_u16(0xE04, ((gdt_phys >> 16) & 0xFF) as u16);
+
+    // Handoff (+0xF00): cr3 · stack top · fn (ap_main) · rank · magic=0.
+    put(0xF00, AP_CR3.load(Ordering::Acquire));
+    put(0xF08, stack_top);
+    put(0xF10, ap_main as *const () as u64);
+    put(0xF18, rank as u64);
+    put(0xF20, 0); // clear the online magic
+}
+
+/// Descriptor encoder for 32-bit code (base + limit + D perimeter).
+const fn encode_flat_code(base: u64, limit: u64, l: bool) -> u64 {
+    // descriptor bit layout: [15:0] limit 0..15 · [39:16] base 0..23 ·
+    // [47:40] type/flags · [51:48] limit 16..19 · [55:52] G,D/B,L,AVL ·
+    // [63:56] base 24..31
+    let mut raw = 0u64;
+    raw |= limit & 0xFFFF;                       // limit 0..15
+    raw |= (base & 0xFF) << 16;                  // base 0..7
+    raw |= ((base >> 8) & 0xFF) << 24;           // base 8..15
+    raw |= ((base >> 16) & 0xFF) << 32;          // base 16..23
+    raw |= 0x9A << 40;                           // PRESENT ring-0 code, read
+    raw |= ((limit >> 16) & 0xF) << 48;          // limit 16..19
+    let flags: u64 = if l { 0b1010 } else { 0b0100 }; // G, D|L, AVL
+    raw |= flags << 52;
+    raw |= ((base >> 24) & 0xFF) << 56;          // base 24..31
+    raw
+}
+
+/// Boots every AP below the BSP, one at a time: reseat truc, handoff
+/// staged, INIT → 10 ms → SIPI → (200 µs) → SIPI, then wait for the
+/// online magic. BSP-only (sends IPIs across the bus; touches global);
+/// runs with interrupts off per `arch::init` ordering.
+pub fn boot_aps() {
+    let madt = crate::arch::acpi::madt();
+    let ids = madt.enabled_ids();
+    if ids.len() <= 1 {
+        serial_println!("[cpu] single-CPU MADT; no APs to boot");
+        return;
+    }
+    build_ap_tables();
+    for rank in 1..ids.len() {
+        let apic_id = ids[rank];
+        if rank >= MAX_CPUS {
+            serial_println!("[cpu] warning: AP beyond MAX_CPUS skipped (apic id {})", apic_id);
+            continue;
+        }
+        let stack = &AP_STACKS[rank - 1];
+        let stack_top = stack.0.as_ptr() as u64 + AP_STACK_SIZE as u64;
+
+        // SAFETY: whole-maintenance staging; BSP-only flow with IRQs off.
+        unsafe { stage_trampoline(rank, stack_top) };
+
+        // INIT → wait → SIPI ×2 → wait for online magic.
+        crate::arch::apic::send_init(apic_id);
+        crate::arch::timer::delay_ms(10);
+        crate::arch::apic::send_sipi(apic_id, TRAMPOLINE_PHYS);
+        crate::arch::timer::delay_ms(1);
+        crate::arch::apic::send_sipi(apic_id, TRAMPOLINE_PHYS);
+
+        let magic_ptr = super::mm::frame_virt(PhysAddr::new(TRAMPOLINE_PHYS + 0xF20)).as_mut_ptr::<u64>();
+        // SAFETY: fixed handoff slot (contract with the asm).
+        let deadline = 50_000_000usize;
+        let mut i = 0;
+        while unsafe { magic_ptr.read_volatile() } != AP_ONLINE_MAGIC {
+            core::hint::spin_loop();
+            i += 1;
+            if i > deadline {
+                serial_println!("[cpu] warning: ap rank {} (apic id {}) never came online", rank, apic_id);
+                break;
+            }
+        }
+        if i <= deadline {
+            serial_println!(
+                "[cpu] ap rank {} (apic id {}) online",
+                rank,
+                apic_id
+            );
+        }
+    }
+}
+
+/// The AP's own per-CPU table readiness (L4: identity 1 GiB low + verbatim
+/// kernel entries beyond it). Built alongside the FIRST AP's boot; shared.
+fn build_ap_tables() {
+    if AP_CR3.load(Ordering::Acquire) != 0 {
+        return; // already built
+    }
+    // Frames: one L4 + one L3 (with the 1-GiB identity huge page).
+    let l4 = crate::arch::mm::allocate_frame().expect("ap tables: L4 frame");
+    let l3 = crate::arch::mm::allocate_frame().expect("ap tables: L3 frame");
+    let write_table = |root: PhysAddr, index: usize, value: u64| {
+        // SAFETY: allocator-owned (Usable) frames; exclusive at build.
+        unsafe {
+            let base = crate::arch::mm::frame_virt(root).as_mut_ptr::<u64>();
+            base.add(index).write_volatile(value);
+        }
+    };
+    // L3, entry 0: 1-GiB identity (huge page, PRESENT|WRITE|ACCESSED).
+    write_table(l3.start_address(), 0, 0x0000_0000_0087);
+    // L4, entry 0 points at the L3 (PRESENT|WRITE).
+    write_table(l4.start_address(), 0, l3.start_address().as_u64() | 0x003);
+    // L4, everything else: verbatim boot-table entries (kernel image, phys
+    // map, MMIO slots, recursion) — the kernel half is shared memory.
+    let kernel_root = crate::arch::mm::kernel_cr3().start_address();
+    for i in 1..512 {
+        // SAFETY: read source is the still-active boot L4 (never modified
+        // here); write target is an allocator-owned frame.
+        unsafe {
+            let src = crate::arch::mm::frame_virt(kernel_root).as_ptr::<u64>();
+            let dst = crate::arch::mm::frame_virt(l4.start_address()).as_mut_ptr::<u64>();
+            dst.add(i).write_volatile(src.add(i).read_volatile());
+        }
+    }
+    AP_CR3.store(l4.start_address().as_u64(), Ordering::Release);
+    serial_println!(
+        "[cpu] ap tables ready (cr3 {:#x}, identity 1 GiB + shared kernel half)",
+        AP_CR3.load(Ordering::Acquire)
+    );
+}
+
+/// AP-only: the whole per-CPU bring-up once the trampoline hands us off.
+/// Called on the AP's OWN boot stack with interrupts still off; runs until
+/// the machine parks it.
+extern "C" fn ap_main(rank: u64) -> ! {
+    let cpu_index = rank as usize;
+    assert!(cpu_index < MAX_CPUS, "ap_main: rank beyond MAX_CPUS");
+
+    // Per-CPU tables + GS identity. Segment reloads here also fix the
+    // trampoline-leftover segment state (real-mode cached values).
+    crate::arch::gdt::bring_up(cpu_index);
+    init_percpu(cpu_index, apic_id_for(cpu_index));
+    // LAPIC up WITHOUT the timer (its LVT stays masked; the per-CPU
+    // scheduler arms its own tick later).
+    crate::arch::apic::bring_up(crate::arch::acpi::madt().lapic_base());
+    serial_println!(
+        "[cpu] ap rank {} online (per-cpu @ {:#x})",
+        cpu_index,
+        current() as *const PerCpu as u64
+    );
+    // Handoff magic: the BSP's boot loop waits for this.
+    let magic = super::mm::frame_virt(PhysAddr::new(TRAMPOLINE_PHYS + 0xF20)).as_mut_ptr::<u64>();
+    // SAFETY: fixed handoff slot.
+    unsafe { magic.write_volatile(AP_ONLINE_MAGIC) };
+
+    // Park: IRQs are still off (no sharing concerns); commit 3 turns this
+    // into the per-CPU scheduler's idle loop.
+    loop {
+        core::hint::spin_loop();
+        x86_64::instructions::hlt();
+    }
+}
+
+/// APIC id for a logical index (read from the MADT at boot).
+fn apic_id_for(cpu_index: usize) -> u32 {
+    crate::arch::acpi::madt().enabled_ids()[cpu_index] as u32
 }

@@ -10,13 +10,13 @@
 //!
 //! Virtual memory (page mapping) lives in the [`paging`] submodule.
 
-mod paging;
+pub mod paging;
 
 pub mod heap;
 pub use paging::{
     frame_virt, free_user_tree, install_cr3, kernel_cr3, map_page, map_page_flags,
     on_kernel_tree, phys_to_virt, top_user_p4_index, top_user_p4_index_in, translate,
-    translate_active, unmap_page, FreshL4, TaskFrameAlloc, with_table,
+    translate_active, unmap_page, FreshL4, PageError, TaskFrameAlloc, with_table,
 };
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

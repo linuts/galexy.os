@@ -34,22 +34,21 @@ pub fn end_timer_interrupt() {
 
 /// Brings up the whole interrupt subsystem and enables interrupts.
 pub fn init(boot_info: &BootInfo) {
+    // ACPI discovery must run FIRST: the per-CPU bring-up reads the BSP's
+    // APIC ID from the MADT. It needs nothing else (the phys map exists
+    // from boot, fixed in BOOTLOADER_CONFIG).
+    let phys_offset = boot_info
+        .physical_memory_offset
+        .into_option()
+        .expect("physical memory must be mapped (see BOOTLOADER_CONFIG)");
+    acpi::init(boot_info.rsdp_addr.into_option(), phys_offset);
+
     gdt::init();
     // Per-CPU substrate AFTER gdt::init (the GS selector load resets the
     // GS base — WRGSBASE must be the last GS-base writer).
     cpu::init_bsp();
     syscall::init();
     idt::init();
-    // ACPI discovery runs before any controller init: the APIC bring-up
-    // consumes the MADT, and the phys map (fixed in BOOTLOADER_CONFIG)
-    // exists from boot, so even before-mm::init kernels can walk tables.
-    // (The offset comes from BootInfo, not the mm module, to keep this
-    // independent of init order.)
-    let phys_offset = boot_info
-        .physical_memory_offset
-        .into_option()
-        .expect("physical memory must be mapped (see BOOTLOADER_CONFIG)");
-    acpi::init(boot_info.rsdp_addr.into_option(), phys_offset);
     apic::init(acpi::madt().lapic_base());
     // Legacy PICs remapped + fully masked (APIC delivers from here on);
     // then the I/O APIC wires the keyboard line onto its vector.
@@ -59,5 +58,8 @@ pub fn init(boot_info: &BootInfo) {
     // PIC's init — the keyboard driver owns its controller now).
     crate::drivers::keyboard::init();
     timer::init();
+    // AP bring-up runs LAST, still with IRQs off: the trampoline sequence
+    // waits on global clock ports (PIT delays) and IPIs from the BSP.
+    cpu::boot_aps();
     x86_64::instructions::interrupts::enable();
 }

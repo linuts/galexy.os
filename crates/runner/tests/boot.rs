@@ -130,7 +130,7 @@ fn apic_test_passes() {
         "test-apic success marker missing; serial:\n{serial}"
     );
     assert!(
-        serial.contains("[apic] lapic ready"),
+        serial.contains("[apic] lapic up"),
         "LAPIC enable marker missing; serial:\n{serial}"
     );
     assert!(
@@ -518,7 +518,7 @@ fn uefi_image_boots_and_timer_ticks() {
         "UEFI MADT discovery marker missing; serial:\n{last}"
     );
     assert!(
-        last.contains("[apic] lapic ready"),
+        last.contains("[apic] lapic up"),
         "UEFI LAPIC enable marker missing; serial:\n{last}"
     );
 }
