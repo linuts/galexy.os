@@ -1,12 +1,12 @@
 # galexy.os
 
 A small, modular operating system written in Rust. Bootable on BIOS and UEFI,
-with a pixel-framebuffer TTY, PS/2 keyboard input, memory management,
-cooperative tasks, timer-preemptive kernel threads, and a real userland:
-ring-3 tasks with their own address spaces, actual Rust programs loaded as
-ELF from a tar ramdisk, printing through the syscall ABI, killed cleanly
-when they crash — the OS survives user bugs. The interactive shell launches
-userland programs by name (`run hello`).
+running on **two CPUs**, with a pixel-framebuffer TTY, PS/2 keyboard input,
+memory management, cooperative tasks, timer-preemptive kernel threads, and a
+real userland: ring-3 tasks with their own address spaces (running on either
+CPU), actual Rust programs loaded as ELF from a tar ramdisk, printing through
+the syscall ABI, killed cleanly when they crash — the OS survives user bugs.
+The interactive shell launches userland programs by name (`run hello`).
 
 ## Features
 
@@ -91,8 +91,9 @@ cargo test -p runner        # boots every kernel binary in headless QEMU
 ```
 
 Test kernels are regular binaries under `crates/galexy-os/src/bin/`; the
-runner builds one disk image per binary and asserts exit codes + serial
-output. Panics in test kernels automatically fail the run.
+runner builds one disk image per binary, boots at `-smp 2` (BIOS and, for
+the UEFI cases, OVMF), and asserts exit codes + serial output. Panics in
+test kernels automatically fail the run.
 
 ### Build the bootable images only
 
@@ -138,9 +139,13 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
 │   │       ├── macros.rs            # print!/println! plumbing
 │   │       └── sched/               # tasks, preemptive threads, context asm,
 │   │                                #   syscall dispatch table
-│   ├── galexy-core/                 # kernel primitives (Ring, Bitmap), host-testable
-│   ├── userspace/                   # ring-3 programs later (see DESIGN rule 6/8)
-│   └── runner/                      # host crate: images, QEMU, boot tests
+│   ├── galexy-core/                 # kernel primitives (Ring, Bitmap,
+│   │                                #   TarCursor), alloc-free + host-testable
+│   ├── userspace/                     # ring-3 programs: galexy-rt (the
+│   │                                  #   runtime: entry!, syscall wrappers,
+│   │                                  #   panic handler) + hello (the first
+│   │                                  #   real Rust user program)
+│   └── runner/                        # host crate: images, QEMU, boot tests
 │       ├── build.rs                 # bootloader image builder (per kernel bin)
 │       ├── src/main.rs              # QEMU invocation (--uefi flag)
 │       └── tests/boot.rs            # boots every kernel binary headless
@@ -153,11 +158,16 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
    same surface can sit in front of any renderer tomorrow.
 2. **No singletons beyond explicit statics with `spin` primitives** — locks
    are the concurrency story, so a scheduler can rely on them.
-3. **Timer ticks are sacred.** The PIT fires ~1 kHz; the handler body is the
-   only thing a scheduler later has to swap.
-4. **Test what can be tested.** Kernel unit tests are planned via
-   `#[test_case]` runnable in QEMU; meanwhile `scripts/boot-test.sh` gives
-   repeatable headless boot verification.
+3. **The per-CPU LAPIC timer is sacred.** Calibrated once at boot (share-split
+   across CPUs to keep ~1 kHz machine-wide); the handler body is the only
+   thing a scheduler ever has to swap.
+4. **Test what can be tested.** Host unit tests for the pure primitives
+   (`galexy-core`, `galexy-abi`), plus one bootable kernel binary per
+   integration test — 28 QEMU boots (all at `-smp 2`) assert exit codes and
+   serial output on every run.
+5. **Ownership beats locks for per-CPU state.** Rotation cursors, TSS.RSP0,
+   syscall scratch and the LAPIC registers are touched by exactly one CPU
+   each; only the thread table is a shared lock.
 
 ## References
 
