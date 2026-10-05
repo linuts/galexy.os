@@ -90,5 +90,5 @@ fn read_size(header: &[u8]) -> Option<usize> {
 
 /// Round up to the 512-byte block boundary.
 fn ceil_to_block(size: usize) -> usize {
-    (size + BLOCK - 1) / BLOCK * BLOCK
+    size.div_ceil(BLOCK) * BLOCK
 }
