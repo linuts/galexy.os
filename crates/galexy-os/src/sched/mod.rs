@@ -588,6 +588,18 @@ pub fn thread_stats() -> alloc::vec::Vec<(&'static str, u64)> {
     })
 }
 
+/// Is any RUNNING thread registered under `name`?
+///
+/// Foreground-job query for the shell's `run` prompt pacing: the pending
+/// program's exit (syscall tombstone) flips it to false within one gate.
+pub fn is_name_running(name: &str) -> bool {
+    interrupts::without_interrupts(|| {
+        THREADS.lock().iter().any(|t| {
+            t.state.load(Ordering::Relaxed) == STATE_RUNNING && t.name == name
+        })
+    })
+}
+
 /// CPU ticks charged to the main loop (slot 0).
 pub fn main_ticks() -> u64 {
     MAIN_TICKS.load(Ordering::Relaxed)

@@ -25,6 +25,10 @@ const BAR_FG: screen::Color = screen::Color::new(0xC8, 0xD0, 0xE0);
 
 /// Current line under construction.
 static LINE: Mutex<String> = Mutex::new(String::new());
+/// The foreground program's name (the leaked task name) while it runs —
+/// the prompt stays away until it exits, so its output never lands on an
+/// input line. Cleared by [`poll`] once no task with that name is running.
+static PENDING: Mutex<Option<&'static str>> = Mutex::new(None);
 
 /// Prints the startup prompt.
 pub fn init() {
@@ -38,6 +42,15 @@ pub fn init() {
 /// Called repeatedly from the main loop; hlt() between calls keeps the CPU
 /// asleep until the next interrupt.
 pub fn poll() {
+    // Foreground bookkeeping: when the pending program is no longer
+    // running (its exit syscall tombstoned it), reclaim the prompt.
+    let pending = *PENDING.lock();
+    if let Some(name) = pending {
+        if !sched::is_name_running(name) {
+            *PENDING.lock() = None;
+            prompt_only();
+        }
+    }
     let mut line = LINE.lock();
     while let Some(c) = keyboard::pop_key() {
         match c {
@@ -112,13 +125,13 @@ fn run(line: &str) {
     // leak the name — a few bytes per spawn, same philosophy as the
     // tombstone slot model (revisit with a slot free-list).
     let leaked: &'static str = alloc::boxed::Box::leak(name.into());
-    // Spawn + reclaim the prompt inside one IRQ-off step. A tick arriving
-    // here stays pending; after the gate the rotation serves the earlier
-    // slots (main, demo threads) before this fresh task — so the prompt
-    // is always on screen before the program's first output.
+    // Foreground semantics: spawn inside one IRQ-off step — a pending
+    // tick can only serve the rotation's earlier slots (main, demo
+    // threads) after the gate, so nothing prints before this. The prompt
+    // is NOT reclaimed here: it returns when the program exits (poll).
     x86_64::instructions::interrupts::without_interrupts(|| {
         sched::loader::spawn_program(leaked, bytes);
-        prompt_only();
+        *PENDING.lock() = Some(leaked);
     });
 }
 

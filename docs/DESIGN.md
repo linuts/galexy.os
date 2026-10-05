@@ -357,9 +357,11 @@ dispatches (`help`, `stats`, `tasks`, `threads`, `run <program>`, `clear`,
 `about`; unknown lines report `<line>: command not found`); Backspace
 erases. `run <name>` finds the program's ELF via the ramdisk
 service and hands it to the loader (Milestone 16; dispatch body factored
-into `shell::exec(line)` so boot tests drive the SAME path typing does;
-the typed line closes with a newline before the prompt is reclaimed —
-the program's output then arrives asynchronously).
+into `shell::exec(line)` so boot tests drive the SAME path typing does).
+Foreground semantics: the typed line closes with a newline, the program
+spawns, and the prompt is NOT reclaimed until the program exits
+(`sched::is_name_running` polled by `poll`) — the program's output always
+lands on its own line, never on an input line.
 The status bar (`render_status_bar`) redraws the bottom line
 in-place once per second (uptime + per-thread tick counts + frames free)
 with cursor save/restore — the "quiet OS" demo: everything observable as
