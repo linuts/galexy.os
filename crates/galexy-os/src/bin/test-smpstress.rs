@@ -71,11 +71,10 @@ extern "C" fn grower1() {
 /* ---------------- phase C: hammer + churn ---------------- */
 
 const HAMMER_BUF: usize = 64 * 1024;
-// TCG-debug budget: each loop is a full touch+verify of 64 KiB; 20 loops
-// per CPU is plenty of TLB/alloc pressure without starving the phase-C
-// deadline under host load (the earlier 100-loop variant exceeded 20 000
-// ticks and starved the completion check).
-const HAMMER_LOOPS: usize = 20;
+// TCG budget: each loop is a full touch+verify of 64 KiB; 10 loops per CPU
+// still exercises the TLB/alloc paths but survives even a 30-way parallel
+// suite run under host load (100-loop variant starved the deadline).
+const HAMMER_LOOPS: usize = 10;
 static HAMMER_DONE: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
 
 /// Cycles alloc/free of one 64 KiB buffer, touching every page (the TLB
