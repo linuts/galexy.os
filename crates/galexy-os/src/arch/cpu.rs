@@ -249,12 +249,17 @@ const AP_STACK_SIZE: usize = 64 * 1024;
 static AP_STACKS: [PerCpuStack; MAX_CPUS - 1] = [const { PerCpuStack::new() }; MAX_CPUS - 1];
 
 /// Stack type with alignment for the FXSAVE-friendly 16-byte ending.
+///
+/// The `UnsafeCell` is LOAD-BEARING: zero-initialized statics can float
+/// into `.rodata` (const-foldable), where the map is READ-ONLY — the first
+/// stack push would triple-fault the AP. Interior mutability pins writable
+/// placement (observed: `.bss`).
 #[repr(C, align(16))]
-struct PerCpuStack([u8; AP_STACK_SIZE]);
+struct PerCpuStack(core::cell::UnsafeCell<[u8; AP_STACK_SIZE]>);
 
 impl PerCpuStack {
     const fn new() -> Self {
-        Self([0; AP_STACK_SIZE])
+        Self(core::cell::UnsafeCell::new([0; AP_STACK_SIZE]))
     }
 }
 
@@ -479,7 +484,11 @@ pub fn boot_aps() {
     let madt = crate::arch::acpi::madt();
     let ids = madt.enabled_ids();
     if ids.len() <= 1 {
+        // Single CPU: no APs, but the BSP's timer still must be armed
+        // (the arming moved out of apic::init; the share-split loop AND
+        // this path both land here).
         serial_println!("[cpu] single-CPU MADT; no APs to boot");
+        crate::arch::apic::arm_timer();
         return;
     }
     build_ap_tables();
@@ -490,7 +499,8 @@ pub fn boot_aps() {
             continue;
         }
         let stack = &AP_STACKS[rank - 1];
-        let stack_top = stack.0.as_ptr() as u64 + AP_STACK_SIZE as u64;
+        // SAFETY: raw-stack address computation (no aliasing access yet).
+        let stack_top = unsafe { (*stack.0.get()).as_ptr() as u64 } + AP_STACK_SIZE as u64;
 
         // SAFETY: whole-maintenance staging; BSP-only flow with IRQs off.
         unsafe { stage_trampoline(rank, stack_top) };
@@ -522,6 +532,9 @@ pub fn boot_aps() {
             );
         }
     }
+    // All online CPUs counted: the BSP re-arms ITS timer with the share-
+    // split ICR (its earlier arm — none — used a stale online count).
+    crate::arch::apic::arm_timer();
 }
 
 /// The AP's own per-CPU table readiness (L4: identity 1 GiB low + verbatim
@@ -573,7 +586,14 @@ extern "C" fn ap_main(rank: u64) -> ! {
     // Per-CPU tables + GS identity. Segment reloads here also fix the
     // trampoline-leftover segment state (real-mode cached values).
     crate::arch::gdt::bring_up(cpu_index);
+    // The shared IDT must be loaded into THIS CPU's IDTR — the AP spared
+    // up real-mode-styled; its timer tick would hit a zero IDTR otherwise.
+    crate::arch::idt::ap_load();
     init_percpu(cpu_index, apic_id_for(cpu_index));
+    // SYSCALL/SYSRET hardware is PER-CPU MSRs — the BSP's `syscall::init`
+    // programmed only ITS own. Every AP re-runs the MSR bring-up or its
+    // first ring-3 syscall faults on the (unset) STAR/LSTAR values.
+    crate::arch::syscall::init();
     // LAPIC up WITHOUT the timer (its LVT stays masked; the per-CPU
     // scheduler arms its own tick later).
     crate::arch::apic::bring_up(crate::arch::acpi::madt().lapic_base());
@@ -587,11 +607,17 @@ extern "C" fn ap_main(rank: u64) -> ! {
     // SAFETY: fixed handoff slot.
     unsafe { magic.write_volatile(AP_ONLINE_MAGIC) };
 
-    // Park: IRQs are still off (no sharing concerns); commit 3 turns this
-    // into the per-CPU scheduler's idle loop.
+    // Arm this CPU's own LAPIC timer (share-split ICR; brings the naked
+    // timer switch up on THIS CPU — the per-CPU rotation runs from here).
+    // Per-CPU LAPIC EOI is hardware-directed, so no cross-CPU EOI hazards.
+    crate::arch::apic::arm_timer();
+
+    // Per-CPU idle loop (SMP M18): reap THIS CPU's dead, sleep until the
+    // local timer; the naked timer switch rotates this CPU's tasks and
+    // returns into this main loop whenever its slot 0 is served.
     loop {
-        core::hint::spin_loop();
-        x86_64::instructions::hlt();
+        x86_64::instructions::interrupts::enable_and_hlt();
+        crate::sched::reap();
     }
 }
 

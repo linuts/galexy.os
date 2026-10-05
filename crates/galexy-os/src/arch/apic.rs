@@ -159,13 +159,11 @@ pub fn lapic_id() -> u8 {
 /// No-op under an already-off gate (naked handler paths are gated already).
 pub fn init(lapic_base: u64) {
     bring_up(lapic_base);
-    // The LAPIC timer becomes THE timer: calibrate against the PIT once,
-    // then run periodic at the same ~1 kHz cadence the PIT used, so tick
-    // accounting (`arch::timer_ticks`), the scheduler's quantum and the
-    // heartbeat all keep their meaning. `arch::init` enables interrupts
-    // only AFTER this, so calibration runs with IRQs off.
+    // Calibrate against the PIT once (ratio math only — no wall-clock
+    // assumptions, TCG safe; interrupts are off inside `arch::init`). The
+    // timer is ARMED after `cpu::boot_aps()` — with the final online count
+    // so the BSP's share reflects every CPU.
     init_timer();
-    serial_println!("[apic] timer calibrated: {} ticks/ms", ticks_per_ms());
 }
 
 /// LAPIC bring-up WITHOUT the timer: mode detection, page mapping, spurious
@@ -329,9 +327,20 @@ fn init_timer() {
     // by at most that — far under the scheduler's needs.
     let per_ms = (elapsed / u32::from(CAL_MS)).max(1);
     TICKS_PER_MS.call_once(|| per_ms);
-    let icr = per_ms; // 1 ms per period at divide-by-1
+    serial_println!("[apic] timer calibrated: {} ticks/ms", per_ms);
+}
 
-    // ---- Arm periodic ----
+/// Arms THIS CPU's LAPIC timer: periodic on vector 32, period =
+/// ticks-per-ms × (CPUs online) — the SHARE SPLIT (SMP M18): with N CPUs
+/// each ticks every N ms, so the machine-wide tick rate stays ~1 kHz and
+/// tick accounting (TICKS/1000 seconds), the heartbeat and quake semantics
+/// survive the multicore hop. Every CPU's local bus clock is the same
+/// divisor: the BSP's calibration serves all.
+///
+/// Called by the BSP AFTER `boot_aps()` (its ICR must reflect the final
+/// online count) and by each AP right after its LAPIC bring-up.
+pub fn arm_timer() {
+    let icr = ticks_per_ms().saturating_mul(crate::arch::cpu::online() as u32).max(1);
     // Vector 32 (TIMER_INTERRUPT_ID — unchanged naked handler + tick path),
     // periodic (bit 17), unmasked. EOI comes from the timer switch path.
     set_reg(REG_DIV_CONF, DIV_1);
@@ -339,6 +348,12 @@ fn init_timer() {
     // Order matters: LVT BEFORE the initial count (xAPIC write order
     // contract); the first expiry starts the endless reload cycle.
     set_reg(REG_INITIAL_COUNT, icr);
+    serial_println!(
+        "[apic] timer armed (periodic, {} ticks {}, cpu {})",
+        icr,
+        if crate::arch::cpu::online() > 1 { "1/Ns share" } else { "~1ms" },
+        crate::arch::cpu::current_index()
+    );
 }
 
 /// Program PIT channel 2 for a one-shot of `counts` (speaker OFF, gate ON).

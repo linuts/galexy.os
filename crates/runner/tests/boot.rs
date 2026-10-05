@@ -225,9 +225,21 @@ fn threadexit_test_passes() {
         serial.contains("[test-threadexit] passed"),
         "test-threadexit success marker missing; serial:\n{serial}"
     );
+    // Per-CPU reaping (SMP M18): the three exits can be reaped in chunks
+    // per owner CPU (any split of 3, e.g. "reaped 3" or "reaped 1" twice).
+    let total: usize = serial
+        .lines()
+        .filter_map(|l| {
+            let idx = l.find("reaped ")?;
+            let rest = &l[idx + "reaped ".len()..];
+            let word = rest.split(' ').next()?;
+            word.parse::<usize>().ok()
+        })
+        .sum();
     assert!(
-        serial.contains("reaped 3 thread stack(s)"),
-        "reaper marker missing; serial:\n{serial}"
+        total == 3,
+        "reaper freed {} stack(s) across CPUs; serial:\n{serial}",
+        total
     );
 }
 

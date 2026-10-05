@@ -178,6 +178,9 @@ struct Thread {
     /// User tasks only: the P4 entry index of their region in their own
     /// tree (the reaper's tree walk needs it).
     user_p4: u16,
+    /// The CPU that owns (runs + reaps) this thread — "pinned at spawn"
+    /// (SMP M18). A thread is ever-current on exactly one CPU.
+    owner: u8,
 }
 
 // SAFETY: `fx` is an exclusively-owned allocation, dereferenced only by the
@@ -189,17 +192,60 @@ unsafe impl Send for Thread {}
 /// and the timer handler — access is IRQ-gated (see lock audit). Slots are
 /// tombstones on death (see STATE_* docs); never removed.
 static THREADS: Mutex<Vec<Thread>> = Mutex::new(Vec::new());
-/// 0 = main loop is current; otherwise thread index + 1.
-static CURRENT: AtomicUsize = AtomicUsize::new(0);
-/// Main loop's saved context pointer (0 = not yet saved).
-static MAIN_CTX: AtomicU64 = AtomicU64::new(0);
-/// Round-robin cursor: index of the last-served thread (usize::MAX = none).
-static LAST_SERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
 
-/// Main loop's FXSAVE area (FxArea is 16-aligned).
-static MAIN_FX: Mutex<FxArea> = Mutex::new(FxArea::new());
-/// CPU ticks charged to the main loop.
-static MAIN_TICKS: AtomicU64 = AtomicU64::new(0);
+/// Per-CPU rotation state (SMP, M18): each CPU keeps its OWN round-robin —
+/// the global rotation statics would double-enter a task the moment two
+/// naked timer ticks coincided. INDEX = the CPU's logical index
+/// (`cpu::current_index()`); a CPU NEVER touches another's slot.
+///
+/// Slot 0 = "this CPU's main":
+/// - on the BSP that is the shell main loop,
+/// - on an AP the idle/reap loop.
+struct CpuSched {
+    /// 0 = this CPU's main is current; otherwise a thread index + 1
+    /// (only threads OWNED by this CPU may ever be current elsewhere).
+    current: AtomicUsize,
+    /// This CPU's round-robin cursor (usize::MAX = none yet).
+    last_served: AtomicUsize,
+    /// This CPU's main saved context pointer (0 = not yet saved).
+    main_ctx: AtomicU64,
+    /// This CPU's main FXSAVE area.
+    main_fx: Mutex<FxArea>,
+    /// CPU ticks charged to THIS CPU's main.
+    main_ticks: AtomicU64,
+}
+
+impl CpuSched {
+    const fn new() -> Self {
+        Self {
+            current: AtomicUsize::new(0),
+            last_served: AtomicUsize::new(usize::MAX),
+            main_ctx: AtomicU64::new(0),
+            main_fx: Mutex::new(FxArea::new()),
+            main_ticks: AtomicU64::new(0),
+        }
+    }
+}
+
+static CPU_SCHED: [CpuSched; crate::arch::cpu::MAX_CPUS] = [const { CpuSched::new() }; crate::arch::cpu::MAX_CPUS];
+
+/// This CPU's rotation state. Per-CPU ownership (fenced by IRQ gating in
+/// every user); NEVER locks CPU_SCHED[i] from a foreign CPU.
+fn cpu_sched() -> &'static CpuSched {
+    &CPU_SCHED[crate::arch::cpu::current_index()]
+}
+/// The BSP's main ticks (shell-side accounting; the status bar and tests
+/// use this — AP idles are off-graph).
+pub fn main_ticks() -> u64 {
+    CPU_SCHED[0].main_ticks.load(Ordering::Relaxed)
+}
+/// Where the next spawned thread/task lands: round-robin across the CPUs
+/// the MADT brought online ("pinned at spawn"; no migration, no stealing).
+static NEXT_CPU: AtomicUsize = AtomicUsize::new(0);
+fn next_cpu() -> u8 {
+    let online = crate::arch::cpu::online();
+    (NEXT_CPU.fetch_add(1, Ordering::Relaxed) % online) as u8
+}
 
 /// Installs the CR3 for the task being entered (switch-in hook, callers are
 /// under the IRQ gate). `cr3_addr == 0` = kernel table.
@@ -228,7 +274,7 @@ fn enter_task_cr3(cr3_addr: u64) {
 /// Must run on a thread's own stack — calling from the main loop is a bug
 /// (panics; main has no Thread slot to tombstone).
 pub fn thread_exit() {
-    let slot = CURRENT.load(Ordering::Relaxed);
+    let slot = cpu_sched().current.load(Ordering::Relaxed);
     assert!(slot != 0, "thread_exit: called from the main loop");
     interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
@@ -237,9 +283,12 @@ pub fn thread_exit() {
     });
 }
 
-/// Frees resources of every exited thread (stack Vec + FXSAVE area) and
-/// leaves `Freed` tombstones in place. Called from the main loop (e.g. the
-/// shell's periodic sweep); IRQ-gated per the lock-audit rule.
+/// Frees resources of every EXITED thread OWNED BY THIS CPU (stack Vec +
+/// FXSAVE area) and leaves `Freed` tombstones in place. Per-CPU reap (SMP
+/// M18): cross-CPU reaping would free a stack while a zombie still parks on
+/// it on its owner; ownership makes "the thread stopped" a same-CPU fact.
+/// Called from main-loop/idle context (BSP shell + AP idle); IRQ-gated per
+/// the lock-audit rule.
 ///
 /// Safety net on the way: if a thread's stack canary was clobbered (stack
 /// overflow deep enough to leave its Vec), reaping panics loudly instead of
@@ -247,8 +296,12 @@ pub fn thread_exit() {
 pub fn reap() {
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
+        let my_cpu = crate::arch::cpu::current_index() as u8;
         let mut freed = 0usize;
         for t in threads.iter_mut() {
+            if t.owner != my_cpu {
+                continue; // another CPU's thread — its reaper owns it
+            }
             if t.state
                 .compare_exchange(STATE_EXITED, STATE_FREED, Ordering::AcqRel, Ordering::Relaxed)
                 .is_err()
@@ -324,6 +377,7 @@ pub(crate) fn register_user_task(init: TaskInit) {
         let mut kstack = init.kstack;
         kstack[..8].copy_from_slice(&STACK_CANARY.to_le_bytes());
         let fx = Box::into_raw(Box::new(FxArea::new()));
+        let owner = next_cpu();
         THREADS.lock().push(Thread {
             name: init.name,
             state: AtomicU8::new(STATE_RUNNING),
@@ -336,6 +390,7 @@ pub(crate) fn register_user_task(init: TaskInit) {
             kstack_top: init.kstack_top,
             cr3: AtomicU64::new(init.cr3),
             user_p4: init.user_p4,
+            owner,
         });
     });
 }
@@ -355,6 +410,7 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) {
         let (cs, ss) = context::kernel_cs_ss();
         let ctx = unsafe { context::init_stack(top, entry, cs, ss) };
         let fx = Box::into_raw(Box::new(FxArea::new()));
+        let owner = next_cpu();
         THREADS.lock().push(Thread {
             name,
             state: AtomicU8::new(STATE_RUNNING),
@@ -367,8 +423,9 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) {
             kstack_top: 0,
             cr3: AtomicU64::new(0),
             user_p4: 0,
+            owner,
         });
-        serial_println!("[sched] thread '{}' ready", name);
+        serial_println!("[sched] thread '{}' ready (owner cpu {})", name, owner);
     });
 }
 
@@ -537,6 +594,7 @@ pub fn spawn_user_task(
         let kstack_top = (kstack.as_ptr() as u64 + kstack.len() as u64) & !0xF;
 
         let fx = Box::into_raw(Box::new(FxArea::new()));
+        let owner = next_cpu();
         THREADS.lock().push(Thread {
             name,
             state: AtomicU8::new(STATE_RUNNING),
@@ -549,6 +607,7 @@ pub fn spawn_user_task(
             kstack_top,
             cr3: AtomicU64::new(root.start_address().as_u64()),
             user_p4: p4_index,
+            owner,
         });
         serial_println!(
             "[sched] user task '{}' ready (own tree cr3={:#x}, p4={}, code @ {:#x}, kstack top {:#x})",
@@ -601,13 +660,11 @@ pub fn is_name_running(name: &str) -> bool {
 }
 
 /// CPU ticks charged to the main loop (slot 0).
-pub fn main_ticks() -> u64 {
-    MAIN_TICKS.load(Ordering::Relaxed)
-}
+// (main_ticks moved into the per-CPU table above.)
 
 /// The current rotation slot (0 = main loop; otherwise thread index + 1).
 pub fn current_slot() -> usize {
-    CURRENT.load(Ordering::Relaxed)
+    cpu_sched().current.load(Ordering::Relaxed)
 }
 
 /// Is the CURRENT slot a ring-3 task? (`slot` per [`current_slot`].)
@@ -639,7 +696,8 @@ pub fn slot_is_user(slot: usize) -> bool {
 /// `frame` must be the CURRENT task's uniform context frame on its kernel
 /// stack, exactly as built by the syscall entry.
 pub unsafe fn syscall_handoff(frame: *mut context::Context, exit: bool, reason: &'static str) -> u64 {
-    let slot = CURRENT.load(Ordering::Relaxed);
+    let me = cpu_sched();
+    let slot = me.current.load(Ordering::Relaxed);
     assert!(slot != 0, "syscall_handoff: no task current (cpl bug?)");
     let pending_ctx = interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
@@ -657,12 +715,16 @@ pub unsafe fn syscall_handoff(frame: *mut context::Context, exit: bool, reason: 
         // Advance the rotation: first eligible slot strictly after the
         // outgoing one (main at slot 0 is always the fallback, and the
         // caller is never main — so this scan ALWAYS finds a switch).
+        // SMP: only THIS CPU's own threads are eligible; foreign threads
+        // are skipped like tombstones (they rotate on their owner).
+        let my_cpu = crate::arch::cpu::current_index() as u8;
         let n = threads.len();
         let mut cand = if slot >= n { 0 } else { slot + 1 };
         let mut scans = n + 1;
         while scans > 0 {
-            let eligible =
-                cand == 0 || threads[cand - 1].state.load(Ordering::Acquire) == STATE_RUNNING;
+            let eligible = cand == 0
+                || (threads[cand - 1].owner == my_cpu
+                    && threads[cand - 1].state.load(Ordering::Acquire) == STATE_RUNNING);
             if eligible {
                 break;
             }
@@ -670,10 +732,10 @@ pub unsafe fn syscall_handoff(frame: *mut context::Context, exit: bool, reason: 
             scans -= 1;
         }
         debug_assert!(scans > 0, "handoff rotation scan unwound without main");
-        LAST_SERVED.store(cand, Ordering::Relaxed);
+        me.last_served.store(cand, Ordering::Relaxed);
 
         let (who, ctx, rsp0, cr3) = match cand {
-            0 => (0usize, MAIN_CTX.load(Ordering::Relaxed), None, 0),
+            0 => (0usize, me.main_ctx.load(Ordering::Relaxed), None, 0),
             s => {
                 let t2 = &threads[s - 1];
                 let rsp0 = t2.is_user.then_some(t2.kstack_top);
@@ -691,9 +753,9 @@ pub unsafe fn syscall_handoff(frame: *mut context::Context, exit: bool, reason: 
             crate::arch::set_tss_rsp0(VirtAddr::new(top));
         }
         enter_task_cr3(cr3);
-        CURRENT.store(who, Ordering::Relaxed);
+        me.current.store(who, Ordering::Relaxed);
         let fx_ptr = match cand {
-            0 => (&*MAIN_FX.lock()) as *const FxArea as u64,
+            0 => (&*me.main_fx.lock()) as *const FxArea as u64,
             s => threads[s - 1].fx as u64,
         };
         context::fx_restore(fx_ptr as *const u8);
@@ -718,14 +780,16 @@ pub unsafe fn syscall_handoff(frame: *mut context::Context, exit: bool, reason: 
 pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
     crate::arch::timer_tick(); // tick accounting + 1s heartbeat
 
+    let me = cpu_sched();
     let next_ctx = interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        let current = CURRENT.load(Ordering::Relaxed);
+        let my_cpu = crate::arch::cpu::current_index() as u8;
+        let current = me.current.load(Ordering::Relaxed);
 
         // CPU-time attribution: this tick goes to whoever was running.
         match current {
             0 => {
-                MAIN_TICKS.fetch_add(1, Ordering::Relaxed);
+                me.main_ticks.fetch_add(1, Ordering::Relaxed);
             }
             i => {
                 threads[i - 1].ticks.fetch_add(1, Ordering::Relaxed);
@@ -735,9 +799,9 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
         // Save the outgoing task's context + FPU state.
         match current {
             0 => {
-                let mut fx = MAIN_FX.lock();
+                let mut fx = me.main_fx.lock();
                 context::fx_save(&mut *fx as *mut FxArea as *mut u8);
-                MAIN_CTX.store(frame as u64, Ordering::Relaxed);
+                me.main_ctx.store(frame as u64, Ordering::Relaxed);
             }
             i => {
                 let t = &threads[i - 1];
@@ -746,14 +810,16 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
             }
         }
 
-        // Unified round-robin over ALL participants: main (slot 0), then
-        // threads (slots 1..=n). Exited/freed slots are skipped (tombstones;
-        // see STATE_* docs). Switching "to main" = returning MAIN_CTX.
+        // Unified round-robin over THIS CPU's participants: its main
+        // (slot 0), then the threads it OWNS (slots 1..=n; foreign-owned
+        // slots are skipped like tombstones — SMP M18). Exited/freed slots
+        // are skipped (tombstones; see STATE_* docs). Switching "to main" =
+        // returning the per-CPU main context.
         let n = threads.len();
         if n == 0 {
             return None;
         }
-        let last = LAST_SERVED.load(Ordering::Relaxed);
+        let last = me.last_served.load(Ordering::Relaxed);
         let mut next_slot = if last == usize::MAX {
             1 // first tick ever: serve the first thread
         } else if last + 1 > n {
@@ -761,13 +827,16 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
         } else {
             last + 1
         };
-        // Skip tombstones; main (slot 0) is always eligible, so the scan
-        // terminates after at most n+1 steps.
+        // Skip tombstones AND foreign-owned slots; main (slot 0) is always
+        // eligible, so the scan terminates after at most n+1 steps.
         let mut scans = n + 1;
         while scans > 0 {
             let eligible = match next_slot {
                 0 => true,
-                s => threads[s - 1].state.load(Ordering::Acquire) == STATE_RUNNING,
+                s => {
+                    threads[s - 1].owner == my_cpu
+                        && threads[s - 1].state.load(Ordering::Acquire) == STATE_RUNNING
+                }
             };
             if eligible {
                 break;
@@ -776,10 +845,11 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
             scans -= 1;
         }
         debug_assert!(scans > 0, "rotation scan terminated without main");
-        LAST_SERVED.store(next_slot, Ordering::Relaxed);
+        me.last_served.store(next_slot, Ordering::Relaxed);
 
-        // Switching to ourselves (all other slots dead) = no switch.
-        let current = CURRENT.load(Ordering::Relaxed);
+        // Switching to ourselves (all other slots dead or foreign) = no
+        // switch.
+        let current = me.current.load(Ordering::Relaxed);
         if next_slot == current {
             return None;
         }
@@ -787,8 +857,8 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
         let (who, ctx, fx_ptr, rsp0, cr3) = match next_slot {
             0 => (
                 0usize,
-                MAIN_CTX.load(Ordering::Relaxed),
-                (&*MAIN_FX.lock()) as *const FxArea as u64,
+                me.main_ctx.load(Ordering::Relaxed),
+                (&*me.main_fx.lock()) as *const FxArea as u64,
                 None,
                 0,
             ),
@@ -805,17 +875,18 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
             }
         };
         // Ring-3 readiness BEFORE entering the chosen task: a user task's
-        // ring 3→0 crossings (timer IRQ via TSS.RSP0, later the syscall
-        // entry via the kstack registry) must push onto ITS OWN kernel
-        // stack. Kernel threads/main reset the registry. (Step B: CR3 is
-        // installed for the incoming task — the kernel half is shared by
-        // every task table, so the switch is safe mid-flight.)
+        // ring 3→0 crossings (timer IRQ via per-CPU TSS.RSP0, later the
+        // syscall entry via the per-CPU kstack slot gs:[8]) must push onto
+        // ITS OWN kernel stack. Kernel threads/main reset the registry.
+        // (Step B: CR3 is installed for the incoming task — the kernel half
+        // is shared by every task table, so the switch is safe mid-flight;
+        // CR3 itself is per-CPU hardware.)
         crate::arch::syscall::set_task_kstack(rsp0.unwrap_or(0));
         if let Some(top) = rsp0 {
             crate::arch::set_tss_rsp0(VirtAddr::new(top));
         }
         enter_task_cr3(cr3);
-        CURRENT.store(who, Ordering::Relaxed);
+        me.current.store(who, Ordering::Relaxed);
         context::fx_restore(fx_ptr as *const u8);
         Some(ctx)
     });

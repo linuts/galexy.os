@@ -96,3 +96,19 @@ extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame) {
 /// silence. A spurious needs no EOI (the ISR bit for it is never set), so
 /// this body is a no-op — the handler exists purely so the gate is mapped.
 extern "x86-interrupt" fn spurious_handler(_stack_frame: InterruptStackFrame) {}
+
+/// Loads the SHARED IDT into THIS CPU's IDTR (AP bring-up).
+///
+/// The IDT itself is one shared table (entries reference selector values,
+/// valid in every CPU's replicated per-CPU GDT), but the PER-CPU hard-
+/// wired IDTR is not: the APs come up real-mode-styled and MUST commit
+/// their own `lidt` before the first interrupt arrives (the AP's timer
+/// firing against a zero IDTR triple-faults instantly — the GP error
+/// code (`vector << 3) | 2` — was the tell).
+pub fn ap_load() {
+    // SAFETY: the IDT is never moved (it lives in the static); every CPU
+    // may load the same table — this is exactly what `init` does for the
+    // BSP.
+    unsafe { IDT.lock().load_unsafe() };
+    crate::serial_println!("[idt] ap: shared IDT loaded");
+}
