@@ -15,6 +15,7 @@
 //! in a later commit, keyboard delivery goes through the I/O APIC.
 
 use spin::Once;
+use x86_64::instructions::port::Port;
 use x86_64::registers::model_specific::Msr;
 use x86_64::structures::paging::{Page, PageTableFlags, PhysFrame, Size4KiB};
 use x86_64::{PhysAddr, VirtAddr};
@@ -26,16 +27,21 @@ use crate::serial_println;
 const IA32_APIC_BASE: u32 = 0x1B;
 /// x2APIC MSR base: an xAPIC MMIO offset maps to 0x800 + (offset >> 4).
 const X2APIC_MSR_BASE: u32 = 0x800;
-/// Lapic register offsets (subset we drive; timer regs join with the
-/// LAPIC-timer commit and ICR with the boot-CPU seam).
+/// Lapic register offsets (subset we drive).
 const REG_ID: u32 = 0x020;
 const REG_EOI: u32 = 0x0B0;
 const REG_SPURIOUS: u32 = 0x0F0;
 const REG_DFR: u32 = 0x0E0;
 const REG_LDR: u32 = 0x0D0;
-/// xAPIC-only register shape: writes as an MSR under x2APIC are harmless
-/// (the x2APIC MSR space aliases the whole register space).
 const REG_TPR: u32 = 0x080;
+/// Timer LVT: vector + mask (bit 16) + periodic mode (bit 17).
+const REG_LVT_TIMER: u32 = 0x320;
+/// Divide configuration: bus-divider selection.
+const REG_DIV_CONF: u32 = 0x3E0;
+/// Timer initial count (periodic mode reloads from here on expiry).
+const REG_INITIAL_COUNT: u32 = 0x380;
+/// Timer current count (counts down to 0).
+const REG_CURRENT_COUNT: u32 = 0x390;
 
 /// Spurious-interrupt vector: must have an IDT entry the moment the LAPIC
 /// is enabled (an unhandled stray spurious would triple-fault). No device
@@ -136,6 +142,11 @@ pub fn mode() -> LapicMode {
     APIC.get().unwrap_or_else(|| panic!("apic: not initialized")).mode
 }
 
+/// The timer's delivery vector (single source of truth: `pics::`'s constant).
+pub fn timer_interrupt_id() -> u8 {
+    crate::arch::pics::TIMER_INTERRUPT_ID
+}
+
 /// Reads the LAPIC ID register (xAPIC layout; ID in bits 24..31).
 pub fn lapic_id() -> u8 {
     (reg(REG_ID) >> 24) as u8
@@ -182,6 +193,14 @@ pub fn init(lapic_base: u64) {
         lapic_id(),
         reg(REG_SPURIOUS)
     );
+
+    // The LAPIC timer becomes THE timer: calibrate against the PIT once,
+    // then run periodic at the same ~1 kHz cadence the PIT used, so tick
+    // accounting (`arch::timer_ticks`), the scheduler's quantum and the
+    // heartbeat all keep their meaning. `arch::init` enables interrupts
+    // only AFTER this, so calibration runs with IRQs off.
+    init_timer();
+    serial_println!("[apic] timer calibrated: {} ticks/ms", ticks_per_ms());
 }
 
 /// Maps the LAPIC register page (MMIO, PRESENT|RW|NX, not from the
@@ -214,3 +233,106 @@ fn map_lapic_page(base: u64) -> VirtAddr {
     serial_println!("[apic] lapic page {:#x} -> {:#x}", virt.as_u64(), base);
     virt
 }
+
+/* ---------------- LAPIC timer ---------------- */
+
+/// Calibrated timer rate in ticks per millisecond.
+static TICKS_PER_MS: Once<u32> = Once::new();
+
+/// The calibrated LAPIC-timer rate (ticks per millisecond at divide-by-1).
+/// Panics before calibration (a bug, not a condition to handle).
+pub fn ticks_per_ms() -> u32 {
+    TICKS_PER_MS
+        .get()
+        .copied()
+        .unwrap_or_else(|| panic!("apic: timer not calibrated (init runs first)"))
+}
+
+/// Calibrates the LAPIC timer against the PIT, then arms it in PERIODIC
+/// mode at ~1 kHz (vector 32, the same vector the PIT timer used).
+///
+/// Interrupts must be OFF. Uses the PIT channel 2 in one-shot mode (gate =
+/// port 0x61 bit 0, speaker bit cleared): ~10 ms window, counted by the
+/// LAPIC's down-counter. Ratio math only — no wall-clock assumptions, so
+/// TCG timing quirks cannot skew the result.
+fn init_timer() {
+    if TICKS_PER_MS.get().is_some() {
+        panic!("apic: timer calibrated twice");
+    }
+
+    // ---- Calibrate ----
+    // Deadline: count LAPIC ticks over a ~10 ms PIT one-shot.
+    const CAL_MS: u32 = 10;
+    // PIT crystal ≈ 1.193182 MHz; channel-2 one-shot for exactly 10 ms.
+    const PIT_FREQ: u32 = 1_193_182;
+    const PIT_COUNTS: u32 = PIT_FREQ / 1000 * CAL_MS; // ≈ 11931
+
+    // Put the LAPIC timer in one-shot, divide-by-1, masked (no IRQs while
+    // we calibrate — the tick handler must not fire mid-measurement).
+    set_reg(REG_LVT_TIMER, MASKED_BIT);
+    set_reg(REG_DIV_CONF, DIV_1);
+    // Arm the PIT channel 2 one-shot first, then the LAPIC counter, so the
+    // LAPIC count INCLUDES the ~1 µs it takes to program it (negligible
+    // asymmetry; the ratio is what matters).
+    pit_oneshot_10ms(PIT_COUNTS);
+    set_reg(REG_INITIAL_COUNT, u32::MAX);
+    // Wait for the PIT one-shot to drain (OUT2 goes low again on port 0x61
+    // bit 5); the LAPIC counts in parallel.
+    while !pit_drained() {}
+    let elapsed = u32::MAX - reg(REG_CURRENT_COUNT);
+
+    // Quantize to ticks-per-ms with a floor of 1 (a 0 value would hang the
+    // periodic counter). Accuracy: ±2% at the 10 ms window; skews tick rate
+    // by at most that — far under the scheduler's needs.
+    let per_ms = (elapsed / u32::from(CAL_MS)).max(1);
+    TICKS_PER_MS.call_once(|| per_ms);
+    let icr = per_ms; // 1 ms per period at divide-by-1
+
+    // ---- Arm periodic ----
+    // Vector 32 (TIMER_INTERRUPT_ID — unchanged naked handler + tick path),
+    // periodic (bit 17), unmasked. EOI comes from the timer switch path.
+    set_reg(REG_DIV_CONF, DIV_1);
+    set_reg(REG_LVT_TIMER, u32::from(TIMER_VECTOR) | PERIODIC_BIT);
+    // Order matters: LVT BEFORE the initial count (xAPIC write order
+    // contract); the first expiry starts the endless reload cycle.
+    set_reg(REG_INITIAL_COUNT, icr);
+}
+
+/// Program PIT channel 2 for a one-shot of `counts` (speaker OFF, gate ON).
+fn pit_oneshot_10ms(counts: u32) {
+    // SAFETY: fixed PIT ports; channel 2 is unused by anything else.
+    unsafe {
+        let mut cmd = Port::<u8>::new(0x43);
+        let mut ch2 = Port::<u8>::new(0x42);
+        let mut gate = Port::<u8>::new(0x61);
+        // Channel 2, lo/hi access, mode 0 (interrupt on terminal count).
+        cmd.write(0xB0);
+        ch2.write((counts & 0xFF) as u8);
+        ch2.write((counts >> 8) as u8);
+        // Gate ON (bit 0), speaker OFF (bit 1): starts the count.
+        let v = gate.read();
+        gate.write((v & !0b10) | 0b1);
+    }
+}
+
+/// True once the PIT channel-2 one-shot has drained (OUT2 = port 0x61 bit 5
+/// is back to 0 after being set by the count).
+fn pit_drained() -> bool {
+    // SAFETY: fixed status port (0x61 read side carries OUT2 at bit 5).
+    // Mode 0 raises OUT2 when the one-shot drains — HIGH = done.
+    unsafe {
+        let mut gate = Port::<u8>::new(0x61);
+        gate.read() & 0x20 != 0
+    }
+}
+
+/// Timer vector — file-level alias for the single-number source of truth
+/// (`pics::TIMER_INTERRUPT_ID`, still 32): the naked handler, tick path and
+/// scheduler quantum all keep their meaning across the delivery swap.
+const TIMER_VECTOR: u8 = crate::arch::pics::TIMER_INTERRUPT_ID;
+
+/// LVT timer flags: masked-off (bit 16), periodic mode (bit 17).
+const MASKED_BIT: u32 = 1 << 16;
+const PERIODIC_BIT: u32 = 1 << 17;
+/// Divide-by-1 (divide-configuration register encoding).
+const DIV_1: u32 = 0b1011;

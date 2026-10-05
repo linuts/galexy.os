@@ -24,9 +24,10 @@ pub use timer::tick as timer_tick;
 pub use timer::ticks as timer_ticks;
 
 /// Signals end-of-interrupt for the timer vector (called by the timer
-/// switch before entering the next task).
+/// switch before entering the next task). Since the LAPIC-timer commit the
+/// LAPIC is the delivery path — its EOI register is the one true EOI.
 pub fn end_timer_interrupt() {
-    pics::end_of_interrupt(pics::TIMER_INTERRUPT_ID);
+    apic::eoi();
 }
 
 /// Brings up the whole interrupt subsystem and enables interrupts.

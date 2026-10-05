@@ -25,6 +25,11 @@ static PICS: LazyLock<Mutex<ChainedPics>> = LazyLock::new(|| {
 });
 
 /// Remaps the PICs and enables the PS/2 first port.
+///
+/// The timer is LAPIC-delivered since the APIC-timer commit — its legacy
+/// IRQ0 line stays MASKED (a masked line never asserts, so no double
+/// delivery and no lost-EOI ghosts). Only IRQ1 (keyboard) is still
+/// PIC-delivered (until the I/O APIC wiring).
 pub fn init() {
     // SAFETY: done once at boot, before any interrupts are enabled.
     unsafe {
@@ -32,9 +37,9 @@ pub fn init() {
         pics.initialize();
         // The OCW1 masks are whatever the BIOS left (SeaBIOS runs a POLLED
         // keyboard); don't rely on the inherited state. Unmask only the
-        // lines this OS drives — IRQ0 (timer), IRQ1 (keyboard) and the
-        // cascade (IRQ2); everything else stays masked.
-        pics.write_masks(0b1111_1000, 0b1111_1111);
+        // line this OS still drives through the PIC — IRQ1 (keyboard).
+        // IRQ0 is LAPIC-delivered now; the cascade (IRQ2) is unused.
+        pics.write_masks(0b1111_1101, 0b1111_1111);
     }
     // Make sure the PS/2 controller's first port (keyboard) is enabled.
     // SAFETY: fixed controller command port.
@@ -51,7 +56,7 @@ pub fn init() {
             guard += 1;
         }
     }
-    serial_println!("[pics] ready (masks master 0b1111_1000, slave 0b1111_1111)");
+    serial_println!("[pics] ready (masks master 0b1111_1101, slave 0b1111_1111)");
 }
 
 /// Signals end-of-interrupt for a handled vector (from handlers only).

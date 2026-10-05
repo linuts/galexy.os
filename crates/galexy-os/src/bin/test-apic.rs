@@ -45,23 +45,24 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     // just require a plausible linear range (never some huge garbage).
     assert!(id <= 0x0F, "LAPIC id must be a small logical id, got {id}");
 
-    // 3. Register roundtrip on a benign writable register: the LVT timer
-    //    (vector field + mask bit) — write, read back, restore masked-off.
+    // 3. The LAPIC timer is LIVE: periodic mode on vector 32, calibrated
+    //    (ticks-per-ms sane), and actually ticking through the LAPIC.
     const REG_LVT_TIMER: u32 = 0x320;
-    let probe: u32 = 1 << 16 | 0x20; // masked, vector 32 — never delivered
-    apic::set_reg(REG_LVT_TIMER, probe);
-    let readback = apic::reg(REG_LVT_TIMER);
-    serial_println!("[test-apic] LVT timer: {:#x}", readback);
-    assert_eq!(readback & 0x1_FFFF, probe & 0x1_FFFF, "LVT write-read mismatch");
-    apic::set_reg(REG_LVT_TIMER, (1 << 16) | 0xFF); // leave masked
+    let lvt = apic::reg(REG_LVT_TIMER);
+    serial_println!("[test-apic] LVT timer: {:#x}", lvt);
+    assert_eq!(lvt & 0xFF, u32::from(apic::timer_interrupt_id()), "timer must deliver on vector 32");
+    assert_eq!(lvt & (1 << 16), 0, "the timer LVT must be unmasked");
+    assert_ne!(lvt & (1 << 17), 0, "the timer LVT must be periodic");
+    let tpm = apic::ticks_per_ms();
+    serial_println!("[test-apic] calibrated: {} ticks/ms", tpm);
+    assert!(tpm >= 1, "calibration must yield at least 1 tick/ms");
 
-    // 4. Timer liveness: with the PIC still delivering IRQ0, ticks accrue
-    //    (regression net for the delivery-path swap coming next commit).
+    // 4. Timer liveness: ticks accrue through the LAPIC delivery path.
     let t0 = arch::timer_ticks();
     while arch::timer_ticks() == t0 {
         x86_64::instructions::hlt();
     }
-    serial_println!("[test-apic] timer ticking (pre-LAPIC-timer, PIC path)");
+    serial_println!("[test-apic] timer ticking (LAPIC-delivered)");
 
     println!("[test-apic] lapic registers verified");
     println!("[test-apic] all assertions passed");
