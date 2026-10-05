@@ -235,6 +235,25 @@ pub fn translate(virt: VirtAddr) -> Option<PhysAddr> {
 /// change mid-syscall (IF=0; switches happen only via timer/syscall
 /// handoff).
 pub fn translate_active(virt: VirtAddr) -> Option<PhysAddr> {
+    walk_active(virt).map(|leaf| leaf.phys)
+}
+
+/// Leaf page flags for `virt` in the active tree.
+///
+/// `None` when the walk misses. Syscalls use this to require
+/// `USER_ACCESSIBLE` (and `WRITABLE` for a destination) instead of treating
+/// every present kernel page as a user buffer.
+pub fn active_leaf_flags(virt: VirtAddr) -> Option<PageTableFlags> {
+    walk_active(virt).map(|leaf| leaf.flags)
+}
+
+struct ActiveLeaf {
+    phys: PhysAddr,
+    flags: PageTableFlags,
+}
+
+/// Walks the active CR3 tree. See [`translate_active`].
+fn walk_active(virt: VirtAddr) -> Option<ActiveLeaf> {
     assert!(
         READY.load(Ordering::Relaxed),
         "paging: mapper not initialized"
@@ -260,7 +279,10 @@ pub fn translate_active(virt: VirtAddr) -> Option<PhysAddr> {
             if entry.flags().contains(PageTableFlags::HUGE_PAGE) {
                 let size: u64 = if i == 1 { 1 << 30 } else { 1 << 21 };
                 let base = entry.addr().as_u64() & !(size - 1);
-                return Some(PhysAddr::new(base + (virt.as_u64() & (size - 1))));
+                return Some(ActiveLeaf {
+                    phys: PhysAddr::new(base + (virt.as_u64() & (size - 1))),
+                    flags: entry.flags(),
+                });
             }
             let frame = entry.frame().ok()?;
             let next = &*(phys + frame.start_address().as_u64()).as_ptr::<PageTable>();
@@ -269,7 +291,10 @@ pub fn translate_active(virt: VirtAddr) -> Option<PhysAddr> {
         if !entry.flags().contains(PageTableFlags::PRESENT) {
             return None;
         }
-        Some(entry.frame().ok()?.start_address() + u64::from(virt.page_offset()))
+        Some(ActiveLeaf {
+            phys: entry.frame().ok()?.start_address() + u64::from(virt.page_offset()),
+            flags: entry.flags(),
+        })
     }
 }
 

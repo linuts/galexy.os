@@ -52,6 +52,35 @@ pub fn write_console(bytes: &[u8]) -> SyscallResult {
     )
 }
 
+/// Opens a ramdisk file by exact name (`banner.txt`, `hello`).
+///
+/// On success, `value` is the new capability's bits (READ right).
+pub fn open(name: &[u8]) -> SyscallResult {
+    syscall(
+        Syscall::Open as u64,
+        name.as_ptr() as u64,
+        name.len() as u64,
+        0,
+    )
+}
+
+/// Reads the next bytes of an open file into `buf`.
+///
+/// On success, `value` is the number of bytes copied. `0` is end of file.
+pub fn read(cap: Cap, buf: &mut [u8]) -> SyscallResult {
+    syscall(
+        Syscall::Read as u64,
+        cap.bits(),
+        buf.as_mut_ptr() as u64,
+        buf.len() as u64,
+    )
+}
+
+/// Drops a file capability returned by [`open`].
+pub fn close(cap: Cap) -> SyscallResult {
+    syscall(Syscall::Close as u64, cap.bits(), 0, 0)
+}
+
 /// Gives up the rest of the scheduling quantum.
 pub fn yield_now() -> SyscallResult {
     syscall(Syscall::Yield as u64, 0, 0, 0)

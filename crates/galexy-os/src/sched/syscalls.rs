@@ -15,6 +15,7 @@
 use galexy_abi::{Cap, CapRights, SysError, Syscall, SyscallResult, MAX_SYSCALL};
 
 use crate::sched::context::Context;
+use x86_64::structures::paging::PageTableFlags;
 use x86_64::VirtAddr;
 
 /// What the dispatcher wants done with the (already result-stamped) frame.
@@ -58,7 +59,22 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, syscall_cap_info(Cap::from_bits(frame.rdi)));
             Outcome::Resume
         }
-        // The rest of the frozen ABI table: not wired at this step.
+        n if n == Syscall::Open as u64 => {
+            stamp(frame, syscall_open(frame.rdi, frame.rsi));
+            Outcome::Resume
+        }
+        n if n == Syscall::Read as u64 => {
+            stamp(
+                frame,
+                syscall_read(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx),
+            );
+            Outcome::Resume
+        }
+        n if n == Syscall::Close as u64 => {
+            stamp(frame, syscall_close(Cap::from_bits(frame.rdi)));
+            Outcome::Resume
+        }
+        // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));
             Outcome::Resume
@@ -74,8 +90,8 @@ fn stamp(frame: &mut Context, result: SyscallResult) {
 }
 
 fn syscall_cap_info(cap: Cap) -> SyscallResult {
-    // TEMPLATE behavior: echoes the handle's bits back. Kernel-side cap
-    // table + revocation semantics land with the resource work.
+    // Echoes the handle's bits. File caps have a real per-task table
+    // (`open`/`read`/`close`); this call still does not consult it.
     SyscallResult::ok(cap.bits())
 }
 
@@ -95,25 +111,11 @@ fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
         return SyscallResult::err(SysError::BadValue);
     }
 
-    // User-buffer validation: every byte must sit in USER-ACCESSIBLE,
-    // present pages. (Step A shares the kernel's address space, so it is
-    // not enough for a page to be mapped — the flags must allow ring 3.)
-    // User-buffer validation: every byte must sit in present pages
-    // (Step A shares the kernel's address space, so "mapped" alone is NOT
-    // enough — a kernel page in ring 3 faults at the copy, framed by the
-    // CPU as the task's own illegal access; the explicit walk turns that
-    // into a clean syscall error for common cases).
-    let Some(last_byte) = addr.checked_add(len - 1) else {
+    // User-accessible pages only. A kernel address is present in the task
+    // tree (shared kernel half) but lacks USER_ACCESSIBLE — copying it
+    // would hand the task kernel bytes.
+    if user_buffer(addr, len, false).is_err() {
         return SyscallResult::err(SysError::BadBuffer);
-    };
-    let first_page = addr >> 12;
-    let last_page = last_byte >> 12;
-    for page_no in first_page..=last_page {
-        // ACTIVE-tree walk: the buffer lives in the calling task's own
-        // address space (Step B) — the kernel-tree translate can't see it.
-        if crate::arch::mm::translate_active(VirtAddr::new(page_no << 12)).is_none() {
-            return SyscallResult::err(SysError::BadBuffer);
-        }
     }
 
     // Stage the bytes kernel-side, then print. run-with-IF semantics: this
@@ -144,8 +146,108 @@ fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     SyscallResult::ok(len)
 }
 
+fn syscall_open(addr: u64, len: u64) -> SyscallResult {
+    if len == 0 || len > MAX_NAME {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if user_buffer(addr, len, false).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut raw = [0u8; MAX_NAME as usize];
+    // SAFETY: `user_buffer` accepted every byte of [addr, addr+len).
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            VirtAddr::new(addr).as_ptr::<u8>(),
+            raw.as_mut_ptr(),
+            len as usize,
+        );
+    }
+    let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
+    if !file_name_ok(name) {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    match crate::sched::task_open(name) {
+        Ok(cap) => SyscallResult::ok(cap.bits()),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+    // Short read: a request larger than the staging cap returns a prefix.
+    let len = len.min(MAX_READ);
+    if len > 0 && user_buffer(addr, len, true).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut staged = [0u8; MAX_READ as usize];
+    let n = match crate::sched::task_read(cap, &mut staged[..len as usize]) {
+        Ok(n) => n,
+        Err(err) => return SyscallResult::err(err),
+    };
+    if n > 0 {
+        // SAFETY: the destination was accepted as present, user, writable.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                staged.as_ptr(),
+                VirtAddr::new(addr).as_mut_ptr::<u8>(),
+                n,
+            );
+        }
+    }
+    SyscallResult::ok(n as u64)
+}
+
+fn syscall_close(cap: Cap) -> SyscallResult {
+    match crate::sched::task_close(cap) {
+        Ok(()) => SyscallResult::ok(0),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+/// Exact ramdisk names: `banner.txt`, `hello`. No directories, no spaces.
+fn file_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
+}
+
+/// Every page of `[addr, addr+len)` is present and user-accessible in the
+/// active tree. `writable` also requires the leaf to be writable, so `read`
+/// cannot store into the task's code page (that would be a ring-0 fault).
+fn user_buffer(addr: u64, len: u64, writable: bool) -> Result<(), SysError> {
+    let Some(last_byte) = addr.checked_add(len - 1) else {
+        return Err(SysError::BadBuffer);
+    };
+    let Ok(start) = VirtAddr::try_new(addr) else {
+        return Err(SysError::BadBuffer);
+    };
+    let Ok(end) = VirtAddr::try_new(last_byte) else {
+        return Err(SysError::BadBuffer);
+    };
+    let mut need = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
+    if writable {
+        need |= PageTableFlags::WRITABLE;
+    }
+    let first_page = start.as_u64() >> 12;
+    let last_page = end.as_u64() >> 12;
+    for page_no in first_page..=last_page {
+        let page = VirtAddr::new(page_no << 12);
+        match crate::arch::mm::active_leaf_flags(page) {
+            Some(flags) if flags.contains(need) => {}
+            _ => return Err(SysError::BadBuffer),
+        }
+    }
+    Ok(())
+}
+
 /// `write` staging cap (single page minus stack headroom).
 const MAX_WRITE: u64 = 1024;
+
+/// `read` staging cap. Longer user requests short-read to this size.
+const MAX_READ: u64 = 1024;
+
+/// `open` name cap. Ramdisk entries are short (`hello`, `banner.txt`).
+const MAX_NAME: u64 = 64;
 
 /// Rights a `write` call must see on the capability (kernel-side authority;
 /// the opaque model means userspace never "sets" them).

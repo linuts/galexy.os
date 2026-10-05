@@ -73,6 +73,12 @@ impl CapRights {
     pub const fn union(self, other: Self) -> Self {
         CapRights(self.0 | other.0)
     }
+
+    /// Rights present in both masks. A call is allowed only for this
+    /// intersection of the kernel grant and the handle's snapshot.
+    pub const fn intersection(self, other: Self) -> Self {
+        CapRights(self.0 & other.0)
+    }
 }
 
 impl Cap {
@@ -135,6 +141,12 @@ pub mod reserved {
     }
 }
 
+/// Lowest capability index a per-task file open may return. `0` is null,
+/// [`reserved::CONSOLE_INDEX`] is the console, [`reserved::SELF_INDEX`] is
+/// the calling task. File indexes are per-task (not a global fd table):
+/// task A's index 3 and task B's index 3 are different opens.
+pub const FILE_CAP_BASE: u64 = 3;
+
 /* ---------------- address-space contract ---------------- */
 
 /// The fixed virtual load address for EVERY user program. Programs link
@@ -173,19 +185,36 @@ pub enum Syscall {
     ///
     /// Args: `RDI = cap bits`. Returns: `SyscallResult` (rax = cap bits).
     CapInfo,
-    /// `probe(frame)` — reserved ABI slot 4 (first non-v1 call goes here).
-    #[doc(hidden)]
-    _Reserved4,
+    /// `open(name, len)` — open a ramdisk file by exact name.
+    ///
+    /// Args: `RDI = user address of the name`, `RSI = byte count`.
+    /// Returns: `SyscallResult` (rax = new `Cap` bits, READ right).
+    /// The cap is private to the calling task.
+    Open,
+    /// `read(cap, addr, len)` — copy bytes from an open file into a buffer.
+    ///
+    /// Args: `RDI = cap bits`, `RSI = user address`, `RDX = byte count`.
+    /// Returns: `SyscallResult` (rax = bytes copied; `0` is end of file).
+    /// A long request short-reads rather than failing. Requires
+    /// CapRights::READ on both the kernel grant and the handle snapshot.
+    Read,
+    /// `close(cap)` — drop a file capability opened by this task.
+    ///
+    /// Args: `RDI = cap bits`. Returns: `SyscallResult` (rax = 0).
+    /// Reserved caps (console, self) are not files and fail `BadCap`.
+    Close,
 }
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (fixing the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 5] = [
+pub const SYSCALLS: [Syscall; 7] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
     Syscall::CapInfo,
-    Syscall::_Reserved4,
+    Syscall::Open,
+    Syscall::Read,
+    Syscall::Close,
 ];
 
 /// Maximum syscall number (upper bound for a u64 dispatch table).
@@ -244,6 +273,10 @@ pub enum SysError {
     Unsupported = 4,
     /// Invalid argument value outside any handle/buffer concern.
     BadValue = 5,
+    /// `open` found no ramdisk file with that exact name.
+    NotFound = 6,
+    /// The calling task's file-capability table is full.
+    NoResource = 7,
 }
 
 impl SysError {
@@ -255,6 +288,8 @@ impl SysError {
             3 => SysError::BadBuffer,
             4 => SysError::Unsupported,
             5 => SysError::BadValue,
+            6 => SysError::NotFound,
+            7 => SysError::NoResource,
             _ => SysError::Unsupported,
         }
     }

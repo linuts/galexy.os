@@ -618,6 +618,31 @@ under concurrent load.** Suite: 30 QEMU boot tests, all `-smp 2`.
 - [x] Docs synced (TODO/DESIGN: shootdown rules + steal protocol +
       concurrency model, ROADMAP, README).
 
+## Milestone 20 — Files as capabilities ✅
+
+The capability model meets a real resource. **A task `open`s a ramdisk
+file by exact name and gets a private READ cap; `read` copies the next
+bytes; `close` drops the slot.** Suite: 31 QEMU boot tests, all `-smp 2`.
+
+- [x] **ABI** (`galexy-abi`): `open`=4 (the reserved slot), `read`=5,
+      `close`=6. Errors `NotFound`=6 and `NoResource`=7. File indexes
+      start at `FILE_CAP_BASE` (3), after null / console / self. The
+      effective right is kernel grant ∩ handle snapshot
+- [x] **Per-task table** (`sched`): 8 slots carved into `Thread` at spawn.
+      `open` does not allocate — the syscall runs IF=0, and a heap grow
+      there would broadcast a shootdown. Slots die on reap. Two tasks'
+      index 3 are different opens
+- [x] **`open` / `read` / `close`** (`sched/syscalls.rs`): exact ramdisk
+      name (`banner.txt`, `hello`); `read` short-reads at 1 KiB and
+      returns 0 at EOF; user buffers must be `USER_ACCESSIBLE` (a
+      destination must also be writable) so a kernel address is not a
+      buffer
+- [x] **`bin/test-open.rs`**: missing name → NotFound, `banner.txt`
+      bytes match, a WRITE-only forgery of the same index is
+      AccessDenied, EOF returns 0, close then read is BadCap
+- [x] **`galexy-rt`**: `open` / `read` / `close` wrappers
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17
@@ -647,6 +672,8 @@ under concurrent load.** Suite: 30 QEMU boot tests, all `-smp 2`.
       addressing; proper user segment reload is future segment work
 - [ ] `write` printable-ASCII rule is a stand-in for a real console
       charset policy (newlines work; tab/CR/ESC are future screen work)
+- [ ] File caps are ramdisk reads only: no write, seek, or directory
+      listing, and the shell's `run` still loads by name in the kernel
 - [ ] `run` leaks the task name (`Box::leak`, a few bytes per spawn) —
       fine at this scale; a slot free-list is the fix if tasks churn
 - [ ] Tombstone slots live forever (a few bytes per dead thread) — fine

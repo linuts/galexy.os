@@ -54,6 +54,12 @@ fn rights_masks() {
     assert!(!CapRights::READ.contains(CapRights::WRITE));
     assert!(!CapRights::NONE.contains(CapRights::READ));
     assert_eq!(CapRights::READ.union(CapRights::SIGNAL).bits(), 0b101);
+    assert_eq!(
+        CapRights::READ
+            .union(CapRights::WRITE)
+            .intersection(CapRights::READ),
+        CapRights::READ
+    );
 }
 
 #[test]
@@ -62,6 +68,10 @@ fn reserved_caps_have_permanent_indexes() {
     // conscious ABI break. Pin them.
     assert_eq!(reserved::CONSOLE_INDEX, 1);
     assert_eq!(reserved::SELF_INDEX, 2);
+    assert_eq!(FILE_CAP_BASE, 3);
+    assert!(matches!(SYSCALLS[4], Syscall::Open));
+    assert!(matches!(SYSCALLS[5], Syscall::Read));
+    assert!(matches!(SYSCALLS[6], Syscall::Close));
     let console = reserved::console(CapRights::WRITE);
     assert_eq!(console.index(), 1);
     let self_cap = reserved::self_cap();
@@ -71,7 +81,7 @@ fn reserved_caps_have_permanent_indexes() {
 
 #[test]
 fn result_codes_roundtrip() {
-    for code in [SysError::BadCap as u64, 2, 3, 4, 5] {
+    for code in [SysError::BadCap as u64, 2, 3, 4, 5, 6, 7] {
         let r = SyscallResult {
             ok: false,
             value: code,

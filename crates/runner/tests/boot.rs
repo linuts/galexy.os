@@ -354,6 +354,20 @@ fn userfault_test_passes() {
 }
 
 #[test]
+fn open_test_passes() {
+    let (code, serial) = boot(&image("test-open"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-open should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-open] passed"),
+        "test-open success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn ramdisk_test_passes() {
     let (code, serial) = boot(&image("test-ramdisk"));
     assert_eq!(

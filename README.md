@@ -36,14 +36,16 @@ The interactive shell launches userland programs by name (`run hello`).
       a real lifecycle: exited threads are reaped (stacks return to the
       heap), slots are stable tombstones, stack canary surfaces overflows
 - [x] User space: ring-3 tasks in the same rotation, SYSCALL/SYSRET
-      (`exit`, `yield`, `write`, `cap_info`), capability authority
+      (`exit`, `yield`, `write`, `cap_info`, `open`, `read`, `close`),
+      capability authority
       kernel-side, per-task kernel stacks via TSS.RSP0 — and REAL
       isolation: per-task address spaces (FreshL4), CR3 swapped by the
       rotation, whole trees walked back on reap, guard-page fences, and
       ring-3 crashes killing only the faulting task
 - [x] `galexy-abi`: the syscall ABI — numbered syscalls + capability model
       (no fds; capabilities day one) — frozen and host-tested before any
-      ring-3 code exists
+      ring-3 code exists. `open`/`read`/`close` turn ramdisk files into
+      per-task capabilities
 - [x] Shell with commands (`help`, `stats`, `threads`, `run <program>`,
       ...) + live status bar ("quiet OS" demo) — `run` launches real
       userland programs from the ramdisk; console output = screen + serial
@@ -166,7 +168,7 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
    thing a scheduler ever has to swap.
 4. **Test what can be tested.** Host unit tests for the pure primitives
    (`galexy-core`, `galexy-abi`), plus one bootable kernel binary per
-   integration test — 30 QEMU boots (all at `-smp 2`) assert exit codes and
+   integration test — 31 QEMU boots (all at `-smp 2`) assert exit codes and
    serial output on every run.
 5. **Ownership beats locks for per-CPU state.** Rotation cursors, TSS.RSP0,
    syscall scratch and the LAPIC registers are touched by exactly one CPU

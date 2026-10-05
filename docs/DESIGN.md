@@ -78,9 +78,10 @@ contract between them.
    from inside either side without a version bump.
 8. **ABI stability (capabilities day one).** The `galexy-abi` decisions —
    opaque `Cap` handles (48-bit index + 16-bit rights), reserved indexes
-   (console=1, self=2), syscall numbers (exit=0, yield=1, write=2,
-   cap_info=3), error codes (BadCap=1, AccessDenied=2, BadBuffer=3,
-   Unsupported=4, BadValue=5) — are permanent. New syscalls APPEND;
+   (console=1, self=2; file caps start at 3, per task), syscall numbers
+   (exit=0, yield=1, write=2, cap_info=3, open=4, read=5, close=6), error
+   codes (BadCap=1, AccessDenied=2, BadBuffer=3, Unsupported=4, BadValue=5,
+   NotFound=6, NoResource=7) — are permanent. New syscalls APPEND;
    renumbering/renaming = ABI major bump. NO file descriptors at this ABI
    level: resources are capabilities kernel-side, validated on every call,
    revoked easily. Files/ports/handles-to-come all become caps.
@@ -451,9 +452,16 @@ buffer via `translate_active` — the CR3-ACTIVE tree, since per-task
 address spaces the kernel-rooted `translate` cannot see user buffers;
 printable-ASCII staging; screen output **+ serial mirror** — console =
 screen + COM1, which is what makes userland output observable headless);
-`cap_info` echoes handles (dispatch proving ground). Unknown numbers →
-Unsupported. Kernel-origin syscalls are impossible-by-structure: the arch
-shim dies loudly instead.
+`cap_info` echoes handles (dispatch proving ground). `open`/`read`/`close`
+are ramdisk files as capabilities (Milestone 20): each user task has a
+fixed table of 8 opens (no allocation on the IF=0 syscall path), indexes
+from `FILE_CAP_BASE` (3), authoritative READ grant intersected with the
+handle snapshot. `open(name)` is an exact ramdisk lookup; `read` copies
+the next bytes (short-read at 1 KiB, 0 at EOF); `close` drops the slot.
+User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
+must also be writable) — a kernel address is present but not a user
+buffer. Unknown numbers → Unsupported. Kernel-origin syscalls are
+impossible-by-structure: the arch shim dies loudly instead.
 
 ### arch/syscall — "the mechanism" (arch/)
 
@@ -514,8 +522,10 @@ The runner packs user programs into a USTAR tar and the bootloader maps it
 (`BootInfo.ramdisk_addr` = a VIRTUAL address, framebuffer-like contract).
 `sched::ramdisk::init` publishes those bytes once (kernel-lifetime, so a
 `&'static [u8]` view); `find(name)` walks them read-only via
-`galexy-core::TarCursor` per call. Consumers (the shell's `run`, test
-kernels) never touch raw BootInfo ramdisk fields again.
+`galexy-core::TarCursor` per call. Consumers (the shell's `run`, `open`,
+test kernels) never touch raw BootInfo ramdisk fields again. An `open`
+holds that `&'static` slice plus a per-cap cursor; closing the cap does
+not free ramdisk bytes.
 
 ## Concurrency model (SMP, two CPUs — Milestones 18–19)
 

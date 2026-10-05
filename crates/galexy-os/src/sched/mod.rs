@@ -25,6 +25,8 @@ use x86_64::instructions::interrupts;
 use x86_64::structures::paging::{Mapper, Page, PageTableFlags, PhysFrame, Size4KiB};
 use x86_64::{PhysAddr, VirtAddr};
 
+use galexy_abi::{Cap, CapRights, SysError};
+
 use crate::arch::mm;
 use crate::serial_println;
 
@@ -148,6 +150,22 @@ const STATE_FREED: u8 = 2; // stack + fx freed; rotation-skipped tombstone
 /// downward through this word first — reaping detects the clobber.
 const STACK_CANARY: u64 = 0x0CA7_AB1E_500D_F00D;
 
+/// Open ramdisk files one task may hold at once. The table is carved into
+/// the `Thread` at spawn so `open` never allocates (the syscall runs IF=0;
+/// a heap grow there would broadcast a shootdown that targets must ack).
+const MAX_OPEN_FILES: usize = 8;
+
+/// One open ramdisk file. The bytes live in the bootloader's ramdisk for
+/// the kernel's whole life; only the cursor is per-open.
+#[derive(Clone, Copy)]
+struct OpenFile {
+    bytes: &'static [u8],
+    offset: usize,
+    /// Authoritative rights. The handle's upper half is a snapshot; a call
+    /// is allowed only for the intersection of the two.
+    rights: CapRights,
+}
+
 struct Thread {
     /// For status/ps display.
     name: &'static str,
@@ -184,6 +202,9 @@ struct Thread {
     /// The timer tick of this thread's last steal (anti-ping-pong cooldown
     /// for the idle-CPU steal path). 0 = never stolen (eligible).
     stolen_at: AtomicU64,
+    /// File capabilities belonging to this task. Empty for kernel threads.
+    /// Indexes are [`galexy_abi::FILE_CAP_BASE`] + slot. Cleared on reap.
+    files: [Option<OpenFile>; MAX_OPEN_FILES],
 }
 
 // SAFETY: `fx` is an exclusively-owned allocation, dereferenced only by the
@@ -388,6 +409,8 @@ pub fn reap() {
                     t.name
                 );
             }
+            // File caps die with the task. The bytes stay in the ramdisk.
+            t.files = [None; MAX_OPEN_FILES];
             // SAFETY: the fx area was leaked at spawn; its slot is a
             // tombstone now — no code will dereference it again.
             unsafe { drop(Box::from_raw(t.fx)) };
@@ -458,6 +481,7 @@ pub(crate) fn register_user_task(init: TaskInit) {
             user_p4: init.user_p4,
             owner,
             stolen_at: AtomicU64::new(0),
+            files: [None; MAX_OPEN_FILES],
         });
     });
 }
@@ -493,6 +517,7 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) -> u8 {
             user_p4: 0,
             owner,
             stolen_at: AtomicU64::new(0),
+            files: [None; MAX_OPEN_FILES],
         });
         serial_println!("[sched] thread '{}' ready (owner cpu {})", name, owner);
         owner
@@ -678,6 +703,7 @@ pub fn spawn_user_task(
             user_p4: p4_index,
             owner,
             stolen_at: AtomicU64::new(0),
+            files: [None; MAX_OPEN_FILES],
         });
         serial_println!(
             "[sched] user task '{}' ready (own tree cr3={:#x}, p4={}, code @ {:#x}, kstack top {:#x})",
@@ -770,6 +796,97 @@ pub fn is_name_running(name: &str) -> bool {
 }
 
 // (main_ticks moved into the per-CPU table above.)
+
+/// Opens a ramdisk file for the current user task. `name` is the exact
+/// archive entry (`banner.txt`, `hello`). The returned cap carries READ.
+pub(crate) fn task_open(name: &str) -> Result<Cap, SysError> {
+    let bytes = crate::sched::ramdisk::find(name).ok_or(SysError::NotFound)?;
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        let Some(index) = thread.files.iter().position(|slot| slot.is_none()) else {
+            return Err(SysError::NoResource);
+        };
+        let rights = CapRights::READ;
+        thread.files[index] = Some(OpenFile {
+            bytes,
+            offset: 0,
+            rights,
+        });
+        Ok(Cap::new(galexy_abi::FILE_CAP_BASE + index as u64, rights))
+    })
+}
+
+/// Copies the next bytes of an open file into `dst`. `Ok(0)` is end of file.
+///
+/// The effective right is the intersection of the kernel grant and the
+/// handle snapshot, so a task cannot inflate READ onto a handle it stripped,
+/// and cannot use a WRITE-only forgery of a file index.
+pub(crate) fn task_read(cap: Cap, dst: &mut [u8]) -> Result<usize, SysError> {
+    let index = file_slot(cap)?;
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
+        let effective = file.rights.intersection(cap.rights());
+        if !effective.contains(CapRights::READ) {
+            return Err(SysError::AccessDenied);
+        }
+        if dst.is_empty() {
+            return Ok(0);
+        }
+        let start = file.offset;
+        let available = file.bytes.len().saturating_sub(start);
+        let n = dst.len().min(available);
+        dst[..n].copy_from_slice(&file.bytes[start..start + n]);
+        file.offset = start + n;
+        Ok(n)
+    })
+}
+
+/// Drops one file capability belonging to the current task.
+///
+/// Close is possession of the slot, not a READ: the index names the open
+/// in this task's table, and no other task has that table.
+pub(crate) fn task_close(cap: Cap) -> Result<(), SysError> {
+    let index = file_slot(cap)?;
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        if thread.files[index].take().is_none() {
+            return Err(SysError::BadCap);
+        }
+        Ok(())
+    })
+}
+
+/// File-table index for a user cap, or `BadCap` when it is not a file index.
+fn file_slot(cap: Cap) -> Result<usize, SysError> {
+    let index = cap.index();
+    if index < galexy_abi::FILE_CAP_BASE {
+        return Err(SysError::BadCap);
+    }
+    let slot = (index - galexy_abi::FILE_CAP_BASE) as usize;
+    if slot >= MAX_OPEN_FILES {
+        return Err(SysError::BadCap);
+    }
+    Ok(slot)
+}
 
 /// The current rotation slot (0 = main loop; otherwise thread index + 1).
 pub fn current_slot() -> usize {

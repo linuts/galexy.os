@@ -108,8 +108,10 @@ first real program landed in Milestone 13:
 
 ## Phase 4 — Beyond
 
-- Filesystem capabilities: `open(name) → Cap(file)` + `read(cap, ...)` —
-  the capability-day-one machinery exercised by real resources.
+- Filesystem capabilities ✅ (Milestone 20: `open(name) → Cap(file)` +
+  `read(cap)` + `close(cap)` on the ramdisk. Per-task table, READ grant
+  checked as kernel-rights ∩ handle snapshot, `bin/test-open` round-trips
+  `banner.txt` including a missing name, a forged cap, EOF, and close).
 - APIC so UEFI boots get timer/keyboard; the door to SMP ✅ (Milestone 17:
   MADT discovery (arch/acpi), LAPIC enabled with a PIT-calibrated periodic
   timer on vector 32 (xAPIC/x2APIC dual access), I/O APIC routing the
