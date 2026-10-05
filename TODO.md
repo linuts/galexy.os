@@ -240,6 +240,52 @@ works, exit reaps.** Every commit left the boot suite green.
       the allocator; verified (exit 33; 18 QEMU tests now)
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 14 — Step B: real isolation ✅
+
+ROADMAP Step B, executed. **Every user task owns its address space; CR3
+swaps with the rotation; trees are walked back; ring-3 crashes kill only
+the crasher.** Suite grew to 19 QEMU boot tests, green per commit.
+
+- [x] **CR3 plumbing (no behavior change)**: kernel table root cached at
+      init; `install_cr3()` no-ops when the frame is already active (the
+      Redox pattern); `Thread.cr3` (0 = kernel table); switch-in hooks in
+      the timer path AND `syscall_handoff` install the incoming CR3 inside
+      the IRQ gate — safe by construction: every task table shares the
+      kernel half (the FreshL4/M12 contract), so everything the switch
+      touches stays mapped across the swap
+- [x] **Per-task trees**: `spawn_user_task` builds a FreshL4 at spawn
+      (guarded: spawn must run on the kernel tree — a FreshL4 clones the
+      ACTIVE table, which must never carry user mappings), then maps the
+      task's code page / 4-page user stack / scratch page INTO ITS OWN
+      TREE via `with_table` at a scanned top-free P4 entry (< 256). All
+      kernel-side staging goes through backing frames (`frame_virt`) —
+      the task tree never needs to be active to write it. The initial
+      ring-3 frame is fabricated through the phys-map image of the top
+      stack page (user-space vaddrs are task-private now).
+      `TaskFrameAlloc` made public for out-of-module `map_to` calls.
+      Tests poll a task's scratch page via `frame_virt(scratch_phys)`
+      (`UserRegion` gained the phys addr). `test-userpreempt` +
+      `test-syscall` now headline the CR3-swap crossing; verified
+- [x] **Reaper tree walk**: `paging::free_user_tree(root, p4_index)`
+      frees the task's whole P4-entry subtree — P3/P2/P1 frames AND data
+      frames (the kernel's shared subtrees under other entries are never
+      touched). The reaper dropped its unmap-per-page pass; one walk per
+      dead task reports `freed task 'X' tree: N frame(s)`. The M12/M13
+      table-frame leak debt is CLOSED.
+      `bin/test-treechurn.rs`: spawn→exit→reap looped 5×; free-frames
+      returns to baseline EXACTLY every cycle (12 frames/cycle: 6 data +
+      6 tables); verified (exit 33)
+- [x] **Crash isolation**: one GUARD page left unmapped directly below
+      each user stack (a fence of absence); the page-fault vector got a
+      NAKED handler (same prologue as the timer; the vector carries an
+      error-code word, so fields are read by raw offsets and never
+      resumed): ring-3 faults tombstone + rotate (the kernel lives),
+      ring-0 faults still report + park. The `syscall_handoff` seam took
+      a `reason` ("yield"/"syscall"/"page fault" in the serial trace).
+      `bin/test-userfault.rs`: blob recurses into the guard page, task
+      dies, main keeps rotating, tree fully reclaimed; verified (exit 33)
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [ ] UEFI: timer + keyboard dead under UEFI — legacy PIC doesn't exist;
@@ -250,11 +296,6 @@ works, exit reaps.** Every commit left the boot suite green.
       addressing; proper user segment reload is future segment work
 - [ ] `write` printable-ASCII rule is a stand-in for a real console
       charset policy (newlines unsupported yet — the blob prints one line)
-- [ ] Page-table frames consumed by user-task spawn mappings stay
-      allocated (reaper doesn't walk trees; FreshL4 debt, Step B)
-- [ ] Thread guard pages: a too-deep thread silently corrupts the heap
-      (canary detects on reap now, but guard pages land with Step B where
-      stacks are independently mapped anyway)
 - [ ] Tombstone slots live forever (a few bytes per dead thread) — fine
       until tasks churn; a free-list of slots is the fix if ever needed
 - [ ] Status bar can overwrite the typing line when the screen is full
@@ -265,3 +306,5 @@ works, exit reaps.** Every commit left the boot suite green.
 - [ ] Keyboard queue overflow silently drops keys — fine for now, revisit
 - [ ] Cooperative-scheduler nits: `run()` sweep fairness mid-sweep;
       TaskCtx's 8 fixed u64 slots (boxed state enum when tasks get richer)
+- [ ] TLB efficiency: every CR3 swap is a full flush (no PCID/GLOBAL
+      kernel pages) — fine at this scale, revisit if task churn grows

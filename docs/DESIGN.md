@@ -177,14 +177,20 @@ Init order: GDT/TSS → IDT → PICs → timer config → `sti`.
   the TLB; page-table frames come from the frame allocator via a trait
   adapter. `unmap_page` flushes and returns the frame. `translate(virt)`
   for lookups.
-- `FreshL4` — per-task address-space groundwork (Step B): allocates a frame
-  and clones the active L4 into it, then re-points the recursive entry
+- `FreshL4` — per-task address spaces (Step B): allocates a frame and
+  clones the active L4 into it, then re-points the recursive entry
   (P4 511) at the FRESH frame — a verbatim copy would leave the recursive
   mapping addressing the OLD tree once the fresh table is loaded into CR3
-  (kernel higher-half entries are shared frames either way). Tests can map
-  into a fresh (non-active, coherent) tree via the `unsafe with_table()`
-  mapper (no TLB flush — no CPU can address it); `FreshL4::drop` currently
-  leaks its frame (tree walk = Step B work, documented debt).
+  (kernel higher-half entries are shared frames either way). Spawn-time
+  guard: `on_kernel_tree()` must hold, or the clone could carry another
+  task's user mappings. Tests can map into a fresh (non-active, coherent)
+  tree via the `unsafe with_table()` mapper (no TLB flush — no CPU can
+  address it).
+- `install_cr3(frame)` — no-op when already active (Redox pattern: a swap
+  costs a full TLB flush); `kernel_cr3()` = the boot table, cached at init.
+- `free_user_tree(root, p4_index)` — reclaims a tombstoned task's WHOLE
+  subtree under its own P4 entry: P3/P2/P1 frames AND data frames (the
+  kernel's shared subtrees live under other entries — never touched).
 - Fresh virtual space: the bootloader's dynamic mappings fill P4 indices
   from 0 upward, physical memory is fixed at index 32, recursive at 511 —
   test/scratch mappings use a high-but-canonical index (heap 43, tests
@@ -236,17 +242,22 @@ loop MUST stay interrupts-ENABLED — with IF=0 the dead thread sleeps in
 `hlt` forever, nothing ever preempts it, and the whole machine wedges
 (found by `bin/test-threadexit.rs`).
 
-**User tasks (Step A).** Same rotation, same lifecycle. `spawn_user_task`
-grants a fresh user region: one free P4 entry scanned top-down below 256
-(boot dynamics fill upward from 0; our fixed maps sit at 32/43/511) —
-512 GiB per task: code page at +0 (PRESENT\|USER), user stack (4 pages,
-RW\|NX\|USER) at +1 GiB, an RW scratch page right above (kernel-pollable
-for tests — Step A tasks share the active address space; per-task CR3 is
-Step B). The task carries its own KERNEL-MODE stack (heap-backed Vec):
-timer IRQs from ring 3 push onto it via TSS.RSP0 (set at every switch-in
-to the task, cleared for main/kernel threads), and the syscall entry
-targets it via the kstack registry. Scheduler reaps it identically —
-plus it unmaps + frees the user pages by address.
+**User tasks (Step B).** Same rotation, same lifecycle — private address
+space. `spawn_user_task` (kernel tree asserted) builds a `FreshL4` and maps
+the task's world INTO ITS OWN TREE via `with_table`: code page at a scanned
+top-free P4 entry (`< 256` — 512 GiB per task), user stack (4 pages,
+RW\|NX\|USER) at +1 GiB, an RW scratch page right above. All kernel-side
+staging (blob bytes, zeroing, the initial ring-3 frame) goes through the
+BACKING FRAMES (`frame_virt`) — the phys map is present in every tree, so
+the task tree never needs to be active to write it. `Thread.cr3` swaps in
+both switch paths (timer + syscall handoff), no-op when unchanged. The
+task's own kernel-mode stack (heap Vec) serves its ring 3→0 crossings via
+TSS.RSP0. Reaping = `free_user_tree(root, p4_index)`: one walk takes tables
+AND data frames; the accounting closes exactly (proven by
+`bin/test-treechurn.rs`). CRASH ISOLATION: one unmapped guard page below
+the stack; the page-fault vector runs a NAKED handler (timer-shaped
+prologue + error-code word ⇒ raw-offset reads, never resumed): ring-3
+faults tombstone + rotate, ring-0 faults report + park.
 
 **Ring-3 readiness** (structure only until userland): GDT carries DPL-3
 user code/data segments, appended consecutively (`user SS = user CS + 8`,

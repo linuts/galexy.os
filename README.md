@@ -2,10 +2,9 @@
 
 A small, modular operating system written in Rust. Bootable on BIOS and UEFI,
 with a pixel-framebuffer TTY, PS/2 keyboard input, memory management,
-cooperative tasks, timer-preemptive kernel threads and — as of the first
-milestone of its userland — real ring-3 tasks printing through syscalls.
-Currently a shell with live system stats plus a user program that prints
-through `write(console_cap, ...)`, growing toward per-task isolation.
+cooperative tasks, timer-preemptive kernel threads, and an isolated
+userland: ring-3 tasks with their own address spaces, printing through
+syscalls, killed cleanly when they crash — the OS survives user bugs.
 
 ## Features
 
@@ -25,17 +24,20 @@ through `write(console_cap, ...)`, growing toward per-task isolation.
 - [x] Cooperative round-robin tasks + timer-preemptive kernel threads with
       a real lifecycle: exited threads are reaped (stacks return to the
       heap), slots are stable tombstones, stack canary surfaces overflows
-- [x] User space (first step): ring-3 tasks in the same rotation,
-      SYSCALL/SYSRET (`exit`, `yield`, `write`, `cap_info`), capability
-      authority kernel-side, per-task kernel stacks via TSS.RSP0, first
-      program prints "Hello from ring 3!" and exits via syscall
+- [x] User space: ring-3 tasks in the same rotation, SYSCALL/SYSRET
+      (`exit`, `yield`, `write`, `cap_info`), capability authority
+      kernel-side, per-task kernel stacks via TSS.RSP0 — and REAL
+      isolation: per-task address spaces (FreshL4), CR3 swapped by the
+      rotation, whole trees walked back on reap, guard-page fences, and
+      ring-3 crashes killing only the faulting task
 - [x] `galexy-abi`: the syscall ABI — numbered syscalls + capability model
       (no fds; capabilities day one) — frozen and host-tested before any
       ring-3 code exists
 - [x] Shell with commands (`help`, `stats`, `threads`, ...) + live status
       bar ("quiet OS" demo)
 - [x] Test harness: host unit tests + per-kernel QEMU integration tests
-- [ ] Per-task address-space isolation (per-task CR3, Step B)
+- [ ] Programs beyond blobs (ELF loader + `galexy-rt` runtime)
+- [ ] Filesystem (read-only first, capability-shaped)
 
 ## Quick start
 

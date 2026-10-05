@@ -75,17 +75,20 @@ first real program landed in Milestone 13:
    plus `test-userpreempt.rs` (ring 3 vs timer) and `test-syscall.rs`
    (msr+frame end to end); all verified (exit 33)
 
-### Step B — real isolation (next)
+### Step B — real isolation ✅
 
-1. Per-task CR3: `FreshL4` per task (proven in Milestone 12 — self-recursive
-   entry, kernel higher-half shared); user region per task mapped via
-   `with_table`; page-table tree walk so the reaper can free whole spaces
-   (currently the spawn's table frames stay allocated)
-2. CR3 in `Context` + swap in the timer switch (Redox pattern: swap only
-   when different); user DS/ES/FS/GS hygiene at ring-3 entry
-3. Per-task user stacks/program pages; preemptively-scheduled isolated
-   user task end to end; guard pages become unmapped low pages of each
-   stack (the canary check graduates to real fault-on-overflow)
+1. Per-task CR3 ✅ — `FreshL4` per task at spawn (kernel-tree guard:
+   spawns must run on the kernel table so the clone stays clean); user
+   region per task mapped via `with_table` into its own tree at a scanned
+   top-free P4 entry; kernel-side staging through backing frames ✅
+2. CR3 in `Context`'s task record + swap in BOTH switch paths (timer +
+   syscall handoff), no-op when unchanged ✅; the kernel half of every
+   tree is shared verbatim, so the switch is safe mid-gate ✅
+3. Reaped trees: `free_user_tree` walks the task's own P4 entry subtree
+   (tables + data) — frame accounting closes exactly across churn ✅;
+   guard pages = the unmapped page below each user stack; ring-3 faults
+   kill only the faulting task (naked PF handler, third handoff entry
+   point) ✅
 
 ### Debt to pay along the way (see TODO)
 
@@ -96,8 +99,6 @@ first real program landed in Milestone 13:
 
 ## Phase 4 — Beyond
 
-- User space: see the recorded plan above (Step A rings + SYSCALL/SYSRET,
-  Step B isolation)
 - Filesystem: read-only first (RAM disk or simple partition). Resources get
   capabilities (ABI already shaped for it — no fds, ever).
 - Networking: no-timing-rush; driver work only after scheduling is solid.
