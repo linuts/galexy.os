@@ -12,10 +12,10 @@
 //! higher-half shared, user region empty) and mapping through a NON-active
 //! tree rooted at an arbitrary frame, via the physical-memory mapping.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use spin::Mutex;
-use x86_64::registers::control::Cr3;
+use x86_64::registers::control::{Cr3, Cr3Flags};
 use x86_64::structures::paging::{
     FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB,
     Translate,
@@ -28,8 +28,11 @@ use crate::serial_println;
 static MAPPER: Mutex<Option<OffsetPageTable<'static>>> = Mutex::new(None);
 /// Set by [`init`]; all ops panic before that.
 static READY: AtomicBool = AtomicBool::new(false);
-/// Physical-memory offset (from `BOOTLOADER_CONFIG`); `None` until init.
+/// Physical-memory offset (from `BOOTLOADER_CONFIG`); `None` before init.
 static PHYS_OFFSET: Mutex<Option<VirtAddr>> = Mutex::new(None);
+/// The kernel's page-table root (physical address), cached at [`init`].
+/// Every FreshL4 tree shares the kernel half of this table verbatim.
+static KERNEL_CR3: AtomicU64 = AtomicU64::new(0);
 
 /// Physical-memory offset accessor for internal use (panics if unset).
 ///
@@ -58,8 +61,36 @@ pub fn init(phys_offset: u64) {
     // only ever accessed through the MAPPER lock below.
     *mapper = Some(unsafe { OffsetPageTable::new(level_4_table, VirtAddr::new(phys_offset)) });
     drop(mapper);
+    // Cache the kernel's table root once (the bootloader's active CR3).
+    let (kernel_frame, _) = Cr3::read();
+    KERNEL_CR3.store(kernel_frame.start_address().as_u64(), Ordering::Relaxed);
     READY.store(true, Ordering::Relaxed);
     serial_println!("[mm] page mapper ready");
+}
+
+/// The kernel's page-table root (physical frame), cached at [`init`].
+pub fn kernel_cr3() -> PhysFrame<Size4KiB> {
+    let addr = KERNEL_CR3.load(Ordering::Relaxed);
+    assert!(addr != PhysAddr::zero().as_u64(), "paging: kernel CR3 not cached (init?)");
+    // SAFETY: the cached address came from a real Cr3::read(); frame lookup
+    // is infallible for an aligned 4 KiB frame base.
+    unsafe { PhysFrame::from_start_address_unchecked(PhysAddr::new(addr)) }
+}
+
+/// Installs `frame` as CR3 (no-op when it's already active — the Redox
+/// pattern: swapping costs a full TLB flush, so only swap when different).
+///
+/// Runs with IRQs off (callers are the switch paths under the gate).
+pub fn install_cr3(frame: PhysFrame<Size4KiB>) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let (current, _) = Cr3::read();
+        if current != frame {
+            // SAFETY: `frame` heads a complete page-table tree whose kernel
+            // half is shared with the table currently active (the FreshL4
+            // contract), so the switch is safe from any kernel context.
+            unsafe { Cr3::write(frame, Cr3Flags::empty()) }
+        }
+    });
 }
 
 /// Returns a mutable reference to the active level-4 page table.

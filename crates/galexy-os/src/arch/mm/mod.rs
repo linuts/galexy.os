@@ -14,8 +14,8 @@ mod paging;
 
 pub mod heap;
 pub use paging::{
-    frame_virt, map_page, map_page_flags, phys_to_virt, top_user_p4_index, translate, unmap_page,
-    FreshL4, with_table,
+    frame_virt, install_cr3, kernel_cr3, map_page, map_page_flags, phys_to_virt,
+    top_user_p4_index, translate, unmap_page, FreshL4, with_table,
 };
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

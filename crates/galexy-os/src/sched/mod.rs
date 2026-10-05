@@ -21,7 +21,7 @@ use core::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use spin::Mutex;
 use x86_64::instructions::interrupts;
 use x86_64::structures::paging::{Page, PageTableFlags, PhysFrame, Size4KiB};
-use x86_64::VirtAddr;
+use x86_64::{PhysAddr, VirtAddr};
 
 use crate::arch::mm;
 use crate::serial_println;
@@ -178,6 +178,10 @@ struct Thread {
     /// User tasks only: mapped scratch page + frame — reaped like the code
     /// page.
     user_scratch: Option<(Page, PhysFrame<Size4KiB>)>,
+    /// The task's page-table root (physical address). `0` = the kernel's
+    /// table (Step A: every task shares it; Step B: only kernel threads —
+    /// user tasks get a FreshL4 at spawn).
+    cr3: AtomicU64,
 }
 
 /// User-stack descriptor for the reaper's unmap+free pass.
@@ -207,6 +211,25 @@ static LAST_SERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
 static MAIN_FX: Mutex<FxArea> = Mutex::new(FxArea::new());
 /// CPU ticks charged to the main loop.
 static MAIN_TICKS: AtomicU64 = AtomicU64::new(0);
+
+/// Installs the CR3 for the task being entered (switch-in hook, callers are
+/// under the IRQ gate). `cr3_addr == 0` = kernel table.
+///
+/// Safe-by-construction: every task table shares the kernel half of the
+/// boot table (the FreshL4 contract), so the kernel structures the switch
+/// machinery touches (locks, fx areas, stacks) remain mapped across the
+/// swap.
+fn enter_task_cr3(cr3_addr: u64) {
+    let frame = if cr3_addr == 0 {
+        mm::kernel_cr3()
+    } else {
+        // SAFETY: the address came from a real FreshL4 allocation (aligned
+        // 4 KiB frame base).
+        PhysFrame::from_start_address(PhysAddr::new(cr3_addr))
+            .expect("sched: corrupt task CR3 address")
+    };
+    mm::install_cr3(frame);
+}
 
 /// Marks the CURRENT thread as exited. Called by the trampoline when a
 /// thread's entry returns — the thread keeps executing until the next timer
@@ -328,6 +351,7 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) {
             user_stack: None,
             user_code: None,
             user_scratch: None,
+            cr3: AtomicU64::new(0),
         });
         serial_println!("[sched] thread '{}' ready", name);
     });
@@ -460,6 +484,7 @@ pub fn spawn_user_task(
             }),
             user_code: Some((code_page, code_frame)),
             user_scratch: Some((Page::containing_address(scratch), scratch_frame)),
+            cr3: AtomicU64::new(0),
         });
         serial_println!(
             "[sched] user task '{}' ready (p4={}, code @ {:#x}, ustack top {:#x}, kstack top {:#x})",
@@ -571,12 +596,17 @@ pub unsafe fn syscall_handoff(frame: *mut context::Context, exit: bool) -> u64 {
         debug_assert!(scans > 0, "handoff rotation scan unwound without main");
         LAST_SERVED.store(cand, Ordering::Relaxed);
 
-        let (who, ctx, rsp0) = match cand {
-            0 => (0usize, MAIN_CTX.load(Ordering::Relaxed), None),
+        let (who, ctx, rsp0, cr3) = match cand {
+            0 => (0usize, MAIN_CTX.load(Ordering::Relaxed), None, 0),
             s => {
                 let t2 = &threads[s - 1];
                 let rsp0 = t2.is_user.then_some(t2.kstack_top);
-                (s, t2.ctx.load(Ordering::Relaxed), rsp0)
+                (
+                    s,
+                    t2.ctx.load(Ordering::Relaxed),
+                    rsp0,
+                    t2.cr3.load(Ordering::Relaxed),
+                )
             }
         };
         assert!(ctx != 0, "handoff: entering a task with no saved context");
@@ -584,6 +614,7 @@ pub unsafe fn syscall_handoff(frame: *mut context::Context, exit: bool) -> u64 {
         if let Some(top) = rsp0 {
             crate::arch::set_tss_rsp0(VirtAddr::new(top));
         }
+        enter_task_cr3(cr3);
         CURRENT.store(who, Ordering::Relaxed);
         let fx_ptr = match cand {
             0 => (&*MAIN_FX.lock()) as *const FxArea as u64,
@@ -677,27 +708,37 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
             return None;
         }
 
-        let (who, ctx, fx_ptr, rsp0) = match next_slot {
+        let (who, ctx, fx_ptr, rsp0, cr3) = match next_slot {
             0 => (
                 0usize,
                 MAIN_CTX.load(Ordering::Relaxed),
                 (&*MAIN_FX.lock()) as *const FxArea as u64,
                 None,
+                0,
             ),
             s => {
                 let t = &threads[s - 1];
                 let rsp0 = t.is_user.then_some(t.kstack_top);
-                (s, t.ctx.load(Ordering::Relaxed), t.fx as u64, rsp0)
+                (
+                    s,
+                    t.ctx.load(Ordering::Relaxed),
+                    t.fx as u64,
+                    rsp0,
+                    t.cr3.load(Ordering::Relaxed),
+                )
             }
         };
         // Ring-3 readiness BEFORE entering the chosen task: a user task's
         // ring 3→0 crossings (timer IRQ via TSS.RSP0, later the syscall
         // entry via the kstack registry) must push onto ITS OWN kernel
-        // stack. Kernel threads/main reset the registry.
+        // stack. Kernel threads/main reset the registry. (Step B: CR3 is
+        // installed for the incoming task — the kernel half is shared by
+        // every task table, so the switch is safe mid-flight.)
         crate::arch::syscall::set_task_kstack(rsp0.unwrap_or(0));
         if let Some(top) = rsp0 {
             crate::arch::set_tss_rsp0(VirtAddr::new(top));
         }
+        enter_task_cr3(cr3);
         CURRENT.store(who, Ordering::Relaxed);
         context::fx_restore(fx_ptr as *const u8);
         Some(ctx)
