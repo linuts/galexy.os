@@ -26,8 +26,8 @@
 //! follows in a later commit, so nothing distinguishes CPU 0 from an AP yet).
 
 use core::arch::{asm, global_asm};
-use x86_64::PhysAddr;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use x86_64::PhysAddr;
 
 use crate::serial_println;
 
@@ -224,7 +224,11 @@ pub fn init_percpu(cpu_index: usize, apic_id: u32) {
 
     GS_READY.store(true, Ordering::Release);
     let _ = ONLINE.fetch_add(1, Ordering::Relaxed);
-    serial_println!("[cpu] per-cpu GS live (slot {} @ {:#x})", cpu_index, readback);
+    serial_println!(
+        "[cpu] per-cpu GS live (slot {} @ {:#x})",
+        cpu_index,
+        readback
+    );
 }
 
 /// BSP bring-up entry (slot 0; called by `arch::init`).
@@ -349,9 +353,9 @@ global_asm!(
     "sub eax, 5",
     // LAYOUT CONTRACT STEPS (asserted in Rust next to the copy): tramp32
     // = blob+0x100, cont64 = blob+0x200.
-    "sub eax, 0x100",          // eax = (nextE - tramp32)
-    "add eax, 0x200",          // eax = cont64's page offset
-    "add eax, 0x8000",         // → cont64's LINEAR address
+    "sub eax, 0x100",  // eax = (nextE - tramp32)
+    "add eax, 0x200",  // eax = cont64's page offset
+    "add eax, 0x8000", // → cont64's LINEAR address
     // 32 → 64: far return into the 64-bit CS (0x10, L=1 flat). retf
     // (32-bit operand) pops EIP (zero-extended into RIP) then CS.
     "push 0x10",
@@ -397,7 +401,7 @@ unsafe fn stage_trampoline(rank: usize, stack_top: u64) {
     let dst = super::mm::frame_virt(PhysAddr::new(TRAMP_PHYS)).as_mut_ptr::<u8>();
     // The blob occupies [TRAMP_START, TRAMP_END). Layout contracts — the
     // asm's raw pushes/jumps read fixed 0x100 steps (verified, not assumed):
-    let base = core::ptr::addr_of!(TRAMP_START) as *const u8 as u64;
+    let base = core::ptr::addr_of!(TRAMP_START) as u64;
     assert_eq!(
         core::ptr::addr_of!(TRAMP32) as u64 - base,
         0x100,
@@ -408,7 +412,7 @@ unsafe fn stage_trampoline(rank: usize, stack_top: u64) {
         0x200,
         "trampoline: the 64-bit continuation must sit at blob offset 0x200"
     );
-    let src = core::ptr::addr_of!(TRAMP_START) as *const u8;
+    let src = core::ptr::addr_of!(TRAMP_START);
     let len = core::ptr::addr_of!(TRAMP_END) as u64 - src as u64;
     // The blob must end below the data slots (the 16-bit section reaching
     // tramp32 at +0x100 was verified by the balign + asserts above).
@@ -436,7 +440,7 @@ unsafe fn stage_trampoline(rank: usize, stack_top: u64) {
         unsafe { addr.write_volatile(v) };
     };
     put_entry(0, 0); // null
-    // code32: base = page base, limit = 0xFFF, D=1, type 9A, G=0.
+                     // code32: base = page base, limit = 0xFFF, D=1, type 9A, G=0.
     put_entry(1, encode_flat_code(TRAMP_PHYS, 0x0FFF, false));
     // code64: L=1 flat code (base/limit ignored in long mode).
     put_entry(2, 0x00AF_9A00_0000_FFFF);
@@ -464,15 +468,15 @@ const fn encode_flat_code(base: u64, limit: u64, l: bool) -> u64 {
     // [47:40] type/flags · [51:48] limit 16..19 · [55:52] G,D/B,L,AVL ·
     // [63:56] base 24..31
     let mut raw = 0u64;
-    raw |= limit & 0xFFFF;                       // limit 0..15
-    raw |= (base & 0xFF) << 16;                  // base 0..7
-    raw |= ((base >> 8) & 0xFF) << 24;           // base 8..15
-    raw |= ((base >> 16) & 0xFF) << 32;          // base 16..23
-    raw |= 0x9A << 40;                           // PRESENT ring-0 code, read
-    raw |= ((limit >> 16) & 0xF) << 48;          // limit 16..19
+    raw |= limit & 0xFFFF; // limit 0..15
+    raw |= (base & 0xFF) << 16; // base 0..7
+    raw |= ((base >> 8) & 0xFF) << 24; // base 8..15
+    raw |= ((base >> 16) & 0xFF) << 32; // base 16..23
+    raw |= 0x9A << 40; // PRESENT ring-0 code, read
+    raw |= ((limit >> 16) & 0xF) << 48; // limit 16..19
     let flags: u64 = if l { 0b1010 } else { 0b0100 }; // G, D|L, AVL
     raw |= flags << 52;
-    raw |= ((base >> 24) & 0xFF) << 56;          // base 24..31
+    raw |= ((base >> 24) & 0xFF) << 56; // base 24..31
     raw
 }
 
@@ -495,7 +499,10 @@ pub fn boot_aps() {
     for rank in 1..ids.len() {
         let apic_id = ids[rank];
         if rank >= MAX_CPUS {
-            serial_println!("[cpu] warning: AP beyond MAX_CPUS skipped (apic id {})", apic_id);
+            serial_println!(
+                "[cpu] warning: AP beyond MAX_CPUS skipped (apic id {})",
+                apic_id
+            );
             continue;
         }
         let stack = &AP_STACKS[rank - 1];
@@ -512,7 +519,8 @@ pub fn boot_aps() {
         crate::arch::timer::delay_ms(1);
         crate::arch::apic::send_sipi(apic_id, TRAMPOLINE_PHYS);
 
-        let magic_ptr = super::mm::frame_virt(PhysAddr::new(TRAMPOLINE_PHYS + 0xF20)).as_mut_ptr::<u64>();
+        let magic_ptr =
+            super::mm::frame_virt(PhysAddr::new(TRAMPOLINE_PHYS + 0xF20)).as_mut_ptr::<u64>();
         // SAFETY: fixed handoff slot (contract with the asm).
         let deadline = 50_000_000usize;
         let mut i = 0;
@@ -520,16 +528,16 @@ pub fn boot_aps() {
             core::hint::spin_loop();
             i += 1;
             if i > deadline {
-                serial_println!("[cpu] warning: ap rank {} (apic id {}) never came online", rank, apic_id);
+                serial_println!(
+                    "[cpu] warning: ap rank {} (apic id {}) never came online",
+                    rank,
+                    apic_id
+                );
                 break;
             }
         }
         if i <= deadline {
-            serial_println!(
-                "[cpu] ap rank {} (apic id {}) online",
-                rank,
-                apic_id
-            );
+            serial_println!("[cpu] ap rank {} (apic id {}) online", rank, apic_id);
         }
     }
     // All online CPUs counted: the BSP re-arms ITS timer with the share-

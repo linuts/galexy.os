@@ -146,7 +146,7 @@ const STATE_FREED: u8 = 2; // stack + fx freed; rotation-skipped tombstone
 /// Magic word painted at the very bottom of each thread's stack (lowest
 /// address). A stack that overflows far enough to corrupt the heap walks
 /// downward through this word first — reaping detects the clobber.
-const STACK_CANARY: u64 = 0xCA_7A_B1E_5_00D_F00D;
+const STACK_CANARY: u64 = 0x0CA7_AB1E_500D_F00D;
 
 struct Thread {
     /// For status/ps display.
@@ -227,7 +227,8 @@ impl CpuSched {
     }
 }
 
-static CPU_SCHED: [CpuSched; crate::arch::cpu::MAX_CPUS] = [const { CpuSched::new() }; crate::arch::cpu::MAX_CPUS];
+static CPU_SCHED: [CpuSched; crate::arch::cpu::MAX_CPUS] =
+    [const { CpuSched::new() }; crate::arch::cpu::MAX_CPUS];
 
 /// This CPU's rotation state. Per-CPU ownership (fenced by IRQ gating in
 /// every user); NEVER locks CPU_SCHED[i] from a foreign CPU.
@@ -278,7 +279,9 @@ pub fn thread_exit() {
     assert!(slot != 0, "thread_exit: called from the main loop");
     interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        threads[slot - 1].state.store(STATE_EXITED, Ordering::Release);
+        threads[slot - 1]
+            .state
+            .store(STATE_EXITED, Ordering::Release);
         serial_println!("[sched] thread '{}' exited", threads[slot - 1].name);
     });
 }
@@ -303,7 +306,12 @@ pub fn reap() {
                 continue; // another CPU's thread — its reaper owns it
             }
             if t.state
-                .compare_exchange(STATE_EXITED, STATE_FREED, Ordering::AcqRel, Ordering::Relaxed)
+                .compare_exchange(
+                    STATE_EXITED,
+                    STATE_FREED,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
                 .is_err()
             {
                 continue; // running or already freed
@@ -320,7 +328,10 @@ pub fn reap() {
             };
             let canary = unsafe { (canary_stack as *const u64).read_unaligned() };
             if canary != STACK_CANARY {
-                panic!("reap: stack canary corrupted for thread '{}' (stack overflow)", t.name);
+                panic!(
+                    "reap: stack canary corrupted for thread '{}' (stack overflow)",
+                    t.name
+                );
             }
             // SAFETY: the fx area was leaked at spawn; its slot is a
             // tombstone now — no code will dereference it again.
@@ -576,8 +587,7 @@ pub fn spawn_user_task(
         // stack_top of the task's user stack; the builder writes downward.
         let stack_top = (stack_base + (USER_STACK_PAGES * 4096) as u64).as_u64() & !0xF;
         debug_assert!(stack_top.is_multiple_of(4096));
-        let fab_vaddr =
-            mm::frame_virt(stack_frames[USER_STACK_PAGES - 1].start_address()) + 4096;
+        let fab_vaddr = mm::frame_virt(stack_frames[USER_STACK_PAGES - 1].start_address()) + 4096;
         let (cs, ss) = context::user_cs_ss();
         let ctx = unsafe {
             context::init_user_frame(
@@ -643,8 +653,7 @@ pub fn threads_count() -> usize {
 pub fn thread_owner(name: &str) -> Option<u8> {
     interrupts::without_interrupts(|| {
         THREADS.lock().iter().find_map(|t| {
-            (t.name == name && t.state.load(Ordering::Relaxed) == STATE_RUNNING)
-                .then_some(t.owner)
+            (t.name == name && t.state.load(Ordering::Relaxed) == STATE_RUNNING).then_some(t.owner)
         })
     })
 }
@@ -678,13 +687,13 @@ pub fn thread_stats() -> alloc::vec::Vec<(&'static str, u64)> {
 /// program's exit (syscall tombstone) flips it to false within one gate.
 pub fn is_name_running(name: &str) -> bool {
     interrupts::without_interrupts(|| {
-        THREADS.lock().iter().any(|t| {
-            t.state.load(Ordering::Relaxed) == STATE_RUNNING && t.name == name
-        })
+        THREADS
+            .lock()
+            .iter()
+            .any(|t| t.state.load(Ordering::Relaxed) == STATE_RUNNING && t.name == name)
     })
 }
 
-/// CPU ticks charged to the main loop (slot 0).
 // (main_ticks moved into the per-CPU table above.)
 
 /// The current rotation slot (0 = main loop; otherwise thread index + 1).
@@ -720,7 +729,11 @@ pub fn slot_is_user(slot: usize) -> bool {
 ///
 /// `frame` must be the CURRENT task's uniform context frame on its kernel
 /// stack, exactly as built by the syscall entry.
-pub unsafe fn syscall_handoff(frame: *mut context::Context, exit: bool, reason: &'static str) -> u64 {
+pub unsafe fn syscall_handoff(
+    frame: *mut context::Context,
+    exit: bool,
+    reason: &'static str,
+) -> u64 {
     let me = cpu_sched();
     let slot = me.current.load(Ordering::Relaxed);
     assert!(slot != 0, "syscall_handoff: no task current (cpl bug?)");

@@ -156,11 +156,17 @@ unsafe extern "C" fn syscall_rust(frame: *mut crate::sched::context::Context, sy
     // SYSCALL = kernel bug (or an ABI cheat): fail loudly.
     let slot = crate::sched::current_slot();
     if slot == 0 {
-        serial_println!("[syscall] BUG: syscall from kernel context (rax={:#x})", sysno);
+        serial_println!(
+            "[syscall] BUG: syscall from kernel context (rax={:#x})",
+            sysno
+        );
         crate::exit_qemu(crate::QemuExitCode::Failed);
     }
     if !crate::sched::slot_is_user(slot) {
-        serial_println!("[syscall] BUG: syscall from a kernel thread (rax={:#x})", sysno);
+        serial_println!(
+            "[syscall] BUG: syscall from a kernel thread (rax={:#x})",
+            sysno
+        );
         crate::exit_qemu(crate::QemuExitCode::Failed);
     }
 

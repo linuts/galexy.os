@@ -86,8 +86,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     // page through its PHYSICAL frame (the phys map is present in every
     // address space; the task's own table is active while it runs). Peek,
     // then reap — the reaper frees the scratch frame, so peek first.
-    let scratch_virt: *const u32 =
-        galexy_os::arch::mm::frame_virt(region.scratch_phys).as_ptr();
+    let scratch_virt: *const u32 = galexy_os::arch::mm::frame_virt(region.scratch_phys).as_ptr();
     loop {
         x86_64::instructions::hlt();
         // SAFETY: scratch is mapped until the reaper frees it; our peek

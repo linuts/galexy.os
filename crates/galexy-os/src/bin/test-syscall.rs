@@ -58,8 +58,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     // preempts it and rotates us back — meanwhile the task's OWN table,
     // not the kernel's, is active, so the user-space alias is unreachable
     // from kernel context.
-    let scratch_virt: *const u64 =
-        galexy_os::arch::mm::frame_virt(region.scratch_phys).as_ptr();
+    let scratch_virt: *const u64 = galexy_os::arch::mm::frame_virt(region.scratch_phys).as_ptr();
     let mut elapsed = 0u64;
     let got = loop {
         x86_64::instructions::hlt();

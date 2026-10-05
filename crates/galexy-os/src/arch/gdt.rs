@@ -82,12 +82,7 @@ impl CpuSlot {
             "gdt: CPU slot built twice"
         );
         // SAFETY: exclusive — this CPU's own bring-up; no other reader.
-        let (tss, gdt) = unsafe {
-            (
-                &mut *self.tss.get(),
-                &mut *self.gdt.get(),
-            )
-        };
+        let (tss, gdt) = unsafe { (&mut *self.tss.get(), &mut *self.gdt.get()) };
         // Stack grows downward: point at the *top* of the reserved range.
         tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] =
             VirtAddr::from_ptr(&self.df_stack) + DOUBLE_FAULT_STACK_SIZE as u64;
@@ -103,7 +98,11 @@ impl CpuSlot {
 
         // Lock in the safety net: selector expectations from the consts
         // above (append order is what makes every CPU's tables identical).
-        debug_assert_eq!(KERNEL_CS_SELECTOR, selector_of_entry(0), "kernel cs selector");
+        debug_assert_eq!(
+            KERNEL_CS_SELECTOR,
+            selector_of_entry(0),
+            "kernel cs selector"
+        );
         debug_assert_eq!(USER_CS_SELECTOR, selector_of_entry(2), "user cs selector");
         debug_assert_eq!(USER_DS_SELECTOR, selector_of_entry(3), "user ds selector");
         debug_assert_eq!(TSS_SELECTOR, selector_of_entry(4), "tss selector");

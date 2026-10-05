@@ -143,7 +143,9 @@ struct Rsdp {
 /// Reads `n` little-endian bytes at `at` inside `buf` (caller bounds-checks;
 /// slice indexing panics loudly otherwise).
 fn le(buf: &[u8], at: usize, n: usize) -> u64 {
-    (0..n).rev().fold(0u64, |acc, i| (acc << 8) | u64::from(buf[at + i]))
+    (0..n)
+        .rev()
+        .fold(0u64, |acc, i| (acc << 8) | u64::from(buf[at + i]))
 }
 
 /// Checksum: the byte sum mod 256 must be 0.
@@ -166,7 +168,10 @@ fn load_rsdp(phys: u64, phys_offset: u64) -> Rsdp {
     let rsdt_phys = le(bytes, 16, 4);
     let xsdt_phys = if revision >= 2 {
         let len = le(bytes, 20, 4) as usize;
-        assert_eq!(len, 36, "acpi: RSDP v2 must be exactly 36 bytes (got {len})");
+        assert_eq!(
+            len, 36,
+            "acpi: RSDP v2 must be exactly 36 bytes (got {len})"
+        );
         assert!(
             checksum_ok(&bytes[..36]),
             "acpi: RSDP v2 extended checksum mismatch"
@@ -175,7 +180,10 @@ fn load_rsdp(phys: u64, phys_offset: u64) -> Rsdp {
     } else {
         None
     };
-    Rsdp { rsdt_phys, xsdt_phys }
+    Rsdp {
+        rsdt_phys,
+        xsdt_phys,
+    }
 }
 
 /// Maps `phys` as an ACPI table image: reads the length from the header,
@@ -203,7 +211,12 @@ unsafe fn table_bytes(phys: u64, phys_offset: u64) -> &'static [u8] {
 
 /// Returns the physical address of the first `APIC` table under the root
 /// system-description table (`entry_size`: 8 for XSDT, 4 for RSDT).
-fn find_madt(root_phys: u64, phys_offset: u64, entry_size: usize, root_sig: &[u8; 4]) -> Option<u64> {
+fn find_madt(
+    root_phys: u64,
+    phys_offset: u64,
+    entry_size: usize,
+    root_sig: &[u8; 4],
+) -> Option<u64> {
     // SAFETY: the root-table address comes from the validated RSDP.
     let root = unsafe { table_bytes(root_phys, phys_offset) };
     assert_eq!(&root[0..4], root_sig, "acpi: root table signature mismatch");
@@ -213,22 +226,20 @@ fn find_madt(root_phys: u64, phys_offset: u64, entry_size: usize, root_sig: &[u8
         root_sig
     );
 
-    (36..root.len())
-        .step_by(entry_size)
-        .find_map(|off| {
-            let child = le(root, off, entry_size);
-            if child == 0 {
-                return None;
-            }
-            // SAFETY: child-table addresses come from the validated root.
-            let bytes = unsafe { table_bytes(child, phys_offset) };
-            assert!(
-                checksum_ok(bytes),
-                "acpi: child table checksum mismatch at phys {:#x}",
-                child
-            );
-            (&bytes[0..4] == b"APIC").then_some(child)
-        })
+    (36..root.len()).step_by(entry_size).find_map(|off| {
+        let child = le(root, off, entry_size);
+        if child == 0 {
+            return None;
+        }
+        // SAFETY: child-table addresses come from the validated root.
+        let bytes = unsafe { table_bytes(child, phys_offset) };
+        assert!(
+            checksum_ok(bytes),
+            "acpi: child table checksum mismatch at phys {:#x}",
+            child
+        );
+        (&bytes[0..4] == b"APIC").then_some(child)
+    })
 }
 
 fn parse_madt(phys: u64, phys_offset: u64) -> Madt {
@@ -302,8 +313,8 @@ fn parse_madt(phys: u64, phys_offset: u64) -> Madt {
         off += len;
     }
 
-    let boot_cpu_apic_id = boot_cpu
-        .unwrap_or_else(|| panic!("acpi: MADT lists no enabled processor"));
+    let boot_cpu_apic_id =
+        boot_cpu.unwrap_or_else(|| panic!("acpi: MADT lists no enabled processor"));
     let (ioapic_base, ioapic_gsi_base) =
         ioapic.unwrap_or_else(|| panic!("acpi: no I/O APIC in the MADT"));
     assert!(lapic_base != 0, "acpi: LAPIC base is 0");

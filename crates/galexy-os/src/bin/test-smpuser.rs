@@ -12,9 +12,7 @@ extern crate alloc;
 
 use bootloader_api::{entry_point, BootInfo};
 use galexy_abi::{CapRights, Syscall};
-use galexy_os::{
-    arch, drivers::screen, exit_qemu, println, sched, serial_println, QemuExitCode,
-};
+use galexy_os::{arch, drivers::screen, exit_qemu, println, sched, serial_println, QemuExitCode};
 
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
@@ -71,18 +69,24 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     // Spawn A (pins BSP) then B (pins AP) — natural RR order.
     // spawn_user_task returns the pin decision — read it race-free.
     let (region_a, owner_a) = sched::spawn_user_task("cpu0", |gr| {
-        blob(WELCOME_A, gr.code.as_u64(), console_cap.bits(), gr.scratch.as_u64())
+        blob(
+            WELCOME_A,
+            gr.code.as_u64(),
+            console_cap.bits(),
+            gr.scratch.as_u64(),
+        )
     });
     let (region_b, owner_b) = sched::spawn_user_task("cpu1", |gr| {
-        blob(WELCOME_B, gr.code.as_u64(), console_cap.bits(), gr.scratch.as_u64())
+        blob(
+            WELCOME_B,
+            gr.code.as_u64(),
+            console_cap.bits(),
+            gr.scratch.as_u64(),
+        )
     });
     assert_eq!(owner_a, 0, "first user task must pin to the BSP");
     assert_eq!(owner_b, 1, "second user task must pin to the AP");
-    serial_println!(
-        "[test-smpuser] pinned: a->cpu{} b->cpu{}",
-        owner_a,
-        owner_b
-    );
+    serial_println!("[test-smpuser] pinned: a->cpu{} b->cpu{}", owner_a, owner_b);
 
     // The scratch addrs (user VAs) fold to the same bits per task; the
     // PHYSICAL frame addresses differ. Keep them for peeking.

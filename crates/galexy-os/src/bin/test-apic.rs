@@ -50,7 +50,11 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     const REG_LVT_TIMER: u32 = 0x320;
     let lvt = apic::reg(REG_LVT_TIMER);
     serial_println!("[test-apic] LVT timer: {:#x}", lvt);
-    assert_eq!(lvt & 0xFF, u32::from(apic::timer_interrupt_id()), "timer must deliver on vector 32");
+    assert_eq!(
+        lvt & 0xFF,
+        u32::from(apic::timer_interrupt_id()),
+        "timer must deliver on vector 32"
+    );
     assert_eq!(lvt & (1 << 16), 0, "the timer LVT must be unmasked");
     assert_ne!(lvt & (1 << 17), 0, "the timer LVT must be periodic");
     let tpm = apic::ticks_per_ms();

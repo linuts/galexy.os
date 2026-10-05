@@ -19,10 +19,7 @@ const MSG: &[u8] = b"churn";
 
 /// Blob: jmp over message → write(msg) → yield → write(msg) →
 /// scratch mark → exit. (Same shape as test-user's program.)
-fn build_blob(
-    console_cap_bits: u64,
-    gr: sched::UserRegion,
-) -> alloc::vec::Vec<u8> {
+fn build_blob(console_cap_bits: u64, gr: sched::UserRegion) -> alloc::vec::Vec<u8> {
     let mut code: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
     code.extend_from_slice(&[0xEB, MSG.len() as u8]);
     code.extend_from_slice(MSG);

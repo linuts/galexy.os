@@ -180,10 +180,7 @@ use std::os::unix::net::UnixStream;
 /// reply line (`return`/`error`), skipping events (which must NOT be
 /// silently dropped from the stream's perspective: they are just consumed,
 /// exactly as the greeting/handshake reader does).
-pub fn qmp_send_keys(
-    reader: &mut BufReader<UnixStream>,
-    qcodes: &[&str],
-) {
+pub fn qmp_send_keys(reader: &mut BufReader<UnixStream>, qcodes: &[&str]) {
     for code in qcodes {
         let cmd = format!(
             "{{\"execute\":\"send-key\",\"arguments\":{{\"keys\":[{{\"type\":\"qcode\",\"data\":\"{code}\"}}]}}}}\n"
@@ -226,7 +223,10 @@ fn qmp_read_until(reader: &mut BufReader<UnixStream>, needle: &[u8], deadline: I
         match reader.read_line(&mut line) {
             Ok(0) => return false, // EOF: QEMU died
             Ok(_) => seen.push_str(&line),
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+            Err(ref e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
                 std::thread::sleep(Duration::from_millis(20));
                 continue;
             }
@@ -258,7 +258,15 @@ pub fn boot_and_type(
     key_delay: Duration,
     timeout: Duration,
 ) -> String {
-    boot_and_type_on(image.bios.clone(), false, sync_pairs, ready_marker, final_marker, key_delay, timeout)
+    boot_and_type_on(
+        image.bios.clone(),
+        false,
+        sync_pairs,
+        ready_marker,
+        final_marker,
+        key_delay,
+        timeout,
+    )
 }
 
 /// UEFI variant of [`boot_and_type`]: boots the image's UEFI disk under
@@ -271,7 +279,15 @@ pub fn boot_and_type_uefi(
     key_delay: Duration,
     timeout: Duration,
 ) -> String {
-    boot_and_type_on(image.uefi.clone(), true, sync_pairs, ready_marker, final_marker, key_delay, timeout)
+    boot_and_type_on(
+        image.uefi.clone(),
+        true,
+        sync_pairs,
+        ready_marker,
+        final_marker,
+        key_delay,
+        timeout,
+    )
 }
 
 /// Shared body: boots `img_path` (BIOS unless `uefi`, which adds `-bios
@@ -344,8 +360,10 @@ fn boot_and_type_on(
         if Instant::now() > deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("ready marker '{ready_marker}' never appeared; serial:\n{}",
-                std::fs::read_to_string(&serial_path).unwrap_or_default());
+            panic!(
+                "ready marker '{ready_marker}' never appeared; serial:\n{}",
+                std::fs::read_to_string(&serial_path).unwrap_or_default()
+            );
         }
         if std::fs::read_to_string(&serial_path)
             .map(|s| s.contains(ready_marker))
@@ -371,8 +389,10 @@ fn boot_and_type_on(
         std::thread::sleep(key_delay);
         loop {
             if Instant::now() > deadline {
-                panic!("echo '{echo}' never appeared after key '{qcode}'; serial tail:\n{}",
-                    std::fs::read_to_string(&serial_path).unwrap_or_default());
+                panic!(
+                    "echo '{echo}' never appeared after key '{qcode}'; serial tail:\n{}",
+                    std::fs::read_to_string(&serial_path).unwrap_or_default()
+                );
             }
             if child.try_wait().expect("try_wait failed").is_some() {
                 panic!("guest exited mid-typing (key '{qcode}')");
@@ -393,8 +413,10 @@ fn boot_and_type_on(
     if !final_marker.is_empty() {
         loop {
             if Instant::now() > deadline {
-                panic!("final marker '{final_marker}' never appeared; serial tail:\n{}",
-                    std::fs::read_to_string(&serial_path).unwrap_or_default());
+                panic!(
+                    "final marker '{final_marker}' never appeared; serial tail:\n{}",
+                    std::fs::read_to_string(&serial_path).unwrap_or_default()
+                );
             }
             if child.try_wait().expect("try_wait failed").is_some() {
                 panic!("guest exited before the final marker '{final_marker}'");

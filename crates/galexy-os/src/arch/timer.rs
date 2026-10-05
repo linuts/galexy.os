@@ -61,8 +61,8 @@ pub fn delay_ms(ms: u32) {
     const SPEAKER_BIT: u8 = 0x2;
 
     let counts = (PIT_FREQ / 1000) as u16; // divisor for exactly 1 ms
-    // SAFETY: fixed PIT + i8042 gate ports; the channel-2 one-shot dance is
-    // the same pattern the LAPIC calibration uses.
+                                           // SAFETY: fixed PIT + i8042 gate ports; the channel-2 one-shot dance is
+                                           // the same pattern the LAPIC calibration uses.
     unsafe {
         let mut cmd = Port::<u8>::new(PIT_COMMAND_PORT);
         let mut ch2 = Port::<u8>::new(PIT_CHANNEL_2_DATA_PORT);
@@ -73,7 +73,7 @@ pub fn delay_ms(ms: u32) {
             ch2.write((counts & 0xFF) as u8);
             ch2.write((counts >> 8) as u8);
             gate.write(base | GATE_BIT); // rising edge starts the count
-            // OUT2 (bit 5) is LOW while counting, HIGH on expiry.
+                                         // OUT2 (bit 5) is LOW while counting, HIGH on expiry.
             while gate.read() & OUT2_MASK == 0 {
                 core::hint::spin_loop();
             }

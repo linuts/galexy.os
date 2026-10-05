@@ -205,7 +205,7 @@ pub unsafe fn init_stack(stack_top: u64, entry: extern "C" fn(), cs: u64, ss: u6
             stack_top,
             stack_top - 512, // RSP: scratch space below the frame
             trampoline as *const () as u64,
-            entry as u64,
+            entry as *const () as u64,
             cs,
             ss,
         )
@@ -238,7 +238,14 @@ pub unsafe fn init_user_frame(write_top: u64, user_rsp: u64, rip: u64, cs: u64, 
 /// `write_top` must top a fresh, exclusively owned, 16-byte-aligned stack of
 /// at least `INITIAL_CONTEXT_SIZE` bytes; `rip`/`cs`/`ss` must form a valid
 /// entry condition for the frame's privilege level.
-unsafe fn init_frame_stack(write_top: u64, user_rsp: u64, rip: u64, rdi: u64, cs: u64, ss: u64) -> u64 {
+unsafe fn init_frame_stack(
+    write_top: u64,
+    user_rsp: u64,
+    rip: u64,
+    rdi: u64,
+    cs: u64,
+    ss: u64,
+) -> u64 {
     let mut sp = write_top as *mut u64;
     let mut push = |value: u64| {
         // SAFETY: caller guarantees enough stack space above `write_top`.

@@ -117,13 +117,17 @@ fn reg_write(apic: &ApicCtrl, offset: u32, value: u32) {
 
 /// Reads one register (public seam — handlers use it for EOI/ICR work).
 pub fn reg(offset: u32) -> u32 {
-    let apic = APIC.get().unwrap_or_else(|| panic!("apic: not initialized"));
+    let apic = APIC
+        .get()
+        .unwrap_or_else(|| panic!("apic: not initialized"));
     reg_read(apic, offset)
 }
 
 /// Writes one register (public seam — used by `eoi`, timer setup, tests).
 pub fn set_reg(offset: u32, value: u32) {
-    let apic = APIC.get().unwrap_or_else(|| panic!("apic: not initialized"));
+    let apic = APIC
+        .get()
+        .unwrap_or_else(|| panic!("apic: not initialized"));
     reg_write(apic, offset, value);
 }
 
@@ -136,13 +140,18 @@ pub fn eoi() {
 
 /// The virtual address of the mapped LAPIC register page (xAPIC only).
 pub fn lapic_page() -> VirtAddr {
-    let apic = APIC.get().unwrap_or_else(|| panic!("apic: not initialized"));
-    apic.page.unwrap_or_else(|| panic!("apic: x2APIC mode has no MMIO page"))
+    let apic = APIC
+        .get()
+        .unwrap_or_else(|| panic!("apic: not initialized"));
+    apic.page
+        .unwrap_or_else(|| panic!("apic: x2APIC mode has no MMIO page"))
 }
 
 /// The detected mode (`Once`: fixed at [`init`]).
 pub fn mode() -> LapicMode {
-    APIC.get().unwrap_or_else(|| panic!("apic: not initialized")).mode
+    APIC.get()
+        .unwrap_or_else(|| panic!("apic: not initialized"))
+        .mode
 }
 
 /// The timer's delivery vector (single source of truth: `pics::`'s constant).
@@ -196,17 +205,17 @@ pub fn bring_up(lapic_base: u64) {
         // x2APIC replaces MMIO with MSRs; the MADT base is informational.
         None
     };
-    let ctrl = ApicCtrl { mode: detected, page };
+    let ctrl = ApicCtrl {
+        mode: detected,
+        page,
+    };
     // First caller wins (the BSP normally); an AP racing a fresh detection
     // of an ALREADY-armed global is fine — mode/page are machine-wide facts.
     if APIC.get().is_none() {
         APIC.call_once(|| ctrl);
     } else {
         let cached = APIC.get().unwrap();
-        assert_eq!(
-            cached.mode, detected,
-            "apic: mode disagreed between CPUs"
-        );
+        assert_eq!(cached.mode, detected, "apic: mode disagreed between CPUs");
     }
 
     // Enable it: spurious vector with bit 8 (APIC enable via the spurious
@@ -248,10 +257,9 @@ fn map_lapic_page(base: u64) -> VirtAddr {
     const LAPIC_P4: u16 = 200;
     // A fixed virtual address under that P4 entry (canonical lower-half
     // sign-extension happens via the address math below).
-    let virt = VirtAddr::new((u64::from(LAPIC_P4) << 39) | 0x0);
+    let virt = VirtAddr::new(u64::from(LAPIC_P4) << 39);
     let page = Page::<Size4KiB>::containing_address(virt);
-    let frame =
-        PhysFrame::from_start_address(phys).expect("apic: LAPIC base is not frame-aligned");
+    let frame = PhysFrame::from_start_address(phys).expect("apic: LAPIC base is not frame-aligned");
     let flags = PageTableFlags::PRESENT
         | PageTableFlags::WRITABLE
         | PageTableFlags::NO_EXECUTE
@@ -325,7 +333,7 @@ fn init_timer() {
     // Quantize to ticks-per-ms with a floor of 1 (a 0 value would hang the
     // periodic counter). Accuracy: ±2% at the 10 ms window; skews tick rate
     // by at most that — far under the scheduler's needs.
-    let per_ms = (elapsed / u32::from(CAL_MS)).max(1);
+    let per_ms = (elapsed / CAL_MS).max(1);
     TICKS_PER_MS.call_once(|| per_ms);
     serial_println!("[apic] timer calibrated: {} ticks/ms", per_ms);
 }
@@ -340,7 +348,9 @@ fn init_timer() {
 /// Called by the BSP AFTER `boot_aps()` (its ICR must reflect the final
 /// online count) and by each AP right after its LAPIC bring-up.
 pub fn arm_timer() {
-    let icr = ticks_per_ms().saturating_mul(crate::arch::cpu::online() as u32).max(1);
+    let icr = ticks_per_ms()
+        .saturating_mul(crate::arch::cpu::online() as u32)
+        .max(1);
     // Vector 32 (TIMER_INTERRUPT_ID — unchanged naked handler + tick path),
     // periodic (bit 17), unmasked. EOI comes from the timer switch path.
     set_reg(REG_DIV_CONF, DIV_1);
@@ -351,7 +361,11 @@ pub fn arm_timer() {
     serial_println!(
         "[apic] timer armed (periodic, {} ticks {}, cpu {})",
         icr,
-        if crate::arch::cpu::online() > 1 { "1/Ns share" } else { "~1ms" },
+        if crate::arch::cpu::online() > 1 {
+            "1/Ns share"
+        } else {
+            "~1ms"
+        },
         crate::arch::cpu::current_index()
     );
 }
@@ -415,7 +429,9 @@ const ICR_DEST_PHYSICAL: u32 = 0;
 /// Per-CPU by hardware: the WRITER's own LAPIC dispatches the IPI (all
 /// IPIs are sent by the BSP in our flow; ordering writes make that safe).
 pub fn send_ipi(apic_id: u8, delivery: u32, vector: u8, level: bool) {
-    let apic = APIC.get().unwrap_or_else(|| panic!("apic: not initialized"));
+    let apic = APIC
+        .get()
+        .unwrap_or_else(|| panic!("apic: not initialized"));
     let level_bit = if level { ICR_LEVEL_ASSERT } else { 0 };
     let low = (u32::from(vector) & 0xFF) | (delivery << 8) | ICR_DEST_PHYSICAL | level_bit;
     match apic.mode {
@@ -446,5 +462,10 @@ pub fn send_init(apic_id: u8) {
 pub fn send_sipi(apic_id: u8, page_phys: u64) {
     debug_assert_eq!(page_phys & 0xFFF, 0, "SIPI vector must be 4 KiB aligned");
     debug_assert!(page_phys < 0x10_0000, "SIPI page must live under 1 MiB");
-    send_ipi(apic_id, ICR_DELIVERY_STARTUP, (page_phys >> 12) as u8, false);
+    send_ipi(
+        apic_id,
+        ICR_DELIVERY_STARTUP,
+        (page_phys >> 12) as u8,
+        false,
+    );
 }

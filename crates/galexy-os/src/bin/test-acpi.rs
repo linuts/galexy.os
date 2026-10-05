@@ -6,11 +6,7 @@
 #![no_main]
 
 use bootloader_api::{entry_point, BootInfo};
-use galexy_os::{
-    arch,
-    drivers::screen,
-    exit_qemu, println, serial_println, QemuExitCode,
-};
+use galexy_os::{arch, drivers::screen, exit_qemu, println, serial_println, QemuExitCode};
 
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
@@ -45,7 +41,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     // QEMU's being-sane assertions: the LAPIC lives at the classic base
     // under both SeaBIOS and OVMF, the boot I/O APIC covers GSI 0, and at
     // least one CPU is enabled.
-    assert_eq!(lapic, 0xFEE0_0000, "LAPIC base must be the classic MMIO base");
+    assert_eq!(
+        lapic, 0xFEE0_0000,
+        "LAPIC base must be the classic MMIO base"
+    );
     assert_eq!(gsi_base, 0, "boot I/O APIC must cover GSI 0");
     assert!(cpus >= 1, "at least the BSP must be enabled in the MADT");
     assert!(

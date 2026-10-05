@@ -3,7 +3,9 @@
 
 mod common;
 
-use common::{boot, boot_and_type, boot_and_type_uefi, boot_liveness, boot_uefi, image, QEMU_EXIT_SUCCESS};
+use common::{
+    boot, boot_and_type, boot_and_type_uefi, boot_liveness, boot_uefi, image, QEMU_EXIT_SUCCESS,
+};
 use std::time::Duration;
 
 #[test]

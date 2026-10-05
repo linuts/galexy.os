@@ -13,7 +13,6 @@ use x86_64::VirtAddr;
 
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
-
 fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galexy_os::init();
     screen::init(boot_info);
@@ -33,9 +32,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let base = VirtAddr::new(ramdisk_addr);
     // SAFETY: the bootloader mapped the contiguous ramdisk image at
     // [ramdisk_addr, +len) into the kernel's (and thus every) space.
-    let archive = unsafe {
-        core::slice::from_raw_parts(base.as_ptr::<u8>(), ramdisk_len as usize)
-    };
+    let archive = unsafe { core::slice::from_raw_parts(base.as_ptr::<u8>(), ramdisk_len as usize) };
     let mut cursor = TarCursor::new(archive);
     let mut hello_elf: Option<&[u8]> = None;
     while let Some((name, body)) = cursor.next_file() {
@@ -52,7 +49,6 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     // The real program: ELF in, task running.
     let _region = sched::loader::spawn_program("hello", hello_elf);
-
 
     // Main loop: hlt + rotations while the program runs; the entry shim
     // exits the task when main returns 0 — the kernel sees tombstone +

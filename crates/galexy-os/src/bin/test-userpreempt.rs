@@ -74,10 +74,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     // The main loop must ALSO have kept receiving quanta (round-robin
     // fairness across the ring boundary).
     let main_ticks = sched::main_ticks() - main_start;
-    assert!(
-        main_ticks > 1,
-        "main loop consumed no quanta: {main_ticks}"
-    );
+    assert!(main_ticks > 1, "main loop consumed no quanta: {main_ticks}");
 
     println!("[test-userpreempt] ring 3 preempted round-robin works");
     println!("[test-userpreempt] all assertions passed");

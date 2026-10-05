@@ -37,8 +37,7 @@ fn main() {
         // Program bins from the userspace tree: one package dir per
         // program (dir name == package name == bin name), built via the
         // artifact dep env vars (same mechanism the kernel bins use).
-        let userspace_root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../userspace");
+        let userspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../userspace");
         if let Ok(pkg_dirs) = std::fs::read_dir(&userspace_root) {
             for pkg in pkg_dirs.flatten() {
                 if !pkg.path().join("src").is_dir() {
@@ -66,7 +65,10 @@ fn main() {
                 }
                 let main_rs = pkg.path().join("src/main.rs");
                 if main_rs.is_file() {
-                    bin_files.push((pkg_name.clone(), format!("CARGO_BIN_FILE_{}_{}", env_crate, pkg_name)));
+                    bin_files.push((
+                        pkg_name.clone(),
+                        format!("CARGO_BIN_FILE_{}_{}", env_crate, pkg_name),
+                    ));
                 }
                 for (stem, var) in bin_files {
                     if let Some(path) = std::env::var_os(&var) {
@@ -89,8 +91,7 @@ fn main() {
             header.set_size(bytes.len() as u64);
             header.set_mode(0o644);
             header.set_cksum();
-            tar.append_data(&mut header, name, bytes as &[u8])
-                .unwrap();
+            tar.append_data(&mut header, name, bytes as &[u8]).unwrap();
         }
         tar.finish().unwrap();
     }

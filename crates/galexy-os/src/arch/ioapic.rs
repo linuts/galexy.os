@@ -82,14 +82,17 @@ fn write_redtbl(page: VirtAddr, pin: u8, entry: u64) {
 /// Maps the I/O APIC register page (MMIO, PRESENT|RW|NX|uncached).
 fn map_ioapic_page(base: u64) -> VirtAddr {
     let phys = PhysAddr::new(base);
-    assert_eq!(phys.as_u64() & 0xFFF, 0, "ioapic: base must be page-aligned");
+    assert_eq!(
+        phys.as_u64() & 0xFFF,
+        0,
+        "ioapic: base must be page-aligned"
+    );
     // P4 entry 201: sibling of the LAPIC's fixed mapping (200); kernel-half
     // mappings are shared verbatim across every task tree (FreshL4 contract).
     const IOAPIC_P4: u16 = 201;
     let virt = VirtAddr::new(u64::from(IOAPIC_P4) << 39);
     let page = Page::<Size4KiB>::containing_address(virt);
-    let frame =
-        PhysFrame::from_start_address(phys).expect("ioapic: base is not frame-aligned");
+    let frame = PhysFrame::from_start_address(phys).expect("ioapic: base is not frame-aligned");
     let flags = PageTableFlags::PRESENT
         | PageTableFlags::WRITABLE
         | PageTableFlags::NO_EXECUTE

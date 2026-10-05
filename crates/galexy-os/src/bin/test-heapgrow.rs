@@ -62,7 +62,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         assert!(buf.iter().all(|&b| b == 0xAB), "buffer {bi} corrupted");
     }
 
-    println!("[test-heapgrow] heap {} -> {} bytes", initial_size, end_size);
+    println!(
+        "[test-heapgrow] heap {} -> {} bytes",
+        initial_size, end_size
+    );
     println!("[test-heapgrow] all growth checks passed");
     serial_println!("[test-heapgrow] passed");
     exit_qemu(QemuExitCode::Success);

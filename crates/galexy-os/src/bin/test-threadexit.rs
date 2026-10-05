@@ -14,11 +14,7 @@ entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 const TARGET: u64 = 100;
 const THREADS: usize = 3;
 
-static DONE: [AtomicU64; THREADS] = [
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-];
+static DONE: [AtomicU64; THREADS] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
 
 /// Each thread counts to TARGET then RETURNS (exercises trampoline +
 /// thread_exit + reaper).
@@ -69,9 +65,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     loop {
         x86_64::instructions::hlt();
         sched::reap();
-        let all_done = DONE
-            .iter()
-            .all(|c| c.load(Ordering::Relaxed) >= TARGET);
+        let all_done = DONE.iter().all(|c| c.load(Ordering::Relaxed) >= TARGET);
         let none_running = sched::threads_count() == 0;
         if all_done && none_running {
             break;

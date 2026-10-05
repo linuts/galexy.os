@@ -97,7 +97,11 @@ pub fn init() {
 /// when the cap is reached. Frames live in the frame allocator; failing to
 /// get them or map them propagates as an allocation failure (null).
 fn grow() -> bool {
-    if !READY.load(Ordering::Relaxed) || GROWING.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+    if !READY.load(Ordering::Relaxed)
+        || GROWING
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+    {
         return false;
     }
     let current = HEAP_CURRENT_SIZE.load(Ordering::Relaxed);

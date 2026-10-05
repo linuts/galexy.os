@@ -49,7 +49,8 @@ pub fn init() {
         let timer_fn: unsafe extern "C" fn() = crate::sched::context::timer_handler_naked;
         idt[TIMER_INTERRUPT_ID].set_handler_addr(VirtAddr::from_ptr(timer_fn as *const ()));
         let pf_fn: unsafe extern "C" fn() = crate::sched::context::page_fault_handler_naked;
-        idt.page_fault.set_handler_addr(VirtAddr::from_ptr(pf_fn as *const ()));
+        idt.page_fault
+            .set_handler_addr(VirtAddr::from_ptr(pf_fn as *const ()));
     }
     drop(idt);
     // SAFETY: the IDT is never moved (it lives in the static) — the lifetime

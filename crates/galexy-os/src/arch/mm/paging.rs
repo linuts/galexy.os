@@ -43,20 +43,19 @@ static KERNEL_CR3: AtomicU64 = AtomicU64::new(0);
 /// Physical-memory offset accessor for internal use (panics if unset).
 fn phys_offset() -> VirtAddr {
     let v = PHYS_OFFSET.load(Ordering::Relaxed);
-    assert!(v != 0, "paging: not initialized (no physical memory offset)");
+    assert!(
+        v != 0,
+        "paging: not initialized (no physical memory offset)"
+    );
     VirtAddr::new(v)
 }
 
 /// Initializes the mapper over the currently active page tables. Requires
 /// the physical memory mapping from `BOOTLOADER_CONFIG`; idempotent.
 pub fn init(phys_offset: u64) {
-    PHYS_OFFSET.compare_exchange(
-        0,
-        phys_offset,
-        Ordering::Release,
-        Ordering::Relaxed,
-    )
-    .expect("paging: physical memory offset already set to a different value");
+    PHYS_OFFSET
+        .compare_exchange(0, phys_offset, Ordering::Release, Ordering::Relaxed)
+        .expect("paging: physical memory offset already set to a different value");
     let mut mapper = MAPPER.lock();
     if mapper.is_some() {
         return;
@@ -76,7 +75,10 @@ pub fn init(phys_offset: u64) {
 /// The kernel's page-table root (physical frame), cached at [`init`].
 pub fn kernel_cr3() -> PhysFrame<Size4KiB> {
     let addr = KERNEL_CR3.load(Ordering::Relaxed);
-    assert!(addr != PhysAddr::zero().as_u64(), "paging: kernel CR3 not cached (init?)");
+    assert!(
+        addr != PhysAddr::zero().as_u64(),
+        "paging: kernel CR3 not cached (init?)"
+    );
     // SAFETY: the cached address came from a real Cr3::read(); frame lookup
     // is infallible for an aligned 4 KiB frame base.
     unsafe { PhysFrame::from_start_address_unchecked(PhysAddr::new(addr)) }
@@ -121,7 +123,10 @@ fn with_mapper<F>(f: F)
 where
     F: FnOnce(&mut OffsetPageTable<'static>),
 {
-    assert!(READY.load(Ordering::Relaxed), "paging: mapper not initialized");
+    assert!(
+        READY.load(Ordering::Relaxed),
+        "paging: mapper not initialized"
+    );
     x86_64::instructions::interrupts::without_interrupts(|| {
         let mut mapper = MAPPER.lock();
         let mapper = mapper.as_mut().expect("paging: mapper lock init race");
@@ -212,7 +217,10 @@ pub fn translate(virt: VirtAddr) -> Option<PhysAddr> {
 /// change mid-syscall (IF=0; switches happen only via timer/syscall
 /// handoff).
 pub fn translate_active(virt: VirtAddr) -> Option<PhysAddr> {
-    assert!(READY.load(Ordering::Relaxed), "paging: mapper not initialized");
+    assert!(
+        READY.load(Ordering::Relaxed),
+        "paging: mapper not initialized"
+    );
     let (root, _) = Cr3::read();
     let phys = phys_offset();
     // SAFETY: the active CR3 target heads a complete page-table tree; the
@@ -267,7 +275,10 @@ pub fn frame_virt(phys: PhysAddr) -> VirtAddr {
 /// each task's fresh tree is private, so two tasks may pick the SAME index
 /// and still never see each other's pages.
 pub fn top_user_p4_index_in(root: PhysFrame<Size4KiB>) -> Option<u16> {
-    assert!(READY.load(Ordering::Relaxed), "paging: mapper not initialized");
+    assert!(
+        READY.load(Ordering::Relaxed),
+        "paging: mapper not initialized"
+    );
     let phys = phys_offset();
     let l4 = phys + root.start_address().as_u64();
     // SAFETY: `root` heads a complete page-table tree (FreshL4 contract);
@@ -374,7 +385,10 @@ impl FreshL4 {
 ///
 /// The tree must NOT be CR3-active (tombstoned task — the reaper's contract).
 pub fn free_user_tree(root: PhysFrame<Size4KiB>, p4_index: u16) -> usize {
-    assert!(READY.load(Ordering::Relaxed), "paging: mapper not initialized");
+    assert!(
+        READY.load(Ordering::Relaxed),
+        "paging: mapper not initialized"
+    );
     let phys = phys_offset();
     let mut freed = 0usize;
 
@@ -412,10 +426,9 @@ pub fn free_user_tree(root: PhysFrame<Size4KiB>, p4_index: u16) -> usize {
 unsafe fn free_table_level(frame: PhysFrame<Size4KiB>, level: u8) -> usize {
     let phys = phys_offset();
     let mut count = 1usize; // this frame
-    // SAFETY: contract above.
+                            // SAFETY: contract above.
     unsafe {
-        let table: *const PageTable =
-            (phys + frame.start_address().as_u64()).as_ptr();
+        let table: *const PageTable = (phys + frame.start_address().as_u64()).as_ptr();
         for i in 0..512usize {
             let entry_ptr: *const x86_64::structures::paging::page_table::PageTableEntry =
                 table.byte_add(i * 8).cast();

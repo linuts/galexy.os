@@ -60,13 +60,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let o2 = sched::spawn_thread("t2", sleeper);
     let o3 = sched::spawn_thread("t3", sleeper);
     let o4 = sched::spawn_thread("t4", sleeper);
-    serial_println!(
-        "[test-smp] owners: t1={} t2={} t3={} t4={}",
-        o1,
-        o2,
-        o3,
-        o4
-    );
+    serial_println!("[test-smp] owners: t1={} t2={} t3={} t4={}", o1, o2, o3, o4);
     assert_eq!(o1, 0, "first spawn pins to the BSP");
     assert_eq!(o2, 1, "second spawn pins to the AP");
     assert_eq!(o3, 0, "third spawn wraps to the BSP");
@@ -74,7 +68,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     // 3: let them spin a while under preemption — each owner's naked
     // timer switch must serve them (CPU-time ticks accumulate per slot).
-    DEADLINE.store(arch::timer_ticks() + 600, core::sync::atomic::Ordering::Relaxed);
+    DEADLINE.store(
+        arch::timer_ticks() + 600,
+        core::sync::atomic::Ordering::Relaxed,
+    );
     let deadline = arch::timer_ticks() + 600;
     while arch::timer_ticks() < deadline {
         x86_64::instructions::hlt();

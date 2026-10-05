@@ -43,14 +43,16 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let base = VirtAddr::new(ramdisk_addr);
     // SAFETY: the bootloader has mapped the (contiguous) ramdisk image at
     // [ramdisk_addr, +len) for kernel use.
-    let archive = unsafe {
-        core::slice::from_raw_parts(base.as_ptr::<u8>(), ramdisk_len as usize)
-    };
+    let archive = unsafe { core::slice::from_raw_parts(base.as_ptr::<u8>(), ramdisk_len as usize) };
 
     let mut found_banner = false;
     let mut cursor = TarCursor::new(archive);
     while let Some((name, body)) = cursor.next_file() {
-        serial_println!("[test-ramdisk] tar entry: '{}' ({} bytes)", name, body.len());
+        serial_println!(
+            "[test-ramdisk] tar entry: '{}' ({} bytes)",
+            name,
+            body.len()
+        );
         if name == "banner.txt" {
             found_banner = true;
             assert_eq!(body, BANNER_TEXT, "ramdisk banner.txt must roundtrip");

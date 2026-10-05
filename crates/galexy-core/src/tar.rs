@@ -34,22 +34,22 @@ impl<'a> TarCursor<'a> {
             let size = read_size(header)?;
             let typeflag = header[156];
             let entry_end = self.pos + BLOCK + size;
-            let (produced, advance): (Option<(&'a str, &'a [u8])>, usize) =
-                match typeflag {
-                    b'0' | 0 => {
-                        let body = self
-                            .data
-                            .get(self.pos + BLOCK..entry_end.min(self.data.len()))?;
-                        (
-                            Some((name, body)),
-                            BLOCK + usize::from((size % BLOCK != 0) as u8) * (BLOCK - size % BLOCK)
-                                + size,
-                        )
-                    }
-                    // Extensions (pax 'x'/'g'), directories '5', long names
-                    // 'L': skip header + body wholesale.
-                    _ => (None, BLOCK + ceil_to_block(size)),
-                };
+            let (produced, advance): (Option<(&'a str, &'a [u8])>, usize) = match typeflag {
+                b'0' | 0 => {
+                    let body = self
+                        .data
+                        .get(self.pos + BLOCK..entry_end.min(self.data.len()))?;
+                    (
+                        Some((name, body)),
+                        BLOCK
+                            + usize::from((size % BLOCK != 0) as u8) * (BLOCK - size % BLOCK)
+                            + size,
+                    )
+                }
+                // Extensions (pax 'x'/'g'), directories '5', long names
+                // 'L': skip header + body wholesale.
+                _ => (None, BLOCK + ceil_to_block(size)),
+            };
             self.pos += advance;
             if let Some(entry) = produced {
                 return Some(entry);
@@ -65,10 +65,7 @@ impl<'a> TarCursor<'a> {
 
 /// Parses a NUL-terminated name from the header's first 100 bytes.
 fn read_name(header: &[u8]) -> Option<&str> {
-    let end = header[..100]
-        .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(100);
+    let end = header[..100].iter().position(|&b| b == 0).unwrap_or(100);
     core::str::from_utf8(&header[..end]).ok()
 }
 

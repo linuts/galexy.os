@@ -20,8 +20,10 @@ use xmas_elf::ElfFile;
 
 use crate::arch::mm;
 use crate::sched::context;
+use crate::sched::{
+    register_user_task, TaskInit, THREAD_STACK_SIZE, USER_STACK_OFFSET, USER_STACK_PAGES,
+};
 use crate::serial_println;
-use crate::sched::{register_user_task, TaskInit, THREAD_STACK_SIZE, USER_STACK_OFFSET, USER_STACK_PAGES};
 
 /// The result of loading a program.
 #[derive(Debug, Clone, Copy)]
@@ -47,7 +49,7 @@ pub fn spawn_program(name: &'static str, bytes: &[u8]) -> ProgramRegion {
         xmas_elf::header::Type::Executable => {}
         other => panic!("spawn_program: unsupported ELF type {other:?} (static EXEC only)"),
     }
-    let entry_vaddr = elf.header.pt2.entry_point() as u64;
+    let entry_vaddr = elf.header.pt2.entry_point();
 
     interrupts::without_interrupts(|| {
         assert!(
@@ -137,8 +139,7 @@ pub fn spawn_program(name: &'static str, bytes: &[u8]) -> ProgramRegion {
         // top stack page; RIP = the ELF's entry.
         let stack_top = (stack_base + (USER_STACK_PAGES * 4096) as u64).as_u64() & !0xF;
         debug_assert!(stack_top.is_multiple_of(4096));
-        let fab_vaddr =
-            mm::frame_virt(stack_frames[USER_STACK_PAGES - 1].start_address()) + 4096;
+        let fab_vaddr = mm::frame_virt(stack_frames[USER_STACK_PAGES - 1].start_address()) + 4096;
         let (cs, ss) = context::user_cs_ss();
         let ctx = unsafe {
             context::init_user_frame(
@@ -162,7 +163,8 @@ pub fn spawn_program(name: &'static str, bytes: &[u8]) -> ProgramRegion {
             kstack_top,
             cr3: root.start_address().as_u64(),
             user_p4: p4_index_of(image),
-        });        serial_println!(
+        });
+        serial_println!(
             "[loader] program '{}' ready (own tree cr3={:#x}, entry {:#x})",
             name,
             root.start_address().as_u64(),
@@ -185,11 +187,7 @@ pub fn spawn_program(name: &'static str, bytes: &[u8]) -> ProgramRegion {
 /// # Safety
 ///
 /// `mapper` must be over a coherent, non-active task tree.
-unsafe fn map_segment(
-    mapper: &mut OffsetPageTable<'static>,
-    elf: &ElfFile,
-    ph: &ProgramHeader,
-) {
+unsafe fn map_segment(mapper: &mut OffsetPageTable<'static>, elf: &ElfFile, ph: &ProgramHeader) {
     let vaddr = VirtAddr::new(ph.virtual_addr());
     let memsz = ph.mem_size();
     let filesz = ph.file_size();
@@ -203,7 +201,7 @@ unsafe fn map_segment(
     // polluting the shared tables.
     let own_p4 = (galexy_abi::USER_IMAGE_BASE >> 39) as usize;
     let seg_first_p4 = (vaddr.as_u64() >> 39) as usize;
-    let seg_last_p4 = ((vaddr + memsz as u64 - 1).as_u64() >> 39) as usize;
+    let seg_last_p4 = ((vaddr + memsz - 1).as_u64() >> 39) as usize;
     assert!(
         seg_first_p4 == own_p4 && seg_last_p4 == own_p4,
         "loader: segment {:#x}..{:#x} must sit under P4 entry {}",
@@ -239,10 +237,10 @@ unsafe fn map_segment(
     assert_eq!(data.len() as u64, filesz, "loader: file/data size mismatch");
 
     let first_page = Page::containing_address(vaddr);
-    let last_byte = vaddr + memsz as u64 - 1;
+    let last_byte = vaddr + memsz - 1;
     let last_page = Page::containing_address(last_byte);
     let seg_start = vaddr.as_u64();
-    let seg_end = seg_start + filesz as u64;
+    let seg_end = seg_start + filesz;
 
     let mut pages = first_page;
     while pages <= last_page {

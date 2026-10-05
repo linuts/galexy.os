@@ -72,7 +72,10 @@ fn reserved_caps_have_permanent_indexes() {
 #[test]
 fn result_codes_roundtrip() {
     for code in [SysError::BadCap as u64, 2, 3, 4, 5] {
-        let r = SyscallResult { ok: false, value: code };
+        let r = SyscallResult {
+            ok: false,
+            value: code,
+        };
         assert_eq!(r.to_result(), Err(SysError::from_code(code)));
     }
     let ok = SyscallResult::ok(0x9999);

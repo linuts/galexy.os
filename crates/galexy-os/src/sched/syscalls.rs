@@ -48,7 +48,10 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             Outcome::Handoff
         }
         n if n == Syscall::Write as u64 => {
-            stamp(frame, syscall_write(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx));
+            stamp(
+                frame,
+                syscall_write(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx),
+            );
             Outcome::Resume
         }
         n if n == Syscall::CapInfo as u64 => {
@@ -134,8 +137,7 @@ fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if !printable {
         return SyscallResult::err(SysError::BadValue);
     }
-    let text = core::str::from_utf8(&staged[..len as usize])
-        .unwrap_or("");
+    let text = core::str::from_utf8(&staged[..len as usize]).unwrap_or("");
     // Console policy (drivers::console): screen + serial — visible
     // interactively and observable headless.
     crate::drivers::console::out_str(text);

@@ -59,12 +59,16 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("[test-rings] per-cpu slot @ {:#x}", cpu0);
     assert_eq!(
         cpu0,
-        arch::cpu::current().self_ptr().load(core::sync::atomic::Ordering::Relaxed),
+        arch::cpu::current()
+            .self_ptr()
+            .load(core::sync::atomic::Ordering::Relaxed),
         "gs base == gs:[0] (self-referential per-cpu struct)"
     );
     arch::syscall::set_task_kstack(0xDEAD_BEEF_CAFE_0000);
     assert_eq!(
-        arch::cpu::current().kstack_top().load(core::sync::atomic::Ordering::Relaxed),
+        arch::cpu::current()
+            .kstack_top()
+            .load(core::sync::atomic::Ordering::Relaxed),
         0xDEAD_BEEF_CAFE_0000,
         "set_task_kstack must route through the per-CPU slot"
     );

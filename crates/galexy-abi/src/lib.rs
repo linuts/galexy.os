@@ -128,7 +128,10 @@ pub mod reserved {
 
     /// The self capability.
     pub const fn self_cap() -> Cap {
-        Cap::new(SELF_INDEX, super::CapRights::READ.union(super::CapRights::WRITE))
+        Cap::new(
+            SELF_INDEX,
+            super::CapRights::READ.union(super::CapRights::WRITE),
+        )
     }
 }
 
@@ -210,7 +213,10 @@ impl SyscallResult {
 
     /// Failure with an error code.
     pub const fn err(err: SysError) -> Self {
-        SyscallResult { ok: false, value: err as u64 }
+        SyscallResult {
+            ok: false,
+            value: err as u64,
+        }
     }
 
     /// Splits into a Rust Result (host-side ergonomics).
