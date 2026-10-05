@@ -11,6 +11,7 @@
 
 pub mod context;
 pub mod demo;
+pub mod loader;
 pub mod syscalls;
 
 use alloc::boxed::Box;
@@ -116,7 +117,7 @@ pub fn run() {
 /* ---------------- preemptive threads ---------------- */
 
 /// Per-thread kernel stack size.
-const THREAD_STACK_SIZE: usize = 32 * 1024;
+pub(crate) const THREAD_STACK_SIZE: usize = 32 * 1024;
 
 /// 16-byte-aligned buffer (FXSAVE requires it).
 #[repr(align(16))]
@@ -299,6 +300,45 @@ pub fn reap() {
     });
 }
 
+/// User-task registration seam for the loader (crate-internal): the
+/// loader computes everything; the scheduler owns Thread construction
+/// (fx area, canary, state).
+pub(crate) struct TaskInit {
+    pub(crate) name: &'static str,
+    /// Fabricated initial context pointer (on the task's user stack).
+    pub(crate) ctx: u64,
+    /// Kernel-mode stack (heap-backed); the canary is painted here.
+    pub(crate) kstack: Vec<u8>,
+    /// Aligned top of `kstack` (the RSP0 value).
+    pub(crate) kstack_top: u64,
+    /// The task's page-table root (physical address; nonzero).
+    pub(crate) cr3: u64,
+    /// The task's P4 entry index inside its tree.
+    pub(crate) user_p4: u16,
+}
+
+pub(crate) fn register_user_task(init: TaskInit) {
+    interrupts::without_interrupts(|| {
+        // Canary at the very bottom of the kernel-mode stack.
+        let mut kstack = init.kstack;
+        kstack[..8].copy_from_slice(&STACK_CANARY.to_le_bytes());
+        let fx = Box::into_raw(Box::new(FxArea::new()));
+        THREADS.lock().push(Thread {
+            name: init.name,
+            state: AtomicU8::new(STATE_RUNNING),
+            ctx: AtomicU64::new(init.ctx),
+            ticks: AtomicU64::new(0),
+            fx,
+            is_user: true,
+            stack: Vec::new(),
+            kstack,
+            kstack_top: init.kstack_top,
+            cr3: AtomicU64::new(init.cr3),
+            user_p4: init.user_p4,
+        });
+    });
+}
+
 /// Spawns a preemptive kernel thread running `entry` (which parks if it
 /// returns). Allocates + maps the thread stack; IRQ-gated while registering.
 pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) {
@@ -332,10 +372,10 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) {
 }
 
 /// User stack size in 4 KiB pages.
-const USER_STACK_PAGES: usize = 4;
+pub(crate) const USER_STACK_PAGES: usize = 4;
 /// User stack offset inside the task's P4 region (1 GiB in — keeps the
 /// code page and stack far apart; the region is 512 GiB).
-const USER_STACK_OFFSET: u64 = 1 << 30;
+pub(crate) const USER_STACK_OFFSET: u64 = 1 << 30;
 // The GUARD fence is an ABSENCE: the page directly below the user stack is
 // left unmapped (nothing maps it, nothing needs to). A stack walking past
 // its region faults in ring 3, and the page-fault path tombstones the
@@ -480,7 +520,13 @@ pub fn spawn_user_task(
             mm::frame_virt(stack_frames[USER_STACK_PAGES - 1].start_address()) + 4096;
         let (cs, ss) = context::user_cs_ss();
         let ctx = unsafe {
-            context::init_user_frame(fab_vaddr.as_u64(), region.as_u64(), cs, ss)
+            context::init_user_frame(
+                fab_vaddr.as_u64(),
+                stack_top - 512, // user RSP (user-space address!)
+                region.as_u64(),
+                cs,
+                ss,
+            )
         };
 
         // Kernel-mode stack for ring 3→0 crossings: heap-backed, 32 KiB,

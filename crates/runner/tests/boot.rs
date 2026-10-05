@@ -303,6 +303,24 @@ fn ramdisk_test_passes() {
 }
 
 #[test]
+fn realprogram_test_passes() {
+    let (code, serial) = boot(&image("test-realprogram"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-realprogram should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-realprogram] passed"),
+        "test-realprogram success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[loader] program 'hello' ready"),
+        "loader spawn marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn uefi_image_boots_and_reports() {
     // UEFI boots (kernel runs, serial works); timer/keyboard are dead until
     // the APIC work — so this asserts boot markers only, not liveness.

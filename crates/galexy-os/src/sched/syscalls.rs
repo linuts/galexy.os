@@ -125,11 +125,11 @@ fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
             len as usize,
         );
     }
-    // Printable ASCII only this early — the console's charset discipline
-    // lives in screen; raw bytes could include the blob's own encoding.
+    // Printable ASCII + newline: the console's charset discipline (TODO:
+    // tab/CR/ESC handling is future screen work).
     let printable = staged[..len as usize]
         .iter()
-        .all(|b| b.is_ascii_graphic() || *b == b' ');
+        .all(|b| b.is_ascii_graphic() || *b == b' ' || *b == b'\n');
     if !printable {
         return SyscallResult::err(SysError::BadValue);
     }

@@ -154,14 +154,20 @@ unsafe extern "C" fn page_fault_sched(frame: *mut Context) -> u64 {
     let raw = frame as *const u64;
     // SAFETY: the frame is on the faulting task's mapped stack.
     let cs = unsafe { raw.add(17).read() };
+    let err = unsafe { raw.add(15).read() };
     if cs & 0b11 == 3 {
         // Ring-3 fault: the task dies, the kernel lives. Tombstone +
         // rotate (guaranteed switch — the dead task is never main).
+        let cr2 = x86_64::registers::control::Cr2::read();
+        crate::serial_println!(
+            "[pf] ring-3 task fault: err={:#x}, cr2={:#?} — killing the task",
+            err,
+            cr2
+        );
         unsafe { super::syscall_handoff(frame, true, "page fault") }
     } else {
         // Ring-0 fault: kernel bug or a test-installed seam. Report
         // precisely, then park (the faulting instruction would refault).
-        let err = unsafe { raw.add(15).read() };
         crate::serial_println!(
             "[pf] PAGE FAULT in ring 0, err={:#x}, cr2={:#?}",
             err,
@@ -194,7 +200,16 @@ extern "C" fn timer_sched(frame: *mut Context) -> u64 {
 /// at least `INITIAL_CONTEXT_SIZE` bytes.
 pub unsafe fn init_stack(stack_top: u64, entry: extern "C" fn(), cs: u64, ss: u64) -> u64 {
     // SAFETY: contract above.
-    unsafe { init_frame_stack(stack_top, trampoline as *const () as u64, entry as u64, cs, ss) }
+    unsafe {
+        init_frame_stack(
+            stack_top,
+            stack_top - 512, // RSP: scratch space below the frame
+            trampoline as *const () as u64,
+            entry as u64,
+            cs,
+            ss,
+        )
+    }
 }
 
 /// Fabricates a fresh USER task's initial context (RIP directly at the
@@ -202,26 +217,31 @@ pub unsafe fn init_stack(stack_top: u64, entry: extern "C" fn(), cs: u64, ss: u6
 /// to return through, and `thread_exit` does not exist for it until the
 /// exit syscall lands).
 ///
+/// `write_top` is WHERE the frame is fabricated (for loader spawns: the
+/// phys-map image of the user stack's top page — the stack's own virtual
+/// addresses are task-private); `user_rsp` is the RSP VALUE recorded in the
+/// frame (must be a USER-space address: `user_rsp - 512` is left as scratch).
+///
 /// # Safety
 ///
 /// Same contract as [`init_stack`]; additionally `cs`/`ss` must be the
-/// RPL-3 user selectors, `rip` must be mapped + executable + user-accessible.
-pub unsafe fn init_user_frame(stack_top: u64, rip: u64, cs: u64, ss: u64) -> u64 {
+/// RPL-3 user selectors, `rip`/`user_rsp` must be mapped user addresses.
+pub unsafe fn init_user_frame(write_top: u64, user_rsp: u64, rip: u64, cs: u64, ss: u64) -> u64 {
     // SAFETY: contract above.
-    unsafe { init_frame_stack(stack_top, rip, 0, cs, ss) }
+    unsafe { init_frame_stack(write_top, user_rsp, rip, 0, cs, ss) }
 }
 
 /// Shared frame fabricator (both rings; identical frame shape).
 ///
 /// # Safety
 ///
-/// `stack_top` must top a fresh, exclusively owned, 16-byte-aligned stack of
+/// `write_top` must top a fresh, exclusively owned, 16-byte-aligned stack of
 /// at least `INITIAL_CONTEXT_SIZE` bytes; `rip`/`cs`/`ss` must form a valid
 /// entry condition for the frame's privilege level.
-unsafe fn init_frame_stack(stack_top: u64, rip: u64, rdi: u64, cs: u64, ss: u64) -> u64 {
-    let mut sp = stack_top as *mut u64;
+unsafe fn init_frame_stack(write_top: u64, user_rsp: u64, rip: u64, rdi: u64, cs: u64, ss: u64) -> u64 {
+    let mut sp = write_top as *mut u64;
     let mut push = |value: u64| {
-        // SAFETY: caller guarantees enough stack space above `stack_top`.
+        // SAFETY: caller guarantees enough stack space above `write_top`.
         unsafe {
             sp = sp.sub(1);
             sp.write(value);
@@ -234,7 +254,7 @@ unsafe fn init_frame_stack(stack_top: u64, rip: u64, rdi: u64, cs: u64, ss: u64)
 
     // IRQ frame (SS, RSP, RFLAGS, CS, RIP — push order reversed).
     push(ss); // SS
-    push(stack_top - 512); // RSP: scratch space below the frame
+    push(user_rsp); // RSP: caller-provided (user-space for ring 3)
     push(0x202); // RFLAGS: reserved bit 1 + interrupts enabled
     push(cs); // CS
     push(rip); // RIP

@@ -1,6 +1,13 @@
 [workspace]
 resolver = "2"
-members = ["crates/runner", "crates/galexy-os", "crates/galexy-core", "crates/galexy-abi"]
+members = [
+    "crates/runner",
+    "crates/galexy-os",
+    "crates/galexy-core",
+    "crates/galexy-abi",
+    "crates/userspace/galexy-rt",
+    "crates/userspace/hello",
+]
 default-members = ["crates/runner"]
 
 [profile.dev]

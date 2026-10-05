@@ -132,6 +132,14 @@ pub mod reserved {
     }
 }
 
+/* ---------------- address-space contract ---------------- */
+
+/// The fixed virtual load address for EVERY user program. Programs link
+/// with their text at this base (`-Ttext`); the loader maps ELF segments
+/// exactly at the phdrs' `p_vaddr`. Per-task address spaces (Step B) make
+/// all programs sharing this base safe — every task sees its own image.
+pub const USER_IMAGE_BASE: u64 = 0x0000_0C80_0000_0000;
+
 /* ---------------- syscall table ---------------- */
 
 /// The syscall table, in abi-number order.

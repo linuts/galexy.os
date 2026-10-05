@@ -34,22 +34,46 @@ fn main() {
     {
         // Host-side context for each file (name → bytes).
         let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
-        // Program bins from the userspace crate (artifact dep symbols).
-        let userspace_bins =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../userspace/src/bin");
-        if let Ok(bin_dir) = std::fs::read_dir(&userspace_bins) {
-            for entry in bin_dir.flatten() {
-                let stem = entry
+        // Program bins from the userspace tree: one package dir per
+        // program (dir name == package name == bin name), built via the
+        // artifact dep env vars (same mechanism the kernel bins use).
+        let userspace_root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../userspace");
+        if let Ok(pkg_dirs) = std::fs::read_dir(&userspace_root) {
+            for pkg in pkg_dirs.flatten() {
+                if !pkg.path().join("src").is_dir() {
+                    continue; // the galexy-rt LIB is not a program
+                }
+                let pkg_name = pkg
                     .path()
-                    .file_stem()
+                    .file_name()
                     .unwrap()
                     .to_string_lossy()
                     .to_string();
-                let var = format!("CARGO_BIN_FILE_GALEXY_USERS_{}", stem);
-                if let Some(path) = std::env::var_os(&var) {
-                    let bytes = std::fs::read(&path)
-                        .unwrap_or_else(|e| panic!("ramdisk: read {path:?}: {e}"));
-                    entries.push((stem, bytes));
+                let env_crate = pkg_name.replace('-', "_").to_uppercase();
+                let mut bin_files: Vec<(String, String)> = Vec::new(); // (stem, env var)
+                if let Ok(bin_dir) = std::fs::read_dir(pkg.path().join("src/bin")) {
+                    for entry in bin_dir.flatten() {
+                        let stem = entry
+                            .path()
+                            .file_stem()
+                            .unwrap()
+                            .to_string_lossy()
+                            .to_string();
+                        let var = format!("CARGO_BIN_FILE_{}_{}", env_crate, stem);
+                        bin_files.push((stem, var));
+                    }
+                }
+                let main_rs = pkg.path().join("src/main.rs");
+                if main_rs.is_file() {
+                    bin_files.push((pkg_name.clone(), format!("CARGO_BIN_FILE_{}_{}", env_crate, pkg_name)));
+                }
+                for (stem, var) in bin_files {
+                    if let Some(path) = std::env::var_os(&var) {
+                        let bytes = std::fs::read(&path)
+                            .unwrap_or_else(|e| panic!("ramdisk: read {path:?}: {e}"));
+                        entries.push((stem, bytes));
+                    }
                 }
             }
         }

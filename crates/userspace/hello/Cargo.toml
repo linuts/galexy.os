@@ -1,0 +1,16 @@
+[package]
+name = "hello"
+version = "0.1.0"
+edition = "2021"
+description = "The first real Rust user program for galexy.os: prints through the console capability, exits 0."
+
+[[bin]]
+name = "hello"
+path = "src/main.rs"
+
+[dependencies]
+galexy-rt = { path = "../galexy-rt" }
+galexy-abi = { path = "../../galexy-abi" }
+
+[build-dependencies]
+galexy-abi = { path = "../../galexy-abi" }

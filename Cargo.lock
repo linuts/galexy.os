@@ -206,6 +206,14 @@ dependencies = [
  "spin",
  "uart_16550",
  "x86_64",
+ "xmas-elf",
+]
+
+[[package]]
+name = "galexy-rt"
+version = "0.1.0"
+dependencies = [
+ "galexy-abi",
 ]
 
 [[package]]
@@ -229,6 +237,14 @@ dependencies = [
  "crc",
  "log",
  "uuid",
+]
+
+[[package]]
+name = "hello"
+version = "0.1.0"
+dependencies = [
+ "galexy-abi",
+ "galexy-rt",
 ]
 
 [[package]]
@@ -378,6 +394,7 @@ version = "0.1.0"
 dependencies = [
  "bootloader",
  "galexy-os",
+ "hello",
  "tar",
 ]
 
@@ -677,6 +694,21 @@ dependencies = [
  "libc",
  "rustix",
 ]
+
+[[package]]
+name = "xmas-elf"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18245fcbb8b3de8dd198ce7944fdd4096986fd6cd306b0fcfa27df817bd545d6"
+dependencies = [
+ "zero",
+]
+
+[[package]]
+name = "zero"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fe21bcc34ca7fe6dd56cc2cb1261ea59d6b93620215aefb5ea6032265527784"
 
 [[package]]
 name = "zmij"

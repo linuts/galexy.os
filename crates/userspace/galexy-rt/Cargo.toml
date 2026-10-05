@@ -1,0 +1,12 @@
+[package]
+name = "galexy-rt"
+version = "0.1.0"
+edition = "2021"
+description = "The ring-3 runtime: syscall wrappers, program entry, panic handler. The bottom of every user program's dependency stack (galexy-rt -> galexy-abi; never the kernel)."
+
+[lib]
+name = "galexy_rt"
+path = "src/lib.rs"
+
+[dependencies]
+galexy-abi = { path = "../../galexy-abi" }
