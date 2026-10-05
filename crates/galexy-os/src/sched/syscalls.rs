@@ -14,7 +14,6 @@
 
 use galexy_abi::{Cap, CapRights, SysError, Syscall, SyscallResult, MAX_SYSCALL};
 
-use crate::drivers::screen;
 use crate::sched::context::Context;
 use x86_64::VirtAddr;
 

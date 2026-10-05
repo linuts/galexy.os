@@ -61,21 +61,12 @@ pub fn poll() {
     }
 }
 
-/// Echoes the flushed line (or runs it as a command), then prompts again.
-fn flush_and_echo(text: &str) {
-    screen::set_color(TEXT_COLOR);
-    screen::out_str("\n");
-    screen::set_color(PROMPT_COLOR);
-    screen::out_str("echo: ");
-    screen::set_color(TEXT_COLOR);
-    screen::out_str(text);
-    screen::out_str("\n");
-    screen::set_color(PROMPT_COLOR);
-    screen::out_str("galexy> ");
-    screen::set_color(TEXT_COLOR);
+/// Unknown line: `<line>: command not found`, then the prompt.
+fn not_found(text: &str) {
+    out_lines(&[alloc::format!("{text}: command not found")]);
 }
 
-/// Runs the line as a shell command; unknown lines are echoed.
+/// Runs the line as a shell command; unknown lines report not-found.
 fn flush_and_dispatch(text: &str) {
     let trimmed = text.trim();
     match trimmed {
@@ -90,7 +81,7 @@ fn flush_and_dispatch(text: &str) {
         }
         "about" => about(),
         _ if trimmed.starts_with("run ") || trimmed == "run" => run(trimmed),
-        _ => flush_and_echo(text),
+        _ => not_found(trimmed),
     }
 }
 
@@ -113,15 +104,22 @@ fn run(line: &str) {
         out_lines(&[alloc::format!("run: no such program '{name}'")]);
         return;
     };
+    // Close the typed line FIRST — no kernel work between Enter and this
+    // newline, so the program's output always starts on a fresh line.
+    screen::set_color(TEXT_COLOR);
+    screen::out_str("\n");
     // The task name outlives this call (thread stats/tombstones read it):
     // leak the name — a few bytes per spawn, same philosophy as the
     // tombstone slot model (revisit with a slot free-list).
     let leaked: &'static str = alloc::boxed::Box::leak(name.into());
-    sched::loader::spawn_program(leaked, bytes);
-    // The loader registered the task; spawn markers go to serial only.
-    // Prompt reprint: the program prints on the screen asynchronously, so
-    // reclaim the line now.
-    prompt_only();
+    // Spawn + reclaim the prompt inside one IRQ-off step. A tick arriving
+    // here stays pending; after the gate the rotation serves the earlier
+    // slots (main, demo threads) before this fresh task — so the prompt
+    // is always on screen before the program's first output.
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        sched::loader::spawn_program(leaked, bytes);
+        prompt_only();
+    });
 }
 
 /// Prints a fresh prompt (for empty lines).
@@ -148,7 +146,7 @@ fn out_lines(lines: &[String]) {
 fn help() {
     out_lines(&[
         "commands: help, stats, tasks, threads, run <program>,".into(),
-        "clear, about; unknown lines are echoed back".into(),
+        "clear, about; anything else: command not found".into(),
     ]);
 }
 

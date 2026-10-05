@@ -354,10 +354,12 @@ shim dies loudly instead.
 Main loop: drains the key queue — printable chars echo + buffer up (the
 echo goes through the console policy: screen + serial); Enter
 dispatches (`help`, `stats`, `tasks`, `threads`, `run <program>`, `clear`,
-`about`; unknown lines echo back — the original echo-shell behavior);
-Backspace erases. `run <name>` finds the program's ELF via the ramdisk
+`about`; unknown lines report `<line>: command not found`); Backspace
+erases. `run <name>` finds the program's ELF via the ramdisk
 service and hands it to the loader (Milestone 16; dispatch body factored
-into `shell::exec(line)` so boot tests drive the SAME path typing does).
+into `shell::exec(line)` so boot tests drive the SAME path typing does;
+the typed line closes with a newline before the prompt is reclaimed —
+the program's output then arrives asynchronously).
 The status bar (`render_status_bar`) redraws the bottom line
 in-place once per second (uptime + per-thread tick counts + frames free)
 with cursor save/restore — the "quiet OS" demo: everything observable as

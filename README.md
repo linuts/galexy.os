@@ -17,7 +17,8 @@ userland programs by name (`run hello`).
 - [x] Interrupts: GDT, IDT, remapped PICs, ~1 kHz PIT timer tick
 - [x] PS/2 keyboard input with scancode translation
 - [x] Shell: line editing (Backspace), commands (`help`, `stats`, `threads`,
-      `tasks`, `clear`, `about`), echo fallback for unknown lines
+      `tasks`, `run <program>`, `clear`, `about`), `command not found` for
+      unknown lines
 - [x] Physical frame allocator over the bootloader memory map
 - [x] Paging: map/unmap pages with TLB flushes, page-fault reporting (CR2),
       fresh page-table trees (per-task isolation groundwork)

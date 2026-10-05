@@ -65,8 +65,7 @@ pub fn init() {
     // reset. With IF cleared at entry, the window is closed; the user's
     // full RFLAGS still arrives in R11 and rides into the frame (SYSRET
     // consumes it unmodified).
-    // SAFETY: constant mask; part of the MSR configuration above.
-    unsafe { model_specific::SFMask::write(RFlags::INTERRUPT_FLAG | RFlags::TRAP_FLAG) };
+    model_specific::SFMask::write(RFlags::INTERRUPT_FLAG | RFlags::TRAP_FLAG);
     // SAFETY: enabling SCE; STAR/LSTAR are consistent above.
     unsafe {
         model_specific::Efer::update(|f| *f |= model_specific::EferFlags::SYSTEM_CALL_EXTENSIONS);
