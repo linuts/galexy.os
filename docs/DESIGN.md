@@ -158,25 +158,31 @@ so IRQ context is safe. Queue overflow drops the newest key (documented).
 
 ### arch — "the plumbing"
 
-Init order: GDT/TSS → IDT → ACPI (MADT) → LAPIC (+ its timer) → I/O APIC
-(keyboard route) → legacy PICs (masked) → i8042 enable → `sti`.
+Init order: GDT/TSS (per-CPU slot 0) → per-CPU GS substrate → ACPI (MADT)
+→ LAPIC (+calibration) → I/O APIC (keyboard route) → legacy PICs (masked)
+→ i8042 enable → AP boot (trampoline + per-AP init + timer arms) → `sti`.
 
-- GDT + TSS: IST slot 0 for double fault; **all segment registers (including
-  `ss`, `ds`) are reloaded after `lgdt`** (bootloader migration warning).
-- IDT: breakpoint, page fault (reports + parks), double fault (own IST
-  stack), timer (vector 32, NAKED), keyboard (vector 33), LAPIC spurious
-  (0xFF).
-- Interrupt delivery is ALL-APIC since Milestone 17: the LAPIC timer carries
-  vector 32 (periodic, ~1 kHz, calibrated against the PIT once at boot),
-  the I/O APIC routes the keyboard's GSI onto vector 33; the legacy 8259s
-  are remapped and fully masked (they'd otherwise ghost IRQs on BIOS boots;
-  a PIC fallback for hardware without an I/O APIC is future work).
-- EOI: ONE true EOI — the LAPIC's EOI register (`apic::eoi`), written by the
-  timer switch path and the keyboard handler. Edge-triggered I/O APIC lines
-  need no IOAPIC-side EOI.
-- Tick accounting: `AtomicU64` + once-per-second serial heartbeat —
-  unchanged semantics across the delivery swap (the scheduler phase swaps
-  only the handler body, and the vector stayed 32).
+- GDT + TSS: per-CPU slots SLOTS[c] (see arch/cpu + arch/gdt) — the same
+  selector layout replicated on every CPU (STAR stays selector-indexed).
+  IST slot 0 for double fault, per-CPU stacks. All segment registers
+  reloaded per CPU at its own bring-up (bootloader migration warning).
+- IDT: ONE shared table, loaded into EVERY CPU's IDTR (`lidt` is per-CPU;
+  an AP without its own load runs on the real-mode zero IDTR and
+  triple-faults on its first tick). Entries: breakpoint, page fault
+  (reports + parks), double fault (per-CPU IST), timer (vector 32, NAKED),
+  keyboard (vector 33), LAPIC spurious (0xFF).
+- Interrupt delivery is ALL-APIC since Milestone 17, now PER-CPU (M18):
+  each CPU's LAPIC timer carries vector 32 with a SHARE-SPLIT ICR
+  (ticks-per-ms × cpu count) so N cores each tick at 1/N kHz and the
+  machine-wide rate stays ~1 kHz; the I/O APIC routes the keyboard to the
+  BSP's LAPIC (physical destination in the RTE); the legacy 8259s are
+  remapped and fully masked.
+- EOI: ONE true EOI — the LAPIC's EOI register (`apic::eoi`), written by
+  each CPU's own switch path/handler (per-CPU by hardware: the MMIO
+  address is per-CPU-redirected in xAPIC, the MSR interface is per-CPU in
+  x2APIC). Edge-triggered I/O APIC lines need no IOAPIC-side EOI.
+- Tick accounting: per-thread/per-CPU-main atomics + a shared TICKS
+  counter whose seconds semantics survive the share split.
 
 ### arch/acpi — "interrupt controller discovery" (arch/)
 
@@ -191,31 +197,53 @@ Init order: GDT/TSS → IDT → ACPI (MADT) → LAPIC (+ its timer) → I/O APIC
   Interrupt Source Overrides (ISA IRQ → GSI; QEMU overrides IRQ0→GSI2,
   leaves IRQ1 identity).
 - Host-side the boot CPU is always LAPIC id 0 — the code never assumes it;
-  the BSP id is read from the MADT (SMP groundwork).
+  the BSP id is read from the MADT; `enabled_ids()` feeds AP bring-up.
+
+### arch/cpu — "per-CPU identity + AP bring-up" (arch/)
+
+- GS-base identity: each CPU WRGSBASEs its slot address (FSGSBASE feature
+  asserted AND CR4.FSGSBASE enabled — the CPUID bit alone does not grant
+  the instructions). Fixed offset contract for naked asm: gs:[0] self ptr,
+  gs:[8] SYSCALL kernel-stack target, gs:[16]/[24] entry scratch.
+  Userland never touches GS → no swapgs discipline anywhere.
+- Per-CPU GDT/TSS slots (arch/gdt): selectors are REPLICATED identically
+  (layout-asserted) so STAR/iret constants stay valid machine-wide; each
+  TSS embeds that CPU's own RSP0 + double-fault IST stack.
+- AP boot: position-independent trampoline at phys 0x8000 (16→32→64 with
+  push/retf walks; EFER.NXE must ride along with LME or the shared kernel
+  half's NX pages #PF as reserved-bit violations); INIT → PIT-timed gap →
+  SIPI ×2; APs run their own GDT/IDTR/GS/syscall-MSR/LAPIC bring-up and
+  write an online magic the BSP waits on.
+- Per-CPU SYSCALL hardware: STAR/LSTAR/SFMASK/EFER.SCE are programmed on
+  EVERY CPU (per-CPU MSRs).
 
 ### arch/apic — "the LAPIC" (arch/)
 
 - Dual interface: xAPIC (MMIO register page at the MADT base — mapped
-  PRESENT|RW|NX|uncached at a fixed kernel-half P4 entry, 200) and x2APIC
-  (MSRs `0x800 + offset >> 4`). Mode DETECTED from `IA32_APIC_BASE` bit 10;
-  every register access funnels through one read/write pair so both paths
-  share all logic. QEMU defaults to xAPIC.
-- Bring-up: spurious vector 0xFF (with an IDT gate installed — an unhandled
-  stray spurious would triple-fault), TPR 0, flat DFR/LDR.
-- LAPIC timer = THE timer: calibrated ONCE at boot against a PIT channel-2
-  one-shot (~10 ms window, ratio math only — no wall-clock assumptions, TCG
-  safe), then armed PERIODIC on vector 32 at the calibrated ticks-per-ms.
-  Calibration runs with IRQs off (inside `arch::init`, before `sti`).
+  PRESENT|RW|NX|uncached at a fixed kernel-half P4 entry, 200; the MMIO
+  address is PER-CPU-redirected by hardware, so shared mapping serves all
+  CPUs) and x2APIC (MSRs `0x800 + offset >> 4`, inherently per-CPU). Mode
+  DETECTED from `IA32_APIC_BASE` bit 10; every register access funnels
+  through one read/write pair so both paths share all logic.
+- Bring-up (`bring_up`): spurious vector 0xFF (with an IDT gate installed
+  — an unhandled stray spurious would triple-fault), TPR 0, flat DFR/LDR,
+  LVT entries masked — each CPU runs it during ITS bring-up.
+- LAPIC timer = THE timer, PER CPU (M18): calibrated ONCE on the BSP
+  against a PIT channel-2 one-shot (~10 ms window, ratio math only — no
+  wall-clock assumptions, TCG safe); EVERY CPU arms its own (`arm_timer`)
+  PERIODIC on vector 32 with the SHARE-SPLIT ICR (ticks-per-ms × online
+  count) — N cores × 1/N kHz keeps the machine-wide tick rate ~1 kHz.
 
 ### arch/ioapic — "external interrupt routing" (arch/)
 
 - MMIO register page mapped at fixed kernel-half P4 entry 201 (the LAPIC
   page's sibling); IOREGSEL/IOWIN pair indexes the register space.
-- Bring-up: version sanity (I/O APICVER ≥ 0x11), ALL redirection entries
-  masked first (inherited state is firmware's), then exactly ONE wiring:
-  the keyboard — ISA IRQ1 → GSI (MADT override or identity) → RTE pin,
-  vector 33, edge-triggered, active-high, physical destination = this
-  CPU's LAPIC ID. Masked-by-default is the rule: mask what you don't use.
+- Bring-up (BSP-only, once): version sanity (I/O APICVER ≥ 0x11), ALL
+  redirection entries masked first (inherited state is firmware's), then
+  exactly ONE wiring: the keyboard — ISA IRQ1 → GSI (MADT override or
+  identity) → RTE pin, vector 33, edge-triggered, active-high, physical
+  destination = the BSP's LAPIC ID. Masked-by-default is the rule: mask
+  what you don't use.
 
 ### arch/mm — "physical memory" (arch/)
 
@@ -292,14 +320,22 @@ returns 0 to resume the outgoing task. Each thread owns:
 - a 32 KiB heap (`Box`/`vec!`) stack — the context block lives on it
 - a leaked-at-spawn FXSAVE area (kernel code may auto-vectorize), freed by
   the reaper on exit
-- main is participant slot 0 of the unified rotation.
+- a pin: the CPU whose rotation runs it (round-robin at spawn; SMP M18)
+- its CPU's main is participant slot 0 of THAT CPU's rotation.
+
+**Pinned rotation (SMP M18).** Each CPU's `CPU_SCHED[c]` holds its own
+current-slot/cursor/main-saved-context + FXSAVE area; the scans skip
+foreign-owned slots like tombstones. `THREADS` remains THE cross-CPU lock
+(spawn, reap, stats all serialize on it; switches touch nothing global
+but it).
 
 **Lifecycle (tombstones).** Slots are NEVER removed from the thread vec:
-`CURRENT`/`LAST_SERVED` index into it mid-switch, so shifting entries would
-corrupt in-flight state. A thread whose entry RETURNS tombstones itself
-(`thread_exit`, called by the trampoline); the rotation scans forward past
-dead slots (bounded — main is always eligible at slot 0); the main loop's
-`sched::reap()` frees stack + fx of every exited thread and checks the
+the per-CPU `current`/`last_served` cursor indexes into it mid-switch, so
+shifting entries would corrupt in-flight state. A thread whose entry
+RETURNS tombstones itself (`thread_exit`, called by the trampoline); the
+owner's rotation scans forward past dead or foreign slots (bounded — main
+is always eligible at slot 0); the OWNER's `sched::reap()` frees stack +
+fx of every exited thread it owns and checks the
 stack canary (a deep overflow walks downward through the magic word at the
 stack's very bottom first — reaping turns silent heap corruption into a
 loud panic). Dead slots remain as `Freed` structs (a few bytes) — stable
@@ -308,8 +344,10 @@ loop MUST stay interrupts-ENABLED — with IF=0 the dead thread sleeps in
 `hlt` forever, nothing ever preempts it, and the whole machine wedges
 (found by `bin/test-threadexit.rs`).
 
-**User tasks (Step B).** Same rotation, same lifecycle — private address
-space. `spawn_user_task` (kernel tree asserted) builds a `FreshL4` and maps
+**User tasks (Step B, now on any CPU — M18).** Same rotation, same
+lifecycle — private address space; the pin is the spawn's round-robin
+over the enabled CPUs (a ring-3 task can run and be reaped entirely on an
+AP: per-CPU TSS.RSP0, per-CPU kstack slot gs:[8], per-CPU STAR/LSTAR). `spawn_user_task` (kernel tree asserted) builds a `FreshL4` and maps
 the task's world INTO ITS OWN TREE via `with_table`: code page at a scanned
 top-free P4 entry (`< 256` — 512 GiB per task), user stack (4 pages,
 RW\|NX\|USER) at +1 GiB, an RW scratch page right above. All kernel-side
@@ -433,14 +471,31 @@ The runner packs user programs into a USTAR tar and the bootloader maps it
 `galexy-core::TarCursor` per call. Consumers (the shell's `run`, test
 kernels) never touch raw BootInfo ramdisk fields again.
 
-## Concurrency model (pre-scheduler, single-core)
+## Concurrency model (SMP, two CPUs — Milestone 18)
 
-- All shared state sits behind `spin::Mutex` (plus `LazyLock` for init-once
-  statics and `AtomicU64` for tick counts).
-- Print lock: `println!` → screen lock. Current mitigation for the
-  hold-lock-while-interrupted hazard: interrupt handlers never touch the
-  screen lock (they use serial or atomics only). A "lock contention audit"
-  is scheduled before preemption lands.
+- **Per-CPU ownership first.** Rotation state (`CPU_SCHED`), LAPIC access,
+  SYSCALL entry scratch (gs:[16]/[24]), TSS.RSP0, and the idle loop are
+  per-CPU by construction — no lock is needed where only one CPU touches.
+- **Pinned-at-spawn + owner-reap.** `Thread.owner` (assigned round-robin
+  at spawn, returned race-free to the caller) decides which CPU's rotation
+  a thread rides and which CPU's `reap()` frees it. "A thread is current
+  on exactly one CPU" is enforced by ownership; cross-CPU races cannot
+  form around a zombie's stack.
+- **`THREADS` is THE global lock** (`spin::Mutex`); the naked timer switch,
+  syscall handoff and reapers serialize on it briefly — no nested locks.
+  The IRQ gate is still part of every acquisition (a local `hlt`-sleeping
+  CPU must not re-enter a held lock).
+- **BSP homeownership**: cooperative tasks (`SCHED` queue), the shell
+  (typing, status bar, foreground), and the framebuffer stay BSP-only by
+  design — one display, one input queue, one accounting yardstick
+  (`main_ticks` = the BSP's slot-0 counter).
+- **Frozen kernel half = no TLB shootdown (yet).** Kernel-half page-table
+  entries are shared memory that is NEVER remapped after boot; per-task
+  trees live entirely in their owner's CR3 swaps (local full flush). The
+  first feature that remaps kernel-half memory on one CPU MUST add IPI
+  shootdowns (TODO follow-up).
+- Print lock: `println!` → screen lock (BSP-side consumers only today).
+  Interrupt handlers never touch the screen lock (serial or atomics only).
 
 ## Testing strategy
 

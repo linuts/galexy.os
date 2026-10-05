@@ -476,12 +476,103 @@ host tests, green per commit.
       rate sane, ticks accrue LAPIC-side
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 18 — SMP: two CPUs, one kernel ✅
+
+The multicore hop. **Both CPUs run the full kernel: per-CPU timer switches,
+naked switch, ring-3 on either core, pinned-at-spawn rotation with owner-
+reaping.** Suite: 28 QEMU boot tests, ALL at `-smp 2` (every existing test
+exercises the multicore paths), + 16 core host tests. Green per commit.
+
+- [x] **Per-CPU substrate** (`arch/cpu.rs`): identity via GS base (FSGSBASE
+      feature asserted + CR4.FSGSBASE enabled at bring-up — the CPUID bit
+      alone is NOT enough; WRGSBASE the slot address, roundtrip-verified).
+      Fixed-offset contract for the naked asm: gs:[0] = self ptr,
+      gs:[8] = SYSCALL kernel-stack target, gs:[16]/[24] = entry scratch.
+      MAX_CPUS = 8; logical index + APIC id stored per slot
+- [x] **Per-CPU GDT/TSS** (`arch/gdt.rs`): every CPU builds + loads its
+      OWN tables (`bring_up(cpu_index)`); the selector layout is fixed and
+      identically REPLICATED (STAR constants stay valid machine-wide, with
+      build-time debug_asserts against the appended order). Per-CPU TSS
+      gives each CPU its own RSP0 + double-fault IST stack
+- [x] **SYSCALL entry via gs:[8]** (`arch/syscall.rs`): the global
+      TASK_KSTACK static and the rip-relative scratch statics are GONE —
+      the naked entry loads the per-CPU registry (gs:[8]) and stashes
+      user RSP/rax in per-CPU scratch (gs:[16]/[24]); USER_CS/USER_SS stay
+      global constants (CPU-independent)
+      `idt`: the APs' IDTR was never loaded — a first tick hit the
+      real-mode zero IDTR and triple-faulted (`GP fault (vector<<3)|2`
+      dump was the tell). `idt::ap_load()` commits the shared table per
+      AP; the IDT itself stays one shared instance (selector-value
+      entries are valid in every replicated GDT)
+- [x] **AP bring-up** (commit 2, `arch/cpu.rs` + `apic.rs`): a
+      position-independent trampoline page at phys 0x8000 — 16→32→64-bit
+      walks with push/`retf` transitions (0xCB byte pinned: the assembler
+      resolved `retf` to a 0x66-prefixed 32-bit return!), assemble-time
+      layout contracts asserted in Rust next to the copy (balign 256
+      sections), micro-GDT + handoff slots (cr3/stack/fn/rank/magic) in
+      the page tail. INIT → 10 ms → SIPI ×2 (PIT channel-2 millisecond
+      delays), then the BSP spin-waits on an online-magic slot the AP
+      writes after ITS per-CPU init completes
+      AP page tables: one shared tree — a 1-GiB identity low map (the
+      trampoline's continuation) + VERBATIM kernel-half L4 copy (needs
+      EFER.NXE alongside LME or every NX PTE #PFs with error 0xA!). APs
+      run `gdt::bring_up`, `idt::ap_load`, per-CPU GS, `syscall::init`
+      (the MSRs are PER-CPU — the AP's STAR/LSTAR were unset until
+      re-programmed!), LAPIC bring-up on its own MMIO (per-CPU by
+      hardware orientation), blank-idle park
+- [x] **Pinned-at-spawn scheduler** (commit 3, `sched/mod.rs`):
+      `Thread.owner` (spawn hands the pin round-robin over MADT-enabled
+      CPUs, returned to the caller race-free); the global rotation
+      statics (CURRENT/LAST_SERVED/MAIN_CTX/MAIN_FX/MAIN_TICKS) became
+      the per-CPU `CPU_SCHED` table; rotation scans + handoffs filter by
+      owner (foreign slots are tombstone-like deadweights otherwise);
+      `reap()` is OWNER-REAP — a CPU frees only its own dead (the
+      cross-CPU zombie race is closed by ownership, not locks)
+- [x] **Per-CPU timer machine**: the LAPIC timer is armed PER CPU with a
+      SHARE-SPLIT ICR (ticks-per-ms × online count) — N CPUs × 1/N Hz
+      each keeps the machine-wide tick rate at ~1 kHz, so TICKS/1000
+      seconds, the heartbeat and the tests' tick budgets survive. The APs'
+      LVTs stay masked until their `arm_timer`; `boot_aps()` also arms on
+      the single-CPU path (the -smp-1 hidden-hang caught by the suite)
+- [x] **AP idle loop**: `enable_and_hlt` + own `reap()` — each CPU's
+      slot-0 main parks with ITS interrupts enabled, its own naked timer
+      switch rotates its own threads back into its own main context
+- [x] **SMP exposure suite-wide**: the runner boots EVERYTHING at
+      `-smp 2 -cpu max` (FSGSBASE needs -cpu max; QEMU's default model
+      lacks it) — the 26 pre-existing tests all exercise the multicore
+      paths; the threadexit reaper assertion now sums per-owner reaps
+- [x] **`bin/test-smp.rs`**: online==2, MADT AP count, pin-RR
+      distribution asserted from the spawn return (t1..t4 = 0,1,0,1),
+      preemption accumulation (the four spinning threads' CPU-time ticks
+      across both per-CPU rotations ≥ 4), full owner-reap drain to zero
+- [x] **`bin/test-smpuser.rs`**: TWO ring-3 blobs — one pinned per CPU —
+      each completing write/yield/scratch-mark/exit; per-owner tree walks
+      reclaim both task trees; data frames × 2 return to the allocator
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17
       (APIC family: LAPIC timer + I/O APIC keyboard route on every boot
       path; UEFI liveness + typed E2E asserted). The door to SMP is open:
       MADT CPU records are already parsed
+- [x] ~~SMP~~ — CLOSED by Milestone 18 (two CPUs running the full kernel;
+      pinned-at-spawn rotation, owner-reaping, per-CPU timers/E2E under
+      the existing suite). The SMP-era follow-ups:
+      - [ ] TLB shootdown IPIs: kernel-halves are FROZEN after boot
+            (shared entries are never remapped) so no shootdown is needed
+            YET — the first kernel-half-remapping feature (heap grow past
+            an AP's cache, demand paging) must add per-CPU shootdowns
+      - [ ] Load balancing: pin-at-spawn is static (a busy CPU keeps its
+            queue even if a sibling idles); stealing/migration is future
+            scheduler work
+      - [ ] `-cpu max` asserts FSGSBASE on real hardware too; a fallback
+            (e.g. per-CPU paging via a shared struct + disables) would be
+            needed on pre-FSGSBASE CPUs — out of scope deliberately
+      - [ ] Everything still single-consumer by DESIGN stays that way:
+            cooperative tasks + shell + framebuffer + keyboard all live
+            on the BSP (one display, one input queue — documented in
+            DESIGN "Concurrency model")
 - [ ] SYSCALL leaves DS/ES/FS/GS as kernel bootstrap selectors when the
       task resumes in ring 3 — user code must not do segment-based
       addressing; proper user segment reload is future segment work

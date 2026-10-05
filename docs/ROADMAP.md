@@ -116,6 +116,12 @@ first real program landed in Milestone 13:
   keyboard onto vector 33, legacy 8259s remapped + fully masked; UEFI
   boots assert full liveness — heartbeat AND a typed `run hello` E2E
   under OVMF).
+- SMP: two CPUs, one kernel ✅ (Milestone 18: per-CPU GS-base substrate
+  (FSGSBASE) + per-CPU GDT/TSS/syscall-MSRs, position-independent
+  16→32→64-bit AP trampoline + INIT/SIPI bring-up, pinned-at-spawn
+  scheduler (per-CPU rotation, owner-reaping), share-split per-CPU LAPIC
+  timers (machine-wide ~1 kHz preserved), ring-3 on either CPU; the WHOLE
+  suite runs at `-smp 2`, plus dedicated bin/test-smp/-smpuser).
 - Shell `run <program>` command ✅ (Milestone 16: ramdisk service +
   `shell::exec("run hello")` — dispatch → loader, full lifecycle; typed-
   keystroke E2E over QMP proves the real input path)

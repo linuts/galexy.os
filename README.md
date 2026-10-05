@@ -14,9 +14,12 @@ userland programs by name (`run hello`).
 - [x] Pixel-framebuffer text output (bootloader v0.11 flow; no legacy VGA text
       mode) with scrolling and colors
 - [x] Serial port logging (for debugging, never on screen)
-- [x] Interrupts: GDT, IDT, ACPI/MADT-discovered APIC stack — LAPIC timer
-      (PIT-calibrated, ~1 kHz) + I/O APIC keyboard route; legacy PICs kept
-      quiet (masked)
+- [x] Interrupts: GDT, IDT, ACPI/MADT-discovered APIC stack — per-CPU LAPIC
+      timers (PIT-calibrated, share-split to keep ~1 kHz), I/O APIC
+      keyboard route; legacy PICs kept quiet (masked)
+- [x] SMP: two CPUs run the kernel — per-CPU GS/GDT/TSS, AP
+      trampoline bring-up, pinned-at-spawn scheduler with per-CPU
+      rotation + owner-reaping; every boot test runs at `-smp 2`
 - [x] PS/2 keyboard input with scancode translation
 - [x] Shell: line editing (Backspace), commands (`help`, `stats`, `threads`,
       `tasks`, `run <program>`, `clear`, `about`), `command not found` for
@@ -126,9 +129,11 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
 │   │       ├── bin/                 # test kernels (one per QEMU test)
 │   │       ├── shell.rs             # the shell: commands + status bar
 │   │       ├── banner.rs            # boot feature showcase
-│   │       ├── arch/                # the port wall: GDT/TSS, IDT, APIC + I/O
-│   │       │                        #   APIC (LAPIC timer, keyboard route),
-│   │       │                        #   legacy PICs (masked), ACPI, PIT, mm
+│   │       ├── arch/                # the port wall: per-CPU GS/GDT/TSS,
+│   │       │                        #   APIC + I/O APIC (per-CPU LAPIC
+│   │       │                        #   timers, keyboard route), AP
+│   │       │                        #   trampoline, ACPI, legacy PICs
+│   │       │                        #   (masked), PIT, mm
 │   │       ├── drivers/             # screen, serial, keyboard
 │   │       ├── macros.rs            # print!/println! plumbing
 │   │       └── sched/               # tasks, preemptive threads, context asm,
