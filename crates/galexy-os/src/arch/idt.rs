@@ -7,7 +7,6 @@ use x86_64::VirtAddr;
 
 use super::apic;
 use super::gdt;
-use super::pics;
 use super::pics::{KEYBOARD_INTERRUPT_ID, TIMER_INTERRUPT_ID};
 use crate::drivers::keyboard;
 
@@ -88,7 +87,9 @@ extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame) {
         let scancode = data_port.read();
         keyboard::add_scancode(scancode);
     }
-    pics::end_of_interrupt(KEYBOARD_INTERRUPT_ID);
+    // Since the I/O APIC wiring, the keyboard is LAPIC-delivered (edge
+    // RTE): the LAPIC EOI is the one true EOI.
+    apic::eoi();
 }
 
 /// The LAPIC spurious interrupt (vector 0xFF): no device work, just log-free

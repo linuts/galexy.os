@@ -10,6 +10,7 @@ pub mod acpi;
 pub mod apic;
 pub mod gdt;
 mod idt;
+pub mod ioapic;
 pub mod mm;
 mod pics;
 pub mod syscall;
@@ -45,10 +46,14 @@ pub fn init(boot_info: &BootInfo) {
         .into_option()
         .expect("physical memory must be mapped (see BOOTLOADER_CONFIG)");
     acpi::init(boot_info.rsdp_addr.into_option(), phys_offset);
-    // LAPIC enable is behavior-neutral until the timer/IOAPIC wiring lands
-    // (M17 commits in sequence); the PIC still delivers everything today.
     apic::init(acpi::madt().lapic_base());
+    // Legacy PICs remapped + fully masked (APIC delivers from here on);
+    // then the I/O APIC wires the keyboard line onto its vector.
     pics::init();
+    ioapic::init();
+    // The i8042 first port enable + stale-buffer drain (moved out of the
+    // PIC's init — the keyboard driver owns its controller now).
+    crate::drivers::keyboard::init();
     timer::init();
     x86_64::instructions::interrupts::enable();
 }
