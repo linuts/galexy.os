@@ -166,6 +166,12 @@ use std::os::unix::net::UnixStream;
 /// Reads replies through the SAME buffered reader the handshake used — a
 /// second reader over the same socket would race bytes with the first and
 /// silently desynchronize the command/reply stream.
+///
+/// ASYNC EVENTS: QMP interleaves `{"event": ...}` lines (e.g. RTC_CHANGE
+/// under OVMF) between replies — the reply read loops until an actual
+/// reply line (`return`/`error`), skipping events (which must NOT be
+/// silently dropped from the stream's perspective: they are just consumed,
+/// exactly as the greeting/handshake reader does).
 pub fn qmp_send_keys(
     reader: &mut BufReader<UnixStream>,
     qcodes: &[&str],
@@ -178,16 +184,25 @@ pub fn qmp_send_keys(
             .get_mut()
             .write_all(cmd.as_bytes())
             .expect("QMP: send-key write failed");
-        // Read the reply: one JSON line per command (anything unread would
-        // desynchronize later reads).
-        let mut reply = String::new();
-        reader
-            .read_line(&mut reply)
-            .expect("QMP: send-key reply read failed");
-        assert!(
-            reply.contains("\"return\"") && !reply.contains("\"error\""),
-            "QMP send-key '{code}' rejected: {reply}"
-        );
+        // Read lines until an actual reply; skip async event lines.
+        loop {
+            let mut reply = String::new();
+            reader
+                .read_line(&mut reply)
+                .expect("QMP: send-key reply read failed");
+            if reply.contains("\"event\"") {
+                continue; // async event, not the reply for our command
+            }
+            assert!(
+                reply.contains("\"return\"") || reply.contains("\"error\""),
+                "QMP send-key '{code}' got no reply (stream desync?): {reply}"
+            );
+            assert!(
+                !reply.contains("\"error\""),
+                "QMP send-key '{code}' rejected: {reply}"
+            );
+            break;
+        }
     }
 }
 
@@ -235,7 +250,34 @@ pub fn boot_and_type(
     key_delay: Duration,
     timeout: Duration,
 ) -> String {
-    let serial_path = serial_log_path(&image.name);
+    boot_and_type_on(image.bios.clone(), false, sync_pairs, ready_marker, final_marker, key_delay, timeout)
+}
+
+/// UEFI variant of [`boot_and_type`]: boots the image's UEFI disk under
+/// OVMF with a QMP monitor (same typing discipline, same marker syncs).
+pub fn boot_and_type_uefi(
+    image: &Image,
+    sync_pairs: &[(&str, &str)],
+    ready_marker: &str,
+    final_marker: &str,
+    key_delay: Duration,
+    timeout: Duration,
+) -> String {
+    boot_and_type_on(image.uefi.clone(), true, sync_pairs, ready_marker, final_marker, key_delay, timeout)
+}
+
+/// Shared body: boots `img_path` (BIOS unless `uefi`, which adds `-bios
+/// OVMF`), QMP monitor attached, types with per-key echo syncs.
+fn boot_and_type_on(
+    img_path: String,
+    uefi: bool,
+    sync_pairs: &[(&str, &str)],
+    ready_marker: &str,
+    final_marker: &str,
+    key_delay: Duration,
+    timeout: Duration,
+) -> String {
+    let serial_path = serial_log_path("typing");
     let sock = std::env::temp_dir().join(format!(
         "galexy-qmp-{}.sock",
         std::time::SystemTime::now()
@@ -245,7 +287,12 @@ pub fn boot_and_type(
     ));
     let _ = std::fs::remove_file(&sock);
 
-    let mut cmd = qemu_command(&image.bios, &serial_path);
+    let mut cmd = qemu_command(&img_path, &serial_path);
+    if uefi {
+        const OVMF_FD_DEFAULT: &str = "/usr/share/ovmf/x64/OVMF.4m.fd";
+        let ovmf_fd = std::env::var("OVMF_FD").unwrap_or_else(|_| OVMF_FD_DEFAULT.into());
+        cmd.arg("-bios").arg(ovmf_fd);
+    }
     cmd.arg("-qmp")
         .arg(format!("unix:{},server,nowait", sock.display()));
     let mut child = cmd

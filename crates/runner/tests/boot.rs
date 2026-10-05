@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{boot, boot_and_type, boot_liveness, boot_uefi, image, QEMU_EXIT_SUCCESS};
+use common::{boot, boot_and_type, boot_and_type_uefi, boot_liveness, boot_uefi, image, QEMU_EXIT_SUCCESS};
 use std::time::Duration;
 
 #[test]
@@ -456,18 +456,48 @@ fn shell_run_hello_typing_e2e() {
     );
 }
 
+/// True end-to-end under UEFI: the same `run hello` typing flow, into the
+/// OVMF-booted kernel — the APIC delivery path (LAPIC timer + I/O APIC
+/// keyboard) drives the whole thing there. OVMF boot flakiness → 3 retries.
 #[test]
-fn uefi_image_boots_and_reports() {
-    // UEFI boots (kernel runs, serial works); timer/keyboard are dead until
-    // the APIC work — so this asserts boot markers only, not liveness.
+fn shell_run_hello_typing_e2e_uefi() {
+    let image = image("galexy-os");
+    let mut last = String::new();
+    for _ in 0..3 {
+        last = boot_and_type_uefi(
+            &image,
+            RUN_HELLO_KEYS,
+            "[boot] main loop ready",
+            "exited (syscall)",
+            Duration::from_millis(30),
+            Duration::from_secs(90),
+        );
+        if last.contains(HELLO_TEXT) && last.contains("exited (syscall)") {
+            break;
+        }
+    }
+    assert!(
+        last.contains(HELLO_TEXT),
+        "typed `run hello` under UEFI never produced user output; serial:\n{last}"
+    );
+    assert!(
+        last.contains("exited (syscall)"),
+        "user task exit marker missing after typed run (UEFI); serial:\n{last}"
+    );
+}
+
+#[test]
+fn uefi_image_boots_and_timer_ticks() {
+    // Since the APIC work (M17), the timer is LAPIC-delivered on every boot
+    // path — the UEFI image is live, not just booting: assert the heartbeat.
     //
     // OVMF's first-boot device enumeration is flaky under QEMU (the disk is
     // sometimes "Not Found" when BDS builds boot options) — retry up to 3x.
     let image = image("galexy-os");
     let mut last = String::new();
     for _ in 0..3 {
-        last = boot_uefi(&image, Duration::from_secs(25));
-        if last.contains("boot info: rsdp_addr") {
+        last = boot_uefi(&image, Duration::from_secs(45));
+        if last.contains("[timer] 1s up") {
             break;
         }
     }
@@ -478,6 +508,18 @@ fn uefi_image_boots_and_reports() {
     assert!(
         last.contains("[mm] frame allocator ready"),
         "UEFI memory bring-up marker missing; serial:\n{last}"
+    );
+    assert!(
+        last.contains("[timer] 1s up"),
+        "UEFI timer heartbeat missing (LAPIC timer must tick under OVMF); serial:\n{last}"
+    );
+    assert!(
+        last.contains("[acpi] madt ready"),
+        "UEFI MADT discovery marker missing; serial:\n{last}"
+    );
+    assert!(
+        last.contains("[apic] lapic ready"),
+        "UEFI LAPIC enable marker missing; serial:\n{last}"
     );
 }
 
