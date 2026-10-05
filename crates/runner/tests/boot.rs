@@ -285,6 +285,24 @@ fn userfault_test_passes() {
 }
 
 #[test]
+fn ramdisk_test_passes() {
+    let (code, serial) = boot(&image("test-ramdisk"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-ramdisk should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-ramdisk] passed"),
+        "test-ramdisk success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("tar entry: 'banner.txt'"),
+        "ramdisk entry marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn uefi_image_boots_and_reports() {
     // UEFI boots (kernel runs, serial works); timer/keyboard are dead until
     // the APIC work — so this asserts boot markers only, not liveness.

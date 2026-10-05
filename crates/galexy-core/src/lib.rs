@@ -10,12 +10,15 @@
 #![deny(missing_docs)]
 
 mod bitmap;
-mod ring;
-
 #[cfg(test)]
 mod bitmap_test;
+mod ring;
 #[cfg(test)]
 mod ring_test;
+mod tar;
+#[cfg(test)]
+mod tar_test;
 
 pub use bitmap::Bitmap;
 pub use ring::Ring;
+pub use tar::TarCursor;
