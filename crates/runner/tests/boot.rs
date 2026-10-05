@@ -203,7 +203,7 @@ fn userpreempt_test_passes() {
         "test-userpreempt success marker missing; serial:\n{serial}"
     );
     assert!(
-        serial.contains("ready (p4="),
+        serial.contains("ready (own tree cr3="),
         "user task spawn marker missing; serial:\n{serial}"
     );
 }
@@ -243,8 +243,8 @@ fn user_lifecycle_test_passes() {
         "user task exit marker missing; serial:\n{serial}"
     );
     assert!(
-        serial.contains("reaped 1 thread stack(s)"),
-        "reaper marker missing; serial:\n{serial}"
+        serial.contains("ready (own tree cr3="),
+        "user task spawn marker missing; serial:\n{serial}"
     );
 }
 

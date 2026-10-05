@@ -153,7 +153,7 @@ pub fn map_page_flags(
     use x86_64::structures::paging::mapper::MapToError;
     let mut result = Ok(());
     with_mapper(|mapper| {
-        let mut frame_alloc = PageTableFrameAllocator;
+        let mut frame_alloc = TaskFrameAlloc;
         // SAFETY: exclusive access via MAPPER under the IRQ gate; frame is
         // Usable per the allocator contract.
         unsafe {
@@ -204,20 +204,16 @@ pub fn frame_virt(phys: PhysAddr) -> VirtAddr {
     phys_offset() + phys.as_u64()
 }
 
-/// The highest FREE P4 entry index in the user half (`< 256`), scanning
-/// top-down. Bootload dynamics fill P4 upward from 0 (kernel, framebuffers
-/// mapped low), fixed mappings are phys memory at 32 / recursive at 511 /
-/// heap at 43 — so fresh 512-GiB user regions come from the top of the
-/// user half downward. Each pick is immediately PRESENT in the L4 (the
-/// caller maps into it right away), so consecutive picks return distinct
-/// indices.
-pub fn top_user_p4_index() -> Option<u16> {
+/// The highest FREE P4 entry index in the user half (`< 256`) of the table
+/// tree rooted at `root`, scanning top-down. Used for per-task user regions:
+/// each task's fresh tree is private, so two tasks may pick the SAME index
+/// and still never see each other's pages.
+pub fn top_user_p4_index_in(root: PhysFrame<Size4KiB>) -> Option<u16> {
     assert!(READY.load(Ordering::Relaxed), "paging: mapper not initialized");
     let phys = phys_offset();
-    let (l4_frame, _) = Cr3::read();
-    let l4 = phys + l4_frame.start_address().as_u64();
-    // SAFETY: the L4 table is the CPU's active one; read-only scan through
-    // the phys map (same access pattern the FreshL4 clone uses).
+    let l4 = phys + root.start_address().as_u64();
+    // SAFETY: `root` heads a complete page-table tree (FreshL4 contract);
+    // read-only scan through the phys map.
     unsafe {
         let table = &*(l4.as_ptr::<PageTable>());
         for i in (0..256u16).rev() {
@@ -229,13 +225,28 @@ pub fn top_user_p4_index() -> Option<u16> {
     None
 }
 
+/// [`top_user_p4_index_in`] for the currently active tree.
+pub fn top_user_p4_index() -> Option<u16> {
+    let (l4_frame, _) = Cr3::read();
+    top_user_p4_index_in(l4_frame)
+}
+
+/// Is the kernel's (boot) table the active one? Spawn-time guard: user
+/// mappings must only ever enter task trees, so `spawn_user_task` must run
+/// on the kernel tree (a `FreshL4` clones the active table).
+pub fn on_kernel_tree() -> bool {
+    let (current, _) = Cr3::read();
+    current == kernel_cr3()
+}
+
 /// Adapter: feeds the x86_64 crate's mapping machinery from our frame
-/// allocator — needed for page-table frames.
-struct PageTableFrameAllocator;
+/// allocator — needed for page-table frames. Public so non-paging call
+/// sites (sched's task-tree mapping) can run `map_to` themselves.
+pub struct TaskFrameAlloc;
 
 // SAFETY: allocate_frame hands out Usable, otherwise-unmapped frames; the
 // mapping machinery never deallocates through this adapter.
-unsafe impl FrameAllocator<Size4KiB> for PageTableFrameAllocator {
+unsafe impl FrameAllocator<Size4KiB> for TaskFrameAlloc {
     fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
         super::allocate_frame()
     }

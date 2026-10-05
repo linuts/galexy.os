@@ -20,7 +20,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use spin::Mutex;
 use x86_64::instructions::interrupts;
-use x86_64::structures::paging::{Page, PageTableFlags, PhysFrame, Size4KiB};
+use x86_64::structures::paging::{Mapper, Page, PageTableFlags, PhysFrame, Size4KiB};
 use x86_64::{PhysAddr, VirtAddr};
 
 use crate::arch::mm;
@@ -287,28 +287,52 @@ pub fn reap() {
             // The saved context lives ON this stack; null it so any stray
             // reader fails loudly instead of jumping into freed memory.
             t.ctx.store(0, Ordering::Relaxed);
-            if let Some(us) = t.user_stack.take() {
-                // Unmap + free the user stack pages (mapper ops are
-                // IRQ-gated internally; nested gate fine).
-                for i in 0..us.pages {
-                    let page = Page::containing_address(us.base + (i * 4096) as u64);
-                    if let Ok(frame) = mm::unmap_page(page) {
-                        mm::deallocate_frame(frame);
-                    }
+            // User tasks: their pages live in THEIR OWN tree — unmap
+            // through it and free the data frames. The tree is guaranteed
+            // not CR3-active here (tombstoned ⇒ the handoff/switch already
+            // moved CR3 to the next task), so no TLB flushes needed.
+            let task_cr3 = t.cr3.swap(0, Ordering::AcqRel);
+            if task_cr3 != 0 {
+                // SAFETY: tombstoned task ⇒ its tree is coherent and not
+                // active in any CR3.
+                let root = PhysFrame::from_start_address(PhysAddr::new(task_cr3))
+                    .expect("reap: corrupt task CR3");
+                let stack_pages = t
+                    .user_stack
+                    .take()
+                    .map(|us| {
+                        (0..us.pages)
+                            .map(|i| Page::containing_address(us.base + (i * 4096) as u64))
+                            .collect::<alloc::vec::Vec<Page>>()
+                    })
+                    .unwrap_or_default();
+                let code_page = t.user_code.take().map(|(p, _)| p);
+                let scratch_page = t.user_scratch.take().map(|(p, _)| p);
+                unsafe {
+                    mm::with_table(root, |m| {
+                        // Free the DATA frames while dropping the entries:
+                        // the tree walk (free_user_tree, next step) will
+                        // take the page-table frames below.
+                        let mut free_frames: alloc::vec::Vec<PhysFrame<Size4KiB>> =
+                            alloc::vec::Vec::new();
+                        for p in &stack_pages {
+                            if let Ok((frame, _)) = m.unmap(*p) {
+                                free_frames.push(frame);
+                            }
+                        }
+                        for page in [code_page, scratch_page].into_iter().flatten() {
+                            if let Ok((frame, _)) = m.unmap(page) {
+                                free_frames.push(frame);
+                            }
+                        }
+                        for f in free_frames {
+                            mm::deallocate_frame(f);
+                        }
+                    });
                 }
-            }
-            if let Some((code_page, code_frame)) = t.user_code.take() {
-                // Unmap the code page and return its frame.
-                if let Ok(frame) = mm::unmap_page(code_page) {
-                    debug_assert_eq!(frame.start_address(), code_frame.start_address());
-                    mm::deallocate_frame(frame);
-                }
-            }
-            if let Some((scratch_page, scratch_frame)) = t.user_scratch.take() {
-                if let Ok(frame) = mm::unmap_page(scratch_page) {
-                    debug_assert_eq!(frame.start_address(), scratch_frame.start_address());
-                    mm::deallocate_frame(frame);
-                }
+                // The root frame itself (page-table frames above it stay
+                // leaked until free_user_tree lands).
+                mm::deallocate_frame(root);
             }
             let stack = core::mem::take(&mut t.stack);
             drop(stack); // returns the 32 KiB to the heap
@@ -363,37 +387,62 @@ const USER_STACK_PAGES: usize = 4;
 /// code page and stack far apart; the region is 512 GiB).
 const USER_STACK_OFFSET: u64 = 1 << 30;
 
-/// Result of a user-task spawn: the virtual addresses ring-3 code was
-/// granted (so the caller can embed them in machine-code blobs).
+/// Result of a user-task spawn: the addresses ring-3 code was granted plus
+/// the scratch page's PHYSICAL address (kernel-side pollers read through
+/// the phys map — the task tree is not active from the kernel's context).
 #[derive(Debug, Clone, Copy)]
 pub struct UserRegion {
-    /// Code page base (RIP entry point of the task).
+    /// Code page base (RIP entry point of the task) — task-private space.
     pub code: VirtAddr,
-    /// One RW|USER|NX scratch page for user↔kernel-shared data (Step A
-    /// tasks share the kernel's address space, so the kernel can poll it).
+    /// RW scratch page in task-private space.
     pub scratch: VirtAddr,
+    /// Physical address of the scratch page's backing frame (kernel poll).
+    pub scratch_phys: PhysAddr,
 }
 
-/// Spawns a ring-3 task. `build` receives the granted addresses and
-/// returns the code bytes to map (≤ one page).
+/// Spawns a ring-3 task with ITS OWN address space: a `FreshL4` cloned
+/// from the kernel's table (kernel half shared verbatim, user half empty).
+/// `build` receives the granted addresses and returns the code bytes to
+/// map (≤ one page).
 ///
-/// Layout per task: one free P4 entry `N` (scanned top-down in the user
-/// half), code mapped at `(N<<39) + 0`, user stack at `+1 GiB`, scratch
-/// page right above the stack. The fabricated context (on the user stack)
-/// enters ring 3; preemption pushes onto this task's own kernel stack via
-/// TSS.RSP0 (set on switch-in). IRQ-gated like every registration.
+/// Layout per task (task-private tree): one free P4 entry `N` scanned
+/// top-down BELOW 256, code at `(N<<39) + 0`, user stack at `+1 GiB`,
+/// scratch page right above the stack. The task's own kernel-mode stack
+/// (heap) serves its ring 3→0 crossings via TSS.RSP0. IRQ-gated.
 pub fn spawn_user_task(
     name: &'static str,
     build: impl FnOnce(UserRegion) -> Vec<u8>,
 ) -> UserRegion {
     interrupts::without_interrupts(|| {
-        let p4_index = mm::top_user_p4_index().expect("no free user P4 entry left");
+        // Spawn MUST run on the kernel tree: a FreshL4 clones whatever is
+        // active, and user mappings live only in task trees from now on.
+        assert!(
+            mm::on_kernel_tree(),
+            "spawn_user_task: must run on the kernel tree (main-loop context)"
+        );
+        let fresh = mm::FreshL4::new().expect("no frame for a fresh task table");
+        let root = fresh.frame;
+        let p4_index =
+            mm::top_user_p4_index_in(root).expect("no free user P4 entry in the fresh tree");
         let region = VirtAddr::new((p4_index as u64) << 39);
+
+        // Data frames first (so `build` can embed the scratch's physical
+        // address for kernel-side polling).
+        let code_frame = mm::allocate_frame().expect("no frame for user code");
+        let mut stack_frames: [PhysFrame<Size4KiB>; USER_STACK_PAGES] =
+            [PhysFrame::from_start_address(PhysAddr::new(0)).unwrap(); USER_STACK_PAGES];
+        for slot in &mut stack_frames {
+            let frame = mm::allocate_frame().expect("no frame for user stack");
+            *slot = frame;
+        }
+        let scratch_frame = mm::allocate_frame().expect("no frame for user scratch");
+
         let stack_base = region + USER_STACK_OFFSET;
         let scratch = stack_base + (USER_STACK_PAGES * 4096) as u64 + 4096;
         let granted = UserRegion {
             code: region,
             scratch,
+            scratch_phys: scratch_frame.start_address(),
         };
         let code = build(granted);
 
@@ -404,65 +453,84 @@ pub fn spawn_user_task(
             code.len()
         );
 
-        // Code page: PRESENT | USER, executable (no NX, no writable).
-        let code_frame = mm::allocate_frame().expect("no frame for user code");
-        // SAFETY: the frame is allocator-owned (exclusive access per
-        // contract), so writing through the phys map is exclusive.
+        // SAFETY: allocator-owned frames (exclusive access per contract);
+        // write through the phys map, no task-tree activation needed.
         unsafe {
-            let dst = mm::frame_virt(code_frame.start_address()).as_mut_ptr::<u8>();
-            core::ptr::copy_nonoverlapping(code.as_ptr(), dst, code.len());
-        }
-        let code_page = Page::containing_address(region);
-        mm::map_page_flags(
-            code_page,
-            code_frame,
-            PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE,
-        )
-        .expect("user code map failed");
-
-        // User stack: PRESENT | WRITABLE | NX | USER, at region + 1 GiB.
-        for i in 0..USER_STACK_PAGES {
-            let frame = mm::allocate_frame().expect("no frame for user stack");
-            let page = Page::containing_address(stack_base + (i * 4096) as u64);
-            mm::map_page_flags(
-                page,
-                frame,
-                PageTableFlags::PRESENT
-                    | PageTableFlags::WRITABLE
-                    | PageTableFlags::USER_ACCESSIBLE
-                    | PageTableFlags::NO_EXECUTE,
-            )
-            .expect("user stack map failed");
+            core::ptr::copy_nonoverlapping(
+                code.as_ptr(),
+                mm::frame_virt(code_frame.start_address()).as_mut_ptr::<u8>(),
+                code.len(),
+            );
+            // Scratch page zeroed: consumers poll for the first non-zero
+            // write; allocator frames may carry stale bytes.
+            core::ptr::write_bytes(
+                mm::frame_virt(scratch_frame.start_address()).as_mut_ptr::<u64>(),
+                0,
+                512,
+            );
         }
 
-        // Scratch page: PRESENT | WRITABLE | NX | USER (right above the
-        // stack pages). Zeroed first: allocator frames can carry stale
-        // bytes, and consumers poll this page for their first non-zero
-        // write.
-        let scratch_frame = mm::allocate_frame().expect("no frame for user scratch");
-        // SAFETY: allocator-owned frame (exclusive access per contract).
+        // Map everything INTO THE TASK'S OWN TREE (it is not CR3-active —
+        // no TLB flushes needed; mapping machinery allocates the task's
+        // own P3/P2/P1 frames below the entry).
+        // SAFETY: a FreshL4 root: coherent, freshly cloned, not active.
         unsafe {
-            let dst = mm::frame_virt(scratch_frame.start_address()).as_mut_ptr::<u64>();
-            core::ptr::write_bytes(dst, 0, 512);
+            mm::with_table(root, |mapper| {
+                let code_page = Page::containing_address(region);
+                mapper
+                    .map_to(
+                        code_page,
+                        code_frame,
+                        PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE,
+                        &mut mm::TaskFrameAlloc,
+                    )
+                    .expect("user code map failed")
+                    .flush();
+                for (i, frame) in stack_frames.iter().enumerate() {
+                    let page = Page::containing_address(stack_base + (i * 4096) as u64);
+                    mapper
+                        .map_to(
+                            page,
+                            *frame,
+                            PageTableFlags::PRESENT
+                                | PageTableFlags::WRITABLE
+                                | PageTableFlags::USER_ACCESSIBLE
+                                | PageTableFlags::NO_EXECUTE,
+                            &mut mm::TaskFrameAlloc,
+                        )
+                        .expect("user stack map failed")
+                        .flush();
+                }
+                let scratch_page = Page::containing_address(scratch);
+                mapper
+                    .map_to(
+                        scratch_page,
+                        scratch_frame,
+                        PageTableFlags::PRESENT
+                            | PageTableFlags::WRITABLE
+                            | PageTableFlags::USER_ACCESSIBLE
+                            | PageTableFlags::NO_EXECUTE,
+                        &mut mm::TaskFrameAlloc,
+                    )
+                    .expect("user scratch map failed")
+                    .flush();
+            });
         }
-        mm::map_page_flags(
-            Page::containing_address(scratch),
-            scratch_frame,
-            PageTableFlags::PRESENT
-                | PageTableFlags::WRITABLE
-                | PageTableFlags::USER_ACCESSIBLE
-                | PageTableFlags::NO_EXECUTE,
-        )
-        .expect("user scratch map failed");
 
-        // Initial ring-3 frame: fabricated at the user stack top, RIP at
-        // the blob entry, user selectors.
+        // Initial ring-3 frame: fabricated through the phys-map image of
+        // the TOP stack page — fab = image end of the top page = the exact
+        // stack_top of the task's user stack; the builder writes downward.
         let stack_top = (stack_base + (USER_STACK_PAGES * 4096) as u64).as_u64() & !0xF;
+        debug_assert!(stack_top.is_multiple_of(4096));
+        let fab_vaddr =
+            mm::frame_virt(stack_frames[USER_STACK_PAGES - 1].start_address()) + 4096;
         let (cs, ss) = context::user_cs_ss();
-        let ctx = unsafe { context::init_user_frame(stack_top, region.as_u64(), cs, ss) };
+        let ctx = unsafe {
+            context::init_user_frame(fab_vaddr.as_u64(), region.as_u64(), cs, ss)
+        };
 
-        // Kernel-mode stack for ring 3→0 crossings (timer IRQ from ring 3,
-        // later syscalls): heap-backed, 32 KiB, canary at bottom.
+        // Kernel-mode stack for ring 3→0 crossings: heap-backed, 32 KiB,
+        // canary at the bottom.
         let mut kstack = vec![0u8; THREAD_STACK_SIZE];
         kstack[..8].copy_from_slice(&STACK_CANARY.to_le_bytes());
         let kstack_top = (kstack.as_ptr() as u64 + kstack.len() as u64) & !0xF;
@@ -482,16 +550,16 @@ pub fn spawn_user_task(
                 base: stack_base,
                 pages: USER_STACK_PAGES,
             }),
-            user_code: Some((code_page, code_frame)),
+            user_code: Some((Page::containing_address(region), code_frame)),
             user_scratch: Some((Page::containing_address(scratch), scratch_frame)),
-            cr3: AtomicU64::new(0),
+            cr3: AtomicU64::new(root.start_address().as_u64()),
         });
         serial_println!(
-            "[sched] user task '{}' ready (p4={}, code @ {:#x}, ustack top {:#x}, kstack top {:#x})",
+            "[sched] user task '{}' ready (own tree cr3={:#x}, p4={}, code @ {:#x}, kstack top {:#x})",
             name,
+            root.start_address().as_u64(),
             p4_index,
             region.as_u64(),
-            stack_top,
             kstack_top
         );
         granted

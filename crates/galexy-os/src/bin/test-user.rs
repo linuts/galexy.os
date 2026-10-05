@@ -14,7 +14,6 @@ use galexy_abi::{CapRights, Syscall};
 use galexy_os::{drivers::screen, exit_qemu, println, sched, serial_println, QemuExitCode};
 
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
-
 /// Blob message written to the console through the write syscall. Cast to
 /// bytes via the closure.
 const MSG: &[u8] = b"Hello from ring 3!";
@@ -75,18 +74,19 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         code
     });
 
-    // Frame accounting baseline (data frames): snapshot AFTER the spawn —
-    // its mapping chain also consumed page-TABLE frames (P3/P2/P1 under
-    // the fresh P4 entry), which the reaper intentionally does NOT walk
-    // back (FreshL4 debt, see docs). The 6 DATA frames (code 1 + stack 4
-    // + scratch 1) must all come back.
+    // Frame accounting: the 6 DATA frames (code 1 + stack 4 + scratch 1)
+    // plus the tree's ROOT frame come back. The spawn's page-table frames
+    // deeper in the tree (P3/P2/P1) stay allocated until free_user_tree
+    // (next commit) — snapshot AFTER the spawn so tables are excluded.
     let frames_after_spawn = galexy_os::arch::mm::free_frames();
-    const DATA_FRAMES: usize = 1 + 4 + 1;
+    const RETURNED_FRAMES: usize = 1 + 4 + 1 + 1;
 
     // Main loop: hlt + rotations while the user task runs. Poll the scratch
-    // page through the shared address space, but ONLY before the reaper
-    // frees its mapping (page fault otherwise). Therefore: peek, then reap.
-    let scratch_virt: *const u32 = region.scratch.as_ptr();
+    // page through its PHYSICAL frame (the phys map is present in every
+    // address space; the task's own table is active while it runs). Peek,
+    // then reap — the reaper frees the scratch frame, so peek first.
+    let scratch_virt: *const u32 =
+        galexy_os::arch::mm::frame_virt(region.scratch_phys).as_ptr();
     loop {
         x86_64::instructions::hlt();
         // SAFETY: scratch is mapped until the reaper frees it; our peek
@@ -111,7 +111,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let frames_after = galexy_os::arch::mm::free_frames();
     assert_eq!(
         frames_after,
-        frames_after_spawn + DATA_FRAMES,
+        frames_after_spawn + RETURNED_FRAMES,
         "user task's data frames must return to the allocator: after_spawn={} final={}",
         frames_after_spawn,
         frames_after
