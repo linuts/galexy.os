@@ -54,6 +54,9 @@ pub fn init(boot_info: &BootInfo) {
     // then the I/O APIC wires the keyboard line onto its vector.
     pics::init();
     ioapic::init();
+    // Shootdown IPI machinery (lazy until the first broadcast; the IDT gate
+    // is registered in idt::init).
+    mm::shootdown::init();
     // The i8042 first port enable + stale-buffer drain (moved out of the
     // PIC's init — the keyboard driver owns its controller now).
     crate::drivers::keyboard::init();

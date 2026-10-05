@@ -523,6 +523,22 @@ fn smp_test_passes() {
 }
 
 #[test]
+fn ipi_test_passes() {
+    // The shootdown IPI machinery (M19): broadcast + lock-free ack, end to
+    // end across the two CPUs the harness always provides.
+    let (code, serial) = boot(&image("test-ipi"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-ipi should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-ipi] passed"),
+        "test-ipi success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn smpuser_test_passes() {
     // The ring-3 blobs print via the console mirror (screen + serial), so
     // the fact the AP-side task's WRITE syscall ran is visible headless.

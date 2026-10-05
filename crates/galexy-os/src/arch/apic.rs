@@ -414,6 +414,9 @@ const DIV_1: u32 = 0b1011;
 /// ICR delivery-mode encodings.
 const ICR_DELIVERY_INIT: u32 = 0b101;
 const ICR_DELIVERY_STARTUP: u32 = 0b110;
+/// ICR delivery mode 0b000 = FIXED: the vector is dispatched as an ordinary
+/// interrupt on the target CPU (the IPI machinery's workhorse — shootdowns).
+const ICR_DELIVERY_FIXED: u32 = 0b000;
 /// ICR level bit (bit 14): 1 = assert (for INIT).
 const ICR_LEVEL_ASSERT: u32 = 1 << 14;
 /// ICR destination-mode: physical (bit 11 = 0) — per-APIC-id targeting.
@@ -451,6 +454,13 @@ pub fn send_ipi(apic_id: u8, delivery: u32, vector: u8, level: bool) {
             }
         }
     }
+}
+
+/// Sends a FIXED-delivery IPI (an ordinary interrupt on `vector`) to
+/// `apic_id`. Runtime consumers (TLB shootdowns) send these from any CPU —
+/// unlike INIT/SIPI bring-up, nothing here is BSP-only.
+pub fn send_fixed_ipi(apic_id: u8, vector: u8) {
+    send_ipi(apic_id, ICR_DELIVERY_FIXED, vector, false);
 }
 
 /// Sends the INIT IPI (assert) to `apic_id`.

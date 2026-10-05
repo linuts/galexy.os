@@ -633,3 +633,14 @@ extern "C" fn ap_main(rank: u64) -> ! {
 fn apic_id_for(cpu_index: usize) -> u32 {
     crate::arch::acpi::madt().enabled_ids()[cpu_index] as u32
 }
+
+/// The APIC id of logical CPU `index`, or `None` when that slot was never
+/// brought up. Shootdown broadcast targets are selected through this — a
+/// slot is "online" once its per-CPU bring-up filled the identity fields.
+pub fn apic_id_of(index: usize) -> Option<u32> {
+    let slot = &SLOTS[index];
+    if slot.self_ptr.load(Ordering::Relaxed) == 0 {
+        return None;
+    }
+    Some(slot.apic_id.load(Ordering::Relaxed))
+}

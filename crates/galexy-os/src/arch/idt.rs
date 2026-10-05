@@ -37,6 +37,11 @@ static IDT: LazyLock<Mutex<InterruptDescriptorTable>> = LazyLock::new(|| {
     // a spurious needs NO EOI when the vector has no handler — but the LAPIC
     // marks the bit itself, so just count + re-mask via EOI (harmless).
     idt[apic::SPURIOUS_VECTOR].set_handler_fn(spurious_handler);
+    // The shootdown IPI (vector 0xF8, Milestone 19): a LOCK-FREE handler —
+    // targets' IPI handlers must never take locks (the deadlock rule: an
+    // IF=0 lock holder must still be able to ack a broadcast).
+    idt[crate::arch::mm::shootdown::SD_VECTOR]
+        .set_handler_fn(crate::arch::mm::shootdown::shootdown_handler);
     Mutex::new(idt)
 });
 
