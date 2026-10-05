@@ -107,6 +107,72 @@ pub unsafe extern "C" fn timer_handler_naked() {
     );
 }
 
+/// The PAGE-FAULT vector's naked handler: same prologue as the timer, but
+/// the page-fault vector carries an ERROR CODE pushed by the CPU right
+/// above the IRQ frame — so the built frame is one word SKEWED vs
+/// `Context` (nobody ever pops it: every page-fault outcome is death or
+/// park). The Rust half reads fields by RAW OFFSETS.
+///
+/// - fault origin ring 3: kill the faulting task (tombstone + switch).
+/// - fault origin ring 0: report + park (the old default).
+///
+/// # Safety
+///
+/// naked function; must only be installed as the page-fault vector's
+/// handler.
+#[unsafe(naked)]
+pub unsafe extern "C" fn page_fault_handler_naked() {
+    core::arch::naked_asm!(
+        "push rax", "push rbx", "push rcx", "push rdx",
+        "push rsi", "push rdi", "push rbp",
+        "push r8", "push r9", "push r10", "push r11",
+        "push r12", "push r13", "push r14", "push r15",
+        "mov rdi, rsp",
+        "call {sched}",
+        "cmp rax, 0",
+        "je 2f",
+        "mov rsp, rax",
+        "2:",
+        "pop r15", "pop r14", "pop r13", "pop r12",
+        "pop r11", "pop r10", "pop r9", "pop r8",
+        "pop rbp", "pop rdi", "pop rsi", "pop rdx",
+        "pop rcx", "pop rbx", "pop rax",
+        "iretq",
+        sched = sym page_fault_sched,
+    );
+}
+
+/// The Rust half of the page-fault path (raw offsets; see
+/// `page_fault_handler_naked` docs for the frame layout: 15 GPRs, then
+/// error code, then the 5-word IRQ frame).
+///
+/// # Safety
+///
+/// Called only from the naked wrapper; `frame` is the outgoing task's
+/// stack top (its context block), exclusively owned, IF=0.
+unsafe extern "C" fn page_fault_sched(frame: *mut Context) -> u64 {
+    let raw = frame as *const u64;
+    // SAFETY: the frame is on the faulting task's mapped stack.
+    let cs = unsafe { raw.add(17).read() };
+    if cs & 0b11 == 3 {
+        // Ring-3 fault: the task dies, the kernel lives. Tombstone +
+        // rotate (guaranteed switch — the dead task is never main).
+        unsafe { super::syscall_handoff(frame, true, "page fault") }
+    } else {
+        // Ring-0 fault: kernel bug or a test-installed seam. Report
+        // precisely, then park (the faulting instruction would refault).
+        let err = unsafe { raw.add(15).read() };
+        crate::serial_println!(
+            "[pf] PAGE FAULT in ring 0, err={:#x}, cr2={:#?}",
+            err,
+            x86_64::registers::control::Cr2::read()
+        );
+        loop {
+            x86_64::instructions::hlt();
+        }
+    }
+}
+
 /// The Rust half of the timer switch: called on the OUTGOING task's stack
 /// with the frame pointer; returns the incoming task's context pointer (or
 /// 0 to resume the outgoing task untouched).

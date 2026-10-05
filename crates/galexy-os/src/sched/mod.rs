@@ -336,6 +336,10 @@ const USER_STACK_PAGES: usize = 4;
 /// User stack offset inside the task's P4 region (1 GiB in — keeps the
 /// code page and stack far apart; the region is 512 GiB).
 const USER_STACK_OFFSET: u64 = 1 << 30;
+// The GUARD fence is an ABSENCE: the page directly below the user stack is
+// left unmapped (nothing maps it, nothing needs to). A stack walking past
+// its region faults in ring 3, and the page-fault path tombstones the
+// task — silent corruption becomes a clean kill.
 
 /// Result of a user-task spawn: the addresses ring-3 code was granted plus
 /// the scratch page's PHYSICAL address (kernel-side pollers read through
@@ -575,7 +579,7 @@ pub fn slot_is_user(slot: usize) -> bool {
 ///
 /// `frame` must be the CURRENT task's uniform context frame on its kernel
 /// stack, exactly as built by the syscall entry.
-pub unsafe fn syscall_handoff(frame: *mut context::Context, exit: bool) -> u64 {
+pub unsafe fn syscall_handoff(frame: *mut context::Context, exit: bool, reason: &'static str) -> u64 {
     let slot = CURRENT.load(Ordering::Relaxed);
     assert!(slot != 0, "syscall_handoff: no task current (cpl bug?)");
     let pending_ctx = interrupts::without_interrupts(|| {
@@ -588,7 +592,7 @@ pub unsafe fn syscall_handoff(frame: *mut context::Context, exit: bool) -> u64 {
         context::fx_save(t.fx as *mut u8);
         if exit {
             t.state.store(STATE_EXITED, Ordering::Release);
-            serial_println!("[sched] task '{}' exited (syscall)", t.name);
+            serial_println!("[sched] task '{}' exited ({})", t.name, reason);
         }
 
         // Advance the rotation: first eligible slot strictly after the

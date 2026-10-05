@@ -16,7 +16,10 @@ use crate::drivers::keyboard;
 static IDT: LazyLock<Mutex<InterruptDescriptorTable>> = LazyLock::new(|| {
     let mut idt = InterruptDescriptorTable::new();
     idt.breakpoint.set_handler_fn(breakpoint_handler);
-    idt.page_fault.set_handler_fn(page_fault_handler);
+    // The page-fault vector uses a NAKED handler (installed by raw address
+    // in `init` below): ring-3 faults must tombstone the faulting task and
+    // switch away — the x86-interrupt ABI can't hand the CPU elsewhere.
+    // Tests can still swap it via `set_page_fault_handler`.
     // SAFETY: index 0 is a valid IST slot we reserved in the TSS.
     unsafe {
         idt.double_fault
@@ -31,13 +34,16 @@ static IDT: LazyLock<Mutex<InterruptDescriptorTable>> = LazyLock::new(|| {
     Mutex::new(idt)
 });
 
-/// Loads the IDT, installing the naked timer handler by address.
+/// Loads the IDT, installing the naked timer + page-fault handlers by
+/// address.
 pub fn init() {
     let mut idt = IDT.lock();
-    // SAFETY: installing a valid handler address in the live IDT.
+    // SAFETY: installing valid handler addresses in the live IDT.
     unsafe {
         let timer_fn: unsafe extern "C" fn() = crate::sched::context::timer_handler_naked;
         idt[TIMER_INTERRUPT_ID].set_handler_addr(VirtAddr::from_ptr(timer_fn as *const ()));
+        let pf_fn: unsafe extern "C" fn() = crate::sched::context::page_fault_handler_naked;
+        idt.page_fault.set_handler_addr(VirtAddr::from_ptr(pf_fn as *const ()));
     }
     drop(idt);
     // SAFETY: the IDT is never moved (it lives in the static) — the lifetime
@@ -49,26 +55,8 @@ extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
     crate::serial_println!("EXCEPTION: BREAKPOINT\n{:#?}", stack_frame);
 }
 
-extern "x86-interrupt" fn page_fault_handler(
-    stack_frame: InterruptStackFrame,
-    error_code: PageFaultErrorCode,
-) {
-    use x86_64::registers::control::Cr2;
-    let faulting_address = Cr2::read();
-    crate::serial_println!(
-        "EXCEPTION: PAGE FAULT ({:?}) while accessing {:#?}\n{:#?}",
-        error_code,
-        faulting_address,
-        stack_frame
-    );
-    // The faulting instruction would just fault again; park here.
-    loop {
-        x86_64::instructions::hlt();
-    }
-}
-
-/// Installs `handler` as the page-fault handler (replacing the default
-/// report-and-park one). For tests and, later, demand paging.
+/// Installs `handler` as the page-fault handler (replacing the naked
+/// kill-or-park default). For tests and, later, demand paging.
 pub fn set_page_fault_handler(
     handler: extern "x86-interrupt" fn(InterruptStackFrame, PageFaultErrorCode),
 ) {

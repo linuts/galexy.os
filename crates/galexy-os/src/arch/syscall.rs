@@ -157,12 +157,12 @@ unsafe extern "C" fn syscall_rust(frame: *mut crate::sched::context::Context, sy
         crate::sched::syscalls::Outcome::Handoff => {
             // SAFETY: the frame is the current task's uniform context on
             // its kernel stack (built by the naked entry just now).
-            unsafe { crate::sched::syscall_handoff(frame, false) }
+            unsafe { crate::sched::syscall_handoff(frame, false, "yield") }
         }
         crate::sched::syscalls::Outcome::Exit => {
             // SAFETY: as above; exit tombstones the task — the handoff
             // guarantees a nonzero target (never returns to the dead task).
-            unsafe { crate::sched::syscall_handoff(frame, true) }
+            unsafe { crate::sched::syscall_handoff(frame, true, "syscall") }
         }
     }
 }
