@@ -19,8 +19,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     println!("[test-heapgrow] running");
     serial_println!("[test-heapgrow] running");
 
-    galexy_os::arch::init(boot_info);
     galexy_os::arch::mm::init(boot_info);
+    galexy_os::arch::init(boot_info);
 
     let initial_size = galexy_os::arch::mm::heap::stats().1;
     let frames_before = galexy_os::arch::mm::free_frames();

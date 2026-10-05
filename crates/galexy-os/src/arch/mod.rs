@@ -7,6 +7,7 @@
 //! only this module tree.
 
 pub mod acpi;
+pub mod apic;
 pub mod gdt;
 mod idt;
 pub mod mm;
@@ -43,6 +44,9 @@ pub fn init(boot_info: &BootInfo) {
         .into_option()
         .expect("physical memory must be mapped (see BOOTLOADER_CONFIG)");
     acpi::init(boot_info.rsdp_addr.into_option(), phys_offset);
+    // LAPIC enable is behavior-neutral until the timer/IOAPIC wiring lands
+    // (M17 commits in sequence); the PIC still delivers everything today.
+    apic::init(acpi::madt().lapic_base());
     pics::init();
     timer::init();
     x86_64::instructions::interrupts::enable();

@@ -23,8 +23,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     };
     let ramdisk_len = boot_info.ramdisk_len;
 
-    galexy_os::arch::init(boot_info);
     galexy_os::arch::mm::init(boot_info);
+    galexy_os::arch::init(boot_info);
     sched::init();
 
     // SAFETY: the bootloader mapped the contiguous ramdisk image at

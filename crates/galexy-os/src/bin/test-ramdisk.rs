@@ -31,10 +31,11 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         ramdisk_len
     );
 
-    // The phys map is up BEFORE the frame allocator matters; mm::init
-    // brings everything online (the phys mapping is fixed in the config).
-    galexy_os::arch::init(boot_info);
+    // mm::init FIRST: arch::init's APIC step maps the LAPIC MMIO page
+    // through the paging mapper. The phys map itself exists from boot
+    // (fixed in the config), so the tar above was already readable.
     galexy_os::arch::mm::init(boot_info);
+    galexy_os::arch::init(boot_info);
 
     // Ramdisk bytes: `ramdisk_addr` is a VIRTUAL address the bootloader
     // already mapped into the kernel's (and thus every task's) space —

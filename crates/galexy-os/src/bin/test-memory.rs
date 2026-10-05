@@ -21,11 +21,11 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         .into_option()
         .expect("physical memory must be mapped (see BOOTLOADER_CONFIG)");
 
-    // Fault handlers BEFORE memory work: a fault reports over serial
-    // instead of triple-faulting into a silent reset.
-    galexy_os::arch::init(boot_info);
-
+    // mm::init FIRST: arch::init's APIC step maps the LAPIC MMIO page
+    // through the paging mapper, which mm::init brings online. Fault
+    // handlers (a subset of arch::init) still come before any memory work.
     mm::init(boot_info);
+    galexy_os::arch::init(boot_info);
     let initial_free = mm::free_frames();
     assert!(
         initial_free > 100,

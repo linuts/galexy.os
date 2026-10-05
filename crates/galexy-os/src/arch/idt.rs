@@ -5,6 +5,7 @@ use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::VirtAddr;
 
+use super::apic;
 use super::gdt;
 use super::pics;
 use super::pics::{KEYBOARD_INTERRUPT_ID, TIMER_INTERRUPT_ID};
@@ -31,6 +32,12 @@ static IDT: LazyLock<Mutex<InterruptDescriptorTable>> = LazyLock::new(|| {
     // installed by raw address.
     // Keyboard (IRQ1) stays a regular x86-interrupt handler.
     idt[KEYBOARD_INTERRUPT_ID].set_handler_fn(keyboard_handler);
+    // The LAPIC's spurious vector MUST have an IDT entry once the LAPIC is
+    // enabled by `arch::apic::init` (vector 0xFF): an unhandled stray
+    // spurious would hit an empty gate and triple-fault. EOI a real spurious;
+    // a spurious needs NO EOI when the vector has no handler — but the LAPIC
+    // marks the bit itself, so just count + re-mask via EOI (harmless).
+    idt[apic::SPURIOUS_VECTOR].set_handler_fn(spurious_handler);
     Mutex::new(idt)
 });
 
@@ -83,3 +90,8 @@ extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame) {
     }
     pics::end_of_interrupt(KEYBOARD_INTERRUPT_ID);
 }
+
+/// The LAPIC spurious interrupt (vector 0xFF): no device work, just log-free
+/// silence. A spurious needs no EOI (the ISR bit for it is never set), so
+/// this body is a no-op — the handler exists purely so the gate is mapped.
+extern "x86-interrupt" fn spurious_handler(_stack_frame: InterruptStackFrame) {}

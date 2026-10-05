@@ -22,6 +22,9 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     // arch::init walks RSDP → root table → MADT (checksums enforced on the
     // way). A malformed table would already have panicked the kernel.
+    // (ACPI itself only needs the phys map, but the LAPIC-enable step inside
+    // arch::init maps MMIO through the paging mapper, so mm comes first.)
+    arch::mm::init(boot_info);
     arch::init(boot_info);
 
     let madt = arch::madt();

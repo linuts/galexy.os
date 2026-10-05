@@ -40,8 +40,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         .into_option()
         .expect("physical memory must be mapped (see BOOTLOADER_CONFIG)");
 
-    galexy_os::arch::init(boot_info); // IDT up first: faults are diagnosable
-    mm::init(boot_info); // also initializes the page mapper
+    mm::init(boot_info); // also initializes the page mapper (LAPIC mapping needs it)
+    galexy_os::arch::init(boot_info); // faults are diagnosable from here on
 
     // Map a freshly allocated frame at a fresh virtual page in P4 entry 100
     // (canonical; unused — dynamics fill from index 0, phys mem is 32,

@@ -118,6 +118,28 @@ fn acpi_test_passes() {
 }
 
 #[test]
+fn apic_test_passes() {
+    let (code, serial) = boot(&image("test-apic"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-apic should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-apic] passed"),
+        "test-apic success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[apic] lapic ready"),
+        "LAPIC enable marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("detected mode: XApic"),
+        "LAPIC mode detection marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn heap_grow_test_passes() {
     let (code, serial) = boot(&image("test-heapgrow"));
     assert_eq!(
