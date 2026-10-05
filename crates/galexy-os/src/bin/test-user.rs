@@ -75,11 +75,12 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     });
 
     // Frame accounting: the 6 DATA frames (code 1 + stack 4 + scratch 1)
-    // plus the tree's ROOT frame come back. The spawn's page-table frames
-    // deeper in the tree (P3/P2/P1) stay allocated until free_user_tree
-    // (next commit) — snapshot AFTER the spawn so tables are excluded.
+    // plus the tree's page-table frames come back — the reaper's tree walk
+    // reports the full count over serial ("freed task ... tree: N"). The
+    // exact cycle-closure accounting lives in bin/test-treechurn.rs; here
+    // we require at least the data frames back.
     let frames_after_spawn = galexy_os::arch::mm::free_frames();
-    const RETURNED_FRAMES: usize = 1 + 4 + 1 + 1;
+    const DATA_FRAMES: usize = 1 + 4 + 1;
 
     // Main loop: hlt + rotations while the user task runs. Poll the scratch
     // page through its PHYSICAL frame (the phys map is present in every
@@ -109,9 +110,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     }
 
     let frames_after = galexy_os::arch::mm::free_frames();
-    assert_eq!(
-        frames_after,
-        frames_after_spawn + RETURNED_FRAMES,
+    assert!(
+        frames_after >= frames_after_spawn + DATA_FRAMES,
         "user task's data frames must return to the allocator: after_spawn={} final={}",
         frames_after_spawn,
         frames_after
