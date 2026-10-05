@@ -170,7 +170,8 @@ Init order: GDT/TSS (per-CPU slot 0) → per-CPU GS substrate → ACPI (MADT)
   an AP without its own load runs on the real-mode zero IDTR and
   triple-faults on its first tick). Entries: breakpoint, page fault
   (reports + parks), double fault (per-CPU IST), timer (vector 32, NAKED),
-  keyboard (vector 33), LAPIC spurious (0xFF).
+  keyboard (vector 33), shootdown IPI (vector 0xF8, lock-free — M19),
+  LAPIC spurious (0xFF).
 - Interrupt delivery is ALL-APIC since Milestone 17, now PER-CPU (M18):
   each CPU's LAPIC timer carries vector 32 with a SHARE-SPLIT ICR
   (ticks-per-ms × cpu count) so N cores each tick at 1/N kHz and the
@@ -300,9 +301,39 @@ Init order: GDT/TSS (per-CPU slot 0) → per-CPU GS substrate → ACPI (MADT)
   maps a 64 KiB chunk right past the current end (frames from the frame
   allocator) and `Heap::extend`s the allocator (the whole P4 entry spans
   512 GiB, so the growth path needs no new top-level structures).
+- Growth is machine-serialized by a `GROWING` flag (SMP M19). The map
+  loop runs IRQ-gated; the TLB shootdown between map and `Heap::extend`
+  is lock-free (no Rust spin lock across the broadcast — see shootdown
+  below). A second CPU that OOMs mid-growth does not fail the alloc: it
+  spins with interrupts enabled until the in-flight chunk lands (a ~2s
+  watchdog panics if the grower sticks), then the caller retries.
 - `shell` is the first heap consumer (String line buffers); the scheduler's
   task queues are the next one. Host unit tests never touch the heap
   (no_std tests of `galexy-core` are allocation-free by rule).
+
+### arch/mm/shootdown — "precise INVLPG" (arch/)
+
+Kernel-half PTEs are shared across every CPU and every task tree. A remap
+on one CPU is stale in every other TLB until invalidated.
+
+- Mailbox pool: 8 slots × 16 VAs (one heap-growth chunk fits one slot).
+  The ICR only carries the vector (0xF8); the VAs ride in the slot. A
+  monotonic machine-global `seq` is published with Release; a slot is
+  reused only after every target's per-slot `seen` has consumed that
+  `seq` (ABA closed; a stale re-INVLPG is harmless).
+- Initiator (`shootdown_others`): claim a slot, publish, `send_fixed_ipi`
+  to every other online CPU, spin until each target's `seen` catches
+  `seq`. Holds no Rust spin lock. Any IRQ state is fine — targets ack
+  the next time they run with IF=1.
+- Target: the 0xF8 handler scans unseen seqs, `invlpg`s the listed VAs,
+  stores `seen`. Takes no locks, ever (an IF=0 lock holder must still be
+  able to ack, or a broadcasting initiator spins forever).
+- `map_kernel_page_broadcast` is the single-page primitive: map, local
+  flush, then broadcast. Heap `grow()` batches instead: `map_page` the
+  chunk under the IRQ gate, one `shootdown_others` for every new VA (a
+  16-page chunk fills one mailbox slot), then `Heap::extend`. Per-task
+  trees stay local: only that CPU's CR3 swap (a full flush) publishes
+  them.
 
 ### sched — "the scheduler" (`sched/`)
 
@@ -328,6 +359,21 @@ current-slot/cursor/main-saved-context + FXSAVE area; the scans skip
 foreign-owned slots like tombstones. `THREADS` remains THE cross-CPU lock
 (spawn, reap, stats all serialize on it; switches touch nothing global
 but it).
+
+**Idle-pass work stealing (SMP M19).** When a CPU's scan is about to
+serve main AND it owns no runnable thread (serving main every other tick
+while threads exist is not idle), it may flip one foreign RUNNING slot's
+owner to itself — under `THREADS`, and only if that slot is not current
+on its owner and its saved context is **stable**. Stability is a per-slot
+flag the victim's naked tail sets only after `mov rsp` leaves the thread
+stack (`gs:[40]` carries the slot). A fresh thread starts unstable, so
+its first run stays on the spawn CPU. `current != slot` is stored earlier,
+when the lock drops, so it is not proof the tail has finished — a
+host-starved victim vCPU can still be on that stack a guest tick later.
+Entry on the stealer stays deferred to its next scan. That scan rides the saved
+context; per-CPU switch-in (gs:[8], TSS.RSP0, CR3) is CPU-agnostic.
+`stolen_at` holds the thread ~100 ticks so idle CPUs do not ping-pong it.
+One steal attempt per idle pass.
 
 **Lifecycle (tombstones).** Slots are NEVER removed from the thread vec:
 the per-CPU `current`/`last_served` cursor indexes into it mid-switch, so
@@ -471,31 +517,42 @@ The runner packs user programs into a USTAR tar and the bootloader maps it
 `galexy-core::TarCursor` per call. Consumers (the shell's `run`, test
 kernels) never touch raw BootInfo ramdisk fields again.
 
-## Concurrency model (SMP, two CPUs — Milestone 18)
+## Concurrency model (SMP, two CPUs — Milestones 18–19)
 
 - **Per-CPU ownership first.** Rotation state (`CPU_SCHED`), LAPIC access,
   SYSCALL entry scratch (gs:[16]/[24]), TSS.RSP0, and the idle loop are
   per-CPU by construction — no lock is needed where only one CPU touches.
-- **Pinned-at-spawn + owner-reap.** `Thread.owner` (assigned round-robin
-  at spawn, returned race-free to the caller) decides which CPU's rotation
-  a thread rides and which CPU's `reap()` frees it. "A thread is current
-  on exactly one CPU" is enforced by ownership; cross-CPU races cannot
-  form around a zombie's stack.
+- **Pinned-at-spawn + owner-reap, with idle stealing.** `Thread.owner`
+  (assigned round-robin at spawn, returned race-free to the caller)
+  decides which CPU's rotation a thread rides and which CPU's `reap()`
+  frees it. An idle CPU may flip that pin (work stealing, M19) once the
+  victim has published a stable context (naked tail, after `mov rsp`);
+  the owner-reap rule still holds after the flip. "A thread is current on
+  exactly one CPU" stays true: a steal only takes a slot that is not
+  current on its owner and whose stack tail has finished, and the new
+  owner does not enter until its next tick.
 - **`THREADS` is THE global lock** (`spin::Mutex`); the naked timer switch,
-  syscall handoff and reapers serialize on it briefly — no nested locks.
-  The IRQ gate is still part of every acquisition (a local `hlt`-sleeping
-  CPU must not re-enter a held lock).
+  syscall handoff, steals, and reapers serialize on it briefly — no nested
+  locks. The IRQ gate is still part of every acquisition (a local
+  `hlt`-sleeping CPU must not re-enter a held lock). Steal correctness
+  rides this lock; there is no separate migration lock.
 - **BSP homeownership**: cooperative tasks (`SCHED` queue), the shell
   (typing, status bar, foreground), and the framebuffer stay BSP-only by
   design — one display, one input queue, one accounting yardstick
   (`main_ticks` = the BSP's slot-0 counter).
-- **Frozen kernel half = no TLB shootdown (yet).** Kernel-half page-table
-  entries are shared memory that is NEVER remapped after boot; per-task
-  trees live entirely in their owner's CR3 swaps (local full flush). The
-  first feature that remaps kernel-half memory on one CPU MUST add IPI
-  shootdowns (TODO follow-up).
+- **Kernel-half remaps are shootdowns (M19).** Shared kernel-half PTEs
+  are no longer frozen after boot. `map_kernel_page_broadcast` maps,
+  flushes locally, and broadcasts precise INVLPG (vector 0xF8, mailbox
+  of VAs, lock-free handler). The initiator holds no Rust spin lock
+  across the broadcast. Heap growth is the production path: map the
+  chunk under the IRQ gate, one batched broadcast, then `extend`. A
+  conflicting grower waits
+  on `GROWING` with IF=1. Per-task trees stay local (that CPU's CR3
+  swap is a full flush).
 - Print lock: `println!` → screen lock (BSP-side consumers only today).
   Interrupt handlers never touch the screen lock (serial or atomics only).
+  The shootdown handler is the same rule pushed further: serial or
+  atomics, never a lock.
 
 ## Testing strategy
 

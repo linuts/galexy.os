@@ -97,6 +97,16 @@ pub unsafe extern "C" fn timer_handler_naked() {
         "cmp rax, 0",
         "je 2f",
         "mov rsp, rax",
+        // Publish the departed slot's context as stable NOW: RSP has left
+        // that stack. gs:[40] is 1-based; CTX_STABLE is one byte per slot.
+        // A plain store is a release store on x86.
+        "mov rcx, qword ptr gs:[40]",
+        "test rcx, rcx",
+        "jz 2f",
+        "dec rcx",
+        "lea rdx, [rip + {stable}]",
+        "mov byte ptr [rdx + rcx], 1",
+        "mov qword ptr gs:[40], 0",
         "2:",
         "pop r15", "pop r14", "pop r13", "pop r12",
         "pop r11", "pop r10", "pop r9", "pop r8",
@@ -104,6 +114,7 @@ pub unsafe extern "C" fn timer_handler_naked() {
         "pop rcx", "pop rbx", "pop rax",
         "iretq",
         sched = sym timer_sched,
+        stable = sym super::CTX_STABLE,
     );
 }
 
@@ -132,6 +143,14 @@ pub unsafe extern "C" fn page_fault_handler_naked() {
         "cmp rax, 0",
         "je 2f",
         "mov rsp, rax",
+        // Same stable-context publish as the timer tail (see there).
+        "mov rcx, qword ptr gs:[40]",
+        "test rcx, rcx",
+        "jz 2f",
+        "dec rcx",
+        "lea rdx, [rip + {stable}]",
+        "mov byte ptr [rdx + rcx], 1",
+        "mov qword ptr gs:[40], 0",
         "2:",
         "pop r15", "pop r14", "pop r13", "pop r12",
         "pop r11", "pop r10", "pop r9", "pop r8",
@@ -139,6 +158,7 @@ pub unsafe extern "C" fn page_fault_handler_naked() {
         "pop rcx", "pop rbx", "pop rax",
         "iretq",
         sched = sym page_fault_sched,
+        stable = sym super::CTX_STABLE,
     );
 }
 

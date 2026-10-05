@@ -65,6 +65,9 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert_eq!(arch::cpu::online(), 2, "two CPUs must be live");
 
     let console_cap = galexy_abi::reserved::console(CapRights::WRITE);
+    // Before either spawn: an idle AP runs its pinned task immediately, so
+    // a sample taken after spawn can already include a finished reap.
+    let baseline = arch::mm::free_frames();
 
     // Spawn A (pins BSP) then B (pins AP) — natural RR order.
     // spawn_user_task returns the pin decision — read it race-free.
@@ -92,8 +95,6 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     // PHYSICAL frame addresses differ. Keep them for peeking.
     let scratch_phys = [region_a.scratch_phys, region_b.scratch_phys];
     let mut state = [Phase::Running; 2];
-
-    let frames_after_spawn = arch::mm::free_frames();
 
     // Main loop: rotate while both complete; peek each scratch page.
     loop {
@@ -124,17 +125,15 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     loop {
         x86_64::instructions::hlt();
         sched::reap();
-        if sched::threads_count() == 0 {
+        if sched::unreaped_threads() == 0 {
             break;
         }
     }
 
     let frames_after = arch::mm::free_frames();
-    assert!(
-        frames_after >= frames_after_spawn + (1 + 4 + 1) * 2,
-        "both user tasks' data frames must return to the allocator: after_spawn={} final={}",
-        frames_after_spawn,
-        frames_after
+    assert_eq!(
+        frames_after, baseline,
+        "both user tasks' frames must return to the allocator: baseline={baseline} final={frames_after}"
     );
 
     println!("[test-smpuser] all assertions passed");

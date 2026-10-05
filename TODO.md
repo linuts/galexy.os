@@ -550,48 +550,72 @@ exercises the multicore paths), + 16 core host tests. Green per commit.
       reclaim both task trees; data frames × 2 return to the allocator
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
-## Milestone 19 — SMP act 2: cross-CPU coordination (the clean base) ⏳
+## Milestone 19 — SMP act 2: cross-CPU coordination (the clean base) ✅
 
-The multicore base fs capabilities build on. **Kernel-half remaps are
+The multicore base filesystem capabilities build on. **Kernel-half remaps are
 mechanized (precise-INVLPG shootdown IPIs), the scheduler self-balances
 (idle-CPU work stealing), and a stress kernel proves the machine closes
-under concurrent load.** Suite: ~30 QEMU boot tests, all `-smp 2`.
+under concurrent load.** Suite: 30 QEMU boot tests, all `-smp 2`.
 
-- [ ] **IPI infrastructure** (`arch/apic.rs` + `arch/idt.rs`): a dedicated
+- [x] **IPI infrastructure** (`arch/apic.rs` + `arch/idt.rs`): a dedicated
       IPI vector (0xF8) with a lock-free x86-interrupt handler; per-CPU
-      ack atomics; `send_ipi` (M18) gets its first real consumer
-- [ ] **Precise-INVLPG shootdown**: the ICR carries only 8 bits, so the
-      VAs ride in a static mailbox pool (request slots of 16 VAs — one
-      heap-growth chunk fits one slot; generation counters close the ABA
-      window; acks are per-CPU atomics the initiator spins on).
-      `mm::shootdown_others()` — broadcast + wait from IF=1, lock-free
-      contexts only (the deadlock rule: targets' handlers take no locks;
-      all lock holds stay short + IPI-free).
-      `map_kernel_page_broadcast` (map + local flush + broadcast) — heap
-      `grow()` rewired to it, making the "kernel half is map-only" M18
-      assumption MECHANIZED; `grow()` asserts its caller runs with IF=1
-      (naked paths never allocate → never grow).
+      ack atomics; `send_ipi` (M18) gets its first real consumer.
+      `send_fixed_ipi` (fixed delivery) works from ANY CPU. The handler
+      takes NO locks (the deadlock rule: an IF=0 lock holder must still be
+      able to ack a broadcast).
+      `bin/test-ipi.rs` round-trips 1-VA and full-16-VA broadcasts end to
+      end
+- [x] **Precise-INVLPG shootdown** (`arch/mm/shootdown.rs`): the ICR carries
+      only 8 bits, so the VAs ride in a static mailbox pool (8 request
+      slots of 16 VAs — one heap-growth chunk fits one slot; a monotonic
+      machine-global sequence counter closes the ABA window; slots are
+      only reused after every target consumed their `seq`). Targets'
+      `seen` values are per-CPU per-slot atomics the initiator spins on.
+      `mm::shootdown_others()` — broadcast + wait, LOCK-FREE initiator
+      (the deadlock rule refined: targets' handlers take no locks; all
+      lock holds stay short + IPI-free — the caller must hold NO Rust spin
+      lock across the broadcast; any IRQ state is fine).
+      `map_kernel_page_broadcast` (map + local flush + one-VA broadcast)
+      is the single-page primitive. Heap `grow()` batches: gated
+      `map_page` of the chunk, one lock-free `shootdown_others` for every
+      new VA (a 16-page chunk fills one mailbox slot), then `extend` —
+      the "kernel half is map-only" M18 assumption MECHANIZED (naked
+      paths never allocate → never reach the broadcast). The GROWING-conflict path now WAITS for
+      the in-flight growth (IF=1 spin + watchdog) instead of failing the
+      alloc into a null-abort — a stress essential (both CPUs hammering
+      the heap otherwise abort randomly).
       Task-tree maps stay local (per-CPU CR3s); only kernel-half runtime
       changes broadcast
-- [ ] **Work stealing** (`sched/mod.rs`): idle CPUs steal under the
-      THREADS lock, only slots provably NOT current on their owner
-      (`owner_cpu.current != slot` ⇒ the saved ctx is valid); post-steal
-      the victim's rotation skips the slot (owner filter) and the
-      stealer rides it with the saved context — all per-CPU switch-in
-      machinery (kstack slot gs:[8], TSS.RSP0, CR3) is CPU-agnostic and
-      slot-held. One steal attempt per idle pass; stealing correctness
-      rides the existing THREADS-lock serialization (no new locks)
-- [ ] **`bin/test-smpstress.rs`**: both CPUs hammering heap alloc/free
-      (real growth + shootdown crossings) + interleaved ring-3 tasks +
-      exact frame-accounting closure over a long window; steal proof:
-      spawn an imbalance (spinner on the BSP + an exiting task on the AP
-      → the AP idles → steals), assert a thread's live owner flipped to
-      the AP + its ticks accumulated there
-- [ ] **`test-heapgrow` gains the shootdown marker** (it boots `-smp 2`
-      and grows the heap — the broadcast path runs for real)
-- [ ] **Clippy repo-wide works again** (pre-existing `manual_div_ceil`
+- [x] **Work stealing** (`sched/mod.rs`): idle CPUs (no runnable OWNED
+      thread — the alternate-with-main pattern is NOT idle) steal under
+      the THREADS lock, only slots provably NOT current on their owner
+      (`owner_cpu.current != slot` is necessary but not sufficient). Steal
+      = owner flip of a slot whose saved context is STABLE. The victim's
+      naked tail publishes that flag only AFTER `mov rsp` off the task
+      kstack (gs:[40] = the departed slot; timer, syscall, and page-fault
+      tails all do it). The lock drops before that tail, so a one-tick
+      delay is not the proof — a host-starved victim vCPU can still be
+      unwinding the frame when the stealer's next guest tick arrives
+      (two CPUs popping one frame; `test-treechurn` under a parallel
+      suite). Entry stays deferred to the stealer's next rotation scan,
+      which rides the saved context — all per-CPU switch-in machinery
+      (kstack slot gs:[8], TSS.RSP0, CR3) is CPU-agnostic and slot-held.
+      A `stolen_at` cooldown (~100 ticks) stops idle-CPU ping-pong; one
+      steal attempt per idle pass; stealing correctness rides the
+      existing THREADS-lock serialization (no new locks)
+- [x] **`bin/test-smpstress.rs`**: phase A steal proof (spinner on the
+      BSP + flash on the AP → the AP idles → steals; owner flipped + ticks
+      accrued there + cooldown stick asserted); phase B two concurrent
+      1-MiB growers (real GROWING-conflict waits + shootdown broadcasts
+      counted); phase C dual-CPU hammering (alloc/free + full-page touch)
+      + ring-3 blob lifecycle + EXACT frame-accounting closure (heap size
+      unchanged, free_frames back to baseline exactly)
+- [x] **`test-heapgrow` gains the shootdown marker** (it boots `-smp 2`
+      and grows the heap — the broadcast path runs for real; asserts
+      `broadcast_count() >= 1`)
+- [x] **Clippy repo-wide works again** (pre-existing `manual_div_ceil`
       lint breakage in galexy-core/tar.rs — one-liner)
-- [ ] Docs synced (TODO/DESIGN: shootdown rules + steal protocol +
+- [x] Docs synced (TODO/DESIGN: shootdown rules + steal protocol +
       concurrency model, ROADMAP, README).
 
 ## Known limitations / follow-ups
@@ -603,13 +627,14 @@ under concurrent load.** Suite: ~30 QEMU boot tests, all `-smp 2`.
 - [x] ~~SMP~~ — CLOSED by Milestone 18 (two CPUs running the full kernel;
       pinned-at-spawn rotation, owner-reaping, per-CPU timers/E2E under
       the existing suite). The SMP-era follow-ups:
-      - [ ] TLB shootdown IPIs: kernel-halves are FROZEN after boot
-            (shared entries are never remapped) so no shootdown is needed
-            YET — the first kernel-half-remapping feature (heap grow past
-            an AP's cache, demand paging) must add per-CPU shootdowns
-      - [ ] Load balancing: pin-at-spawn is static (a busy CPU keeps its
-            queue even if a sibling idles); stealing/migration is future
-            scheduler work
+      - [x] ~~TLB shootdown IPIs~~ — CLOSED by Milestone 19 (vector 0xF8,
+            lock-free handler, mailbox pool; heap growth broadcasts for
+            real). Demand paging, if it remaps kernel-half pages, must
+            use the same `shootdown_others` path
+      - [x] ~~Load balancing~~ — CLOSED by Milestone 19 (idle-pass work
+            stealing: owner flip under THREADS, entry deferred one tick,
+            stolen_at cooldown). Pin-at-spawn is still the initial
+            placement; only idle CPUs migrate
       - [ ] `-cpu max` asserts FSGSBASE on real hardware too; a fallback
             (e.g. per-CPU paging via a shared struct + disables) would be
             needed on pre-FSGSBASE CPUs — out of scope deliberately

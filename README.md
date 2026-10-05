@@ -19,7 +19,10 @@ The interactive shell launches userland programs by name (`run hello`).
       keyboard route; legacy PICs kept quiet (masked)
 - [x] SMP: two CPUs run the kernel — per-CPU GS/GDT/TSS, AP
       trampoline bring-up, pinned-at-spawn scheduler with per-CPU
-      rotation + owner-reaping; every boot test runs at `-smp 2`
+      rotation + owner-reaping; idle CPUs work-steal (owner flips once the
+      victim has left that stack, entry on the next tick); kernel-half remaps are
+      mechanized with precise-INVLPG shootdown IPIs (vector 0xF8, lock-free
+      handler, mailbox pool); every boot test runs at `-smp 2`
 - [x] PS/2 keyboard input with scancode translation
 - [x] Shell: line editing (Backspace), commands (`help`, `stats`, `threads`,
       `tasks`, `run <program>`, `clear`, `about`), `command not found` for
@@ -133,8 +136,8 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
 │   │       ├── arch/                # the port wall: per-CPU GS/GDT/TSS,
 │   │       │                        #   APIC + I/O APIC (per-CPU LAPIC
 │   │       │                        #   timers, keyboard route), AP
-│   │       │                        #   trampoline, ACPI, legacy PICs
-│   │       │                        #   (masked), PIT, mm
+│   │       │                        #   trampoline, shootdown IPIs, ACPI,
+│   │       │                        #   legacy PICs (masked), PIT, mm
 │   │       ├── drivers/             # screen, serial, keyboard
 │   │       ├── macros.rs            # print!/println! plumbing
 │   │       └── sched/               # tasks, preemptive threads, context asm,
@@ -163,7 +166,7 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
    thing a scheduler ever has to swap.
 4. **Test what can be tested.** Host unit tests for the pure primitives
    (`galexy-core`, `galexy-abi`), plus one bootable kernel binary per
-   integration test — 28 QEMU boots (all at `-smp 2`) assert exit codes and
+   integration test — 30 QEMU boots (all at `-smp 2`) assert exit codes and
    serial output on every run.
 5. **Ownership beats locks for per-CPU state.** Rotation cursors, TSS.RSP0,
    syscall scratch and the LAPIC registers are touched by exactly one CPU

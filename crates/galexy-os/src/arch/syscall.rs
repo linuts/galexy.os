@@ -130,6 +130,15 @@ pub unsafe extern "C" fn syscall_entry_naked() {
         "cmp rax, 0",
         "je 2f",
         "mov rsp, rax",
+        // Publish the departed slot's context as stable now that RSP has
+        // left its stack (gs:[40], 1-based). Same sequence as the timer tail.
+        "mov rcx, qword ptr gs:[40]",
+        "test rcx, rcx",
+        "jz 2f",
+        "dec rcx",
+        "lea rdx, [rip + {stable}]",
+        "mov byte ptr [rdx + rcx], 1",
+        "mov qword ptr gs:[40], 0",
         "2:",
         "pop r15", "pop r14", "pop r13", "pop r12",
         "pop r11", "pop r10", "pop r9", "pop r8",
@@ -139,6 +148,7 @@ pub unsafe extern "C" fn syscall_entry_naked() {
         user_ss = sym USER_SS,
         user_cs = sym USER_CS,
         rust = sym syscall_rust,
+        stable = sym crate::sched::CTX_STABLE,
     );
 }
 

@@ -19,7 +19,7 @@ use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use spin::Mutex;
 use x86_64::instructions::interrupts;
 use x86_64::structures::paging::{Mapper, Page, PageTableFlags, PhysFrame, Size4KiB};
@@ -254,6 +254,45 @@ static STEALS: AtomicU64 = AtomicU64::new(0);
 /// between them.
 const STEAL_COOLDOWN_TICKS: u64 = 100;
 
+/// Tombstones are never reused, so this caps live + dead slots together.
+const MAX_THREADS: usize = 64;
+/// Per-slot "saved context is idle" flag. Index = thread slot − 1.
+///
+/// `true`: no CPU is still unwinding a frame on this thread's stack.
+/// Cleared when a CPU commits to entering the thread; set from the naked
+/// switch tail AFTER `mov rsp` (see gs:[40] / `departed_slot`).
+///
+/// Load-bearing for work stealing. `current != slot` is stored before the
+/// lock drops, and the victim's tail still runs on the thread stack after
+/// that. One guest tick does not cover a host-starved victim vCPU — the
+/// stealer must wait until this flag says the tail has actually finished.
+pub(crate) static CTX_STABLE: [AtomicBool; MAX_THREADS] =
+    [const { AtomicBool::new(true) }; MAX_THREADS];
+
+const _: () = assert!(core::mem::size_of::<AtomicBool>() == 1);
+
+/// Registers a thread at the next stable slot index.
+fn push_thread(thread: Thread) {
+    let mut threads = THREADS.lock();
+    assert!(
+        threads.len() < MAX_THREADS,
+        "sched: thread table full ({MAX_THREADS} tombstones; slots are never reused)"
+    );
+    // False until this thread's owner publishes a switch-out. A fresh
+    // thread is not stealable: its first run stays on the spawn CPU, and
+    // the flag only becomes true after `mov rsp` leaves its stack.
+    CTX_STABLE[threads.len()].store(false, Ordering::Release);
+    threads.push(thread);
+}
+
+/// Incoming `slot` (1-based; 0 = main) is about to be entered, so its saved
+/// context is not stealable until this CPU switches off it.
+fn claim_incoming(slot: usize) {
+    if slot != 0 {
+        CTX_STABLE[slot - 1].store(false, Ordering::Release);
+    }
+}
+
 /// Number of completed work-steals since boot.
 pub fn steal_count() -> u64 {
     STEALS.load(Ordering::Relaxed)
@@ -405,7 +444,7 @@ pub(crate) fn register_user_task(init: TaskInit) {
         kstack[..8].copy_from_slice(&STACK_CANARY.to_le_bytes());
         let fx = Box::into_raw(Box::new(FxArea::new()));
         let owner = next_cpu();
-        THREADS.lock().push(Thread {
+        push_thread(Thread {
             name: init.name,
             state: AtomicU8::new(STATE_RUNNING),
             ctx: AtomicU64::new(init.ctx),
@@ -440,7 +479,7 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) -> u8 {
         let ctx = unsafe { context::init_stack(top, entry, cs, ss) };
         let fx = Box::into_raw(Box::new(FxArea::new()));
         let owner = next_cpu();
-        THREADS.lock().push(Thread {
+        push_thread(Thread {
             name,
             state: AtomicU8::new(STATE_RUNNING),
             ctx: AtomicU64::new(ctx),
@@ -625,7 +664,7 @@ pub fn spawn_user_task(
 
         let fx = Box::into_raw(Box::new(FxArea::new()));
         let owner = next_cpu();
-        THREADS.lock().push(Thread {
+        push_thread(Thread {
             name,
             state: AtomicU8::new(STATE_RUNNING),
             ctx: AtomicU64::new(ctx),
@@ -649,6 +688,23 @@ pub fn spawn_user_task(
             kstack_top
         );
         (granted, owner)
+    })
+}
+
+/// Threads that still hold their stacks and address spaces: running, or
+/// exited but not yet reaped. Reap is owner-local, so a drain on the BSP
+/// must wait for this rather than [`threads_count`] — a stolen task goes
+/// `EXITED` on the other CPU before that CPU's idle loop frees it.
+pub fn unreaped_threads() -> usize {
+    interrupts::without_interrupts(|| {
+        THREADS
+            .lock()
+            .iter()
+            .filter(|t| {
+                let state = t.state.load(Ordering::Acquire);
+                state == STATE_RUNNING || state == STATE_EXITED
+            })
+            .count()
     })
 }
 
@@ -753,6 +809,9 @@ pub unsafe fn syscall_handoff(
     exit: bool,
     reason: &'static str,
 ) -> u64 {
+    // No-switch paths (there are none once we return) must not leave a
+    // stale departed slot for the naked tail to publish.
+    crate::arch::cpu::set_departed_slot(0);
     let me = cpu_sched();
     let slot = me.current.load(Ordering::Relaxed);
     assert!(slot != 0, "syscall_handoff: no task current (cpl bug?)");
@@ -811,6 +870,10 @@ pub unsafe fn syscall_handoff(
         }
         enter_task_cr3(cr3);
         me.current.store(who, Ordering::Relaxed);
+        // Outgoing thread's tail is still on its stack until `mov rsp`.
+        // The naked tail publishes CTX_STABLE from gs:[40] after that.
+        claim_incoming(who);
+        crate::arch::cpu::set_departed_slot(slot as u64);
         let fx_ptr = match cand {
             0 => (&*me.main_fx.lock()) as *const FxArea as u64,
             s => threads[s - 1].fx as u64,
@@ -835,6 +898,7 @@ pub unsafe fn syscall_handoff(
 /// `frame` must be the outgoing task's context block (the naked wrapper's
 /// RSP).
 pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
+    crate::arch::cpu::set_departed_slot(0);
     crate::arch::timer_tick(); // tick accounting + 1s heartbeat
 
     let me = cpu_sched();
@@ -911,13 +975,14 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
         // CPU. Steal = flip the owner (all under the THREADS lock, which
         // both this switch and the victim's switch serialize on); the
         // ENTRY IS DEFERRED TO THIS CPU'S NEXT TICK (the rotation scan
-        // picks it up as own+RUNNING). The deferral is LOAD-BEARING: the
-        // victim's switch-out released the lock BEFORE its naked tail
-        // finished unwinding the frame ON THE TASK'S KSTACK — an immediate
-        // entry would have both CPUs popping the same frame. One tick
-        // later, the victim's tail is long done and the saved ctx is
-        // stable. The cooldown (stolen_at) keeps a hot thread from
-        // ping-ponging between idle CPUs: it stays put for a while.
+        // picks it up as own+RUNNING). The steal itself requires
+        // CTX_STABLE: the victim publishes that only AFTER `mov rsp` off
+        // the thread stack. `current != slot` is not enough — it is stored
+        // before the lock drops, while the naked tail is still on that
+        // stack, and a host-starved victim can miss the stealer's next
+        // guest tick (both CPUs then pop one frame). The cooldown
+        // (stolen_at) keeps a hot thread from ping-ponging between idle
+        // CPUs: it stays put for a while.
         if next_slot == 0 {
             let own_runnable = threads
                 .iter()
@@ -931,8 +996,9 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
                         || t.state.load(Ordering::Acquire) != STATE_RUNNING
                         || now < stolen_at + STEAL_COOLDOWN_TICKS
                         || CPU_SCHED[t.owner as usize].current.load(Ordering::Relaxed) == slot_no
+                        || !CTX_STABLE[i].load(Ordering::Acquire)
                     {
-                        continue; // own / dead / cooling down / current on its owner
+                        continue; // own / dead / cooling down / current / tail still on its stack
                     }
                     let victim = t.owner;
                     t.owner = my_cpu;
@@ -990,6 +1056,11 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
         }
         enter_task_cr3(cr3);
         me.current.store(who, Ordering::Relaxed);
+        // `current` here is the outgoing slot (reloaded above). Its tail
+        // still owns the stack until the naked `mov rsp`; gs:[40] tells
+        // that tail which CTX_STABLE byte to set.
+        claim_incoming(who);
+        crate::arch::cpu::set_departed_slot(current as u64);
         context::fx_restore(fx_ptr as *const u8);
         Some(ctx)
     });

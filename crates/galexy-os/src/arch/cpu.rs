@@ -16,6 +16,9 @@
 //!   (the value the naked entry loads into RSP before building the frame)
 //! - `gs:[16]` = `saved_rsp` — SYSCALL-entry mid-flight scratch (user RSP)
 //! - `gs:[24]` = `saved_rax` — SYSCALL-entry mid-flight scratch (syscall no.)
+//! - `gs:[40]` = `departed_slot` — 1-based thread slot whose stack this
+//!   CPU has decided to leave (0 = none). The naked switch tails store
+//!   the context-stable byte only AFTER `mov rsp`, then zero this word.
 //!
 //! Every per-CPU field is WRITTEN by exactly one CPU (its owner) — no locks
 //! required by ownership; atomics appear anyway so the static array itself
@@ -55,6 +58,10 @@ pub struct PerCpu {
     cpu_index: AtomicU32,
     /// The CPU's APIC ID (from the MADT; set at bring-up).
     apic_id: AtomicU32,
+    /// 1-based thread slot this CPU is switching away from; 0 = none.
+    /// Naked tails (timer, syscall, page fault) read gs:[40] AFTER `mov rsp`
+    /// and publish that slot's saved context as stable. Same-CPU only.
+    departed_slot: AtomicU64,
 }
 
 // Layout contract for the naked asm (verified at compile time):
@@ -62,6 +69,7 @@ const _: () = assert!(core::mem::offset_of!(PerCpu, self_ptr) == 0);
 const _: () = assert!(core::mem::offset_of!(PerCpu, kstack_top) == 8);
 const _: () = assert!(core::mem::offset_of!(PerCpu, saved_rsp) == 16);
 const _: () = assert!(core::mem::offset_of!(PerCpu, saved_rax) == 24);
+const _: () = assert!(core::mem::offset_of!(PerCpu, departed_slot) == 40);
 
 impl PerCpu {
     /// This struct's own address (gs:[0]; set at bring-up).
@@ -93,6 +101,7 @@ impl PerCpu {
             saved_rax: AtomicU64::new(0),
             cpu_index: AtomicU32::new(0),
             apic_id: AtomicU32::new(0),
+            departed_slot: AtomicU64::new(0),
         }
     }
 }
@@ -143,6 +152,14 @@ pub fn current_index() -> usize {
 /// this race-free without a lock).
 pub fn set_kstack(top: u64) {
     current().kstack_top.store(top, Ordering::Relaxed);
+}
+
+/// Arms the naked switch tail: after `mov rsp`, publish this slot's saved
+/// context as stable. `0` clears a stale arm (no-switch returns).
+///
+/// Same-CPU ownership — the tail reads gs:[40] on this CPU only.
+pub fn set_departed_slot(slot: u64) {
+    current().departed_slot.store(slot, Ordering::Relaxed);
 }
 
 /// Number of CPUs online (BSP counts once).

@@ -191,7 +191,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     loop {
         x86_64::instructions::hlt();
         sched::reap();
-        if sched::threads_count() == 0 {
+        if sched::unreaped_threads() == 0 {
             break;
         }
         assert!(
@@ -228,7 +228,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     loop {
         x86_64::instructions::hlt();
         sched::reap();
-        if sched::threads_count() == 0 {
+        if sched::unreaped_threads() == 0 {
             break;
         }
         assert!(
@@ -287,7 +287,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     loop {
         x86_64::instructions::hlt();
         sched::reap();
-        if sched::threads_count() == 0 {
+        if sched::unreaped_threads() == 0 {
             break;
         }
         assert!(

@@ -122,6 +122,14 @@ first real program landed in Milestone 13:
   scheduler (per-CPU rotation, owner-reaping), share-split per-CPU LAPIC
   timers (machine-wide ~1 kHz preserved), ring-3 on either CPU; the WHOLE
   suite runs at `-smp 2`, plus dedicated bin/test-smp/-smpuser).
+- Cross-CPU coordination ✅ (Milestone 19: precise-INVLPG shootdown IPIs
+  on vector 0xF8 — lock-free handler, 8×16 VA mailbox, monotonic seq —
+  heap growth broadcasts each new chunk through `shootdown_others` with a
+  GROWING-conflict wait, idle-pass work stealing (stable context published
+  after the victim's `mov rsp`, entry on the next tick, ~100-tick
+  cooldown); `bin/test-ipi`, `bin/test-smpstress`,
+  and `test-heapgrow`'s broadcast marker. Suite: 30 QEMU boots, all
+  `-smp 2`).
 - Shell `run <program>` command ✅ (Milestone 16: ramdisk service +
   `shell::exec("run hello")` — dispatch → loader, full lifecycle; typed-
   keystroke E2E over QMP proves the real input path)

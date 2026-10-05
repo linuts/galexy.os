@@ -66,7 +66,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         x86_64::instructions::hlt();
         sched::reap();
         let all_done = DONE.iter().all(|c| c.load(Ordering::Relaxed) >= TARGET);
-        let none_running = sched::threads_count() == 0;
+        let none_running = sched::unreaped_threads() == 0;
         if all_done && none_running {
             break;
         }
