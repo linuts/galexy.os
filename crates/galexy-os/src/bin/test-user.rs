@@ -47,7 +47,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     //   77: mov eax, 0               (exit — never returns)
     //   82: syscall
     let console_cap = galexy_abi::reserved::console(CapRights::WRITE);
-    let region = sched::spawn_user_task("uhello", |gr| {
+    let (region, _) = sched::spawn_user_task("uhello", |gr| {
         let mut code: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
         code.extend_from_slice(&[0xEB, MSG.len() as u8]); // jmp over message
         code.extend_from_slice(MSG);

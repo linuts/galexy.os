@@ -40,7 +40,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     //   mov rdi, <scratch addr>          ; store RAX (the echo) here
     //   mov [rdi], rax
     //   jmp self
-    let region = sched::spawn_user_task("capinfo-blob", |gr| {
+    let (region, _) = sched::spawn_user_task("capinfo-blob", |gr| {
         let mut code: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
         code.extend_from_slice(&[0xB8, Syscall::CapInfo as u8, 0x00, 0x00, 0x00]); // mov eax, 3
         code.extend_from_slice(&[0x48, 0xBF]); // mov rdi, imm64

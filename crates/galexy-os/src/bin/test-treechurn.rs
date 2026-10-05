@@ -66,7 +66,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let baseline = galexy_os::arch::mm::free_frames();
 
     for cycle in 0..CYCLES {
-        let region = sched::spawn_user_task("churn", |gr| build_blob(console_cap_bits, gr));
+        let (region, _) = sched::spawn_user_task("churn", |gr| build_blob(console_cap_bits, gr));
         let scratch_virt: *const u32 =
             galexy_os::arch::mm::frame_virt(region.scratch_phys).as_ptr();
 

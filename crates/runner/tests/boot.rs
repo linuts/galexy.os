@@ -499,6 +499,52 @@ fn shell_run_hello_typing_e2e_uefi() {
 }
 
 #[test]
+fn smp_test_passes() {
+    let (code, serial) = boot(&image("test-smp"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-smp should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-smp] passed"),
+        "test-smp success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-smp] online=2"),
+        "the SMP substrate must count 2 PCs; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("owners: t1=0 t2=1 t3=0 t4=1"),
+        "pin-at-spawn distribution marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn smpuser_test_passes() {
+    // The ring-3 blobs print via the console mirror (screen + serial), so
+    // the fact the AP-side task's WRITE syscall ran is visible headless.
+    let (code, serial) = boot(&image("test-smpuser"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-smpuser should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-smpuser] passed"),
+        "test-smpuser success marker missing; serial:\n{serial}"
+    );
+    // Ring-3 completion proof, matching the milestone pattern (the blob
+    // prints to the SCREEN; the observe-headless path is the scratch page
+    // — see test-user's design note): both DONE marks must appear.
+    assert!(
+        serial.contains("[test-smpuser] task 0 marked done")
+            && serial.contains("[test-smpuser] task 1 marked done"),
+        "both ring-3 tasks must reach their scratch-mark (both CPUs ran a program); serial:\n{serial}"
+    );
+}
+
+#[test]
 fn uefi_image_boots_and_timer_ticks() {
     // Since the APIC work (M17), the timer is LAPIC-delivered on every boot
     // path — the UEFI image is live, not just booting: assert the heartbeat.

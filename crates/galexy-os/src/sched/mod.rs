@@ -397,7 +397,8 @@ pub(crate) fn register_user_task(init: TaskInit) {
 
 /// Spawns a preemptive kernel thread running `entry` (which parks if it
 /// returns). Allocates + maps the thread stack; IRQ-gated while registering.
-pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) {
+/// Spawns the thread; returns its owner CPU (the pin decision).
+pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) -> u8 {
     interrupts::without_interrupts(|| {
         // Zero pages straight into the heap (no big stack temp).
         let mut stack = vec![0u8; THREAD_STACK_SIZE];
@@ -426,7 +427,8 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) {
             owner,
         });
         serial_println!("[sched] thread '{}' ready (owner cpu {})", name, owner);
-    });
+        owner
+    })
 }
 
 /// User stack size in 4 KiB pages.
@@ -464,7 +466,7 @@ pub struct UserRegion {
 pub fn spawn_user_task(
     name: &'static str,
     build: impl FnOnce(UserRegion) -> Vec<u8>,
-) -> UserRegion {
+) -> (UserRegion, u8) {
     interrupts::without_interrupts(|| {
         // Spawn MUST run on the kernel tree: a FreshL4 clones whatever is
         // active, and user mappings live only in task trees from now on.
@@ -617,7 +619,7 @@ pub fn spawn_user_task(
             region.as_u64(),
             kstack_top
         );
-        granted
+        (granted, owner)
     })
 }
 
@@ -636,6 +638,29 @@ pub fn threads_count() -> usize {
 ///
 /// IRQ-gated: the timer handler takes this same lock (lock-audit rule —
 /// the gate lives in the API, not at call sites).
+/// The owner CPU of the thread named `name` ("pinned at spawn" — SMP M18);
+/// `None` when no RUNNING thread by that name exists.
+pub fn thread_owner(name: &str) -> Option<u8> {
+    interrupts::without_interrupts(|| {
+        THREADS.lock().iter().find_map(|t| {
+            (t.name == name && t.state.load(Ordering::Relaxed) == STATE_RUNNING)
+                .then_some(t.owner)
+        })
+    })
+}
+
+/// Sum of CPU-time ticks across every thread ever (post-mortem liveness of
+/// the per-CPU timer machine: a thread serviced anywhere accumulated >0).
+pub fn thread_tick_total() -> u64 {
+    interrupts::without_interrupts(|| {
+        THREADS
+            .lock()
+            .iter()
+            .map(|t| t.ticks.load(Ordering::Relaxed))
+            .sum()
+    })
+}
+
 pub fn thread_stats() -> alloc::vec::Vec<(&'static str, u64)> {
     interrupts::without_interrupts(|| {
         THREADS
