@@ -14,7 +14,9 @@ userland programs by name (`run hello`).
 - [x] Pixel-framebuffer text output (bootloader v0.11 flow; no legacy VGA text
       mode) with scrolling and colors
 - [x] Serial port logging (for debugging, never on screen)
-- [x] Interrupts: GDT, IDT, remapped PICs, ~1 kHz PIT timer tick
+- [x] Interrupts: GDT, IDT, ACPI/MADT-discovered APIC stack — LAPIC timer
+      (PIT-calibrated, ~1 kHz) + I/O APIC keyboard route; legacy PICs kept
+      quiet (masked)
 - [x] PS/2 keyboard input with scancode translation
 - [x] Shell: line editing (Backspace), commands (`help`, `stats`, `threads`,
       `tasks`, `run <program>`, `clear`, `about`), `command not found` for
@@ -73,8 +75,9 @@ cargo run -- --uefi
 Uses the system OVMF firmware (`/usr/share/ovmf/x64/OVMF.4m.fd`); override
 with `OVMF_FD=/path/to/OVMF.fd cargo run -- --uefi`.
 
-Note: under UEFI the timer/keyboard are not wired up yet (needs APIC, see
-`TODO.md`); the kernel boots and reports over serial.
+Note: UEFI is a first-class boot path — the timer (LAPIC) and keyboard
+(I/O APIC) work identically under both firmware types since the APIC work
+(Milestone 17, see `TODO.md`/`DESIGN.md`).
 
 ### Tests
 
@@ -123,7 +126,9 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
 │   │       ├── bin/                 # test kernels (one per QEMU test)
 │   │       ├── shell.rs             # the shell: commands + status bar
 │   │       ├── banner.rs            # boot feature showcase
-│   │       ├── arch/                # the port wall: GDT/TSS, IDT, PICs, PIT, mm
+│   │       ├── arch/                # the port wall: GDT/TSS, IDT, APIC + I/O
+│   │       │                        #   APIC (LAPIC timer, keyboard route),
+│   │       │                        #   legacy PICs (masked), ACPI, PIT, mm
 │   │       ├── drivers/             # screen, serial, keyboard
 │   │       ├── macros.rs            # print!/println! plumbing
 │   │       └── sched/               # tasks, preemptive threads, context asm,

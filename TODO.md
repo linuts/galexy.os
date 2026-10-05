@@ -413,11 +413,75 @@ tests (+ a true typed-keystroke E2E) + 16 core host tests, green per commit.
       window 20s → 45s (TCG-under-load)
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 17 — APIC: LAPIC + I/O APIC on every boot path ✅
+
+ROADMAP Phase 4's APIC item, executed. **The timer is LAPIC-delivered
+(MADT-discovered, PIT-calibrated), the keyboard routes through the I/O
+APIC, and UEFI boots are FULL first-class citizens** (timer liveness + a
+typed `run hello` E2E under OVMF). Suite: 26 QEMU boot tests + 16 core
+host tests, green per commit.
+
+- [x] **ACPI discovery** (`arch/acpi.rs`): RSDP (physical addr from
+      `BootInfo.rsdp_addr`) → XSDT (v2, 8-byte entries) or RSDT (v1,
+      4-byte) → first `APIC`-signed table = MADT; every table checksum-
+      validated before trust; malformed/missing = loud panic. Parses and
+      publishes: LAPIC MMIO base (header + type-5 override), the boot
+      I/O APIC (base + GSI base, the record covering GSI 0), enabled
+      CPU count + BSP APIC ID, ISA Interrupt Source Overrides (IRQ0→GSI2
+      under QEMU; IRQ1 identity). Reads through the phys map — exists
+      from boot, so `arch::init` order vs `mm::init` doesn't matter for
+      discovery itself
+      `arch::init` signature: now takes `&BootInfo` (reads rsdp +
+      phys-offset itself); all 17 test kernels updated (mechanically),
+      and their init order normalized to mm-before-arch where APIC needs
+      the paging mapper (8 bins reordered)
+- [x] **LAPIC** (`arch/apic.rs`): mode DETECTED from MSR 0x1B bit 10 —
+      xAPIC (MMIO register page mapped at fixed kernel-half P4 entry 200,
+      PRESENT|RW|NX|uncached) vs x2APIC (MSRs `0x800 + offset>>4`); every
+      access funnels through one read/write pair so both paths share all
+      logic. Bring-up: spurious vector 0xFF + an IDT gate for it (an
+      unhandled stray spurious would triple-fault), TPR 0, flat DFR/LDR.
+      Real hardware frequently ships x2APIC-enabled; QEMU defaults xAPIC
+- [x] **LAPIC timer = THE timer**: calibrated ONCE against a PIT
+      channel-2 one-shot (~10 ms window, ratio math only — TCG safe,
+      interrupts off) → periodic on VECTOR 32 (unchanged: the naked
+      handler, `timer_ticks()` accounting, 1s heartbeat, scheduler
+      quantum all keep their meaning; only the delivery path swapped).
+      EOI rewire: `arch::end_timer_interrupt` → `apic::eoi()` (the LAPIC
+      EOI register is the one true EOI now)
+- [x] **I/O APIC** (`arch/ioapic.rs`): register page at fixed kernel-half
+      P4 entry 201 (LAPIC's sibling mapping); version sanity, ALL
+      redirection entries masked first, then ONE wiring — the keyboard:
+      ISA IRQ1 → GSI (MADT override or identity) → RTE pin, vector 33,
+      edge/active-high/physical-dest = BSP LAPIC id. Keyboard EOI →
+      `apic::eoi()` (edge lines need no IOAPIC-side EOI)
+- [x] **PIC demoted, not deleted** (`arch/pics.rs`): remap + BOTH 8259s
+      fully masked (masked lines never assert — no lost-EOI ghosts, no
+      double delivery on BIOS); PS/2 controller enable + stale-buffer
+      drain MOVED to `drivers/keyboard::init()` (i8042 work, not
+      interrupt-controller work; runs on every boot path — OVMF may
+      leave the port disabled). PIC-fallback for IOAPIC-less hardware =
+      future work
+- [x] **UEFI tests graduated** (`runner/tests/boot.rs`): the smoke test
+      became `uefi_image_boots_and_timer_ticks` — asserts MADT + LAPIC +
+      `[timer] 1s up` under OVMF (3 retries for OVMF disk flakiness);
+      NEW `shell_run_hello_typing_e2e_uefi` — the full typed `run
+      hello` under OVMF via QMP. Harness fix en route: QMP reply reads
+      must SKIP async event lines (RTC_CHANGE under OVMF interleaves
+      them and desynchronized the reply stream)
+- [x] `bin/test-acpi.rs`: MADT parse assertions (bases, gsi 0 coverage,
+      IRQ0→GSI2 override, ≥1 CPU) on the BIOS AND UEFI images
+- [x] `bin/test-apic.rs`: mode detection (XApic under QEMU), LAPIC page
+      mapping, LVT timer state (vector 32, periodic, unmasked), calibrated
+      rate sane, ticks accrue LAPIC-side
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
-- [ ] UEFI: timer + keyboard dead under UEFI — legacy PIC doesn't exist;
-      needs APIC under `arch/` (boot-only behavior now guarded by the UEFI
-      smoke test; userland is BIOS-path for now, syscalls work the same)
+- [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17
+      (APIC family: LAPIC timer + I/O APIC keyboard route on every boot
+      path; UEFI liveness + typed E2E asserted). The door to SMP is open:
+      MADT CPU records are already parsed
 - [ ] SYSCALL leaves DS/ES/FS/GS as kernel bootstrap selectors when the
       task resumes in ring 3 — user code must not do segment-based
       addressing; proper user segment reload is future segment work

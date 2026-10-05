@@ -100,9 +100,10 @@ BIOS/UEFI
   produce `galexy-os-bios.img` / `galexy-os-uefi.img`. Its `main` boots the
   chosen image in QEMU; `--uefi` selects UEFI + OVMF.
 - `BootInfo` carries: physical memory map, framebuffer (mapped into our
-  address space), RSDP address, etc. `physical_memory_offset` is currently
-  `None` — enable `map_physical_memory` in the `BootConfig` when memory work
-  starts.
+  address space), RSDP address, ramdisk, etc. `physical_memory_offset` is
+  FIXED (`0x0000_4000_0000_0000` via `BOOTLOADER_CONFIG`) — the phys map
+  covers the whole physical address space from boot (ACPI tables, LAPIC/IO
+  APIC discovery, frame access all rely on it).
 
 ## Module contracts
 
@@ -136,7 +137,15 @@ handlers can log through it safely.
 
 ### keyboard — "the input decoder" (`drivers/`)
 
-IRQ1 handler → `pc_keyboard` (US layout, scancode set 1) → Unicode chars
+PS/2 controller bring-up lives HERE now (`keyboard::init`, called from
+`arch::init`): the i8042 first-port enable (`0xAE` to port 0x64) + a
+stale-output-buffer drain — firmware (SeaBIOS polled keyboard, OVMF alike)
+may leave the port disabled or bytes pending, and a full buffer never
+re-asserts the line (the first real keystroke would black-hole). This is
+controller work, not interrupt-controller work — it runs on every boot path.
+
+IRQ1 handler (LAPIC-delivered via the I/O APIC) → `pc_keyboard` (US layout,
+scancode set 1) → Unicode chars
 pushed into a `kcore::Ring`. Consumers drain via `keyboard::pop_key()`:
 
 ```rust
@@ -149,16 +158,64 @@ so IRQ context is safe. Queue overflow drops the newest key (documented).
 
 ### arch — "the plumbing"
 
-Init order: GDT/TSS → IDT → PICs → timer config → `sti`.
+Init order: GDT/TSS → IDT → ACPI (MADT) → LAPIC (+ its timer) → I/O APIC
+(keyboard route) → legacy PICs (masked) → i8042 enable → `sti`.
 
 - GDT + TSS: IST slot 0 for double fault; **all segment registers (including
   `ss`, `ds`) are reloaded after `lgdt`** (bootloader migration warning).
 - IDT: breakpoint, page fault (reports + parks), double fault (own IST
-  stack), timer (IRQ0), keyboard (IRQ1).
-- PICs remapped to vectors 32..47 via `pic8259`.
-- Timer: PIT channel 0 at ~1 kHz; handler increments an `AtomicU64` and
-  heartbeats over serial once per second. **Scheduler phase swaps this
-  handler body, nothing else changes.**
+  stack), timer (vector 32, NAKED), keyboard (vector 33), LAPIC spurious
+  (0xFF).
+- Interrupt delivery is ALL-APIC since Milestone 17: the LAPIC timer carries
+  vector 32 (periodic, ~1 kHz, calibrated against the PIT once at boot),
+  the I/O APIC routes the keyboard's GSI onto vector 33; the legacy 8259s
+  are remapped and fully masked (they'd otherwise ghost IRQs on BIOS boots;
+  a PIC fallback for hardware without an I/O APIC is future work).
+- EOI: ONE true EOI — the LAPIC's EOI register (`apic::eoi`), written by the
+  timer switch path and the keyboard handler. Edge-triggered I/O APIC lines
+  need no IOAPIC-side EOI.
+- Tick accounting: `AtomicU64` + once-per-second serial heartbeat —
+  unchanged semantics across the delivery swap (the scheduler phase swaps
+  only the handler body, and the vector stayed 32).
+
+### arch/acpi — "interrupt controller discovery" (arch/)
+
+- RSDP (physical addr from `BootInfo.rsdp_addr`) → XSDT (v2+, 8-byte child
+  entries) or RSDT (v1, 4-byte) → first `APIC`-signature table = MADT.
+  Every table read goes through the physical-memory mapping (which exists
+  from boot, independent of `mm::init` order) and is CHECKSUM-VALIDATED
+  before trust; malformed/missing data panics loudly (no guessing).
+- Parsed + published (`arch::madt()`): LAPIC MMIO base (header field or
+  type-5 override), the boot I/O APIC's MMIO base + GSI base (the record
+  covering GSI 0), enabled processor count + BSP APIC ID, and the ISA
+  Interrupt Source Overrides (ISA IRQ → GSI; QEMU overrides IRQ0→GSI2,
+  leaves IRQ1 identity).
+- Host-side the boot CPU is always LAPIC id 0 — the code never assumes it;
+  the BSP id is read from the MADT (SMP groundwork).
+
+### arch/apic — "the LAPIC" (arch/)
+
+- Dual interface: xAPIC (MMIO register page at the MADT base — mapped
+  PRESENT|RW|NX|uncached at a fixed kernel-half P4 entry, 200) and x2APIC
+  (MSRs `0x800 + offset >> 4`). Mode DETECTED from `IA32_APIC_BASE` bit 10;
+  every register access funnels through one read/write pair so both paths
+  share all logic. QEMU defaults to xAPIC.
+- Bring-up: spurious vector 0xFF (with an IDT gate installed — an unhandled
+  stray spurious would triple-fault), TPR 0, flat DFR/LDR.
+- LAPIC timer = THE timer: calibrated ONCE at boot against a PIT channel-2
+  one-shot (~10 ms window, ratio math only — no wall-clock assumptions, TCG
+  safe), then armed PERIODIC on vector 32 at the calibrated ticks-per-ms.
+  Calibration runs with IRQs off (inside `arch::init`, before `sti`).
+
+### arch/ioapic — "external interrupt routing" (arch/)
+
+- MMIO register page mapped at fixed kernel-half P4 entry 201 (the LAPIC
+  page's sibling); IOREGSEL/IOWIN pair indexes the register space.
+- Bring-up: version sanity (I/O APICVER ≥ 0x11), ALL redirection entries
+  masked first (inherited state is firmware's), then exactly ONE wiring:
+  the keyboard — ISA IRQ1 → GSI (MADT override or identity) → RTE pin,
+  vector 33, edge-triggered, active-high, physical destination = this
+  CPU's LAPIC ID. Masked-by-default is the rule: mask what you don't use.
 
 ### arch/mm — "physical memory" (arch/)
 
@@ -409,8 +466,15 @@ QEMU exit-code mapping (empirically verified): `Success` (0x10) → exit 33,
 
 - `bootloader` 0.11's builder API differs entirely from 0.9's `bootimage`;
   pin exactly in `Cargo.toml`.
-- UEFI boot: legacy PIC doesn't exist → timer/keyboard need APIC work before
-  they work there.
+- APIC discovery is MADT-based (RSDP → XSDT/RSDT walk, checksums enforced);
+  no fallback to hard-coded MMIO bases — a machine without ACPI tables
+  fails loudly rather than guessing.
+- The LAPIC timer calibration assumes the PIT exists (it does on every
+  x86 platform worth booting; QEMU emulates it under both SeaBIOS and
+  OVMF). TSC-deadline mode is the follow-up if drift ever matters.
+- x2APIC-mode hosts take the MSR path (`0x800 + offset>>4`); QEMU defaults
+  to xAPIC — both are exercised by the access-layer abstraction, only xAPIC
+  by the QEMU test suite (assert in `bin/test-apic`).
 - `-no-reboot` is always passed to QEMU so triple faults surface as an exit
   instead of an infinite reboot loop.
 - Fresh artifacts can live in *multiple* `OUT_DIR` hash dirs; pick images by

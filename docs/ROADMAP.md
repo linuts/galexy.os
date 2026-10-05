@@ -92,8 +92,8 @@ first real program landed in Milestone 13:
 
 ### Debt to pay along the way (see TODO)
 
-- APIC so UEFI boots get timer/keyboard (UEFI smoke test already guards
-  boot-only behavior)
+- APIC ✅ done (Milestone 17 - LAPIC timer + I/O APIC keyboard on every
+  boot path, UEFI first-class)
 - Heap growth ✅ done (grow-on-demand since Milestone 12)
 - Thread reaper ✅ done (tombstones + canary since Milestone 12)
 
@@ -110,7 +110,12 @@ first real program landed in Milestone 13:
 
 - Filesystem capabilities: `open(name) → Cap(file)` + `read(cap, ...)` —
   the capability-day-one machinery exercised by real resources.
-- APIC so UEFI boots get timer/keyboard; the door to SMP.
+- APIC so UEFI boots get timer/keyboard; the door to SMP ✅ (Milestone 17:
+  MADT discovery (arch/acpi), LAPIC enabled with a PIT-calibrated periodic
+  timer on vector 32 (xAPIC/x2APIC dual access), I/O APIC routing the
+  keyboard onto vector 33, legacy 8259s remapped + fully masked; UEFI
+  boots assert full liveness — heartbeat AND a typed `run hello` E2E
+  under OVMF).
 - Shell `run <program>` command ✅ (Milestone 16: ramdisk service +
   `shell::exec("run hello")` — dispatch → loader, full lifecycle; typed-
   keystroke E2E over QMP proves the real input path)
