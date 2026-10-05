@@ -309,6 +309,75 @@ impl FreshL4 {
     }
 }
 
+/// Frees EVERY frame a task owns: the subtree under its own P4 entry
+/// (allocated fresh at spawn — the kernel's shared subtrees live under
+/// OTHER entries and are never touched) plus the root frame itself.
+/// Returns the number of frames freed (page-table + data frames).
+///
+/// The tree must NOT be CR3-active (tombstoned task — the reaper's contract).
+pub fn free_user_tree(root: PhysFrame<Size4KiB>, p4_index: u16) -> usize {
+    assert!(READY.load(Ordering::Relaxed), "paging: mapper not initialized");
+    let phys = phys_offset();
+    let mut freed = 0usize;
+
+    // SAFETY: root heads a coherent, non-active tree (tombstoned task);
+    // read access via the phys map to find the task's P3.
+    let p3 = unsafe {
+        let l4 = (phys + root.start_address().as_u64()).as_ptr::<PageTable>();
+        // PageTable = 512 entries starting at the table pointer itself.
+        let entry_ptr: *const x86_64::structures::paging::page_table::PageTableEntry =
+            l4.byte_add(usize::from(p4_index) * 8).cast();
+        let entry = core::ptr::read(entry_ptr);
+        if entry.is_unused() {
+            None
+        } else {
+            Some(entry.frame().expect("free_user_tree: entry without frame"))
+        }
+    };
+
+    if let Some(p3_frame) = p3 {
+        // SAFETY: the subtree is task-owned, coherent, not CR3-active.
+        freed += unsafe { free_table_level(p3_frame, 3) };
+    }
+    super::deallocate_frame(root);
+    freed + 1
+}
+
+/// Frees a page-table frame and everything under it. `level` 3 = P3
+/// (children: P2), 2 = P2 (children: P1), 1 = P1 (entries: data frames —
+/// freed directly, no recursion). Returns the count.
+///
+/// # Safety
+///
+/// The subtree must belong exclusively to the caller (non-active task
+/// tree); no aliasing walkers may run concurrently (single-core + gate).
+unsafe fn free_table_level(frame: PhysFrame<Size4KiB>, level: u8) -> usize {
+    let phys = phys_offset();
+    let mut count = 1usize; // this frame
+    // SAFETY: contract above.
+    unsafe {
+        let table: *const PageTable =
+            (phys + frame.start_address().as_u64()).as_ptr();
+        for i in 0..512usize {
+            let entry_ptr: *const x86_64::structures::paging::page_table::PageTableEntry =
+                table.byte_add(i * 8).cast();
+            let entry = core::ptr::read(entry_ptr);
+            if entry.is_unused() {
+                continue;
+            }
+            let child = entry.frame().expect("free tree: non-frame entry");
+            if level == 1 {
+                super::deallocate_frame(child);
+                count += 1;
+            } else {
+                count += free_table_level(child, level - 1);
+            }
+        }
+    }
+    super::deallocate_frame(frame);
+    count
+}
+
 /// Runs `f` with a mapper over a NON-active page-table tree rooted at
 /// `root_frame`, accessed through the physical memory map. Built for Step B
 /// consumers: mapping into a task's table before (or while not) loading it

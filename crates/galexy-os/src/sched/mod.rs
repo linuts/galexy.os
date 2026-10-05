@@ -169,26 +169,13 @@ struct Thread {
     kstack: Vec<u8>,
     /// User tasks only: aligned top of `kstack` (the RSP0 value).
     kstack_top: u64,
-    /// User tasks only: user-stack base (BOTTOM address) + page count —
-    /// the reaper unmaps + frees these.
-    user_stack: Option<UserStack>,
-    /// User tasks only: mapped code page + its frame — the reaper unmaps
-    /// the page + frees the frame.
-    user_code: Option<(Page, PhysFrame<Size4KiB>)>,
-    /// User tasks only: mapped scratch page + frame — reaped like the code
-    /// page.
-    user_scratch: Option<(Page, PhysFrame<Size4KiB>)>,
     /// The task's page-table root (physical address). `0` = the kernel's
     /// table (Step A: every task shares it; Step B: only kernel threads —
     /// user tasks get a FreshL4 at spawn).
     cr3: AtomicU64,
-}
-
-/// User-stack descriptor for the reaper's unmap+free pass.
-struct UserStack {
-    /// BOTTOM address of the mapped stack region.
-    base: VirtAddr,
-    pages: usize,
+    /// User tasks only: the P4 entry index of their region in their own
+    /// tree (the reaper's tree walk needs it).
+    user_p4: u16,
 }
 
 // SAFETY: `fx` is an exclusively-owned allocation, dereferenced only by the
@@ -287,52 +274,17 @@ pub fn reap() {
             // The saved context lives ON this stack; null it so any stray
             // reader fails loudly instead of jumping into freed memory.
             t.ctx.store(0, Ordering::Relaxed);
-            // User tasks: their pages live in THEIR OWN tree — unmap
-            // through it and free the data frames. The tree is guaranteed
-            // not CR3-active here (tombstoned ⇒ the handoff/switch already
-            // moved CR3 to the next task), so no TLB flushes needed.
+            // User tasks: their ENTIRE tree is reclaimed by a walk under
+            // the task's own P4 entry (page-table frames AND data frames —
+            // the unmap-per-page pass is gone; the tree is not CR3-active
+            // here: tombstoned ⇒ the handoff/switch already moved CR3).
             let task_cr3 = t.cr3.swap(0, Ordering::AcqRel);
             if task_cr3 != 0 {
-                // SAFETY: tombstoned task ⇒ its tree is coherent and not
-                // active in any CR3.
+                // SAFETY: the address came from a real FreshL4 allocation.
                 let root = PhysFrame::from_start_address(PhysAddr::new(task_cr3))
                     .expect("reap: corrupt task CR3");
-                let stack_pages = t
-                    .user_stack
-                    .take()
-                    .map(|us| {
-                        (0..us.pages)
-                            .map(|i| Page::containing_address(us.base + (i * 4096) as u64))
-                            .collect::<alloc::vec::Vec<Page>>()
-                    })
-                    .unwrap_or_default();
-                let code_page = t.user_code.take().map(|(p, _)| p);
-                let scratch_page = t.user_scratch.take().map(|(p, _)| p);
-                unsafe {
-                    mm::with_table(root, |m| {
-                        // Free the DATA frames while dropping the entries:
-                        // the tree walk (free_user_tree, next step) will
-                        // take the page-table frames below.
-                        let mut free_frames: alloc::vec::Vec<PhysFrame<Size4KiB>> =
-                            alloc::vec::Vec::new();
-                        for p in &stack_pages {
-                            if let Ok((frame, _)) = m.unmap(*p) {
-                                free_frames.push(frame);
-                            }
-                        }
-                        for page in [code_page, scratch_page].into_iter().flatten() {
-                            if let Ok((frame, _)) = m.unmap(page) {
-                                free_frames.push(frame);
-                            }
-                        }
-                        for f in free_frames {
-                            mm::deallocate_frame(f);
-                        }
-                    });
-                }
-                // The root frame itself (page-table frames above it stay
-                // leaked until free_user_tree lands).
-                mm::deallocate_frame(root);
+                let count = mm::free_user_tree(root, t.user_p4);
+                serial_println!("[sched] freed task '{}' tree: {} frame(s)", t.name, count);
             }
             let stack = core::mem::take(&mut t.stack);
             drop(stack); // returns the 32 KiB to the heap
@@ -372,10 +324,8 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) {
             stack,
             kstack: Vec::new(),
             kstack_top: 0,
-            user_stack: None,
-            user_code: None,
-            user_scratch: None,
             cr3: AtomicU64::new(0),
+            user_p4: 0,
         });
         serial_println!("[sched] thread '{}' ready", name);
     });
@@ -546,13 +496,8 @@ pub fn spawn_user_task(
             stack: Vec::new(),
             kstack,
             kstack_top,
-            user_stack: Some(UserStack {
-                base: stack_base,
-                pages: USER_STACK_PAGES,
-            }),
-            user_code: Some((Page::containing_address(region), code_frame)),
-            user_scratch: Some((Page::containing_address(scratch), scratch_frame)),
             cr3: AtomicU64::new(root.start_address().as_u64()),
+            user_p4: p4_index,
         });
         serial_println!(
             "[sched] user task '{}' ready (own tree cr3={:#x}, p4={}, code @ {:#x}, kstack top {:#x})",
