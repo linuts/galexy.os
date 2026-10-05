@@ -107,7 +107,9 @@ fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     let first_page = addr >> 12;
     let last_page = last_byte >> 12;
     for page_no in first_page..=last_page {
-        if crate::arch::mm::translate(VirtAddr::new(page_no << 12)).is_none() {
+        // ACTIVE-tree walk: the buffer lives in the calling task's own
+        // address space (Step B) — the kernel-tree translate can't see it.
+        if crate::arch::mm::translate_active(VirtAddr::new(page_no << 12)).is_none() {
             return SyscallResult::err(SysError::BadBuffer);
         }
     }
@@ -135,7 +137,9 @@ fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     }
     let text = core::str::from_utf8(&staged[..len as usize])
         .unwrap_or("");
-    screen::out_str(text);
+    // Console policy (drivers::console): screen + serial — visible
+    // interactively and observable headless.
+    crate::drivers::console::out_str(text);
     SyscallResult::ok(len)
 }
 

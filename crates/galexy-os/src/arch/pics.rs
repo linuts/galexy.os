@@ -7,6 +7,8 @@ use pic8259::ChainedPics;
 use spin::{LazyLock, Mutex};
 use x86_64::instructions::port::Port;
 
+use crate::serial_println;
+
 /// Base vector for the primary PIC's IRQs.
 pub const PIC_1_OFFSET: u8 = 32;
 /// Base vector for the secondary PIC's IRQs (chained to primary IRQ 2).
@@ -26,13 +28,30 @@ static PICS: LazyLock<Mutex<ChainedPics>> = LazyLock::new(|| {
 pub fn init() {
     // SAFETY: done once at boot, before any interrupts are enabled.
     unsafe {
-        PICS.lock().initialize();
+        let mut pics = PICS.lock();
+        pics.initialize();
+        // The OCW1 masks are whatever the BIOS left (SeaBIOS runs a POLLED
+        // keyboard); don't rely on the inherited state. Unmask only the
+        // lines this OS drives — IRQ0 (timer), IRQ1 (keyboard) and the
+        // cascade (IRQ2); everything else stays masked.
+        pics.write_masks(0b1111_1000, 0b1111_1111);
     }
     // Make sure the PS/2 controller's first port (keyboard) is enabled.
     // SAFETY: fixed controller command port.
     unsafe {
         Port::new(0x64).write(0xAE_u8);
+        // Drain any bytes the BIOS left in the output buffer: a full
+        // buffer never re-asserts IRQ1, so the first real keystroke would
+        // black-hole.
+        let mut status = Port::<u8>::new(0x64);
+        let mut data = Port::<u8>::new(0x60);
+        let mut guard = 0u32;
+        while status.read() & 0x01 != 0 && guard < 64 {
+            let _ = data.read();
+            guard += 1;
+        }
     }
+    serial_println!("[pics] ready (masks master 0b1111_1000, slave 0b1111_1111)");
 }
 
 /// Signals end-of-interrupt for a handled vector (from handlers only).

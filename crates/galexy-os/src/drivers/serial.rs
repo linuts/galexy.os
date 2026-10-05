@@ -35,6 +35,16 @@ impl fmt::Write for SerialWriter<'_> {
     }
 }
 
+/// Sends raw bytes over COM1 (byte-for-byte; used by the write syscall's
+/// console mirror).
+pub fn write_bytes(bytes: &[u8]) {
+    use x86_64::instructions::interrupts;
+
+    interrupts::without_interrupts(|| {
+        serial1().lock().send_bytes_exact(bytes);
+    });
+}
+
 /// Format-hook for the `serial_print!`/`serial_println!` macros.
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {

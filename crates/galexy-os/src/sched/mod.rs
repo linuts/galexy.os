@@ -12,6 +12,7 @@
 pub mod context;
 pub mod demo;
 pub mod loader;
+pub mod ramdisk;
 pub mod syscalls;
 
 use alloc::boxed::Box;

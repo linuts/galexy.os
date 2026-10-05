@@ -28,30 +28,35 @@ use crate::serial_println;
 static MAPPER: Mutex<Option<OffsetPageTable<'static>>> = Mutex::new(None);
 /// Set by [`init`]; all ops panic before that.
 static READY: AtomicBool = AtomicBool::new(false);
-/// Physical-memory offset (from `BOOTLOADER_CONFIG`); `None` before init.
-static PHYS_OFFSET: Mutex<Option<VirtAddr>> = Mutex::new(None);
+/// Physical-memory offset (from `BOOTLOADER_CONFIG`); 0 before init.
+///
+/// ATOMIC, not a mutex: `phys_offset()`/`frame_virt()` are reachable from
+/// IF=0 contexts (the write syscall's active-tree buffer walk) — a lock
+/// whose holder can be preemptable main-loop code would wedge the timer
+/// (the lock-audit rule). The value is fixed once at init and never
+/// changes.
+static PHYS_OFFSET: AtomicU64 = AtomicU64::new(0);
 /// The kernel's page-table root (physical address), cached at [`init`].
 /// Every FreshL4 tree shares the kernel half of this table verbatim.
 static KERNEL_CR3: AtomicU64 = AtomicU64::new(0);
 
 /// Physical-memory offset accessor for internal use (panics if unset).
-///
-/// Note: `spin::Mutex::lock()` returns the guard directly (no poisoning), so
-/// this `expect` is `Option<VirtAddr>::expect` through the guard's deref —
-/// it unwraps the stored offset, not a lock result.
 fn phys_offset() -> VirtAddr {
-    PHYS_OFFSET.lock().expect("paging: not initialized (no physical memory offset)")
+    let v = PHYS_OFFSET.load(Ordering::Relaxed);
+    assert!(v != 0, "paging: not initialized (no physical memory offset)");
+    VirtAddr::new(v)
 }
 
 /// Initializes the mapper over the currently active page tables. Requires
 /// the physical memory mapping from `BOOTLOADER_CONFIG`; idempotent.
 pub fn init(phys_offset: u64) {
-    {
-        let mut stored = PHYS_OFFSET.lock();
-        if stored.is_none() {
-            *stored = Some(VirtAddr::new(phys_offset));
-        }
-    }
+    PHYS_OFFSET.compare_exchange(
+        0,
+        phys_offset,
+        Ordering::Release,
+        Ordering::Relaxed,
+    )
+    .expect("paging: physical memory offset already set to a different value");
     let mut mapper = MAPPER.lock();
     if mapper.is_some() {
         return;
@@ -181,12 +186,65 @@ pub fn unmap_page(page: Page<Size4KiB>) -> Result<PhysFrame<Size4KiB>, PageError
 }
 
 /// Translates a virtual address to its physical address, if mapped.
+///
+/// Walks the KERNEL'S BOOT TREE (the mapper's fixed root): for
+/// kernel-side addresses only. User-task addresses must go through
+/// [`translate_active`] — since per-task address spaces (Step B) a ring-3
+/// buffer lives in the calling task's own tree, invisible to this walk.
 pub fn translate(virt: VirtAddr) -> Option<PhysAddr> {
     let mut result = None;
     with_mapper(|mapper| {
         result = mapper.translate_addr(virt);
     });
     result
+}
+
+/// Translates a virtual address in the CURRENTLY ACTIVE tree (CR3).
+///
+/// The write syscall validates user buffers here: the syscall runs with
+/// the calling task's CR3 active, and its buffer lives in its own tree —
+/// the kernel-tree [`translate`] cannot see it (it would report BadBuffer
+/// for every user buffer; the M14 per-task-tree regression this closed).
+///
+/// Read-only 4-level walk through the phys map (the mapper is rooted at
+/// the boot tree and cannot serve non-active trees). Huge-page entries
+/// resolve to their frame base + intra-page offset. The task tree cannot
+/// change mid-syscall (IF=0; switches happen only via timer/syscall
+/// handoff).
+pub fn translate_active(virt: VirtAddr) -> Option<PhysAddr> {
+    assert!(READY.load(Ordering::Relaxed), "paging: mapper not initialized");
+    let (root, _) = Cr3::read();
+    let phys = phys_offset();
+    // SAFETY: the active CR3 target heads a complete page-table tree; the
+    // walk only reads through the phys map, never writes.
+    unsafe {
+        let table = &*(phys + root.start_address().as_u64()).as_ptr::<PageTable>();
+        let indices = [
+            usize::from(virt.p4_index()),
+            usize::from(virt.p3_index()),
+            usize::from(virt.p2_index()),
+            usize::from(virt.p1_index()),
+        ];
+        let mut entry = &table[indices[0]];
+        for i in 1..4 {
+            if !entry.flags().contains(PageTableFlags::PRESENT) {
+                return None;
+            }
+            // 1 GiB (under P4) / 2 MiB (under P3) leaf: base + offset.
+            if entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+                let size: u64 = if i == 1 { 1 << 30 } else { 1 << 21 };
+                let base = entry.addr().as_u64() & !(size - 1);
+                return Some(PhysAddr::new(base + (virt.as_u64() & (size - 1))));
+            }
+            let frame = entry.frame().ok()?;
+            let next = &*(phys + frame.start_address().as_u64()).as_ptr::<PageTable>();
+            entry = &next[indices[i]];
+        }
+        if !entry.flags().contains(PageTableFlags::PRESENT) {
+            return None;
+        }
+        Some(entry.frame().ok()?.start_address() + u64::from(virt.page_offset()))
+    }
 }
 
 /// Physical→virtual conversion for direct access to allocated frames.

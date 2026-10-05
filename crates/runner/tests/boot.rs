@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{boot, boot_liveness, boot_uefi, image, QEMU_EXIT_SUCCESS};
+use common::{boot, boot_and_type, boot_liveness, boot_uefi, image, QEMU_EXIT_SUCCESS};
 use std::time::Duration;
 
 #[test]
@@ -318,6 +318,87 @@ fn realprogram_test_passes() {
         serial.contains("[loader] program 'hello' ready"),
         "loader spawn marker missing; serial:\n{serial}"
     );
+    // The write syscall must actually SUCCEED: hello's text reaches COM1
+    // through the console mirror (guards the active-tree buffer walk —
+    // a kernel-tree walk reports BadBuffer for every user buffer).
+    assert!(
+        serial.contains(HELLO_TEXT),
+        "hello's console output missing from serial (write syscall failed?); serial:\n{serial}"
+    );
+}
+
+#[test]
+fn runshell_test_passes() {
+    let (code, serial) = boot(&image("test-runshell"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-runshell should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-runshell] passed"),
+        "test-runshell success marker missing; serial:\n{serial}"
+    );
+    // hello's output reached COM1 through the console mirror (exactly the
+    // text the real program writes).
+    assert!(
+        serial.contains("Hello from a real Rust user program!"),
+        "user program console output missing from serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("exited (syscall)"),
+        "user task exit marker missing; serial:\n{serial}"
+    );
+}
+
+/// The exact text the real hello program prints through the console
+/// syscall (mirrored to COM1 by the kernel).
+const HELLO_TEXT: &str = "Hello from a real Rust user program!";
+
+/// Qcode + expected-echo pairs for typing `run hello` + Enter (typing
+/// E2E). Each key syncs on the shell's echo of it (console = screen +
+/// serial); the Enter key syncs on hello's program output (the write
+/// syscall's console mirror) — proof the whole dispatch ran.
+const RUN_HELLO_KEYS: &[(&str, &str)] = &[
+    ("r", "r"),
+    ("u", "u"),
+    ("n", "n"),
+    ("spc", " "),
+    ("h", "h"),
+    ("e", "e"),
+    ("l", "l"),
+    ("l", "l"),
+    ("o", "o"),
+    ("ret", HELLO_TEXT),
+];
+
+/// True end-to-end: TYPES `run hello` into the running kernel through
+/// QEMU's QMP `send-key` (real PS/2 IRQs into the keyboard driver) and
+/// asserts the user program's console output on COM1 (screen+serial
+/// mirror make the result observable headless).
+#[test]
+fn shell_run_hello_typing_e2e() {
+    // Typing starts only after the kernel's main loop (the shell's key
+    // consumer) is live — serial marker, not a sleep: init timing under
+    // TCG varies. Each key syncs on the guest's echo, so host load can
+    // never overflow the i8042 queue between keys.
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        RUN_HELLO_KEYS,
+        "[boot] main loop ready",
+        "exited (syscall)",
+        Duration::from_millis(30),
+        Duration::from_secs(60),
+    );
+    assert!(
+        serial.contains(HELLO_TEXT),
+        "typed `run hello` never produced user output; serial:\n{serial}"
+    );
+    // The task's full lifecycle ran under the real rotation + reaper.
+    assert!(
+        serial.contains("exited (syscall)"),
+        "user task exit marker missing after typed run; serial:\n{serial}"
+    );
 }
 
 #[test]
@@ -348,7 +429,9 @@ fn uefi_image_boots_and_reports() {
 #[test]
 fn main_kernel_boots_and_timer_ticks() {
     // The interactive kernel never exits; verify liveness markers instead.
-    let serial = boot_liveness(&image("galexy-os"), Duration::from_secs(20));
+    // (Generous window: TCG boot + banner render stretch badly when the
+    // host is loaded — 20 s was observed to cut the first heartbeat off.)
+    let serial = boot_liveness(&image("galexy-os"), Duration::from_secs(45));
     assert!(
         serial.contains("boot info: rsdp_addr"),
         "boot info marker missing; serial:\n{serial}"

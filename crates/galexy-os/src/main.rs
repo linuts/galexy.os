@@ -18,11 +18,28 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         boot_info.rsdp_addr,
         boot_info.physical_memory_offset
     );
+
+    // Ramdisk: the bootloader-mapped tar, published for `run <program>`.
+    if let Some(ramdisk_addr) = boot_info.ramdisk_addr.into_option() {
+        // SAFETY: the bootloader mapped the contiguous ramdisk image at
+        // [ramdisk_addr, +len) into the kernel's (and thus every) space.
+        let archive = unsafe {
+            core::slice::from_raw_parts(
+                x86_64::VirtAddr::new(ramdisk_addr).as_ptr::<u8>(),
+                boot_info.ramdisk_len as usize,
+            )
+        };
+        sched::ramdisk::init(archive);
+    } else {
+        serial_println!("[boot] no ramdisk handed to the kernel");
+    }
+
     galexy_os::arch::mm::init(boot_info); // frames + paging + heap
     galexy_os::arch::init(); // interrupts last to init: handlers depend on drivers
     sched::init();
     sched::demo::spawn_all(); // silent preemptive threads
     banner::show();
+    serial_println!("[boot] main loop ready");
     let mut last_second = 0u64;
     loop {
         // Status bar refresh, once per second (timer-driven).

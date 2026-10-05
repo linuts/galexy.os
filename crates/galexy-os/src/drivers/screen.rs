@@ -348,16 +348,28 @@ fn with_lock<F>(f: F)
 where
     F: FnOnce(&mut ScreenWriter),
 {
-    let mut guard = SCREEN.lock();
-    if let Some(writer) = guard.as_mut() {
-        f(writer);
-    }
+    // Lock-audit rule (docs/DESIGN.md): the screen lock is reached from
+    // preemptable code (main loop shell output) AND IRQ-context code (a
+    // user task's write syscall runs at IF=0) — the gate lives here, in
+    // the module's lock-taking core, so no holder can ever be preempted
+    // mid-hold (a held lock + IF=0 syscalls would wedge the timer).
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut guard = SCREEN.lock();
+        if let Some(writer) = guard.as_mut() {
+            f(writer);
+        }
+    });
 }
 
 /// Current cursor position, in character cells.
 pub fn pos() -> (usize, usize) {
     let mut pos = (0, 0);
-    with_lock(|screen| pos = (screen.char_x, screen.char_y));
+    // Same gate as the writers (shared lock).
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if let Some(writer) = SCREEN.lock().as_ref() {
+            pos = (writer.char_x, writer.char_y);
+        }
+    });
     pos
 }
 

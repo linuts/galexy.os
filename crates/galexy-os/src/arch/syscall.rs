@@ -18,6 +18,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use x86_64::registers::model_specific;
+use x86_64::registers::rflags::RFlags;
 
 use crate::serial_println;
 
@@ -55,6 +56,17 @@ pub fn init() {
     model_specific::LStar::write(x86_64::VirtAddr::new(
         syscall_entry_naked as *const () as usize as u64,
     ));
+    // FMASK: clear IF (and TF) the instant SYSCALL lands. FMASK=0 left the
+    // entry's first instructions with IF=1 — a timer tick landing in that
+    // one-instruction window interrupts at CPL=0 with RSP = the USER stack
+    // (no automatic RSP0 switch below ring 3), and the tick's context gets
+    // pushed onto the user stack; the rotation's CR3 swap then unmaps it
+    // under the timer's own return path → page fault → double fault →
+    // reset. With IF cleared at entry, the window is closed; the user's
+    // full RFLAGS still arrives in R11 and rides into the frame (SYSRET
+    // consumes it unmodified).
+    // SAFETY: constant mask; part of the MSR configuration above.
+    unsafe { model_specific::SFMask::write(RFlags::INTERRUPT_FLAG | RFlags::TRAP_FLAG) };
     // SAFETY: enabling SCE; STAR/LSTAR are consistent above.
     unsafe {
         model_specific::Efer::update(|f| *f |= model_specific::EferFlags::SYSTEM_CALL_EXTENSIONS);

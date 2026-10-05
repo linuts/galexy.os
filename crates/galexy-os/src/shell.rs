@@ -11,6 +11,7 @@ use spin::Mutex;
 
 use crate::arch::mm;
 use crate::drivers::{keyboard, screen};
+use crate::sched;
 
 /// Prompt color.
 pub(crate) const PROMPT_COLOR: screen::Color = screen::Color::new(0x7C, 0xA0, 0xFF);
@@ -51,7 +52,10 @@ pub fn poll() {
             }
             c => {
                 line.push(c);
-                screen::out_char(c);
+                // Echo through the console policy: the typed char shows on
+                // screen AND lands on COM1 — headless harnesses sync the
+                // typing flow on exactly this.
+                crate::drivers::console::out_char(c);
             }
         }
     }
@@ -85,8 +89,39 @@ fn flush_and_dispatch(text: &str) {
             prompt_only();
         }
         "about" => about(),
+        _ if trimmed.starts_with("run ") || trimmed == "run" => run(trimmed),
         _ => flush_and_echo(text),
     }
+}
+
+/// Public seam for driving the command dispatcher without keystrokes
+/// (boot tests call this directly; `poll` reaches it through the same path
+/// the typing flow uses).
+pub fn exec(line: &str) {
+    flush_and_dispatch(line);
+}
+
+/// `run <program>`: loads a user program's ELF from the ramdisk and spawns
+/// it. Runs on the main loop = kernel tree (the loader's guard).
+fn run(line: &str) {
+    let name = line["run".len()..].trim();
+    if name.is_empty() {
+        out_lines(&["run: no program named (usage: run <program>)".into()]);
+        return;
+    }
+    let Some(bytes) = sched::ramdisk::find(name) else {
+        out_lines(&[alloc::format!("run: no such program '{name}'")]);
+        return;
+    };
+    // The task name outlives this call (thread stats/tombstones read it):
+    // leak the name — a few bytes per spawn, same philosophy as the
+    // tombstone slot model (revisit with a slot free-list).
+    let leaked: &'static str = alloc::boxed::Box::leak(name.into());
+    sched::loader::spawn_program(leaked, bytes);
+    // The loader registered the task; spawn markers go to serial only.
+    // Prompt reprint: the program prints on the screen asynchronously, so
+    // reclaim the line now.
+    prompt_only();
 }
 
 /// Prints a fresh prompt (for empty lines).
@@ -112,8 +147,8 @@ fn out_lines(lines: &[String]) {
 
 fn help() {
     out_lines(&[
-        "commands: help, stats, tasks, threads, clear, about".into(),
-        "unknown lines are echoed back".into(),
+        "commands: help, stats, tasks, threads, run <program>,".into(),
+        "clear, about; unknown lines are echoed back".into(),
     ]);
 }
 

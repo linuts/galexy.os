@@ -51,7 +51,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let baseline = galexy_os::arch::mm::free_frames();
 
     // The real program: ELF in, task running.
-    let region = sched::loader::spawn_program("hello", hello_elf);
+    let _region = sched::loader::spawn_program("hello", hello_elf);
 
 
     // Main loop: hlt + rotations while the program runs; the entry shim
@@ -69,6 +69,22 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         if polls > 4000 {
             panic!("hello never exited");
         }
+    }
+
+    // Drain: the exit handoff can land between `reap()` and the count
+    // check above (the count only reflects RUNNING state) — keep the
+    // rotation + reaper running until the frame accounting stops
+    // improving, so the tree walk below sees the final state.
+    let mut stable = 0u32;
+    while stable < 16 {
+        x86_64::instructions::hlt();
+        let before = galexy_os::arch::mm::free_frames();
+        sched::reap();
+        stable = if galexy_os::arch::mm::free_frames() == before {
+            stable + 1
+        } else {
+            0
+        };
     }
 
     // Accounting: the program's tree (data + tables) returned wholesale.
