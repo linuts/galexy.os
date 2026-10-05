@@ -179,8 +179,11 @@ struct Thread {
     /// tree (the reaper's tree walk needs it).
     user_p4: u16,
     /// The CPU that owns (runs + reaps) this thread — "pinned at spawn"
-    /// (SMP M18). A thread is ever-current on exactly one CPU.
+    /// (SMP M18); work stealing (M19) may flip it to an idle CPU.
     owner: u8,
+    /// The timer tick of this thread's last steal (anti-ping-pong cooldown
+    /// for the idle-CPU steal path). 0 = never stolen (eligible).
+    stolen_at: AtomicU64,
 }
 
 // SAFETY: `fx` is an exclusively-owned allocation, dereferenced only by the
@@ -243,6 +246,19 @@ pub fn main_ticks() -> u64 {
 /// Where the next spawned thread/task lands: round-robin across the CPUs
 /// the MADT brought online ("pinned at spawn"; no migration, no stealing).
 static NEXT_CPU: AtomicUsize = AtomicUsize::new(0);
+/// Completed work-steals (diagnostics + test assertions for the steal
+/// proof).
+static STEALS: AtomicU64 = AtomicU64::new(0);
+/// A freshly stolen thread cannot be stolen again for this many timer
+/// ticks (~0.1 s machine time): idle CPUs must not ping-pong a hot task
+/// between them.
+const STEAL_COOLDOWN_TICKS: u64 = 100;
+
+/// Number of completed work-steals since boot.
+pub fn steal_count() -> u64 {
+    STEALS.load(Ordering::Relaxed)
+}
+
 fn next_cpu() -> u8 {
     let online = crate::arch::cpu::online();
     (NEXT_CPU.fetch_add(1, Ordering::Relaxed) % online) as u8
@@ -402,6 +418,7 @@ pub(crate) fn register_user_task(init: TaskInit) {
             cr3: AtomicU64::new(init.cr3),
             user_p4: init.user_p4,
             owner,
+            stolen_at: AtomicU64::new(0),
         });
     });
 }
@@ -436,6 +453,7 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) -> u8 {
             cr3: AtomicU64::new(0),
             user_p4: 0,
             owner,
+            stolen_at: AtomicU64::new(0),
         });
         serial_println!("[sched] thread '{}' ready (owner cpu {})", name, owner);
         owner
@@ -620,6 +638,7 @@ pub fn spawn_user_task(
             cr3: AtomicU64::new(root.start_address().as_u64()),
             user_p4: p4_index,
             owner,
+            stolen_at: AtomicU64::new(0),
         });
         serial_println!(
             "[sched] user task '{}' ready (own tree cr3={:#x}, p4={}, code @ {:#x}, kstack top {:#x})",
@@ -820,7 +839,7 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
 
     let me = cpu_sched();
     let next_ctx = interrupts::without_interrupts(|| {
-        let threads = THREADS.lock();
+        let mut threads = THREADS.lock();
         let my_cpu = crate::arch::cpu::current_index() as u8;
         let current = me.current.load(Ordering::Relaxed);
 
@@ -885,8 +904,54 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
         debug_assert!(scans > 0, "rotation scan terminated without main");
         me.last_served.store(next_slot, Ordering::Relaxed);
 
-        // Switching to ourselves (all other slots dead or foreign) = no
-        // switch.
+        // IDLE-PASS WORK STEALING (SMP M19): the scan is about to serve
+        // main. That alone is NOT "idle" (the alternate-with-main pattern
+        // hits main every other tick even with runnable threads) — so the
+        // steal attempt is gated on NO runnable thread being owned by this
+        // CPU. Steal = flip the owner (all under the THREADS lock, which
+        // both this switch and the victim's switch serialize on); the
+        // ENTRY IS DEFERRED TO THIS CPU'S NEXT TICK (the rotation scan
+        // picks it up as own+RUNNING). The deferral is LOAD-BEARING: the
+        // victim's switch-out released the lock BEFORE its naked tail
+        // finished unwinding the frame ON THE TASK'S KSTACK — an immediate
+        // entry would have both CPUs popping the same frame. One tick
+        // later, the victim's tail is long done and the saved ctx is
+        // stable. The cooldown (stolen_at) keeps a hot thread from
+        // ping-ponging between idle CPUs: it stays put for a while.
+        if next_slot == 0 {
+            let own_runnable = threads
+                .iter()
+                .any(|t| t.owner == my_cpu && t.state.load(Ordering::Acquire) == STATE_RUNNING);
+            if !own_runnable {
+                let now = crate::arch::timer_ticks();
+                for (i, t) in threads.iter_mut().enumerate() {
+                    let slot_no = i + 1;
+                    let stolen_at = t.stolen_at.load(Ordering::Relaxed);
+                    if t.owner == my_cpu
+                        || t.state.load(Ordering::Acquire) != STATE_RUNNING
+                        || now < stolen_at + STEAL_COOLDOWN_TICKS
+                        || CPU_SCHED[t.owner as usize].current.load(Ordering::Relaxed) == slot_no
+                    {
+                        continue; // own / dead / cooling down / current on its owner
+                    }
+                    let victim = t.owner;
+                    t.owner = my_cpu;
+                    t.stolen_at.store(now, Ordering::Relaxed);
+                    STEALS.fetch_add(1, Ordering::Relaxed);
+                    serial_println!(
+                        "[sched] cpu {} stole '{}' (slot {}) from cpu {} (enters next tick)",
+                        my_cpu,
+                        t.name,
+                        slot_no,
+                        victim
+                    );
+                    break;
+                }
+            }
+        }
+
+        // Switching to ourselves (all other slots dead or foreign, and no
+        // steal landed) = no switch.
         let current = me.current.load(Ordering::Relaxed);
         if next_slot == current {
             return None;
