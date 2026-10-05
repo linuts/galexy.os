@@ -563,6 +563,26 @@ fn smpuser_test_passes() {
 }
 
 #[test]
+fn smpstress_test_passes() {
+    // M19 stress: idle-CPU steal proof + concurrent heap growth (shootdown
+    // crossings) + hammering with exact frame closure.
+    let (code, serial) = boot(&image("test-smpstress"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-smpstress should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-smpstress] passed"),
+        "test-smpstress success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("stole 'spinner'"),
+        "the steal proof must show the owner flip; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn uefi_image_boots_and_timer_ticks() {
     // Since the APIC work (M17), the timer is LAPIC-delivered on every boot
     // path — the UEFI image is live, not just booting: assert the heartbeat.
