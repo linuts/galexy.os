@@ -111,8 +111,13 @@ first real program landed in Milestone 13:
 - Filesystem capabilities: `open(name) → Cap(file)` + `read(cap, ...)` —
   the capability-day-one machinery exercised by real resources.
 - APIC so UEFI boots get timer/keyboard; the door to SMP.
-- Shell `run <program>` command + userland print hygiene (ANSI-ish
-  console layer).
+- Shell `run <program>` command ✅ (Milestone 16: ramdisk service +
+  `shell::exec("run hello")` — dispatch → loader, full lifecycle; typed-
+  keystroke E2E over QMP proves the real input path)
+- Userland print hygiene: console = screen + serial mirror ✅ (Milestone
+  16); ANSI-ish console layer still future work.
+- Userland shell (a shell as a REAL ring-3 program): needs a `read`-side
+  syscall + keyboard capability — the next capability step after fs caps.
 
 ## Standing principles
 

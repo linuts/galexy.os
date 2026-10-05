@@ -46,7 +46,10 @@ contract between them.
    registers, MSRs, or platform specifics. Drivers and primitives call
    `arch` APIs. Porting to another arch = rewriting `arch/` alone.
 3. **Drivers never call drivers.** Shared behavior goes through `galexy-core`
-   types/traits; shared *policies* stay in the caller (`shell`).
+   types/traits; shared *policies* stay in the caller (`shell`). Exception
+   (Milestone 16): `drivers/console.rs` is not a driver but the console
+   POLICY façade (screen + serial in one place); it is the one sanctioned
+   composition point.
 4. **`galexy-core` stays alloc-free** and platform-independent (no `arch`
    deps) — it's the bottom of the dependency stack:
    `bins → lib → (shell, banner, sched, drivers)`,
@@ -303,7 +306,10 @@ Live behaviors: `exit` (tombstone + handoff — the reaper frees the task's
 user stack pages, scratch, code page + kernel stack), `yield` (real
 rotation switch via `sched::syscall_handoff`), `write` (cap authority:
 console index + WRITE right; 1 KiB cap; page-walk validation of the user
-buffer via `translate`; printable-ASCII staging; screen output);
+buffer via `translate_active` — the CR3-ACTIVE tree, since per-task
+address spaces the kernel-rooted `translate` cannot see user buffers;
+printable-ASCII staging; screen output **+ serial mirror** — console =
+screen + COM1, which is what makes userland output observable headless);
 `cap_info` echoes handles (dispatch proving ground). Unknown numbers →
 Unsupported. Kernel-origin syscalls are impossible-by-structure: the arch
 shim dies loudly instead.
@@ -313,7 +319,8 @@ shim dies loudly instead.
 - MSR bring-up (order matters): `STAR::write_raw(user_cs, kernel_cs)`
   (SYSRET forces RPL 3 on both CS and SS — our consecutive GDT layout
   makes the hardware `SS = CS + 8` land on user data), `LSTAR` → naked
-  entry, `FMASK = 0` (full user RFLAGS through), `EFER.SCE` last.
+  entry, `SFMASK` = IF+TF (RFLAGS bits cleared at entry — see below),
+  `EFER.SCE` last.
 - Naked entry: `cli` FIRST (the whole syscall is atomic vs the timer;
   resumed tasks restore IF from their own saved RFLAGS), then switch to
   the CURRENT task's kernel stack via the kstack registry
@@ -322,7 +329,13 @@ shim dies loudly instead.
   frame: SS (static user SS), RSP (stashed), RFLAGS (r11), CS (static
   user CS), RIP (rcx), GPRs r15..rax. The first iteration forgot the CS
   push — the cpl()==3 assert in `sched::syscalls::service` caught it
-  immediately (cheap tripwears pay).
+  immediately (cheap tripwears pay). SFMASK lesson (Milestone 16):
+  `FMASK=0` left IF set for the entry's first instructions — a timer tick
+  in that window interrupts at CPL=0 with the USER stack as RSP (no RSP0
+  auto-switch below ring 3) and the tick's context lands on the user
+  stack; the rotation's CR3 swap then unmaps it under the timer's return
+  path → PF → double fault → silent reset. SFMASK clearing IF (and TF)
+  closes the window; the user's RFLAGS still rides in R11 into the frame.
 - Dispatch result: 0 resumes the outgoing frame (pop + iretq), a pointer
   switches (yield/exit handoff — the decomposition used by the timer too).
 - Ring-3 segment hygiene: SYSCALL leaves DS/ES/FS/GS as the kernel's
@@ -338,13 +351,26 @@ shim dies loudly instead.
 
 ### shell — "the shell" (`shell.rs`)
 
-Main loop: drains the key queue — printable chars echo + buffer up; Enter
-dispatches (`help`, `stats`, `tasks`, `threads`, `clear`, `about`;
-unknown lines echo back — the original echo-shell behavior); Backspace
-erases. The status bar (`render_status_bar`) redraws the bottom line
+Main loop: drains the key queue — printable chars echo + buffer up (the
+echo goes through the console policy: screen + serial); Enter
+dispatches (`help`, `stats`, `tasks`, `threads`, `run <program>`, `clear`,
+`about`; unknown lines echo back — the original echo-shell behavior);
+Backspace erases. `run <name>` finds the program's ELF via the ramdisk
+service and hands it to the loader (Milestone 16; dispatch body factored
+into `shell::exec(line)` so boot tests drive the SAME path typing does).
+The status bar (`render_status_bar`) redraws the bottom line
 in-place once per second (uptime + per-thread tick counts + frames free)
 with cursor save/restore — the "quiet OS" demo: everything observable as
 live numbers, zero background noise.
+
+### sched/ramdisk — "the archive" (`sched/`)
+
+The runner packs user programs into a USTAR tar and the bootloader maps it
+(`BootInfo.ramdisk_addr` = a VIRTUAL address, framebuffer-like contract).
+`sched::ramdisk::init` publishes those bytes once (kernel-lifetime, so a
+`&'static [u8]` view); `find(name)` walks them read-only via
+`galexy-core::TarCursor` per call. Consumers (the shell's `run`, test
+kernels) never touch raw BootInfo ramdisk fields again.
 
 ## Concurrency model (pre-scheduler, single-core)
 

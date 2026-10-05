@@ -339,6 +339,80 @@ tests + 16 core host tests, green per commit.
       path too (Step A/B blobs just never pushed)
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 16 — shell `run <program>` ✅
+
+The shell can launch real userland programs by name. Along the way, TWO
+latent kernel bugs surfaced and were fixed; the suite grew to 23 QEMU boot
+tests (+ a true typed-keystroke E2E) + 16 core host tests, green per commit.
+
+- [x] **Ramdisk service** (`sched/ramdisk.rs`): `init(boot_info)` publishes
+      the bootloader-mapped tar (`ramdisk_addr` = VIRTUAL, framebuffer-like
+      contract) once; `find(name)` walks it via `TarCursor`. Test kernels
+      stop re-walking the raw BootInfo themselves
+- [x] **`run <name>`** (shell.rs): arg → `ramdisk::find` →
+      `loader::spawn_program`; unknown program → `run: no such program`
+      (not a silent echo); the parsed name is `Box::leak`ed for the task
+      record (`&'static str`, same tombstone-slot philosophy). Dispatch
+      body factored into `shell::exec(line)` — the typing flow and boot
+      tests reach the SAME path. Help text lists `run <program>`
+- [x] **Console = screen + serial** (`drivers/console.rs`): the console
+      POLICY façade — userland's `write` and the shell's typed-key echo
+      both print through it, so userland output is observable headless
+      and the harness can sync on guest progress. This mirror is what
+      exposed the two kernel bugs below
+- [x] **FIX — M14 write-validation regression**: since per-task trees, the
+      `write` syscall's buffer page-walk used the KERNEL-ROOTED mapper
+      (`arch/mm::translate` — rooted at the boot L4 captured at init) and
+      reported **BadBuffer for EVERY user buffer** (blob tests ignored the
+      result, no test asserted printed text). Closed with
+      `arch/mm::translate_active`: a read-only 4-level walk of the
+      CR3-ACTIVE tree through the phys map (huge pages included) —
+      `test-realprogram` now asserts hello's text on serial
+- [x] **FIX — syscall-entry timer window**: `FMASK=0` left IF set at
+      SYSCALL entry; a timer tick landing between the `syscall`
+      instruction and the entry's `cli` interrupted at CPL=0 with RSP =
+      the USER stack (no RSP0 auto-switch below ring 3), pushed its
+      context onto the user stack, and the rotation's CR3 swap then
+      unmapped it under the timer's own return path → PF → double fault →
+      silent reset (TCG-timing flaky; found via `-d int`). `SFMASK` now
+      clears IF+TF at entry (user RFLAGS rides in R11 unchanged)
+- [x] **Screen lock gate** (`drivers/screen`): `with_lock`/`pos` are
+      IRQ-gated in the module's public API (lock-audit rule) — the first
+      ever coexistence of user-task screen writes (IF=0) with the main
+      loop's shell output had exposed the gap
+- [x] **PIC determinism** (`arch/pics`): explicit masks after remap
+      (master 0b1111_1000 = IRQ0/1/2 + cascade, slave 0xFF — the inherited
+      BIOS masks are SeaBIOS's polled-keyboard leftovers) + an
+      output-buffer flush (a stale POST byte holds the buffer full and
+      the first real keystroke never asserts IRQ1)
+- [x] **`bin/test-runshell.rs`**: drives `shell::exec("run hello")`
+      directly — ramdisk find (positive + negative), full lifecycle
+      (exit-by-syscall + tree walk), hello's text on serial via the
+      mirror, frames back to baseline; verified (exit 33)
+- [x] **Typing E2E** (`runner/tests`): QMP `send-key` types
+      `run hello<Enter>` into the LIVE main kernel (real PS/2 IRQs —
+      nothing injected kernel-side). Determinism was earned the hard way:
+      - fixed sleeps lose keys (init timing varies under TCG) → the
+        harness waits for a serial ready-marker (`[boot] main loop ready`)
+      - wall-time PACING still loses keys under host load (the guest
+        drains at TCG speed; QEMU's 16-deep PS/2 queue overflows and
+        silently drops tail keystrokes — deterministic 16-of-20 under
+        load, found via `pckbd*` traces) → EACH key syncs on the guest's
+        SERIAL echo of it (the console mirror in the other direction);
+        Enter syncs on hello's program output
+      - the exit handoff lags the program's output by a scheduling
+        quantum under slow TCG → a final-marker wait (`exited
+        (syscall)`) precedes the assertions
+      - QMP replies read through the SAME buffered reader as the
+        handshake (a second reader desynchronizes the command/reply
+        stream — keys silently misdelivered)
+- [x] **Test-harness hardening**: `test-realprogram`/`test-runshell`/
+      `test-user` gain a drain phase after `threads_count()==0` (the exit
+      handoff can land between `reap()` and the count check — RUNNING-only
+      count — leaving the tree unfreed at assert time); liveness test
+      window 20s → 45s (TCG-under-load)
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [ ] UEFI: timer + keyboard dead under UEFI — legacy PIC doesn't exist;
@@ -348,7 +422,9 @@ tests + 16 core host tests, green per commit.
       task resumes in ring 3 — user code must not do segment-based
       addressing; proper user segment reload is future segment work
 - [ ] `write` printable-ASCII rule is a stand-in for a real console
-      charset policy (newlines unsupported yet — the blob prints one line)
+      charset policy (newlines work; tab/CR/ESC are future screen work)
+- [ ] `run` leaks the task name (`Box::leak`, a few bytes per spawn) —
+      fine at this scale; a slot free-list is the fix if tasks churn
 - [ ] Tombstone slots live forever (a few bytes per dead thread) — fine
       until tasks churn; a free-list of slots is the fix if ever needed
 - [ ] Status bar can overwrite the typing line when the screen is full

@@ -5,7 +5,8 @@ with a pixel-framebuffer TTY, PS/2 keyboard input, memory management,
 cooperative tasks, timer-preemptive kernel threads, and a real userland:
 ring-3 tasks with their own address spaces, actual Rust programs loaded as
 ELF from a tar ramdisk, printing through the syscall ABI, killed cleanly
-when they crash — the OS survives user bugs.
+when they crash — the OS survives user bugs. The interactive shell launches
+userland programs by name (`run hello`).
 
 ## Features
 
@@ -34,8 +35,9 @@ when they crash — the OS survives user bugs.
 - [x] `galexy-abi`: the syscall ABI — numbered syscalls + capability model
       (no fds; capabilities day one) — frozen and host-tested before any
       ring-3 code exists
-- [x] Shell with commands (`help`, `stats`, `threads`, ...) + live status
-      bar ("quiet OS" demo)
+- [x] Shell with commands (`help`, `stats`, `threads`, `run <program>`,
+      ...) + live status bar ("quiet OS" demo) — `run` launches real
+      userland programs from the ramdisk; console output = screen + serial
 - [x] Test harness: host unit tests + per-kernel QEMU integration tests
 - [x] Programs beyond blobs: `galexy-rt` runtime (`entry!`, syscall
       wrappers, user panic handler), kernel ELF loader (static ET_EXEC,
