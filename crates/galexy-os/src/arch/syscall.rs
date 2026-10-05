@@ -1,19 +1,27 @@
 //! SYSCALL/SYSRET mechanism (x86_64): MSR configuration + the naked entry
 //! that builds a uniform context frame.
 //!
-//! Registers at SYSCALL entry (fixed CPU semantics):
+//! Register state at SYSCALL entry (fixed CPU semantics):
 //! - `rcx` = user RIP, `r11` = user RFLAGS (explicitly NOT saved by the
 //!   instruction), `rsp` = user RSP (unchanged), other GPRs = user values,
 //!   DS/ES/FS/GS untouched (still the kernel bootstrap selectors — user
 //!   code must not use segment-based addressing; ring-3 segment hygiene is
 //!   future ABI work).
 //!
-//! Entry protocol: switch to the CURRENT task's kernel stack (registry
-//! updated on every switch-in to a user task), push the uniform frame
-//! (same shape as the timer's interrupt frame), then run the Rust dispatch
-//! (policy in `sched::syscalls`, per boundary rule 7). The dispatch returns
-//! either 0 (resume the outgoing frame) or a context pointer (switch:
-//! yield/exit handoff).
+//! Entry protocol: switch to the CURRENT task's kernel stack (per-CPU
+//! `gs:[8]`, written on every switch-in to a user task), push the uniform
+//! frame (same shape as the timer's interrupt frame), then run the Rust
+//! dispatch (policy in `sched::syscalls`, per boundary rule 7). The
+//! dispatch returns either 0 (resume the outgoing frame) or a context
+//! pointer (switch: yield/exit handoff).
+//!
+//! Mid-flight scratch (user RSP / syscall number) lives in PER-CPU memory
+//! (`gs:[16]`/`gs:[24]`, see `arch/cpu.rs`) — with 2 CPUs a shared static
+//! would clobber across cores.
+//!
+//! GS contract: the kernel keeps its GS base (per-CPU struct) across ring
+//! transitions — userland never modifies it, and SYSRET leaves it alone.
+//! `gs:[8]` therefore names THIS CPU's registry everywhere.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -21,13 +29,6 @@ use x86_64::registers::model_specific;
 use x86_64::registers::rflags::RFlags;
 
 use crate::serial_println;
-
-/// Kernel stack top of the CURRENT task (`0` = main loop / kernel thread —
-/// a syscall there is a kernel bug, checked in Rust, not the asm).
-static TASK_KSTACK: AtomicU64 = AtomicU64::new(0);
-/// Scratch legs for the naked entry (user RSP / user RAX mid-flight).
-static SAVED_RSP: AtomicU64 = AtomicU64::new(0);
-static SAVED_RAX: AtomicU64 = AtomicU64::new(0);
 /// The user CS selector (RPL 3, iretq's return target) pushed into every
 /// uniform frame's CS slot.
 static USER_CS: AtomicU64 = AtomicU64::new(0);
@@ -35,10 +36,10 @@ static USER_CS: AtomicU64 = AtomicU64::new(0);
 /// CS half in hardware; SS is our constant).
 static USER_SS: AtomicU64 = AtomicU64::new(0);
 
-/// Publishes the CURRENT task's kernel stack top (switch-in hook). `0`
-/// clears (main loop / kernel thread).
+/// Publishes the CURRENT task's kernel stack top for this CPU (switch-in
+/// hook). `0` clears (main loop / kernel thread).
 pub fn set_task_kstack(top: u64) {
-    TASK_KSTACK.store(top, Ordering::Relaxed);
+    crate::arch::cpu::set_kstack(top);
 }
 
 /// MSR configuration (order matters): `STAR` (kernel/user CS bases), then
@@ -92,18 +93,21 @@ pub unsafe extern "C" fn syscall_entry_naked() {
         // Kernel-origin syscalls are checked in Rust (fail loudly there);
         // first order: interrupts off + switch to the task kernel stack.
         "cli",
-        // Stash user rsp + rax, load the task's kernel stack top.
-        "mov QWORD PTR [rip + {saved_rsp}], rsp",
-        "mov QWORD PTR [rip + {saved_rax}], rax",
-        "mov rsp, QWORD PTR [rip + {task_kstack}]",
+        // Stash user rsp + rax into PER-CPU scratch (gs:[16]/[24]), then
+        // load the task's kernel stack top (gs:[8]). GS is the kernel's
+        // per-CPU base across rings (userland never modifies it) — this
+        // column is exactly what makes the entry CPU-agnostic.
+        "mov QWORD PTR gs:[16], rsp",
+        "mov QWORD PTR gs:[24], rax",
+        "mov rsp, QWORD PTR gs:[8]",
         // Uniform frame, pushed downward; rising layout matches
         // context::Context exactly: SS, RSP, RFLAGS, CS, RIP, r15..rax.
         "push QWORD PTR [rip + {user_ss}]", // SS
-        "push QWORD PTR [rip + {saved_rsp}]", // RSP = user rsp
+        "push QWORD PTR gs:[16]", // RSP = user rsp
         "push r11", // RFLAGS = user rflags
         "push QWORD PTR [rip + {user_cs}]", // CS = user (RPL 3 — iretq returns to ring 3)
         "push rcx", // RIP = user rip
-        "push QWORD PTR [rip + {saved_rax}]", // rax (the syscall number)
+        "push QWORD PTR gs:[24]", // rax (the syscall number)
         "push rbx",
         "push rcx", // r11/rcx are clobbered by SYSCALL per the ABI anyway
         "push rdx",
@@ -132,9 +136,6 @@ pub unsafe extern "C" fn syscall_entry_naked() {
         "pop rbp", "pop rdi", "pop rsi", "pop rdx",
         "pop rcx", "pop rbx", "pop rax",
         "iretq",
-        saved_rsp = sym SAVED_RSP,
-        saved_rax = sym SAVED_RAX,
-        task_kstack = sym TASK_KSTACK,
         user_ss = sym USER_SS,
         user_cs = sym USER_CS,
         rust = sym syscall_rust,

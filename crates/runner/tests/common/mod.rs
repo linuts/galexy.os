@@ -56,11 +56,19 @@ fn serial_log_path(name: &str) -> PathBuf {
 
 /// Builds the QEMU command for `img_path`: headless, COM1 to `serial_path`,
 /// writable-overlays (`-snapshot`) so parallel tests never conflict.
+///
+/// `-smp 2 -cpu max`: the SMP substrate requires FSGSBASE (`-cpu max`;
+/// QEMU's default qemu64 model lacks it), and 2 cores exercise the per-CPU
+/// paths in EVERY test — single-core assumptions regress loudly.
 fn qemu_command(img_path: &str, serial_path: &PathBuf) -> Command {
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.arg("-drive")
         .arg(format!("format=raw,file={img_path}"))
         .arg("-snapshot")
+        .arg("-smp")
+        .arg("2")
+        .arg("-cpu")
+        .arg("max")
         .arg("-display")
         .arg("none")
         .arg("-no-reboot")

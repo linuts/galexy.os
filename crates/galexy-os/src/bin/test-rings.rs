@@ -5,6 +5,8 @@
 //!    (SYSRET requires `user SS == user CS + 8`).
 //! 2. `set_tss_rsp0` roundtrips through the live TSS.
 //! 3. `Context::cpl()` decodes fabricated frames (kernel + user shape).
+//! 4. Per-CPU substrate (SMP M18): GS-base identity + kstack registry
+//!    roundtrips on CPU 0 — the syscall naked entry switches to `gs:[8]`.
 
 #![no_std]
 #![no_main]
@@ -50,6 +52,23 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let mut uframe: context::Context = unsafe { core::mem::zeroed() };
     uframe.cs = user_cs; // includes RPL 3 bits
     assert_eq!(uframe.cpl(), 3, "user frame decodes CPL 3");
+
+    // 4: per-CPU substrate (gs:[0] identity + gs:[8] kstack roundtrip).
+    let cpu0 = arch::cpu::current();
+    let cpu0 = cpu0 as *const _ as u64;
+    serial_println!("[test-rings] per-cpu slot @ {:#x}", cpu0);
+    assert_eq!(
+        cpu0,
+        arch::cpu::current().self_ptr().load(core::sync::atomic::Ordering::Relaxed),
+        "gs base == gs:[0] (self-referential per-cpu struct)"
+    );
+    arch::syscall::set_task_kstack(0xDEAD_BEEF_CAFE_0000);
+    assert_eq!(
+        arch::cpu::current().kstack_top().load(core::sync::atomic::Ordering::Relaxed),
+        0xDEAD_BEEF_CAFE_0000,
+        "set_task_kstack must route through the per-CPU slot"
+    );
+    arch::syscall::set_task_kstack(0); // cleared: main-loop semantics
 
     println!("[test-rings] selectors + TSS.RSP0 + frame shape checked");
     println!("[test-rings] all assertions passed");

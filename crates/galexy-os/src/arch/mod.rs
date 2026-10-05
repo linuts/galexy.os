@@ -8,6 +8,7 @@
 
 pub mod acpi;
 pub mod apic;
+pub mod cpu;
 pub mod gdt;
 mod idt;
 pub mod ioapic;
@@ -34,6 +35,9 @@ pub fn end_timer_interrupt() {
 /// Brings up the whole interrupt subsystem and enables interrupts.
 pub fn init(boot_info: &BootInfo) {
     gdt::init();
+    // Per-CPU substrate AFTER gdt::init (the GS selector load resets the
+    // GS base — WRGSBASE must be the last GS-base writer).
+    cpu::init_bsp();
     syscall::init();
     idt::init();
     // ACPI discovery runs before any controller init: the APIC bring-up

@@ -36,6 +36,11 @@ fn main() {
         cmd.arg("-bios").arg(ovmf_fd);
     }
     cmd.arg("-drive").arg(format!("format=raw,file={img_path}"));
+    // SMP: 2 cores, exposed by the per-CPU substrate (gs:[8] syscall path,
+    // per-CPU GDT/TSS). `-cpu max` exposes FSGSBASE, required by the
+    // per-CPU mechanism (WRGSBASE/RDGSBASE).
+    cmd.arg("-smp").arg("2");
+    cmd.arg("-cpu").arg("max");
     // Surface guest COM1 on the host terminal for debugging.
     cmd.arg("-serial").arg("stdio");
     // Make triple faults visible instead of silently rebooting.
