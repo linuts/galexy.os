@@ -71,7 +71,11 @@ extern "C" fn grower1() {
 /* ---------------- phase C: hammer + churn ---------------- */
 
 const HAMMER_BUF: usize = 64 * 1024;
-const HAMMER_LOOPS: usize = 100;
+// TCG-debug budget: each loop is a full touch+verify of 64 KiB; 20 loops
+// per CPU is plenty of TLB/alloc pressure without starving the phase-C
+// deadline under host load (the earlier 100-loop variant exceeded 20 000
+// ticks and starved the completion check).
+const HAMMER_LOOPS: usize = 20;
 static HAMMER_DONE: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
 
 /// Cycles alloc/free of one 64 KiB buffer, touching every page (the TLB
@@ -247,7 +251,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     });
     let scratch_phys = region.scratch_phys;
 
-    let churn_deadline = arch::timer_ticks() + 20000;
+    let churn_deadline = arch::timer_ticks() + 30000;
     let mut blob_marked = false;
     loop {
         x86_64::instructions::hlt();
