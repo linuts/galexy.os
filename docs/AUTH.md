@@ -76,7 +76,9 @@ su <name>     # only if caller holds ALL on that root (or is admin session)
 login …       # always password-checked identity switch
 ```
 
-Admin may `su` to any actor without a password (operator seat). Returning
+Admin may `su` to any actor without a password (operator seat). A session
+whose `fs_root` is admin also passes every token check (list/open/grant),
+so the F1 console can manage any tree without collecting cards. Returning
 to admin from a born-admin F1 seat still works via `su admin` or
 `login admin <pass>`.
 

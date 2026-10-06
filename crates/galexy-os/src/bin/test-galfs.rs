@@ -107,6 +107,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         "open of /dan@Desktop/secret is AccessDenied without a token"
     );
 
+    // Operator seat: logged-in admin may list foreign trees without a card.
     let mut saw = false;
     galfs::for_each_visible(
         galfs::admin_cred().root,
@@ -117,7 +118,15 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
             }
         },
     );
-    assert!(!saw, "admin must not list dan's tree without a token");
+    assert!(saw, "admin operator must list dan's tree");
+
+    // Guest listing stays empty — cards, not the path string, grant rights.
+    let mut guest_saw = false;
+    let guest = galfs::guest_cred();
+    galfs::for_each_visible(guest.root, &guest.tokens, |_| {
+        guest_saw = true;
+    });
+    assert!(!guest_saw, "guest must list nothing");
 
     // Empty cards until granter installs list+read on dan's Desktop.
     let (holder_region, _) = sched::spawn_user_with("holder", galfs::guest_cred(), |gr| {
