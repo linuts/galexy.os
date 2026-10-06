@@ -15,6 +15,9 @@ entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
 const DONE: u64 = 0x5C4A_7C21;
 const TICK_TIMEOUT: u64 = 8000;
+/// Writable scratch layout: report, then pipe caps out, then read buf.
+const CAPS_OFF: u64 = 0x40;
+const BUF_OFF: u64 = 0x50;
 
 #[repr(C)]
 struct ProducerReport {
@@ -117,16 +120,15 @@ fn build_producer(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let task = b"consumer";
     let msg = b"ping";
     let mut code = alloc::vec::Vec::new();
-    let data_len = 16 + task.len() + msg.len();
+    let data_len = task.len() + msg.len();
     code.push(0xEB);
     code.push(data_len as u8);
-    let caps_addr = code_base + 2;
-    code.extend_from_slice(&[0u8; 16]);
-    let task_addr = caps_addr + 16;
+    let task_addr = code_base + 2;
     code.extend_from_slice(task);
     let msg_addr = task_addr + task.len() as u64;
     code.extend_from_slice(msg);
 
+    let caps_addr = scratch + CAPS_OFF;
     mov_r64_imm(&mut code, 15, scratch);
 
     mov_eax(&mut code, Syscall::Pipe as u32);
@@ -134,17 +136,15 @@ fn build_producer(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     code.extend_from_slice(&[0x0F, 0x05]);
     store(&mut code, 2, 0x08);
 
-    // give(read_cap, "consumer")
     mov_r64_imm(&mut code, 8, caps_addr);
-    code.extend_from_slice(&[0x49, 0x8B, 0x00]); // mov rax, [r8]
-    code.extend_from_slice(&[0x48, 0x89, 0xC7]); // mov rdi, rax
+    code.extend_from_slice(&[0x49, 0x8B, 0x00]);
+    code.extend_from_slice(&[0x48, 0x89, 0xC7]);
     mov_eax(&mut code, Syscall::Give as u32);
     mov_r64_imm(&mut code, 6, task_addr);
     mov_r64_imm(&mut code, 2, task.len() as u64);
     code.extend_from_slice(&[0x0F, 0x05]);
     store(&mut code, 2, 0x10);
 
-    // write(write_cap, "ping")
     mov_r64_imm(&mut code, 8, caps_addr + 8);
     code.extend_from_slice(&[0x49, 0x8B, 0x00]);
     code.extend_from_slice(&[0x48, 0x89, 0xC7]);
@@ -167,16 +167,15 @@ fn build_producer(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     code
 }
 
-fn build_consumer(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
+fn build_consumer(_code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let mut code = alloc::vec::Vec::new();
+    // No embedded data; jump over 0 bytes still needs a target.
     code.push(0xEB);
-    code.push(16);
-    let buf_addr = code_base + 2;
-    code.extend_from_slice(&[0u8; 16]);
+    code.push(0);
 
+    let buf_addr = scratch + BUF_OFF;
     mov_r64_imm(&mut code, 15, scratch);
 
-    // Empty file table: give installs at slot 0 → Cap index FILE_CAP_BASE.
     let read_cap = Cap::new(FILE_CAP_BASE, CapRights::READ);
 
     let loop_at = code.len();
@@ -185,13 +184,12 @@ fn build_consumer(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     mov_r64_imm(&mut code, 6, buf_addr);
     mov_r64_imm(&mut code, 2, 16);
     code.extend_from_slice(&[0x0F, 0x05]);
-    // Need ok (rdx)!=0 AND rax!=0
-    code.extend_from_slice(&[0x48, 0x85, 0xD2]); // test rdx,rdx
+    code.extend_from_slice(&[0x48, 0x85, 0xD2]);
     let jz_bad = code.len();
-    code.extend_from_slice(&[0x0F, 0x84, 0, 0, 0, 0]); // jz yield
-    code.extend_from_slice(&[0x48, 0x85, 0xC0]); // test rax,rax
+    code.extend_from_slice(&[0x0F, 0x84, 0, 0, 0, 0]);
+    code.extend_from_slice(&[0x48, 0x85, 0xC0]);
     let jnz = code.len();
-    code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]); // jnz got
+    code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]);
     let yield_at = code.len();
     let yrel = yield_at as i32 - (jz_bad as i32 + 6);
     code[jz_bad + 2..jz_bad + 6].copy_from_slice(&yrel.to_le_bytes());
@@ -208,7 +206,7 @@ fn build_consumer(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
 
     store(&mut code, 0, 0x08);
     mov_r64_imm(&mut code, 8, buf_addr);
-    code.extend_from_slice(&[0x41, 0x0F, 0xB6, 0x00]); // movzx eax, byte [r8]
+    code.extend_from_slice(&[0x41, 0x0F, 0xB6, 0x00]);
     store(&mut code, 0, 0x10);
 
     mov_r64_imm(&mut code, 0, DONE);

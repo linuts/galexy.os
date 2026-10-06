@@ -93,15 +93,14 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let name = b"seekme";
     let mut code = alloc::vec::Vec::new();
-    let data_len = name.len() + PAYLOAD.len() + 1;
+    let data_len = name.len() + PAYLOAD.len();
     code.push(0xEB);
     code.push(data_len as u8);
     let name_addr = code_base + 2;
     code.extend_from_slice(name);
     let pay_addr = name_addr + name.len() as u64;
     code.extend_from_slice(PAYLOAD);
-    let buf_addr = pay_addr + PAYLOAD.len() as u64;
-    code.push(0);
+    let buf_addr = scratch + 0x40;
 
     mov_r64_imm(&mut code, 15, scratch);
 
@@ -112,7 +111,7 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     mov_r64_imm(&mut code, 2, 0);
     code.extend_from_slice(&[0x0F, 0x05]);
     store(&mut code, 2, 0x08); // create_ok
-                               // save cap in r14
+    // save cap in r14
     code.extend_from_slice(&[0x49, 0x89, 0xC6]); // mov r14, rax
 
     // write
@@ -132,7 +131,7 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     store(&mut code, 2, 0x18); // seek_ok
     store(&mut code, 0, 0x20); // seek_pos
 
-    // read 1 byte
+    // read 1 byte into scratch
     code.extend_from_slice(&[0x4C, 0x89, 0xF7]);
     mov_eax(&mut code, Syscall::Read as u32);
     mov_r64_imm(&mut code, 6, buf_addr);
