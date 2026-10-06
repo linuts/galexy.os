@@ -405,8 +405,10 @@ is always eligible at slot 0); the OWNER's `sched::reap()` frees stack +
 fx of every exited thread it owns and checks the
 stack canary (a deep overflow walks downward through the magic word at the
 stack's very bottom first — reaping turns silent heap corruption into a
-loud panic). Dead slots remain as `Freed` structs (a few bytes) — stable
-slot index = future TID. THE ZOMBIE RULE: after `thread_exit`, the park
+loud panic). A `Freed` slot is handed out again when no CPU's `current`
+is that slot and `CTX_STABLE` says the switch-out tail has left the old
+stack. The index stays put. The name is a 64-byte buffer on the thread,
+copied at spawn. THE ZOMBIE RULE: after `thread_exit`, the park
 loop MUST stay interrupts-ENABLED — with IF=0 the dead thread sleeps in
 `hlt` forever, nothing ever preempts it, and the whole machine wedges
 (found by `bin/test-threadexit.rs`).

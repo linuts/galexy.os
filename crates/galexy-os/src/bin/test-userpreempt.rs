@@ -51,7 +51,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     sched::spawn_user_task("user-blob", |_| USER_BLOB.to_vec());
     let stats = sched::thread_stats();
     assert!(
-        stats.iter().any(|&(name, _)| name == "user-blob"),
+        stats.iter().any(|(name, _)| name == "user-blob"),
         "user task registered in the rotation"
     );
 
@@ -63,8 +63,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         let stats = sched::thread_stats();
         let user_ticks = stats
             .iter()
-            .find(|&&(n, _)| n == "user-blob")
-            .map(|&(_, t)| t)
+            .find(|(n, _)| n == "user-blob")
+            .map(|(_, t)| *t)
             .unwrap_or(0);
         if user_ticks >= TICK_TARGET {
             break;

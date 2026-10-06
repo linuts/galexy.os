@@ -25,10 +25,10 @@ const BAR_FG: screen::Color = screen::Color::new(0xC8, 0xD0, 0xE0);
 
 /// Current line under construction.
 static LINE: Mutex<String> = Mutex::new(String::new());
-/// The foreground program's name (the leaked task name) while it runs —
-/// the prompt stays away until it exits, so its output never lands on an
-/// input line. Cleared by [`poll`] once no task with that name is running.
-static PENDING: Mutex<Option<&'static str>> = Mutex::new(None);
+/// The foreground program's name while it runs — the prompt stays away
+/// until it exits, so its output never lands on an input line. Cleared by
+/// [`poll`] once no task with that name is running.
+static PENDING: Mutex<Option<String>> = Mutex::new(None);
 
 /// Prints the startup prompt.
 pub fn init() {
@@ -44,9 +44,9 @@ pub fn init() {
 pub fn poll() {
     // Foreground bookkeeping: when the pending program is no longer
     // running (its exit syscall tombstoned it), reclaim the prompt.
-    let pending = *PENDING.lock();
+    let pending = PENDING.lock().clone();
     if let Some(name) = pending {
-        if !sched::is_name_running(name) {
+        if !sched::is_name_running(&name) {
             *PENDING.lock() = None;
             prompt_only();
         }
@@ -121,17 +121,14 @@ fn run(line: &str) {
     // newline, so the program's output always starts on a fresh line.
     screen::set_color(TEXT_COLOR);
     screen::out_str("\n");
-    // The task name outlives this call (thread stats/tombstones read it):
-    // leak the name — a few bytes per spawn, same philosophy as the
-    // tombstone slot model (revisit with a slot free-list).
-    let leaked: &'static str = alloc::boxed::Box::leak(name.into());
+    let owned = String::from(name);
     // Foreground semantics: spawn inside one IRQ-off step — a pending
     // tick can only serve the rotation's earlier slots (main, demo
     // threads) after the gate, so nothing prints before this. The prompt
     // is NOT reclaimed here: it returns when the program exits (poll).
     x86_64::instructions::interrupts::without_interrupts(|| {
-        sched::loader::spawn_program(leaked, bytes);
-        *PENDING.lock() = Some(leaked);
+        sched::loader::spawn_program(&owned, bytes);
+        *PENDING.lock() = Some(owned);
     });
 }
 

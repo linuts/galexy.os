@@ -741,19 +741,22 @@ Suite: 34 QEMU boot tests, all `-smp 2`.
       and checks `banner.txt` and `hello`
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
-## Milestone 26 — Reuse thread slots
+## Milestone 26 — Reuse thread slots ✅
 
-Planned, not started. The table caps at 64 and panics when it fills,
-because a freed slot is never reused. Every `run` also leaks the
-program name. Repeated `run hello` dies on that.
+The table still holds 64 records, and a freed one is handed out again.
+**Names live in the slot, so `run` no longer leaks a string per spawn.**
+Suite: 35 QEMU boot tests, all `-smp 2`.
 
-- [ ] Store the name in a fixed buffer on the thread. Stop leaking a
-      `String` per spawn
-- [ ] Hand a freed slot back out when no CPU is current on it. Stacks
-      and the FXSAVE area are still freed first. Steal rules stay as
-      they are
-- [ ] A boot test spawns and exits more than 64 tasks and still reaches
-      the success exit. `threads` still prints the live names
+- [x] **Name buffer**: 64 bytes on the thread, copied at spawn. The
+      kernel shell and `drain_spawn` drop their `String` when the call
+      returns
+- [x] **Reuse in place**: a `Freed` slot is overwritten when no CPU's
+      `current` is that index and `CTX_STABLE` is set. Stacks and the
+      FXSAVE area are still freed by the owner first. Steal rules are
+      unchanged, and live indexes do not move
+- [x] **`bin/test-reuse`**: 80 short threads exit, one after another,
+      and a thread named `keeper` is still listed
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
 ## Milestone 27 — Scratch files
 
@@ -834,9 +837,9 @@ table. `rm`, pipes, `mv`, `cp`, globs, and a real disk stay out.
       Milestone 27; `echo`, `cat`, `touch`, redirection, then
       `mkdir` / `cd` are Milestone 29. `spawn` still clones whichever
       page table is in CR3 (Milestone 28)
-- [ ] `run` leaks the task name (`Box::leak`, a few bytes per spawn).
-      Freed slots are never reused, so the table panics at 64. Both
-      are Milestone 26
+- [x] ~~`run` leaks the task name, and freed slots panic the table at
+      64~~ — CLOSED by Milestone 26 (name copied into the slot; a
+      `Freed` record is reused once no CPU is current on it)
 - [x] ~~Status bar can overwrite the typing line when the screen is full~~
       — CLOSED by Milestone 24 (text scrolls above the status row)
 - [ ] Framebuffer is used as the bootloader mapped it (deliberate — BootInfo

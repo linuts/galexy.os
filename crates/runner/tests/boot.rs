@@ -254,6 +254,24 @@ fn freshl4_test_passes() {
 }
 
 #[test]
+fn reuse_test_passes() {
+    let (code, serial) = boot(&image("test-reuse"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-reuse should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-reuse] keeper live, exited 80"),
+        "test-reuse live-name marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-reuse] passed"),
+        "test-reuse success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn threadexit_test_passes() {
     let (code, serial) = boot(&image("test-threadexit"));
     assert_eq!(

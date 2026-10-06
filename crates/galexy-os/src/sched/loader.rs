@@ -42,7 +42,7 @@ pub struct ProgramRegion {
 ///
 /// Same rotation/lifecycle as every task: kernel stack via TSS.RSP0, CR3
 /// own tree, tombstone + tree-walk reaping. Owner CPU round-robins.
-pub fn spawn_program(name: &'static str, bytes: &[u8]) -> ProgramRegion {
+pub fn spawn_program(name: &str, bytes: &[u8]) -> ProgramRegion {
     spawn_program_placed(name, bytes, None, false)
 }
 
@@ -50,12 +50,12 @@ pub fn spawn_program(name: &'static str, bytes: &[u8]) -> ProgramRegion {
 ///
 /// The interactive shell lives here: the keyboard IRQ and the framebuffer
 /// both have a single consumer, and that consumer is the BSP.
-pub fn spawn_program_bsp(name: &'static str, bytes: &[u8]) -> ProgramRegion {
+pub fn spawn_program_bsp(name: &str, bytes: &[u8]) -> ProgramRegion {
     spawn_program_placed(name, bytes, Some(0), true)
 }
 
 fn spawn_program_placed(
-    name: &'static str,
+    name: &str,
     bytes: &[u8],
     owner: Option<u8>,
     no_steal: bool,

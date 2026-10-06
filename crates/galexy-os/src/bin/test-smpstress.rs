@@ -181,8 +181,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     }
     let spinner_ticks = sched::thread_stats()
         .iter()
-        .find(|&&(n, _)| n == "spinner")
-        .map(|&(_, t)| t)
+        .find(|(n, _)| n == "spinner")
+        .map(|(_, t)| *t)
         .unwrap_or(0);
     assert!(spinner_ticks > 0, "the spinner must run on its new owner");
 

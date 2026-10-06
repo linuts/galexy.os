@@ -138,13 +138,17 @@ impl FxArea {
 /// Thread lifecycle states (AtomicU8 values).
 ///
 /// Tombstone design: slots are NEVER removed from [`THREADS`] — removal
-/// would shift indexes used by the timer switch (`CURRENT`, `LAST_SERVED`)
-/// and corrupt rotation state mid-flight. Dead threads stay as `Freed`
-/// tombstones (a few bytes each); slots/tids stay stable forever.
+/// would shift indexes used by the timer switch (`current`, `last_served`)
+/// and corrupt rotation state mid-flight. A `Freed` slot is handed out
+/// again once no CPU is current on it and its switch-out tail has
+/// published [`CTX_STABLE`]. The index stays put; only the record changes.
 const STATE_RUNNING: u8 = 0;
 const STATE_EXITED: u8 = 1; // returned from its entry; reaped by the main loop
-const STATE_FREED: u8 = 2; // stack + fx freed; rotation-skipped tombstone
+const STATE_FREED: u8 = 2; // stack + fx freed; rotation-skipped until reused
 const STATE_WAITING: u8 = 3; // parked inside `spawn` until that child exits
+
+/// Bytes kept for a thread's name. Spawn already rejects a longer name.
+const NAME_CAP: usize = 64;
 
 /// Magic word painted at the very bottom of each thread's stack (lowest
 /// address). A stack that overflows far enough to corrupt the heap walks
@@ -168,8 +172,9 @@ struct OpenFile {
 }
 
 struct Thread {
-    /// For status/ps display.
-    name: &'static str,
+    /// Display name. Copied at spawn so the caller's buffer can go away.
+    name_bytes: [u8; NAME_CAP],
+    name_len: u8,
     /// Lifecycle state (see STATE_* consts).
     state: AtomicU8,
     /// Saved context pointer; valid while the thread is NOT running.
@@ -216,20 +221,44 @@ struct Thread {
     wait_for_len: AtomicU8,
 }
 
+impl Thread {
+    fn name(&self) -> &str {
+        let n = self.name_len as usize;
+        core::str::from_utf8(&self.name_bytes[..n]).unwrap_or("")
+    }
+}
+
+/// Copies `name` into a fixed buffer, stopping on a char boundary at 64.
+fn pack_name(name: &str) -> ([u8; NAME_CAP], u8) {
+    let mut bytes = [0u8; NAME_CAP];
+    let mut n = 0;
+    for ch in name.chars() {
+        let len = ch.len_utf8();
+        if n + len > NAME_CAP {
+            break;
+        }
+        ch.encode_utf8(&mut bytes[n..]);
+        n += len;
+    }
+    (bytes, n as u8)
+}
+
 // SAFETY: `fx` is an exclusively-owned allocation, dereferenced only by the
 // single-core timer switch under the IRQ gate; `stack` likewise is only
 // freed from main-loop context.
 unsafe impl Send for Thread {}
 
 /// All preemptive threads, in round-robin order. Touched by the main loop
-/// and the timer handler — access is IRQ-gated (see lock audit). Slots are
-/// tombstones on death (see STATE_* docs); never removed.
+/// and the timer handler — access is IRQ-gated (see lock audit). Slots stay
+/// in the vec (indexes must not shift); a freed record can be overwritten.
 static THREADS: Mutex<Vec<Thread>> = Mutex::new(Vec::new());
 
 /// Per-CPU rotation state (SMP, M18): each CPU keeps its OWN round-robin —
 /// the global rotation statics would double-enter a task the moment two
 /// naked timer ticks coincided. INDEX = the CPU's logical index
-/// (`cpu::current_index()`); a CPU NEVER touches another's slot.
+/// (`cpu::current_index()`); a CPU NEVER locks another's slot. Recycling a
+/// freed thread only loads every CPU's `current` atomic, so a slot some
+/// CPU is still inside is not overwritten.
 ///
 /// Slot 0 = "this CPU's main":
 /// - on the BSP that is the shell main loop,
@@ -284,7 +313,8 @@ static STEALS: AtomicU64 = AtomicU64::new(0);
 /// between them.
 const STEAL_COOLDOWN_TICKS: u64 = 100;
 
-/// Tombstones are never reused, so this caps live + dead slots together.
+/// Live slots. A freed record is reusable, so this caps threads that still
+/// occupy a slot (running, waiting, exited, or not yet safe to recycle).
 const MAX_THREADS: usize = 64;
 /// Per-slot "saved context is idle" flag. Index = thread slot − 1.
 ///
@@ -301,16 +331,39 @@ pub(crate) static CTX_STABLE: [AtomicBool; MAX_THREADS] =
 
 const _: () = assert!(core::mem::size_of::<AtomicBool>() == 1);
 
-/// Registers a thread at the next stable slot index.
+/// A freed slot may be overwritten when its stacks are already gone, no
+/// CPU still names it as `current`, and the switch-out tail has published
+/// [`CTX_STABLE`]. `current` is an atomic load only — this does not lock
+/// another CPU's rotation state.
+fn slot_reusable(threads: &[Thread], index: usize) -> bool {
+    if threads[index].state.load(Ordering::Acquire) != STATE_FREED {
+        return false;
+    }
+    if !CTX_STABLE[index].load(Ordering::Acquire) {
+        return false;
+    }
+    let slot = index + 1;
+    !CPU_SCHED
+        .iter()
+        .any(|cpu| cpu.current.load(Ordering::Acquire) == slot)
+}
+
+/// Registers a thread. A freed slot is overwritten in place; otherwise the
+/// vec grows. Indexes of live threads do not move.
 fn push_thread(thread: Thread) {
     let mut threads = THREADS.lock();
+    if let Some(index) = (0..threads.len()).find(|&i| slot_reusable(&threads, i)) {
+        // False until this thread's owner publishes a switch-out. Stored
+        // before the record becomes RUNNING, so a steal scan cannot take
+        // the slot on its first run.
+        CTX_STABLE[index].store(false, Ordering::Release);
+        threads[index] = thread;
+        return;
+    }
     assert!(
         threads.len() < MAX_THREADS,
-        "sched: thread table full ({MAX_THREADS} tombstones; slots are never reused)"
+        "sched: thread table full ({MAX_THREADS} live slots)"
     );
-    // False until this thread's owner publishes a switch-out. A fresh
-    // thread is not stealable: its first run stays on the spawn CPU, and
-    // the flag only becomes true after `mov rsp` leaves its stack.
     CTX_STABLE[threads.len()].store(false, Ordering::Release);
     threads.push(thread);
 }
@@ -367,7 +420,7 @@ pub fn thread_exit() {
         threads[slot - 1]
             .state
             .store(STATE_EXITED, Ordering::Release);
-        serial_println!("[sched] thread '{}' exited", threads[slot - 1].name);
+        serial_println!("[sched] thread '{}' exited", threads[slot - 1].name());
     });
 }
 
@@ -415,7 +468,7 @@ pub fn reap() {
             if canary != STACK_CANARY {
                 panic!(
                     "reap: stack canary corrupted for thread '{}' (stack overflow)",
-                    t.name
+                    t.name()
                 );
             }
             // File caps die with the task. The bytes stay in the ramdisk.
@@ -437,7 +490,7 @@ pub fn reap() {
                 let root = PhysFrame::from_start_address(PhysAddr::new(task_cr3))
                     .expect("reap: corrupt task CR3");
                 let count = mm::free_user_tree(root, t.user_p4);
-                serial_println!("[sched] freed task '{}' tree: {} frame(s)", t.name, count);
+                serial_println!("[sched] freed task '{}' tree: {} frame(s)", t.name(), count);
             }
             let stack = core::mem::take(&mut t.stack);
             drop(stack); // returns the 32 KiB to the heap
@@ -455,8 +508,8 @@ pub fn reap() {
 /// User-task registration seam for the loader (crate-internal): the
 /// loader computes everything; the scheduler owns Thread construction
 /// (fx area, canary, state).
-pub(crate) struct TaskInit {
-    pub(crate) name: &'static str,
+pub(crate) struct TaskInit<'a> {
+    pub(crate) name: &'a str,
     /// Fabricated initial context pointer (on the task's user stack).
     pub(crate) ctx: u64,
     /// Kernel-mode stack (heap-backed); the canary is painted here.
@@ -473,15 +526,17 @@ pub(crate) struct TaskInit {
     pub(crate) no_steal: bool,
 }
 
-pub(crate) fn register_user_task(init: TaskInit) {
+pub(crate) fn register_user_task(init: TaskInit<'_>) {
     interrupts::without_interrupts(|| {
         // Canary at the very bottom of the kernel-mode stack.
         let mut kstack = init.kstack;
         kstack[..8].copy_from_slice(&STACK_CANARY.to_le_bytes());
         let fx = Box::into_raw(Box::new(FxArea::new()));
         let owner = init.owner.unwrap_or_else(next_cpu);
+        let (name_bytes, name_len) = pack_name(init.name);
         push_thread(Thread {
-            name: init.name,
+            name_bytes,
+            name_len,
             state: AtomicU8::new(STATE_RUNNING),
             ctx: AtomicU64::new(init.ctx),
             ticks: AtomicU64::new(0),
@@ -505,7 +560,7 @@ pub(crate) fn register_user_task(init: TaskInit) {
 /// Spawns a preemptive kernel thread running `entry` (which parks if it
 /// returns). Allocates + maps the thread stack; IRQ-gated while registering.
 /// Spawns the thread; returns its owner CPU (the pin decision).
-pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) -> u8 {
+pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
     interrupts::without_interrupts(|| {
         // Zero pages straight into the heap (no big stack temp).
         let mut stack = vec![0u8; THREAD_STACK_SIZE];
@@ -519,8 +574,10 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) -> u8 {
         let ctx = unsafe { context::init_stack(top, entry, cs, ss) };
         let fx = Box::into_raw(Box::new(FxArea::new()));
         let owner = next_cpu();
+        let (name_bytes, name_len) = pack_name(name);
         push_thread(Thread {
-            name,
+            name_bytes,
+            name_len,
             state: AtomicU8::new(STATE_RUNNING),
             ctx: AtomicU64::new(ctx),
             ticks: AtomicU64::new(0),
@@ -575,10 +632,7 @@ pub struct UserRegion {
 /// top-down BELOW 256, code at `(N<<39) + 0`, user stack at `+1 GiB`,
 /// scratch page right above the stack. The task's own kernel-mode stack
 /// (heap) serves its ring 3→0 crossings via TSS.RSP0. IRQ-gated.
-pub fn spawn_user_task(
-    name: &'static str,
-    build: impl FnOnce(UserRegion) -> Vec<u8>,
-) -> (UserRegion, u8) {
+pub fn spawn_user_task(name: &str, build: impl FnOnce(UserRegion) -> Vec<u8>) -> (UserRegion, u8) {
     interrupts::without_interrupts(|| {
         // Spawn MUST run on the kernel tree: a FreshL4 clones whatever is
         // active, and user mappings live only in task trees from now on.
@@ -708,8 +762,10 @@ pub fn spawn_user_task(
 
         let fx = Box::into_raw(Box::new(FxArea::new()));
         let owner = next_cpu();
+        let (name_bytes, name_len) = pack_name(name);
         push_thread(Thread {
-            name,
+            name_bytes,
+            name_len,
             state: AtomicU8::new(STATE_RUNNING),
             ctx: AtomicU64::new(ctx),
             ticks: AtomicU64::new(0),
@@ -767,16 +823,13 @@ pub fn threads_count() -> usize {
     })
 }
 
-/// `(name, ticks)` for every RUNNING thread, in round-robin order.
-///
-/// IRQ-gated: the timer handler takes this same lock (lock-audit rule —
-/// the gate lives in the API, not at call sites).
 /// The owner CPU of the thread named `name` ("pinned at spawn" — SMP M18);
 /// `None` when no RUNNING thread by that name exists.
 pub fn thread_owner(name: &str) -> Option<u8> {
     interrupts::without_interrupts(|| {
         THREADS.lock().iter().find_map(|t| {
-            (t.name == name && t.state.load(Ordering::Relaxed) == STATE_RUNNING).then_some(t.owner)
+            (t.name() == name && t.state.load(Ordering::Relaxed) == STATE_RUNNING)
+                .then_some(t.owner)
         })
     })
 }
@@ -795,25 +848,33 @@ pub fn thread_tick_total() -> u64 {
 
 /// Calls `each` with every RUNNING thread's name and tick count.
 ///
+/// The name is borrowed from the slot and is only valid inside `each`.
 /// No allocation: the syscall path renders query text into a stack buffer
 /// and must not grow the heap (a grow there broadcasts a shootdown).
-pub(crate) fn for_running_threads(mut each: impl FnMut(&'static str, u64)) {
+pub(crate) fn for_running_threads(mut each: impl FnMut(&str, u64)) {
     interrupts::without_interrupts(|| {
         for thread in THREADS.lock().iter() {
             if thread.state.load(Ordering::Relaxed) == STATE_RUNNING {
-                each(thread.name, thread.ticks.load(Ordering::Relaxed));
+                each(thread.name(), thread.ticks.load(Ordering::Relaxed));
             }
         }
     });
 }
 
-pub fn thread_stats() -> alloc::vec::Vec<(&'static str, u64)> {
+/// `(name, ticks)` for every RUNNING thread. The name is copied so the
+/// status bar can format it after the table lock drops.
+pub fn thread_stats() -> alloc::vec::Vec<(alloc::string::String, u64)> {
     interrupts::without_interrupts(|| {
         THREADS
             .lock()
             .iter()
             .filter(|t| t.state.load(Ordering::Relaxed) == STATE_RUNNING)
-            .map(|t| (t.name, t.ticks.load(Ordering::Relaxed)))
+            .map(|t| {
+                (
+                    alloc::string::String::from(t.name()),
+                    t.ticks.load(Ordering::Relaxed),
+                )
+            })
             .collect()
     })
 }
@@ -827,7 +888,7 @@ pub fn is_name_running(name: &str) -> bool {
         THREADS
             .lock()
             .iter()
-            .any(|t| t.state.load(Ordering::Relaxed) == STATE_RUNNING && t.name == name)
+            .any(|t| t.state.load(Ordering::Relaxed) == STATE_RUNNING && t.name() == name)
     })
 }
 
@@ -901,14 +962,13 @@ pub fn drain_spawn() {
     let Some(name) = name else {
         return;
     };
-    let leaked: &'static str = alloc::boxed::Box::leak(name.into_boxed_str());
-    if let Some(bytes) = ramdisk::find(leaked) {
-        loader::spawn_program(leaked, bytes);
+    if let Some(bytes) = ramdisk::find(&name) {
+        loader::spawn_program(&name, bytes);
     } else {
-        serial_println!("[sched] spawn '{}' missing at drain; waking waiter", leaked);
+        serial_println!("[sched] spawn '{}' missing at drain; waking waiter", name);
         interrupts::without_interrupts(|| {
             let threads = THREADS.lock();
-            wake_waiters(&threads, leaked);
+            wake_waiters(&threads, &name);
         });
     }
 }
@@ -1074,8 +1134,11 @@ pub unsafe fn syscall_handoff(
         t.ctx.store(frame as u64, Ordering::Relaxed);
         context::fx_save(t.fx as *mut u8);
         if exit {
-            let name = t.name;
+            let mut raw = [0u8; NAME_CAP];
+            let n = t.name_len as usize;
+            raw[..n].copy_from_slice(&t.name_bytes[..n]);
             t.state.store(STATE_EXITED, Ordering::Release);
+            let name = core::str::from_utf8(&raw[..n]).unwrap_or("");
             serial_println!("[sched] task '{}' exited ({})", name, reason);
             wake_waiters(&threads, name);
         }
@@ -1260,7 +1323,7 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
                     serial_println!(
                         "[sched] cpu {} stole '{}' (slot {}) from cpu {} (enters next tick)",
                         my_cpu,
-                        t.name,
+                        t.name(),
                         slot_no,
                         victim
                     );

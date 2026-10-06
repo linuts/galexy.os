@@ -146,6 +146,11 @@ first real program landed in Milestone 13:
   are reserved caps. `read` returns a fresh text snapshot, rendered
   without allocating on the IF=0 syscall path. The ring-3 shell types
   all three; `bin` coverage is the QMP typing test).
+- Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
+  place once no CPU is current on it and the switch-out tail has left
+  that stack. The name is a fixed buffer, so spawn does not leak.
+  `bin/test-reuse` exits 80 threads and still lists the one left
+  running).
 - Ramdisk listing ✅ (Milestone 25: files cap `0x8006`. `read` returns
   the archive's regular names, one per line. The shell's `ls` types
   them; the same QMP test checks `banner.txt` and `hello`).

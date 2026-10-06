@@ -37,7 +37,7 @@ through a capability and launches userland programs by name (`run hello`).
       demand past the initial 400 KiB
 - [x] Cooperative round-robin tasks + timer-preemptive kernel threads with
       a real lifecycle: exited threads are reaped (stacks return to the
-      heap), slots are stable tombstones, stack canary surfaces overflows
+      heap), freed slots are reused in place, stack canary surfaces overflows
 - [x] User space: ring-3 tasks in the same rotation, SYSCALL/SYSRET
       (`exit`, `yield`, `write`, `cap_info`, `open`, `read`, `close`,
       `spawn`, `power`),
@@ -175,7 +175,7 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
    thing a scheduler ever has to swap.
 4. **Test what can be tested.** Host unit tests for the pure primitives
    (`galexy-core`, `galexy-abi`), plus one bootable kernel binary per
-   integration test — 34 QEMU boots (all at `-smp 2`) assert exit codes and
+   integration test — 35 QEMU boots (all at `-smp 2`) assert exit codes and
    serial output on every run.
 5. **Ownership beats locks for per-CPU state.** Rotation cursors, TSS.RSP0,
    syscall scratch and the LAPIC registers are touched by exactly one CPU
