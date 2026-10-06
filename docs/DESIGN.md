@@ -507,8 +507,8 @@ from `FILE_CAP_BASE` (3), authoritative grant intersected with the
 handle snapshot. `read` copies the next bytes of an open file
 (short-read at 1 KiB, 0 at EOF);
 `close` drops the slot. `create(name, len, flags)` (syscall 9) puts a
-path in a fixed galfs table (32 objects, actors with one root each,
-64-byte component names, 256-byte file buffers, no heap on the syscall
+path in a fixed galfs table (64 objects, 16 actors with one root each,
+64-byte component names, 512-byte file buffers, no heap on the syscall
 path). A path ending in `/` is a directory and returns 0. A file returns
 READ|WRITE. `RDX == 1` empties an existing file; any other value creates
 only when the name is new. Uniqueness is the parent plus the component.

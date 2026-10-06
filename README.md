@@ -93,6 +93,9 @@ cargo run
 ```
 
 The kernel's COM1 output appears on the host terminal (`-serial stdio`).
+A persistent `galfs.img` (IDE slave) is created next to the runner on
+first launch so files and users survive reboot; override the path with
+`GALEXY_GALFS_IMG`. The boot image itself stays snapshotted.
 
 ### Run in QEMU (UEFI)
 
