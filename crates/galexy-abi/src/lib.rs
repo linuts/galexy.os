@@ -242,8 +242,13 @@ pub const USER_USERS: u64 = 1;
 pub const USER_ADD: u64 = 2;
 /// `user` op: delete an empty actor (not admin; no live task on that root).
 pub const USER_DEL: u64 = 3;
-/// `user` op: switch this task to another actor's launcher credentials.
+/// `user` op: switch this task via an access card (ALL on target root).
 pub const USER_SU: u64 = 4;
+/// `user` op: password login; `R8`/`R9` are the password bytes.
+pub const USER_LOGIN: u64 = 5;
+/// `user` op: set a password. `RDI`/`RSI` name the account (empty = self);
+/// `R8`/`R9` are the new password.
+pub const USER_PASSWD: u64 = 6;
 
 /// Lowest capability index a per-task file open may return. `0` is null,
 /// [`reserved::CONSOLE_INDEX`] is the console, [`reserved::SELF_INDEX`] is
@@ -397,15 +402,13 @@ pub enum Syscall {
     Seek,
     /// `user(addr, len, op)` — actor identity and account management.
     ///
-    /// Args: `RDI = user address`, `RSI = byte count`, `RDX = op`
-    /// ([`USER_WHOAMI`], [`USER_USERS`], [`USER_ADD`], [`USER_DEL`],
-    /// or [`USER_SU`]). Returns: `SyscallResult`. Whoami/users write
-    /// into the buffer and return the byte count. Add/del/su return 0.
-    /// Add and del require the caller to be actor `admin` (root match).
-    /// Su replaces tokens with ALL on the target; allowed for current
-    /// admin, a seat born as admin returning to admin, or a holder of
-    /// `TOKEN_ALL` on the target. Deleting admin, a non-empty tree, or
-    /// an actor a live task still uses is `Unsupported` / `NotFound`.
+    /// Args: `RDI`/`RSI` = name or buffer, `RDX` = op ([`USER_WHOAMI`],
+    /// [`USER_USERS`], [`USER_ADD`], [`USER_DEL`], [`USER_SU`],
+    /// [`USER_LOGIN`], [`USER_PASSWD`]). Login/add/passwd also take a
+    /// password in `R8`/`R9`. Whoami/users write into the buffer.
+    /// Passwords authenticate identity; tokens authorize object access
+    /// (see `docs/AUTH.md`). Deleting admin, a non-empty tree, or an
+    /// actor a live task still uses is `Unsupported` / `NotFound`.
     User,
 }
 

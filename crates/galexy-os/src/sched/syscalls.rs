@@ -124,7 +124,7 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             Outcome::Resume
         }
         n if n == Syscall::User as u64 => {
-            stamp(frame, syscall_user(frame.rdi, frame.rsi, frame.rdx));
+            stamp(frame, syscall_user(frame));
             Outcome::Resume
         }
         // Unknown numbers inside the table (none today) still answer.
@@ -202,10 +202,14 @@ fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if !printable {
         return SyscallResult::err(SysError::BadValue);
     }
-    let text = core::str::from_utf8(&staged[..len as usize]).unwrap_or("");
+    let allowed = crate::sched::console_take_budget(len as usize);
+    if allowed == 0 {
+        return SyscallResult::ok(0);
+    }
+    let text = core::str::from_utf8(&staged[..allowed]).unwrap_or("");
     // The task's own console. COM1 mirrors it only while that TTY is visible.
     crate::drivers::console::out_str_tty(crate::sched::current_tty(), text);
-    SyscallResult::ok(len)
+    SyscallResult::ok(allowed as u64)
 }
 
 /// Copies `src` onto a scratch-file cap. Any bytes are legal; the console
@@ -438,7 +442,10 @@ fn syscall_seek(cap: Cap, offset_bits: u64, whence: u64) -> SyscallResult {
     }
 }
 
-fn syscall_user(addr: u64, len: u64, op: u64) -> SyscallResult {
+fn syscall_user(frame: &Context) -> SyscallResult {
+    let addr = frame.rdi;
+    let len = frame.rsi;
+    let op = frame.rdx;
     match op {
         galexy_abi::USER_WHOAMI | galexy_abi::USER_USERS => {
             if len == 0 || len > MAX_READ {
@@ -468,38 +475,95 @@ fn syscall_user(addr: u64, len: u64, op: u64) -> SyscallResult {
                 Err(err) => SyscallResult::err(err),
             }
         }
-        galexy_abi::USER_ADD | galexy_abi::USER_DEL | galexy_abi::USER_SU => {
-            if len == 0 || len > MAX_NAME {
-                return SyscallResult::err(SysError::BadValue);
-            }
-            if user_buffer(addr, len, false).is_err() {
-                return SyscallResult::err(SysError::BadBuffer);
-            }
+        galexy_abi::USER_DEL | galexy_abi::USER_SU => {
             let mut raw = [0u8; MAX_NAME as usize];
-            // SAFETY: `user_buffer` accepted every byte.
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    VirtAddr::new(addr).as_ptr::<u8>(),
-                    raw.as_mut_ptr(),
-                    len as usize,
-                );
-            }
-            let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
-            if !file_name_ok(name) {
+            let Some(n) = copy_user_str(addr, len, &mut raw, true) else {
                 return SyscallResult::err(SysError::BadValue);
-            }
-            let result = match op {
-                galexy_abi::USER_ADD => crate::sched::task_useradd(name),
-                galexy_abi::USER_DEL => crate::sched::task_userdel(name),
-                _ => crate::sched::task_su(name),
+            };
+            let name = core::str::from_utf8(&raw[..n]).unwrap_or("");
+            let result = if op == galexy_abi::USER_DEL {
+                crate::sched::task_userdel(name)
+            } else {
+                crate::sched::task_su(name)
             };
             match result {
                 Ok(()) => SyscallResult::ok(0),
                 Err(err) => SyscallResult::err(err),
             }
         }
+        galexy_abi::USER_ADD | galexy_abi::USER_LOGIN => {
+            let mut raw = [0u8; MAX_NAME as usize];
+            let Some(n) = copy_user_str(addr, len, &mut raw, true) else {
+                return SyscallResult::err(SysError::BadValue);
+            };
+            let mut pass = [0u8; 64];
+            let Some(p) = copy_user_str(frame.r8, frame.r9, &mut pass, false) else {
+                return SyscallResult::err(SysError::BadValue);
+            };
+            let name = core::str::from_utf8(&raw[..n]).unwrap_or("");
+            let password = &pass[..p];
+            let result = if op == galexy_abi::USER_ADD {
+                crate::sched::task_useradd(name, password)
+            } else {
+                crate::sched::task_login(name, password)
+            };
+            match result {
+                Ok(()) => SyscallResult::ok(0),
+                Err(err) => SyscallResult::err(err),
+            }
+        }
+        galexy_abi::USER_PASSWD => {
+            let mut raw = [0u8; MAX_NAME as usize];
+            let name = if len == 0 {
+                None
+            } else {
+                let Some(n) = copy_user_str(addr, len, &mut raw, true) else {
+                    return SyscallResult::err(SysError::BadValue);
+                };
+                Some(core::str::from_utf8(&raw[..n]).unwrap_or(""))
+            };
+            let mut pass = [0u8; 64];
+            let Some(p) = copy_user_str(frame.r8, frame.r9, &mut pass, false) else {
+                return SyscallResult::err(SysError::BadValue);
+            };
+            match crate::sched::task_passwd(name, &pass[..p]) {
+                Ok(()) => SyscallResult::ok(0),
+                Err(err) => SyscallResult::err(err),
+            }
+        }
         _ => SyscallResult::err(SysError::BadValue),
     }
+}
+
+/// Copies a user string into `out`. When `named`, applies [`file_name_ok`].
+fn copy_user_str(addr: u64, len: u64, out: &mut [u8], named: bool) -> Option<usize> {
+    if len == 0 || len as usize > out.len() {
+        return None;
+    }
+    if user_buffer(addr, len, false).is_err() {
+        return None;
+    }
+    // SAFETY: `user_buffer` accepted every byte.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            VirtAddr::new(addr).as_ptr::<u8>(),
+            out.as_mut_ptr(),
+            len as usize,
+        );
+    }
+    let bytes = &out[..len as usize];
+    if named {
+        let name = core::str::from_utf8(bytes).ok()?;
+        if !file_name_ok(name) {
+            return None;
+        }
+    } else if !bytes
+        .iter()
+        .all(|b| b.is_ascii_graphic() || *b == b' ')
+    {
+        return None;
+    }
+    Some(len as usize)
 }
 
 fn syscall_open(addr: u64, len: u64) -> SyscallResult {

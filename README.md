@@ -69,8 +69,9 @@ through a capability and starts a userland program when you type its name
       for exit before the prompt returns; bare program names keep running;
       a shell fault loads the shell again; F1–F12 switch consoles;
       the visible console is what COM1 mirrors. Boot actor is `admin`
-      (add others with `useradd`; `su` replaces tokens). Typing `shell`
-      is refused — use F1–F12 for consoles
+      (add others with `useradd <name> <pass>`; `login` with a password;
+      `grant` hands access cards; `su` needs a card). Typing `shell`
+      is refused — use F1–F12 for consoles. See `docs/AUTH.md`.
 - [x] Test harness: host unit tests + per-kernel QEMU integration tests
 - [x] Programs beyond blobs: `galexy-rt` runtime (`entry!`, syscall
       wrappers, user panic handler), kernel ELF loader (static ET_EXEC,

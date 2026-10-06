@@ -13,10 +13,11 @@
 #![no_std]
 #![no_main]
 
-use galexy_abi::{Cap, SysError};
+use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
     entry, files_cap, grant, keyboard_cap, read, reboot, revoke, shutdown, spawn_with, stats_cap,
-    tasks_cap, threads_cap, user, user_name, write_console, yield_now,
+    tasks_cap, threads_cap, user, user_login, user_name, user_name_pass, user_passwd, write_console,
+    yield_now,
 };
 
 entry!(main);
@@ -92,10 +93,11 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) {
     }
     if line == b"help" {
         write_console(b"commands: help, ls, echo, cat, touch, mkdir, cd, rm,\n");
-        write_console(b"cp, mv, grant, revoke, whoami, users, useradd, userdel, su,\n");
-        write_console(b"stats, tasks, threads, about, clear\n");
-        write_console(b"a program name on its own starts it\n");
-        write_console(b"grant/revoke: <rights> <path> <task>  (r w l c x)\n");
+        write_console(b"cp, mv, grant, revoke, whoami, users, useradd, userdel,\n");
+        write_console(b"login, passwd, su, stats, tasks, threads, about, clear\n");
+        write_console(b"login <user> <pass>  |  useradd <user> <pass>\n");
+        write_console(b"grant/revoke: <rights> <path> <task>  (r w l c x a=all)\n");
+        write_console(b"su <user> needs an access card; login uses a password\n");
         write_console(b"power: shutdown, reboot\n");
         prompt(cwd);
         return;
@@ -172,11 +174,19 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) {
         return;
     }
     if let Some(rest) = arg_of(line, b"useradd") {
-        user_op(cwd, rest, galexy_abi::USER_ADD, b"useradd");
+        user_pass_op(cwd, rest, galexy_abi::USER_ADD, b"useradd");
         return;
     }
     if let Some(rest) = arg_of(line, b"userdel") {
         user_op(cwd, rest, galexy_abi::USER_DEL, b"userdel");
+        return;
+    }
+    if let Some(rest) = arg_of(line, b"login") {
+        user_pass_op(cwd, rest, galexy_abi::USER_LOGIN, b"login");
+        return;
+    }
+    if let Some(rest) = arg_of(line, b"passwd") {
+        passwd_cmd(cwd, rest);
         return;
     }
     if let Some(rest) = arg_of(line, b"su") {
@@ -361,8 +371,9 @@ fn do_token(cwd: &Cwd, rest: &[u8], is_grant: bool) {
             b'l' | b'L' => galexy_abi::TOKEN_LIST,
             b'c' | b'C' => galexy_abi::TOKEN_CREATE,
             b'x' | b'X' => galexy_abi::TOKEN_REMOVE,
+            b'a' | b'A' => galexy_abi::TOKEN_ALL,
             _ => {
-                write_console(b"rights are r,w,l,c,x\n");
+                write_console(b"rights are r,w,l,c,x,a\n");
                 prompt(cwd);
                 return;
             }
@@ -484,6 +495,67 @@ fn user_op(cwd: &mut Cwd, rest: &[u8], op: u64, label: &[u8]) {
         return;
     }
     let result = user_name(name, op);
+    report_user(cwd, label, result, op == galexy_abi::USER_SU);
+}
+
+fn user_pass_op(cwd: &mut Cwd, rest: &[u8], op: u64, label: &[u8]) {
+    let rest = trim(rest);
+    let Some(sp) = rest.iter().position(|b| *b == b' ') else {
+        write_console(b"usage: ");
+        write_console(label);
+        write_console(b" <name> <password>\n");
+        prompt(cwd);
+        return;
+    };
+    let name = trim(&rest[..sp]);
+    let pass = trim(&rest[sp + 1..]);
+    if name.is_empty()
+        || pass.is_empty()
+        || !name
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'.' || *b == b'_' || *b == b'-')
+    {
+        write_console(b"usage: ");
+        write_console(label);
+        write_console(b" <name> <password>\n");
+        prompt(cwd);
+        return;
+    }
+    let result = if op == galexy_abi::USER_LOGIN {
+        user_login(name, pass)
+    } else {
+        user_name_pass(name, pass, op)
+    };
+    report_user(
+        cwd,
+        label,
+        result,
+        op == galexy_abi::USER_LOGIN || op == galexy_abi::USER_SU,
+    );
+}
+
+fn passwd_cmd(cwd: &mut Cwd, rest: &[u8]) {
+    let rest = trim(rest);
+    if rest.is_empty() {
+        write_console(b"usage: passwd [name] <password>\n");
+        prompt(cwd);
+        return;
+    }
+    let (name, pass) = if let Some(sp) = rest.iter().position(|b| *b == b' ') {
+        (trim(&rest[..sp]), trim(&rest[sp + 1..]))
+    } else {
+        (b"" as &[u8], rest)
+    };
+    if pass.is_empty() {
+        write_console(b"usage: passwd [name] <password>\n");
+        prompt(cwd);
+        return;
+    }
+    let result = user_passwd(name, pass);
+    report_user(cwd, b"passwd", result, false);
+}
+
+fn report_user(cwd: &mut Cwd, label: &[u8], result: SyscallResult, reset_cwd: bool) {
     if !result.ok {
         write_console(label);
         write_console(b": ");
@@ -495,9 +567,7 @@ fn user_op(cwd: &mut Cwd, rest: &[u8], op: u64, label: &[u8]) {
             SysError::BadValue => write_console(b"bad value\n"),
             _ => write_console(b"failed\n"),
         };
-    } else if op == galexy_abi::USER_SU {
-        // Paths are per-actor; keep the shell from creating under the
-        // previous actor's cwd after the identity switch.
+    } else if reset_cwd {
         cwd.len = 0;
     }
     prompt(cwd);
@@ -682,6 +752,16 @@ fn path_arg_ok(name: &[u8]) -> bool {
     };
     if body.is_empty() {
         return false;
+    }
+    // Actor-root card path: `/eve@/`
+    if let Some(head) = body.strip_suffix(b"/") {
+        if let Some(at) = head.iter().position(|b| *b == b'@') {
+            let own = &head[..at];
+            let leaf = &head[at + 1..];
+            if leaf.is_empty() && !head.contains(&b'/') && comp_bytes_ok(own) {
+                return true;
+            }
+        }
     }
     let mut first = true;
     for comp in body.split(|b| *b == b'/') {

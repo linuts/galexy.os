@@ -67,7 +67,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     };
     sched::ramdisk::init(archive);
 
-    let dan_root = galfs::add_user("dan").expect("add dan");
+    let dan_root = galfs::add_user("dan", b"dan-pass").expect("add dan");
     let desktop = galfs::find_under(dan_root, "Desktop").expect("dan Desktop");
     let _secret = galfs::create_file_under(desktop, "secret").expect("secret");
 

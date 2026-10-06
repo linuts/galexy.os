@@ -162,14 +162,41 @@ pub fn user(buf: &mut [u8], op: u64) -> SyscallResult {
 }
 
 /// Actor add/del/su. `op` is [`galexy_abi::USER_ADD`], [`galexy_abi::USER_DEL`],
-/// or [`galexy_abi::USER_SU`].
+/// or [`galexy_abi::USER_SU`]. Prefer [`user_name_pass`] for add.
 pub fn user_name(name: &[u8], op: u64) -> SyscallResult {
-    syscall(
-        Syscall::User as u64,
-        name.as_ptr() as u64,
-        name.len() as u64,
-        op,
-    )
+    user_name_pass(name, &[], op)
+}
+
+/// Like [`user_name`], with a password in `r8`/`r9` for add/login/passwd.
+pub fn user_name_pass(name: &[u8], password: &[u8], op: u64) -> SyscallResult {
+    let value: u64;
+    let ok: u64;
+    // SAFETY: same syscall entry as [`syscall`]. r8/r9 are the password.
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") Syscall::User as u64 => value,
+            inlateout("rdx") op => ok,
+            in("rdi") name.as_ptr() as u64,
+            in("rsi") name.len() as u64,
+            in("r8") password.as_ptr() as u64,
+            in("r9") password.len() as u64,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    SyscallResult { ok: ok != 0, value }
+}
+
+/// Password login as `name`.
+pub fn user_login(name: &[u8], password: &[u8]) -> SyscallResult {
+    user_name_pass(name, password, galexy_abi::USER_LOGIN)
+}
+
+/// Set password for `name` (empty name = self).
+pub fn user_passwd(name: &[u8], password: &[u8]) -> SyscallResult {
+    user_name_pass(name, password, galexy_abi::USER_PASSWD)
 }
 
 /// Like [`create`], and if the path is an existing scratch file its bytes
