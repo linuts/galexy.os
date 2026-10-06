@@ -66,6 +66,17 @@ pub fn create(name: &[u8]) -> SyscallResult {
     )
 }
 
+/// Removes a scratch file or an empty directory. The slot can be created
+/// again. A ramdisk name, or a directory that still has a child, fails.
+pub fn remove(name: &[u8]) -> SyscallResult {
+    syscall(
+        Syscall::Remove as u64,
+        name.as_ptr() as u64,
+        name.len() as u64,
+        0,
+    )
+}
+
 /// Like [`create`], and if the path is an existing scratch file its bytes
 /// are emptied first.
 pub fn create_replace(name: &[u8]) -> SyscallResult {

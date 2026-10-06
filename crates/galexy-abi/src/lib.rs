@@ -301,11 +301,19 @@ pub enum Syscall {
     /// `NotFound`. A full scratch table, or a full per-task file table,
     /// is `NoResource`.
     Create,
+    /// `remove(name, len)` — delete a scratch file or an empty directory.
+    ///
+    /// Args: `RDI = user address of the path`, `RSI = byte count`.
+    /// Returns: `SyscallResult` (rax = 0). The slot can be created again.
+    /// A ramdisk name, or a directory that still has a child, is
+    /// `Unsupported`. A missing path is `NotFound`. An open cap on a
+    /// removed file becomes `BadCap`.
+    Remove,
 }
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (fixing the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 10] = [
+pub const SYSCALLS: [Syscall; 11] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -316,6 +324,7 @@ pub const SYSCALLS: [Syscall; 10] = [
     Syscall::Spawn,
     Syscall::Power,
     Syscall::Create,
+    Syscall::Remove,
 ];
 
 /// Maximum syscall number (upper bound for a u64 dispatch table).

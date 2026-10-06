@@ -493,8 +493,12 @@ READ. Any other path walks the scratch table and must name a file
 cap appends; the read cursor stays at the start. A ramdisk name at
 `/`, or a name that already exists, is `Unsupported`. A missing parent
 is `NotFound`. A full scratch table is `NoResource`. `close` drops the
-task's cap; the scratch bytes stay until reboot. `write` on an archive
-open is `Unsupported`.
+task's cap; the scratch bytes stay until `remove`. `write` on an
+archive open is `Unsupported`. `remove(name, len)` (syscall 10) deletes
+a scratch file or an empty directory and frees the slot. A ramdisk
+name, or a directory that still has a child, is `Unsupported`. A
+missing path is `NotFound`. An open cap on a removed file becomes
+`BadCap`.
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing
@@ -502,10 +506,13 @@ queued). `read` on the stats, tasks, threads, and files caps copies a fresh text
 snapshot (no cursor; the syscall renders into a stack buffer so it does
 not allocate). The files snapshot is the ramdisk's regular names, then each scratch
 path (`box/`, `box/leaf`), one per line. The ring-3 shell's `ls`
-shows the current directory only. The shell keeps that path; `run`
-is still a ramdisk program name. `echo`, `cat`, `touch`, `mkdir`, and
-`cd` are shell commands on this table. `spawn` on the loader cap (EXEC) parks
-the caller (`STATE_WAITING`) and queues the program name; the main loop,
+shows the current directory only. The shell keeps that path. A program
+name on its own is a launch: `spawn` on the loader cap (EXEC) parks
+the caller (`STATE_WAITING`) and queues that name. The new task is
+granted the console only. The shell itself, loaded at boot, also holds
+the keyboard, the loader, the query caps, and power. Presenting a
+reserved index is not enough; the task must have been granted it.
+A ramdisk entry that is not an ELF is `Unsupported`. The main loop,
 which is on the kernel page
 table, loads the ELF. `FreshL4` copies the kernel root cached at init,
 so the new table does not inherit another task's user mappings. The
@@ -562,11 +569,11 @@ arch shim dies loudly instead.
 
 Main loop: drains the key queue — printable chars echo + buffer up (the
 echo goes through the console policy: screen + serial); Enter
-dispatches (`help`, `stats`, `tasks`, `threads`, `run <program>`, `clear`,
-`about`; unknown lines report `<line>: command not found`); Backspace
-erases. `run <name>` finds the program's ELF via the ramdisk
-service and hands it to the loader (Milestone 16; dispatch body factored
-into `shell::exec(line)` so boot tests drive the SAME path typing does).
+dispatches (`help`, `stats`, `tasks`, `threads`, `clear`, `about`; a
+lone name that is an ELF is started; anything else reports
+`<line>: command not found`); Backspace erases. The name is looked up
+in the ramdisk and handed to the loader (dispatch body factored into
+`shell::exec(line)` so boot tests drive the SAME path typing does).
 Foreground semantics: the typed line closes with a newline, the program
 spawns, and the prompt is NOT reclaimed until the program exits
 (`sched::is_name_running` polled by `poll`) — the program's output always
@@ -584,7 +591,7 @@ The runner packs user programs into a USTAR tar and the bootloader maps it
 `sched::ramdisk::init` publishes those bytes once (kernel-lifetime, so a
 `&'static [u8]` view); `find(name)` walks them read-only via
 `galexy-core::TarCursor` per call. `for_each_name` walks those names
-for the files capability. Consumers (the shell's `run` and `ls`, `open`,
+for the files capability. Consumers (the shell's launch and `ls`, `open`,
 test kernels) never touch raw BootInfo ramdisk fields again. An `open`
 holds that `&'static` slice plus a per-cap cursor; closing the cap does
 not free ramdisk bytes.

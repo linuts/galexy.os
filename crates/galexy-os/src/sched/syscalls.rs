@@ -92,6 +92,10 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, syscall_create(frame.rdi, frame.rsi, frame.rdx));
             Outcome::Resume
         }
+        n if n == Syscall::Remove as u64 => {
+            stamp(frame, syscall_remove(frame.rdi, frame.rsi));
+            Outcome::Resume
+        }
         // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));
@@ -116,6 +120,9 @@ fn syscall_cap_info(cap: Cap) -> SyscallResult {
 fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if cap.index() != galexy_abi::reserved::CONSOLE_INDEX {
         return syscall_write_file(cap, addr, len);
+    }
+    if !crate::sched::task_granted(crate::sched::Grant::Console) {
+        return SyscallResult::err(SysError::AccessDenied);
     }
     if !cap.rights().contains(CapRights::WRITE) {
         return SyscallResult::err(SysError::AccessDenied);
@@ -226,6 +233,32 @@ fn syscall_create(addr: u64, len: u64, flags: u64) -> SyscallResult {
     }
 }
 
+fn syscall_remove(addr: u64, len: u64) -> SyscallResult {
+    if len == 0 || len > MAX_NAME {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if user_buffer(addr, len, false).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut raw = [0u8; MAX_NAME as usize];
+    // SAFETY: `user_buffer` accepted every byte of [addr, addr+len).
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            VirtAddr::new(addr).as_ptr::<u8>(),
+            raw.as_mut_ptr(),
+            len as usize,
+        );
+    }
+    let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
+    if !path_ok(name) {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    match crate::sched::task_remove(name) {
+        Ok(()) => SyscallResult::ok(0),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
 fn syscall_open(addr: u64, len: u64) -> SyscallResult {
     if len == 0 || len > MAX_NAME {
         return SyscallResult::err(SysError::BadValue);
@@ -301,6 +334,9 @@ enum Query {
 }
 
 fn syscall_read_query(cap: Cap, kind: Query, addr: u64, len: u64) -> SyscallResult {
+    if !crate::sched::task_granted(crate::sched::Grant::Query) {
+        return SyscallResult::err(SysError::AccessDenied);
+    }
     if !cap.rights().contains(CapRights::READ) {
         return SyscallResult::err(SysError::AccessDenied);
     }
@@ -443,6 +479,9 @@ fn render_threads(out: &mut TextBuf<'_>) {
 }
 
 fn syscall_read_keyboard(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+    if !crate::sched::task_granted(crate::sched::Grant::Keyboard) {
+        return SyscallResult::err(SysError::AccessDenied);
+    }
     if !cap.rights().contains(CapRights::READ) {
         return SyscallResult::err(SysError::AccessDenied);
     }
@@ -488,6 +527,9 @@ fn syscall_spawn(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if !cap.rights().contains(CapRights::EXEC) {
         return SyscallResult::err(SysError::AccessDenied);
     }
+    if !crate::sched::task_granted(crate::sched::Grant::Loader) {
+        return SyscallResult::err(SysError::AccessDenied);
+    }
     if len == 0 || len > MAX_NAME {
         return SyscallResult::err(SysError::BadValue);
     }
@@ -507,8 +549,11 @@ fn syscall_spawn(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if !file_name_ok(name) {
         return SyscallResult::err(SysError::BadValue);
     }
-    if crate::sched::ramdisk::find(name).is_none() {
+    let Some(bytes) = crate::sched::ramdisk::find(name) else {
         return SyscallResult::err(SysError::NotFound);
+    };
+    if !crate::sched::loader::looks_like_elf(bytes) {
+        return SyscallResult::err(SysError::Unsupported);
     }
     match crate::sched::task_spawn(name) {
         Ok(()) => SyscallResult::ok(0),
@@ -521,6 +566,9 @@ fn syscall_power(cap: Cap, op: u64) -> SyscallResult {
         return SyscallResult::err(SysError::BadCap);
     }
     if !cap.rights().contains(CapRights::POWER) {
+        return SyscallResult::err(SysError::AccessDenied);
+    }
+    if !crate::sched::task_granted(crate::sched::Grant::Power) {
         return SyscallResult::err(SysError::AccessDenied);
     }
     match op {

@@ -1,5 +1,5 @@
-//! Integration test kernel: the shell's `run <program>` command. Drives the
-//! shell's command dispatcher DIRECTLY (no keystrokes): `run hello` must
+//! Integration test kernel: launching a program by name. Drives the
+//! shell's command dispatcher DIRECTLY (no keystrokes): `hello` must
 //! find hello's ELF in the ramdisk, spawn it, print through the console
 //! syscall (screen + serial mirror), and reap the exited task with the
 //! frame accounting closed.
@@ -53,7 +53,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let baseline = galexy_os::arch::mm::free_frames();
 
     // The shell seam: same dispatch the typing flow reaches via poll().
-    shell::exec("run hello");
+    shell::exec("hello");
     serial_println!("[test-runshell] dispatch done");
 
     // Main loop: hlt + rotations while the program runs; the entry shim

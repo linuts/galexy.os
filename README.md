@@ -7,7 +7,8 @@ real userland: ring-3 tasks with their own address spaces (running on either
 CPU), actual Rust programs loaded as ELF from a tar ramdisk, printing through
 the syscall ABI, killed cleanly when they crash — the OS survives user bugs.
 The interactive shell is itself a ring-3 program. It reads the keyboard
-through a capability and launches userland programs by name (`run hello`).
+through a capability and starts a userland program when you type its name
+(`hello`).
 
 ## Features
 
@@ -27,9 +28,10 @@ through a capability and launches userland programs by name (`run hello`).
       handler, mailbox pool); every boot test runs at `-smp 2`
 - [x] PS/2 keyboard input with scancode translation
 - [x] Shell: a ring-3 program — line editing (Backspace), commands
-      (`help`, `ls`, `echo`, `cat`, `touch`, `mkdir`, `cd`, `stats`,
-      `tasks`, `threads`, `about`, `clear`, `run <program>`,
-      `shutdown`, `reboot`), `command not found` for unknown lines.
+      (`help`, `ls`, `echo`, `cat`, `touch`, `mkdir`, `cd`, `rm`, `stats`,
+      `tasks`, `threads`, `about`, `clear`, `shutdown`, `reboot`),
+      and a program name on its own starts that program. `command not found`
+      for unknown lines.
       The kernel keeps the live status bar
 - [x] Physical frame allocator over the bootloader memory map
 - [x] Paging: map/unmap pages with TLB flushes, page-fault reporting (CR2),
@@ -41,7 +43,7 @@ through a capability and launches userland programs by name (`run hello`).
       heap), freed slots are reused in place, stack canary surfaces overflows
 - [x] User space: ring-3 tasks in the same rotation, SYSCALL/SYSRET
       (`exit`, `yield`, `write`, `cap_info`, `open`, `read`, `close`,
-      `spawn`, `power`, `create`),
+      `spawn`, `power`, `create`, `remove`),
       capability authority
       kernel-side, per-task kernel stacks via TSS.RSP0 — and REAL
       isolation: per-task address spaces (FreshL4), CR3 swapped by the
@@ -54,10 +56,9 @@ through a capability and launches userland programs by name (`run hello`).
       the task can write; the keyboard, the loader, and the query caps
       (`stats`, `tasks`, `threads`, `ls`) and the power cap (`shutdown`,
       `reboot`) are reserved caps
-- [x] Shell with commands (`help`, `ls`, `stats`, `threads`, `run <program>`,
-      `shutdown`, `reboot`, ...) + live status bar ("quiet OS" demo) —
-      `run` launches real userland programs from the ramdisk; console
-      output = screen + serial
+- [x] Shell with commands (`help`, `ls`, `stats`, `threads`, `shutdown`,
+      `reboot`, ...) + live status bar ("quiet OS" demo) — typing a
+      ramdisk program name starts it; console output = screen + serial
 - [x] Test harness: host unit tests + per-kernel QEMU integration tests
 - [x] Programs beyond blobs: `galexy-rt` runtime (`entry!`, syscall
       wrappers, user panic handler), kernel ELF loader (static ET_EXEC,
@@ -177,7 +178,7 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
    thing a scheduler ever has to swap.
 4. **Test what can be tested.** Host unit tests for the pure primitives
    (`galexy-core`, `galexy-abi`), plus one bootable kernel binary per
-   integration test — 38 QEMU boots (all at `-smp 2`) assert exit codes and
+   integration test — 39 QEMU boots (all at `-smp 2`) assert exit codes and
    serial output on every run.
 5. **Ownership beats locks for per-CPU state.** Rotation cursors, TSS.RSP0,
    syscall scratch and the LAPIC registers are touched by exactly one CPU

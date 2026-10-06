@@ -163,6 +163,17 @@ first real program landed in Milestone 13:
   scratch file, so `echo >` can replace it. Archive names stay at `/`,
   and `run` is still a program name. The typing test cats `banner.txt`,
   writes a scratch file, and walks `mkdir` / `cd` / `ls`).
+- Remove scratch names ✅ (Milestone 30: `remove`=10 frees a scratch
+  file or an empty directory so the slot can be created again. A
+  directory with a child stays, and a tar name cannot be removed. An
+  open cap on a removed file is `BadCap`. `bin/test-rm` fills the
+  table again after the frees. The shell's `rm` does the same).
+- Launch by name ✅ (Milestone 31: typing `hello` starts that ELF.
+  The launched task is granted the console only. The shell, loaded at
+  boot, also holds the keyboard, the loader, the query caps, and power.
+  A fabricated reserved index without that grant is `AccessDenied`.
+  A non-ELF ramdisk name is `Unsupported`. The typing test types
+  `hello`).
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.
@@ -179,8 +190,8 @@ first real program landed in Milestone 13:
 - Userland shell ✅ (Milestone 21: the interactive shell is a ring-3
   program. Keyboard cap + `read` for keystrokes, loader cap + `spawn`
   which parks the caller until the child exits, the ELF load drained on
-  the kernel page table. BSP-resident, not stealable. `run hello` typing
-  E2E still drives it).
+  the kernel page table. BSP-resident, not stealable. Typing `hello`
+  still drives it).
 
 ## Standing principles
 

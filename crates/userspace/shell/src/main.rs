@@ -4,16 +4,16 @@
 //! loader capability, and this task stays parked until they exit. The
 //! kernel keeps the status bar and the screen.
 //!
-//! The current directory lives here. Archive names stay at `/`. `run`
-//! still takes a ramdisk program name, not a path.
+//! The current directory lives here. Archive names stay at `/`. A program
+//! name on its own starts that program.
 
 #![no_std]
 #![no_main]
 
 use galexy_abi::{Cap, SysError};
 use galexy_rt::{
-    close, create, create_replace, entry, files_cap, keyboard_cap, open, read, reboot, shutdown,
-    spawn, stats_cap, tasks_cap, threads_cap, write, write_console, yield_now,
+    close, create, create_replace, entry, files_cap, keyboard_cap, open, read, reboot, remove,
+    shutdown, spawn, stats_cap, tasks_cap, threads_cap, write, write_console, yield_now,
 };
 
 entry!(main);
@@ -78,8 +78,9 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) {
         return;
     }
     if line == b"help" {
-        write_console(b"commands: help, ls, echo, cat, touch, mkdir, cd,\n");
-        write_console(b"stats, tasks, threads, about, clear, run <program>\n");
+        write_console(b"commands: help, ls, echo, cat, touch, mkdir, cd, rm,\n");
+        write_console(b"stats, tasks, threads, about, clear\n");
+        write_console(b"a program name on its own starts it\n");
         write_console(b"power: shutdown, reboot\n");
         prompt(cwd);
         return;
@@ -143,8 +144,12 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) {
         cd(cwd, name);
         return;
     }
-    if let Some(name) = run_arg(line) {
-        run(cwd, name);
+    if let Some(name) = arg_of(line, b"rm") {
+        rm(cwd, name);
+        return;
+    }
+    if !line.contains(&b' ') {
+        launch(cwd, line);
         return;
     }
     write_console(line);
@@ -335,6 +340,39 @@ fn mkdir(cwd: &Cwd, name: &[u8]) {
     prompt(cwd);
 }
 
+fn rm(cwd: &Cwd, name: &[u8]) {
+    let name = trim(name);
+    if name.is_empty()
+        || name.contains(&b' ')
+        || name.contains(&b'/')
+        || name == b"."
+        || name == b".."
+    {
+        write_console(b"rm: usage: rm <name>\n");
+        prompt(cwd);
+        return;
+    }
+    let mut path = [0u8; PATH_MAX];
+    let Some(n) = compose(cwd, name, false, &mut path) else {
+        write_console(b"rm: path too long\n");
+        prompt(cwd);
+        return;
+    };
+    let removed = remove(&path[..n]);
+    if !removed.ok {
+        if removed.value == SysError::NotFound as u64 {
+            write_console(b"rm: no such file\n");
+        } else if removed.value == SysError::Unsupported as u64 && snapshot_has_child(&path[..n]) {
+            write_console(b"rm: directory not empty\n");
+        } else if removed.value == SysError::Unsupported as u64 {
+            write_console(b"rm: cannot remove\n");
+        } else {
+            write_console(b"rm: failed\n");
+        }
+    }
+    prompt(cwd);
+}
+
 fn cd(cwd: &mut Cwd, name: &[u8]) {
     let name = trim(name);
     if name.is_empty() || name == b"/" {
@@ -421,30 +459,19 @@ fn ls_name<'a>(cwd: &Cwd, line: &'a [u8]) -> Option<&'a [u8]> {
     }
 }
 
-fn run(cwd: &Cwd, name: &[u8]) {
-    if name.is_empty() {
-        write_console(b"run: no program named (usage: run <program>)\n");
-        prompt(cwd);
-        return;
-    }
+/// Starts the ramdisk program `name`. A missing name, or a file that is
+/// not an ELF, is reported as an unknown command.
+fn launch(cwd: &Cwd, name: &[u8]) {
     let result = spawn(name);
     if !result.ok {
-        if result.value == SysError::NotFound as u64 {
-            write_console(b"run: no such program '");
-            write_console(name);
-            write_console(b"'\n");
-        } else if result.value == SysError::NoResource as u64 {
-            write_console(b"run: a program is already starting\n");
+        if result.value == SysError::NoResource as u64 {
+            write_console(b"a program is already starting\n");
         } else {
-            write_console(b"run: failed\n");
+            write_console(name);
+            write_console(b": command not found\n");
         }
     }
     prompt(cwd);
-}
-
-/// `run` with nothing after it, or the trimmed argument after `run `.
-fn run_arg(line: &[u8]) -> Option<&[u8]> {
-    arg_of(line, b"run")
 }
 
 /// The bytes after `cmd`, or empty when the line is exactly `cmd`.
@@ -501,6 +528,34 @@ fn compose(cwd: &Cwd, name: &[u8], dir: bool, out: &mut [u8; PATH_MAX]) -> Optio
         n += 1;
     }
     Some(n)
+}
+
+/// True when some snapshot line is strictly inside `dir` (`box/leaf`).
+fn snapshot_has_child(dir: &[u8]) -> bool {
+    if dir.len() + 1 > PATH_MAX {
+        return false;
+    }
+    let mut prefix = [0u8; PATH_MAX + 1];
+    prefix[..dir.len()].copy_from_slice(dir);
+    prefix[dir.len()] = b'/';
+    let prefix = &prefix[..=dir.len()];
+    let mut buf = [0u8; 1024];
+    let got = read(files_cap(), &mut buf);
+    if !got.ok {
+        return false;
+    }
+    let n = (got.value as usize).min(buf.len());
+    let mut i = 0usize;
+    while i < n {
+        let rest = &buf[i..n];
+        let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());
+        let line = &rest[..end];
+        if line.starts_with(prefix) && line.len() > prefix.len() {
+            return true;
+        }
+        i += end + 1;
+    }
+    false
 }
 
 fn snapshot_has(line: &[u8]) -> bool {

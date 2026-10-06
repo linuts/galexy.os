@@ -180,8 +180,8 @@ struct OpenFile {
     rights: CapRights,
 }
 
-/// Scratch files the kernel will hold. A slot stays taken until reboot
-/// (`close` drops the task's cap, not the bytes).
+/// Scratch files the kernel will hold. `close` drops the task's cap, not
+/// the bytes. `remove` frees the slot.
 const SCRATCH_SLOTS: usize = 8;
 /// Bytes one scratch file can hold. A longer `write` copies what fits.
 const SCRATCH_BYTES: usize = 256;
@@ -192,6 +192,71 @@ const KIND_FILE: u8 = 1;
 const KIND_DIR: u8 = 2;
 /// `parent` value for an entry whose parent is `/`.
 const PARENT_ROOT: u8 = 0xff;
+
+/// Rights the launcher recorded on a task. A fabricated cap index is not
+/// enough: the matching bit has to be set here.
+#[derive(Clone, Copy)]
+pub(crate) struct Grants {
+    console: bool,
+    keyboard: bool,
+    loader: bool,
+    /// `stats`, `tasks`, `threads`, and `ls`.
+    query: bool,
+    power: bool,
+}
+
+/// One reserved service a syscall may require.
+pub(crate) enum Grant {
+    Console,
+    Keyboard,
+    Loader,
+    Query,
+    Power,
+}
+
+impl Grants {
+    pub(crate) const fn none() -> Self {
+        Self {
+            console: false,
+            keyboard: false,
+            loader: false,
+            query: false,
+            power: false,
+        }
+    }
+
+    /// A program the user started. It can print, and nothing else.
+    pub(crate) const fn console() -> Self {
+        Self {
+            console: true,
+            keyboard: false,
+            loader: false,
+            query: false,
+            power: false,
+        }
+    }
+
+    /// The interactive shell: console, keyboard, loader, queries, power.
+    pub(crate) const fn launcher() -> Self {
+        Self {
+            console: true,
+            keyboard: true,
+            loader: true,
+            query: true,
+            power: true,
+        }
+    }
+
+    fn allows(self, grant: Grant) -> bool {
+        match grant {
+            Grant::Console => self.console,
+            Grant::Keyboard => self.keyboard,
+            Grant::Loader => self.loader,
+            Grant::Query => self.query,
+            Grant::Power => self.power,
+        }
+    }
+}
 
 /// One scratch file or directory. The name is one path component.
 /// `create` never allocates.
@@ -283,6 +348,8 @@ struct Thread {
     /// store; `wait_for_len` is what readers trust.
     wait_for: [u8; 64],
     wait_for_len: AtomicU8,
+    /// Reserved services this task may call. Set at spawn, never grown.
+    grants: Grants,
 }
 
 impl Thread {
@@ -588,6 +655,8 @@ pub(crate) struct TaskInit<'a> {
     pub(crate) owner: Option<u8>,
     /// Idle stealing must leave this task on its spawn CPU.
     pub(crate) no_steal: bool,
+    /// Reserved services this program may call.
+    pub(crate) grants: Grants,
 }
 
 pub(crate) fn register_user_task(init: TaskInit<'_>) {
@@ -617,6 +686,7 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) {
             no_steal: init.no_steal,
             wait_for: [0; 64],
             wait_for_len: AtomicU8::new(0),
+            grants: init.grants,
         });
     });
 }
@@ -658,6 +728,7 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             no_steal: false,
             wait_for: [0; 64],
             wait_for_len: AtomicU8::new(0),
+            grants: Grants::none(),
         });
         serial_println!("[sched] thread '{}' ready (owner cpu {})", name, owner);
         owner
@@ -846,6 +917,7 @@ pub fn spawn_user_task(name: &str, build: impl FnOnce(UserRegion) -> Vec<u8>) ->
             no_steal: false,
             wait_for: [0; 64],
             wait_for_len: AtomicU8::new(0),
+            grants: Grants::console(),
         });
         serial_println!(
             "[sched] user task '{}' ready (own tree cr3={:#x}, p4={}, code @ {:#x}, kstack top {:#x})",
@@ -945,7 +1017,7 @@ pub fn thread_stats() -> alloc::vec::Vec<(alloc::string::String, u64)> {
 
 /// Is any RUNNING thread registered under `name`?
 ///
-/// Foreground-job query for the shell's `run` prompt pacing: the pending
+/// Foreground-job query for the shell's launch prompt pacing: the pending
 /// program's exit (syscall tombstone) flips it to false within one gate.
 pub fn is_name_running(name: &str) -> bool {
     interrupts::without_interrupts(|| {
@@ -1414,6 +1486,65 @@ pub(crate) fn task_create(name: &str, replace: bool) -> Result<Cap, SysError> {
     })
 }
 
+/// Deletes a scratch file or an empty directory and frees its slot.
+///
+/// A ramdisk name at `/` is `Unsupported`. A directory that still has a
+/// child is `Unsupported`. A missing path is `NotFound`. Any task's open
+/// cap on that slot is dropped, so a later read or write is `BadCap`.
+pub(crate) fn task_remove(name: &str) -> Result<(), SysError> {
+    let parsed = parse_path(name)?;
+    if parsed.n == 1 && crate::sched::ramdisk::find(parsed.comps[0]).is_some() {
+        return Err(SysError::Unsupported);
+    }
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        {
+            let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+            if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+                return Err(SysError::BadCap);
+            }
+        }
+        let mut scratch = SCRATCH.lock();
+        let parent = walk_parents(&scratch, &parsed)?;
+        let last = parsed.comps[parsed.n - 1];
+        let Some(found) = find_child(&scratch, parent, last) else {
+            return Err(SysError::NotFound);
+        };
+        let kind = scratch.files[found].kind;
+        if parsed.dir && kind != KIND_DIR {
+            return Err(SysError::Unsupported);
+        }
+        if kind == KIND_DIR && has_child(&scratch, found as u8) {
+            return Err(SysError::Unsupported);
+        }
+        let index = found as u8;
+        for thread in threads.iter_mut() {
+            for open in &mut thread.files {
+                let stale = matches!(
+                    *open,
+                    Some(file) if matches!(file.body, FileBody::Scratch(body) if body == index)
+                );
+                if stale {
+                    *open = None;
+                }
+            }
+        }
+        scratch.files[found] = ScratchFile::empty();
+        Ok(())
+    })
+}
+
+fn has_child(table: &ScratchTable, parent: u8) -> bool {
+    table
+        .files
+        .iter()
+        .any(|file| file.kind != 0 && file.parent == parent)
+}
+
 /// Drops one file capability belonging to the current task.
 ///
 /// Close is possession of the slot, not a READ: the index names the open
@@ -1450,6 +1581,23 @@ fn file_slot(cap: Cap) -> Result<usize, SysError> {
 /// The current rotation slot (0 = main loop; otherwise thread index + 1).
 pub fn current_slot() -> usize {
     cpu_sched().current.load(Ordering::Relaxed)
+}
+
+/// Whether the current task was granted `grant` at spawn.
+///
+/// The lock is dropped before return, so the caller can take another lock
+/// afterwards. A kernel slot (0) holds nothing.
+pub(crate) fn task_granted(grant: Grant) -> bool {
+    let slot = current_slot();
+    if slot == 0 {
+        return false;
+    }
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        threads
+            .get(slot - 1)
+            .is_some_and(|thread| thread.grants.allows(grant))
+    })
 }
 
 /// Is the CURRENT slot a ring-3 task? (`slot` per [`current_slot`].)

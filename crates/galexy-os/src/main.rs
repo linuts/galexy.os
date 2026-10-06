@@ -19,7 +19,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         boot_info.physical_memory_offset
     );
 
-    // Ramdisk: the bootloader-mapped tar, published for `run <program>`.
+    // Ramdisk: the bootloader-mapped tar, published so a typed name can start.
     if let Some(ramdisk_addr) = boot_info.ramdisk_addr.into_option() {
         // SAFETY: the bootloader mapped the contiguous ramdisk image at
         // [ramdisk_addr, +len) into the kernel's (and thus every) space.
@@ -59,7 +59,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             last_second = second;
             shell::render_status_bar();
         }
-        // A queued `run` loads on this loop (kernel page table). The
+        // A queued launch loads on this loop (kernel page table). The
         // in-kernel editor only consumes keys when no ring-3 shell owns them.
         sched::drain_spawn();
         if !user_shell {

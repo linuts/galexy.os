@@ -93,8 +93,12 @@ fn flush_and_dispatch(text: &str) {
             prompt_only();
         }
         "about" => about(),
-        _ if trimmed.starts_with("run ") || trimmed == "run" => run(trimmed),
-        _ => not_found(trimmed),
+        _ => {
+            if !trimmed.contains(' ') && launch(trimmed) {
+                return;
+            }
+            not_found(trimmed);
+        }
     }
 }
 
@@ -105,18 +109,16 @@ pub fn exec(line: &str) {
     flush_and_dispatch(line);
 }
 
-/// `run <program>`: loads a user program's ELF from the ramdisk and spawns
-/// it. Runs on the main loop = kernel tree (the loader's guard).
-fn run(line: &str) {
-    let name = line["run".len()..].trim();
-    if name.is_empty() {
-        out_lines(&["run: no program named (usage: run <program>)".into()]);
-        return;
-    }
+/// Starts a ramdisk ELF named by the whole line. A missing name, or a
+/// file that is not an ELF, leaves the caller to report not-found.
+/// Runs on the main loop, which is the kernel page table.
+fn launch(name: &str) -> bool {
     let Some(bytes) = sched::ramdisk::find(name) else {
-        out_lines(&[alloc::format!("run: no such program '{name}'")]);
-        return;
+        return false;
     };
+    if !sched::loader::looks_like_elf(bytes) {
+        return false;
+    }
     // Close the typed line FIRST — no kernel work between Enter and this
     // newline, so the program's output always starts on a fresh line.
     screen::set_color(TEXT_COLOR);
@@ -130,6 +132,7 @@ fn run(line: &str) {
         sched::loader::spawn_program(&owned, bytes);
         *PENDING.lock() = Some(owned);
     });
+    true
 }
 
 /// Prints a fresh prompt (for empty lines).
@@ -155,8 +158,8 @@ fn out_lines(lines: &[String]) {
 
 fn help() {
     out_lines(&[
-        "commands: help, stats, tasks, threads, run <program>,".into(),
-        "clear, about; anything else: command not found".into(),
+        "commands: help, stats, tasks, threads, clear, about".into(),
+        "a program name on its own starts it".into(),
     ]);
 }
 

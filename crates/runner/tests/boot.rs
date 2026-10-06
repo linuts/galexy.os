@@ -424,6 +424,20 @@ fn userfault_test_passes() {
 }
 
 #[test]
+fn rm_test_passes() {
+    let (code, serial) = boot(&image("test-rm"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-rm should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-rm] passed"),
+        "test-rm success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn scratch_test_passes() {
     let (code, serial) = boot(&image("test-scratch"));
     assert_eq!(
@@ -522,15 +536,11 @@ fn runshell_test_passes() {
 /// syscall (mirrored to COM1 by the kernel).
 const HELLO_TEXT: &str = "Hello from a real Rust user program!";
 
-/// Qcode + expected-echo pairs for typing `run hello` + Enter (typing
+/// Qcode + expected-echo pairs for typing `hello` + Enter (typing
 /// E2E). Each key syncs on the shell's echo of it (console = screen +
 /// serial); the Enter key syncs on hello's program output (the write
 /// syscall's console mirror) — proof the whole dispatch ran.
 const RUN_HELLO_KEYS: &[(&str, &str)] = &[
-    ("r", "r"),
-    ("u", "u"),
-    ("n", "n"),
-    ("spc", " "),
     ("h", "h"),
     ("e", "e"),
     ("l", "l"),
@@ -733,6 +743,58 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("x", "x"),
     ("t", "t"),
     ("ret", "echo: cannot replace"),
+    ("r", "r"),
+    ("m", "m"),
+    ("spc", " "),
+    ("n", "n"),
+    ("o", "o"),
+    ("t", "t"),
+    ("e", "e"),
+    ("ret", "galexy> "),
+    ("c", "c"),
+    ("a", "a"),
+    ("t", "t"),
+    ("spc", " "),
+    ("n", "n"),
+    ("o", "o"),
+    ("t", "t"),
+    ("e", "e"),
+    ("ret", "cat: no such file"),
+    ("r", "r"),
+    ("m", "m"),
+    ("spc", " "),
+    ("b", "b"),
+    ("o", "o"),
+    ("x", "x"),
+    ("ret", "rm: directory not empty"),
+    ("c", "c"),
+    ("d", "d"),
+    ("spc", " "),
+    ("b", "b"),
+    ("o", "o"),
+    ("x", "x"),
+    ("ret", "galexy:/box> "),
+    ("r", "r"),
+    ("m", "m"),
+    ("spc", " "),
+    ("l", "l"),
+    ("e", "e"),
+    ("a", "a"),
+    ("f", "f"),
+    ("ret", "galexy:/box> "),
+    ("c", "c"),
+    ("d", "d"),
+    ("spc", " "),
+    ("dot", "."),
+    ("dot", "."),
+    ("ret", "galexy> "),
+    ("r", "r"),
+    ("m", "m"),
+    ("spc", " "),
+    ("b", "b"),
+    ("o", "o"),
+    ("x", "x"),
+    ("ret", "galexy> "),
 ];
 
 /// The ring-3 shell's query caps: typed `stats` / `threads` / `tasks` /
@@ -772,15 +834,16 @@ fn shell_query_typing_e2e() {
 
 /// `cat banner.txt`, a scratch file written with `echo`, and `mkdir` /
 /// `cd` / `ls`. `hello` is not console text. A tar name cannot be replaced.
+/// `rm` drops a scratch file and refuses a directory that still has a child.
 #[test]
 fn shell_util_typing_e2e() {
     let serial = boot_and_type(
         &image("galexy-os"),
         UTIL_KEYS,
         "[boot] main loop ready",
-        "echo: cannot replace",
+        "rm: directory not empty",
         Duration::from_millis(30),
-        Duration::from_secs(120),
+        Duration::from_secs(150),
     );
     assert!(
         serial.contains("plumbing works"),
@@ -814,9 +877,17 @@ fn shell_util_typing_e2e() {
         serial.contains("echo: cannot replace"),
         "typed `echo > banner.txt` should be rejected; serial:\n{serial}"
     );
+    assert!(
+        serial.contains("cat: no such file"),
+        "typed `rm note` should drop the scratch file; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("rm: directory not empty"),
+        "typed `rm box` should refuse a directory that still has a child; serial:\n{serial}"
+    );
 }
 
-/// True end-to-end: TYPES `run hello` into the running kernel through
+/// True end-to-end: TYPES `hello` into the running kernel through
 /// QEMU's QMP `send-key` (real PS/2 IRQs into the keyboard driver) and
 /// asserts the user program's console output on COM1 (screen+serial
 /// mirror make the result observable headless).
@@ -836,7 +907,7 @@ fn shell_run_hello_typing_e2e() {
     );
     assert!(
         serial.contains(HELLO_TEXT),
-        "typed `run hello` never produced user output; serial:\n{serial}"
+        "typed `hello` never produced user output; serial:\n{serial}"
     );
     // The task's full lifecycle ran under the real rotation + reaper.
     assert!(
@@ -845,7 +916,7 @@ fn shell_run_hello_typing_e2e() {
     );
 }
 
-/// True end-to-end under UEFI: the same `run hello` typing flow, into the
+/// True end-to-end under UEFI: the same `hello` typing flow, into the
 /// OVMF-booted kernel — the APIC delivery path (LAPIC timer + I/O APIC
 /// keyboard) drives the whole thing there. OVMF boot flakiness → 3 retries.
 #[test]
@@ -867,7 +938,7 @@ fn shell_run_hello_typing_e2e_uefi() {
     }
     assert!(
         last.contains(HELLO_TEXT),
-        "typed `run hello` under UEFI never produced user output; serial:\n{last}"
+        "typed `hello` under UEFI never produced user output; serial:\n{last}"
     );
     assert!(
         last.contains("exited (syscall)"),

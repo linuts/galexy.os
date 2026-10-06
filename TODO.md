@@ -812,6 +812,39 @@ and a real disk stay out. Suite: 38 QEMU boot tests, all `-smp 2`.
       a create-write-read of a scratch file
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 30 — Remove scratch names ✅
+
+`rm` frees a scratch file or an empty directory so the eight slots can
+be used again. A directory that still has a child stays. A tar name
+cannot be removed. Suite: 39 QEMU boot tests, all `-smp 2`.
+
+- [x] **`remove` = 10**: the path names a scratch file or an empty
+      directory. The slot is freed. An open cap on that file becomes
+      `BadCap`. A ramdisk name, or a directory with a child, is
+      `Unsupported`. A missing path is `NotFound`
+- [x] **Shell**: `rm <name>` in the current directory. `rm box` while
+      `box` still holds a file says the directory is not empty
+- [x] **`bin/test-rm`**: remove, a stale cap, a tar name, a missing
+      name, a non-empty directory, then eight new files and a ninth
+      `NoResource`
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
+## Milestone 31 — Launch by name ✅
+
+Typing a ramdisk program name starts it. The new task is granted the
+console only. The shell keeps the keyboard, the loader, the query caps,
+and power. Suite: 39 QEMU boot tests, all `-smp 2`.
+
+- [x] **No `run` verb**: a single token that names an ELF is spawned.
+      `hello extra` is not a launch. `banner.txt` is `Unsupported`
+- [x] **Grants**: recorded on the task at spawn. Console `write`,
+      keyboard `read`, `spawn`, query `read`, and `power` require the
+      matching grant. The boot shell receives the launcher set. A
+      program started from the shell receives the console only
+- [x] Typing `hello` on BIOS and UEFI still prints the program's line.
+      `shell::exec("hello")` drives the same kernel-shell path
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17
@@ -842,8 +875,8 @@ and a real disk stay out. Suite: 38 QEMU boot tests, all `-smp 2`.
 - [ ] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
       ESC). A blinking cursor is still future screen work
-- [ ] Scratch files have no seek. There is no `rm`, pipe, `mv`, `cp`,
-      glob, or disk
+- [ ] Scratch files have no seek. There is no pipe, `mv`, `cp`, glob,
+      or disk
 - [x] ~~`run` leaks the task name, and freed slots panic the table at
       64~~ — CLOSED by Milestone 26 (name copied into the slot; a
       `Freed` record is reused once no CPU is current on it)
