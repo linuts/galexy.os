@@ -22,6 +22,10 @@ const FONT_HEIGHT: RasterHeight = RasterHeight::Size16;
 const LINE_SPACING: usize = 2;
 /// Advance of one text line, in pixels.
 const LINE_HEIGHT: usize = FONT_HEIGHT.val() + LINE_SPACING;
+/// Foreground restored by SGR 0 / SGR 39.
+const DEFAULT_FG: Color = Color::new(0xE0, 0xE0, 0xE0);
+/// Columns between tab stops.
+const TAB_WIDTH: usize = 8;
 
 /// A 24-bit RGB color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +62,61 @@ struct FramebufferSpec {
     info: bootloader_api::info::FrameBufferInfo,
 }
 
+/// Where the byte stream is inside an escape sequence.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AnsiState {
+    Ground,
+    Esc,
+    Csi,
+}
+
+/// Fixed-size CSI parser. No allocation: a sequence that spans two
+/// `write` calls keeps its place here.
+struct AnsiParser {
+    state: AnsiState,
+    params: [u16; 4],
+    present: [bool; 4],
+    count: u8,
+    current: u16,
+    any_digit: bool,
+}
+
+impl AnsiParser {
+    const fn ground() -> Self {
+        Self {
+            state: AnsiState::Ground,
+            params: [0; 4],
+            present: [false; 4],
+            count: 0,
+            current: 0,
+            any_digit: false,
+        }
+    }
+
+    fn enter_csi(&mut self) {
+        *self = Self::ground();
+        self.state = AnsiState::Csi;
+    }
+
+    fn push(&mut self) {
+        let i = self.count as usize;
+        if i < self.params.len() {
+            self.params[i] = self.current;
+            self.present[i] = self.any_digit;
+            self.count += 1;
+        }
+        self.current = 0;
+        self.any_digit = false;
+    }
+
+    fn param(&self, index: usize, default: u16) -> u16 {
+        match self.present.get(index) {
+            Some(true) => self.params[index],
+            _ => default,
+        }
+    }
+}
+
 /// Terminal state + framebuffer handle, guarded by the global lock.
 struct ScreenWriter {
     fb: FramebufferSpec,
@@ -67,24 +126,213 @@ struct ScreenWriter {
     char_x: usize,
     char_y: usize,
     fg: Color,
+    ansi: AnsiParser,
 }
 
 impl ScreenWriter {
-    /// Writes one glyph, advancing the cursor.
+    /// Writes one character, including tab, CR, and CSI sequences.
     fn write_char(&mut self, c: char) {
+        match self.ansi.state {
+            AnsiState::Esc => {
+                self.feed_esc(c);
+                return;
+            }
+            AnsiState::Csi => {
+                self.feed_csi(c);
+                return;
+            }
+            AnsiState::Ground => {}
+        }
         match c {
+            '\u{1b}' => self.ansi.state = AnsiState::Esc,
+            '\t' => self.tab(),
+            '\r' => self.char_x = 0,
             '\n' => self.new_line(),
             '\u{0008}' => self.backspace(),
             '\u{000c}' => self.clear(),
-            c => {
-                if self.char_x >= self.max_char_x() {
-                    self.new_line();
-                }
-                if self.char_y < self.max_char_y() {
-                    self.draw_glyph(c);
-                }
+            c => self.put_glyph(c),
+        }
+    }
+
+    /// Draws one glyph and advances. The status row is in-place: it never
+    /// scrolls. Normal text wraps inside the rows above that row.
+    fn put_glyph(&mut self, c: char) {
+        if self.char_y >= self.text_rows() {
+            if self.char_x < self.max_char_x() {
+                self.draw_glyph(c);
                 self.char_x += 1;
             }
+            return;
+        }
+        if self.char_x >= self.max_char_x() {
+            self.new_line();
+        }
+        if self.char_y < self.text_rows() {
+            self.draw_glyph(c);
+        }
+        self.char_x += 1;
+    }
+
+    fn feed_esc(&mut self, c: char) {
+        match c {
+            '[' => self.ansi.enter_csi(),
+            '\u{1b}' => {}
+            _ => self.ansi.state = AnsiState::Ground,
+        }
+    }
+
+    fn feed_csi(&mut self, c: char) {
+        match c {
+            '0'..='9' => {
+                self.ansi.any_digit = true;
+                let digit = (c as u8 - b'0') as u16;
+                self.ansi.current = self.ansi.current.saturating_mul(10).saturating_add(digit);
+            }
+            ';' => self.ansi.push(),
+            '\u{1b}' => self.ansi.state = AnsiState::Esc,
+            ch if ('\u{40}'..='\u{7e}').contains(&ch) => {
+                self.ansi.push();
+                self.dispatch_csi(ch);
+                self.ansi.state = AnsiState::Ground;
+            }
+            _ => self.ansi.state = AnsiState::Ground,
+        }
+    }
+
+    fn dispatch_csi(&mut self, final_byte: char) {
+        match final_byte {
+            'H' | 'f' => self.cursor_pos(),
+            'A' => self.cursor_move(0, -self.csi_n()),
+            'B' => self.cursor_move(0, self.csi_n()),
+            'C' => self.cursor_move(self.csi_n(), 0),
+            'D' => self.cursor_move(-self.csi_n(), 0),
+            'J' => self.erase_display(),
+            'K' => self.erase_line(),
+            'm' => self.apply_sgr(),
+            _ => {}
+        }
+    }
+
+    /// CSI count, at least 1 when the parameter was omitted.
+    fn csi_n(&self) -> isize {
+        self.ansi.param(0, 1).max(1) as isize
+    }
+
+    fn cursor_pos(&mut self) {
+        let rows = self.text_rows().max(1);
+        let cols = self.max_char_x().max(1);
+        let row = (self.ansi.param(0, 1).max(1) as usize).min(rows);
+        let col = (self.ansi.param(1, 1).max(1) as usize).min(cols);
+        self.char_y = row - 1;
+        self.char_x = col - 1;
+    }
+
+    fn cursor_move(&mut self, dx: isize, dy: isize) {
+        let rows = self.text_rows();
+        let cols = self.max_char_x();
+        if rows == 0 || cols == 0 {
+            return;
+        }
+        let y = self.char_y.min(rows - 1) as isize + dy;
+        let x = self.char_x as isize + dx;
+        self.char_y = y.clamp(0, (rows - 1) as isize) as usize;
+        self.char_x = x.clamp(0, (cols - 1) as isize) as usize;
+    }
+
+    fn erase_display(&mut self) {
+        match self.ansi.param(0, 0) {
+            2 => {
+                let rows = self.text_rows();
+                for row in 0..rows {
+                    self.blank_row(row);
+                }
+            }
+            0 => {
+                let row = self.char_y;
+                let col = self.char_x;
+                if row < self.text_rows() {
+                    self.erase_to_eol();
+                    for r in (row + 1)..self.text_rows() {
+                        self.blank_row(r);
+                    }
+                }
+                self.char_y = row;
+                self.char_x = col;
+            }
+            _ => {}
+        }
+    }
+
+    fn erase_line(&mut self) {
+        match self.ansi.param(0, 0) {
+            0 => self.erase_to_eol(),
+            2 => {
+                let saved = self.char_x;
+                self.char_x = 0;
+                self.erase_to_eol();
+                self.char_x = saved;
+            }
+            _ => {}
+        }
+    }
+
+    fn erase_to_eol(&mut self) {
+        let saved = self.char_x;
+        let end = self.max_char_x();
+        while self.char_x < end {
+            self.clear_cell();
+            self.char_x += 1;
+        }
+        self.char_x = saved;
+    }
+
+    fn apply_sgr(&mut self) {
+        let n = self.ansi.count as usize;
+        let any = self.ansi.present[..n].contains(&true);
+        if n == 0 || !any {
+            self.fg = DEFAULT_FG;
+            return;
+        }
+        for i in 0..n {
+            if self.ansi.present[i] {
+                self.apply_sgr_one(self.ansi.params[i]);
+            }
+        }
+    }
+
+    fn apply_sgr_one(&mut self, code: u16) {
+        self.fg = match code {
+            0 | 39 => DEFAULT_FG,
+            30 => Color::new(0x00, 0x00, 0x00),
+            31 => Color::new(0xE0, 0x40, 0x40),
+            32 => Color::new(0x40, 0xE0, 0x40),
+            33 => Color::new(0xE0, 0xE0, 0x40),
+            34 => Color::new(0x60, 0x80, 0xE0),
+            35 => Color::new(0xE0, 0x60, 0xE0),
+            36 => Color::new(0x40, 0xE0, 0xE0),
+            37 => DEFAULT_FG,
+            90 => Color::new(0x80, 0x80, 0x80),
+            91 => Color::new(0xFF, 0x80, 0x80),
+            92 => Color::new(0x80, 0xFF, 0x80),
+            93 => Color::new(0xFF, 0xFF, 0x80),
+            94 => Color::new(0x80, 0xA0, 0xFF),
+            95 => Color::new(0xFF, 0x80, 0xFF),
+            96 => Color::new(0x80, 0xFF, 0xFF),
+            97 => Color::new(0xFF, 0xFF, 0xFF),
+            _ => self.fg,
+        };
+    }
+
+    fn tab(&mut self) {
+        let next = (self.char_x / TAB_WIDTH + 1) * TAB_WIDTH;
+        if self.char_y >= self.text_rows() {
+            self.char_x = next.min(self.max_char_x());
+            return;
+        }
+        if next >= self.max_char_x() {
+            self.new_line();
+        } else {
+            self.char_x = next;
         }
     }
 
@@ -204,10 +452,19 @@ impl ScreenWriter {
         }
     }
 
-    /// Moves to the next line, scrolling the whole framebuffer up when the
-    /// bottom is reached.
+    /// Moves to the next text line. The last row is the status bar: text
+    /// scrolls above it and never lands on it.
     fn new_line(&mut self) {
-        if self.char_y + 1 >= self.max_char_y() {
+        let rows = self.text_rows();
+        if rows == 0 {
+            self.char_x = 0;
+            return;
+        }
+        if self.char_y + 1 >= rows {
+            if self.char_y >= rows {
+                self.char_x = 0;
+                return;
+            }
             self.scroll_up();
         } else {
             self.char_y += 1;
@@ -225,24 +482,31 @@ impl ScreenWriter {
         self.clear_cell();
     }
 
-    /// Shifts all pixels up by one line height and clears the last line.
+    /// Shifts the text rows up by one line and clears the last text row.
     ///
-    /// NOTE: `stride` is in PIXELS (bootloader doc), not bytes — the shift
-    /// amount must include `bytes_per_pixel`. (This used to be the overlap
-    /// bug: each scroll moved 6 pixel-rows instead of 18.)
+    /// The status row is not part of the shift. `stride` is in pixels
+    /// (bootloader doc), so the byte count includes `bytes_per_pixel`.
     fn scroll_up(&mut self) {
-        let buffer = &mut *self.fb.buffer;
+        let rows = self.text_rows();
+        if rows == 0 {
+            return;
+        }
         let info = self.fb.info;
-
         let line_bytes = LINE_HEIGHT * info.stride * info.bytes_per_pixel;
-        if line_bytes < buffer.len() {
-            buffer.copy_within(line_bytes.., 0);
+        let text_bytes = rows * line_bytes;
+        let buffer = &mut *self.fb.buffer;
+        if line_bytes < text_bytes && text_bytes <= buffer.len() {
+            buffer.copy_within(line_bytes..text_bytes, 0);
         }
-        // Clear the freed lines at the bottom.
-        let tail_start = buffer.len().saturating_sub(line_bytes);
-        for byte in &mut buffer[tail_start..] {
-            *byte = 0;
-        }
+        self.blank_row(rows - 1);
+    }
+
+    /// Paints one text row black without moving the cursor.
+    fn blank_row(&mut self, row: usize) {
+        let saved = self.fg;
+        self.fg = Color::new(0, 0, 0);
+        self.clear_row_pixels(row);
+        self.fg = saved;
     }
 
     /// Fills one text line's pixels with a solid color, cursor to its start.
@@ -275,9 +539,18 @@ impl ScreenWriter {
         self.fb.info.width / self.char_width
     }
 
-    /// Terminal height in characters.
+    /// Terminal height in characters, including the status row.
     fn max_char_y(&self) -> usize {
         self.fb.info.height / LINE_HEIGHT
+    }
+
+    /// Rows normal text may use. The last row belongs to the status bar
+    /// when the screen has more than one row.
+    fn text_rows(&self) -> usize {
+        match self.max_char_y() {
+            0 | 1 => self.max_char_y(),
+            n => n - 1,
+        }
     }
 
     /// Fills the whole framebuffer with black and resets the cursor.
@@ -291,6 +564,7 @@ impl ScreenWriter {
         }
         self.char_x = 0;
         self.char_y = 0;
+        self.ansi = AnsiParser::ground();
     }
 }
 
@@ -339,7 +613,8 @@ pub fn init(boot_info: &mut bootloader_api::info::BootInfo) {
         char_width,
         char_x: 0,
         char_y: 0,
-        fg: Color::new(0xE0, 0xE0, 0xE0),
+        fg: DEFAULT_FG,
+        ansi: AnsiParser::ground(),
     };
     writer.clear();
     *SCREEN.lock() = Some(writer);
@@ -398,11 +673,21 @@ pub fn out_char(c: char) {
     with_lock(|screen| screen.write_char(c));
 }
 
-/// Writes a string to the screen.
+/// Writes a string to the screen, interpreting tab, CR, and CSI.
 pub fn out_str(s: &str) {
     with_lock(|screen| {
         for c in s.chars() {
             screen.write_char(c);
+        }
+    });
+}
+
+/// Writes glyphs with no escape parsing. The status bar uses this so a
+/// half-finished CSI sequence cannot swallow the bar text.
+pub fn out_plain(s: &str) {
+    with_lock(|screen| {
+        for c in s.chars() {
+            screen.put_glyph(c);
         }
     });
 }

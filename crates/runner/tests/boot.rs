@@ -205,6 +205,10 @@ fn screen_test_passes() {
         serial.contains("[test-screen] passed"),
         "test-screen success marker missing; serial:\n{serial}"
     );
+    assert!(
+        serial.contains("\u{1b}[31mZ"),
+        "console did not mirror the CSI bytes to serial:\n{serial}"
+    );
 }
 
 #[test]

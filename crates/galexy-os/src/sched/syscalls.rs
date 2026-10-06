@@ -145,11 +145,19 @@ fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
             len as usize,
         );
     }
-    // Printable ASCII, newline, backspace (0x08), and form feed (0x0c,
-    // clear). Tab/CR/ESC stay future screen work.
-    let printable = staged[..len as usize]
-        .iter()
-        .all(|b| b.is_ascii_graphic() || *b == b' ' || *b == b'\n' || *b == 0x08 || *b == 0x0c);
+    // Printable ASCII, newline, backspace (0x08), form feed (0x0c),
+    // tab (0x09), CR (0x0d), and ESC (0x1b, for CSI). Other controls
+    // stay BadValue.
+    let printable = staged[..len as usize].iter().all(|b| {
+        b.is_ascii_graphic()
+            || *b == b' '
+            || *b == b'\n'
+            || *b == 0x08
+            || *b == 0x09
+            || *b == 0x0c
+            || *b == 0x0d
+            || *b == 0x1b
+    });
     if !printable {
         return SyscallResult::err(SysError::BadValue);
     }

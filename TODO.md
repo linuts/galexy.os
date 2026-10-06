@@ -706,6 +706,26 @@ firmware's PM1 / reset registers.** Suite: 34 QEMU boot tests, all
 - [x] **`bin/test-shutdown` / `bin/test-reboot`**: QEMU exits, no panic
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 24 — Console sequences ✅
+
+The framebuffer speaks a small terminal subset. **Tab, CR, and CSI
+render on the screen; serial still gets the raw bytes. Text scrolls
+above the status row.** Suite: 34 QEMU boot tests, all `-smp 2`.
+
+- [x] **Charset** (`write`): tab `0x09`, CR `0x0d`, ESC `0x1b`, beside
+      the bytes the shell already used. Anything else is still
+      `BadValue`
+- [x] **Parser** (`drivers/screen.rs`): fixed-size, under the screen
+      lock, no heap. SGR 30–37 and 90–97, cursor `H`/`f`/`A`–`D`,
+      erase `J` and `K`. A sequence may span two writes
+- [x] **Status row**: the last row is not part of the text scroll. The
+      bar is drawn with `out_plain`, so a half-read CSI sequence cannot
+      swallow it
+- [x] **`bin/test-screen`**: tab column, CR, red SGR, cursor place,
+      erase leaves the status marker, one text scroll, and the raw
+      CSI bytes on COM1
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17
@@ -733,8 +753,9 @@ firmware's PM1 / reset registers.** Suite: 34 QEMU boot tests, all
 - [ ] SYSCALL leaves DS/ES/FS/GS as kernel bootstrap selectors when the
       task resumes in ring 3 — user code must not do segment-based
       addressing; proper user segment reload is future segment work
-- [ ] `write` printable-ASCII rule is a stand-in for a real console
-      charset policy (newlines work; tab/CR/ESC are future screen work)
+- [ ] `write` still rejects controls outside the console subset
+      (printable ASCII, space, newline, backspace, tab, form feed, CR,
+      ESC). A blinking cursor is still future screen work
 - [ ] File caps are ramdisk reads only: no write, seek, or directory
       listing. `spawn` still loads the ELF on the kernel page table
       (a user CR3 must not be cloned into the child)
@@ -742,11 +763,12 @@ firmware's PM1 / reset registers.** Suite: 34 QEMU boot tests, all
       fine at this scale; a slot free-list is the fix if tasks churn
 - [ ] Tombstone slots live forever (a few bytes per dead thread) — fine
       until tasks churn; a free-list of slots is the fix if ever needed
-- [ ] Status bar can overwrite the typing line when the screen is full
-      (cursor is restored, but the in-progress line's glyphs are clipped)
+- [x] ~~Status bar can overwrite the typing line when the screen is full~~
+      — CLOSED by Milestone 24 (text scrolls above the status row)
 - [ ] Framebuffer is used as the bootloader mapped it (deliberate — BootInfo
       exposes no physical framebuffer address; revisit with isolation work)
-- [ ] Screen: text-mode cursor (blinking), tab handling, ANSI-ish output
+- [ ] Screen: text-mode cursor (blinking). Tab stops and the CSI subset
+      landed in Milestone 24
 - [ ] Keyboard queue overflow silently drops keys — fine for now, revisit
 - [ ] Cooperative-scheduler nits: `run()` sweep fairness mid-sweep;
       TaskCtx's 8 fixed u64 slots (boxed state enum when tasks get richer)

@@ -4,7 +4,8 @@
 //! the output policy in ONE place: everything printed "to the console"
 //! (userland's `write` syscall, the shell's typed-key echo) lands on both
 //! the pixel framebuffer and COM1, so output is visible interactively AND
-//! observable headless (the boot-test harness reads COM1).
+//! observable headless (the boot-test harness reads COM1). The screen
+//! interprets tab, CR, and CSI; the serial bytes stay raw.
 
 /// Writes one character to the console (screen + serial).
 pub fn out_char(c: char) {

@@ -136,7 +136,12 @@ first real program landed in Milestone 13:
   `shell::exec("run hello")` — dispatch → loader, full lifecycle; typed-
   keystroke E2E over QMP proves the real input path)
 - Userland print hygiene: console = screen + serial mirror ✅ (Milestone
-  16); ANSI-ish console layer still future work.
+  16).
+- Console sequences ✅ (Milestone 24: tab, CR, and a small CSI subset
+  on the framebuffer — SGR colors, cursor position, erase. The status
+  bar owns the last row, so a full screen scrolls above it. Serial
+  still receives the raw bytes. `bin/test-screen` checks glyphs and
+  the serial mirror).
 - Query capabilities ✅ (Milestone 22: `stats` / `tasks` / `threads`
   are reserved caps. `read` returns a fresh text snapshot, rendered
   without allocating on the IF=0 syscall path. The ring-3 shell types

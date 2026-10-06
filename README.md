@@ -13,7 +13,8 @@ through a capability and launches userland programs by name (`run hello`).
 
 - [x] Bootable image (BIOS + UEFI) via the `bootloader` crate
 - [x] Pixel-framebuffer text output (bootloader v0.11 flow; no legacy VGA text
-      mode) with scrolling and colors
+      mode) with scrolling, tab stops, and a small set of color and cursor
+      sequences. The status bar keeps the last row
 - [x] Serial port logging (for debugging, never on screen)
 - [x] Interrupts: GDT, IDT, ACPI/MADT-discovered APIC stack — per-CPU LAPIC
       timers (PIT-calibrated, share-split to keep ~1 kHz), I/O APIC

@@ -243,7 +243,7 @@ fn render_status_bar_inner() {
     screen::fill_row(last_row, BAR_BG);
     screen::set_color(BAR_FG);
     screen::set_pos(0, last_row);
-    screen::out_str(&text);
+    screen::out_plain(&text);
     screen::set_color(TEXT_COLOR);
     screen::set_pos(cx, cy);
 }

@@ -128,9 +128,14 @@ pub fn set_color(color: Color)   // foreground; background is always black
 pub fn backspace()               // erase last char of the current line
 ```
 
-State (cursor, color, framebuffer snapshot) lives behind a single
-`spin::Mutex` global; scrolling copies the buffer up by one line height.
-Swap-in candidates later: text-mode cursor, tab stops, an ANSI-ish layer.
+State (cursor, color, framebuffer snapshot, CSI parser) lives behind a
+single `spin::Mutex` global. Text uses every row except the last, which
+the status bar owns; scrolling shifts only the text rows, by one line
+height. Tab stops are every 8 columns. CR returns to column 0. ESC
+introduces a fixed-size CSI parser (no allocation): SGR colors 30–37
+and 90–97 plus reset, cursor position and movement (`H`/`f`/`A`–`D`),
+erase in display (`J` 0 and 2), and erase in line (`K` 0 and 2). The
+parser state survives a split `write`. A blinking cursor is still future.
 
 ### serial — "the side channel" (`drivers/`)
 
@@ -487,8 +492,10 @@ ring-3 page fault. `power` on the power cap (POWER right) shuts the
 machine down (`op` 0, ACPI S5) or resets it (`op` 1). It does not
 return when the platform honors it; a return is Unsupported and the
 shell says the machine stayed up. Console `write` accepts backspace
-(`0x08`) and form feed (`0x0c`, clear) so the ring-3 shell can edit a
-line. Unknown numbers
+(`0x08`), tab (`0x09`), form feed (`0x0c`, clear), CR (`0x0d`), and
+ESC (`0x1b`) so the ring-3 shell can edit a line and programs can emit
+CSI. The screen interprets those; the serial mirror stays raw. Other
+control bytes are still `BadValue`. Unknown numbers
 → Unsupported. Kernel-origin syscalls are impossible-by-structure: the
 arch shim dies loudly instead.
 
@@ -543,7 +550,8 @@ lands on its own line, never on an input line.
 The status bar (`render_status_bar`) redraws the bottom line
 in-place once per second (uptime + per-thread tick counts + frames free)
 with cursor save/restore — the "quiet OS" demo: everything observable as
-live numbers, zero background noise.
+live numbers, zero background noise. That row is not part of the text
+scroll, and the bar is drawn without feeding the CSI parser.
 
 ### sched/ramdisk — "the archive" (`sched/`)
 
