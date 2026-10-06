@@ -1077,6 +1077,11 @@ pub(crate) fn task_spawn(
     if name.len() > 64 || arg.len() > ARG_MAX {
         return Err(SysError::BadValue);
     }
+    // F-key consoles own these names; a user `spawn shell` would start a
+    // second task without the keyboard grant and spam "keyboard denied".
+    if is_console_shell_name(name) {
+        return Err(SysError::Unsupported);
+    }
     let slot = current_slot();
     if slot == 0 {
         return Err(SysError::BadCap);
@@ -1087,6 +1092,15 @@ pub(crate) fn task_spawn(
             return Err(SysError::NoResource);
         }
         let mut threads = THREADS.lock();
+        // One live task per name: SPAWN_WAIT wakes by name, and two
+        // `linger`s on one TTY would fight the console.
+        let name_busy = threads.iter().any(|thread| {
+            let state = thread.state.load(Ordering::Acquire);
+            thread.name() == name && (state == STATE_RUNNING || state == STATE_WAITING)
+        });
+        if name_busy {
+            return Err(SysError::NoResource);
+        }
         let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
         if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
@@ -1168,6 +1182,11 @@ const SHELL_NAMES: [&str; 12] = [
     "shell", "shell2", "shell3", "shell4", "shell5", "shell6", "shell7", "shell8", "shell9",
     "shell10", "shell11", "shell12",
 ];
+
+/// True when `name` is reserved for an F-key console shell.
+fn is_console_shell_name(name: &str) -> bool {
+    SHELL_NAMES.iter().any(|n| *n == name)
+}
 
 /// True when a task named `name` is running or parked on a load.
 fn named_is_live(name: &str) -> bool {

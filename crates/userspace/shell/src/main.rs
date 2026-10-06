@@ -43,9 +43,11 @@ fn main() -> i32 {
         let mut buf = [0u8; 8];
         let got = read(kbd, &mut buf);
         if !got.ok {
+            // Without a keyboard grant this would spin forever (the old
+            // `spawn shell` failure mode). Exit so the supervisor can
+            // load a real console shell if this was one.
             write_console(b"\nread: keyboard denied\n");
-            prompt(&cwd);
-            continue;
+            return 1;
         }
         if got.value == 0 {
             yield_now();
@@ -553,6 +555,12 @@ fn ls(cwd: &Cwd) {
 /// not an ELF, is reported as an unknown command. The prompt returns
 /// once the program is loaded (linger / hello keep running).
 fn launch(cwd: &Cwd, name: &[u8]) {
+    if is_console_shell_name(name) {
+        write_console(name);
+        write_console(b": reserved (use F1-F12)\n");
+        prompt(cwd);
+        return;
+    }
     spawn_and_prompt(cwd, name, b"", 0);
 }
 
@@ -569,14 +577,35 @@ fn launch_util(cwd: &Cwd, program: &[u8], arg: &[u8], query: bool) {
 fn spawn_and_prompt(cwd: &Cwd, program: &[u8], arg: &[u8], grants: u64) {
     let result = spawn_with(program, arg, grants);
     if !result.ok {
-        if result.value == SysError::NoResource as u64 {
-            write_console(b"a program is already starting\n");
-        } else {
-            write_console(program);
-            write_console(b": command not found\n");
-        }
+        write_console(program);
+        write_console(b": ");
+        match SysError::from_code(result.value) {
+            SysError::NoResource => write_console(b"busy\n"),
+            SysError::Unsupported => write_console(b"reserved\n"),
+            SysError::NotFound => write_console(b"command not found\n"),
+            _ => write_console(b"failed\n"),
+        };
     }
     prompt(cwd);
+}
+
+/// F-key console task names. The kernel also rejects spawning these.
+fn is_console_shell_name(name: &[u8]) -> bool {
+    matches!(
+        name,
+        b"shell"
+            | b"shell2"
+            | b"shell3"
+            | b"shell4"
+            | b"shell5"
+            | b"shell6"
+            | b"shell7"
+            | b"shell8"
+            | b"shell9"
+            | b"shell10"
+            | b"shell11"
+            | b"shell12"
+    )
 }
 
 /// The bytes after `cmd`, or empty when the line is exactly `cmd`.

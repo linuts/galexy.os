@@ -989,6 +989,27 @@ Default seat is `admin` only. Suite: 46 QEMU boots.
 - [x] **Prompt**: `user@galexy>` / `user@galexy:/path> ` (whoami each draw)
 - [x] Tests/docs: `test-users`, `test-galfs`, `test-rm`, `test-galfs-disk`
 
+## Milestone 41 — spawn hardening ✅
+
+Stop nested-shell loops and tighten spawn policy. Suite: 47 QEMU boots.
+
+- [x] **Reserved names**: user `spawn` of `shell`…`shell12` is `Unsupported`
+      (F-key consoles only). Shell prints `shell: reserved (use F1-F12)`
+- [x] **Unique live names**: spawning a name that is already running/waiting
+      is `NoResource` (SPAWN_WAIT wakes by name)
+- [x] **Keyboard denied exits**: a shell without the keyboard grant exits
+      instead of spinning "read: keyboard denied"
+- [x] Typing e2e: `shell_nested_spawn_refused_e2e`
+
+### Still open for a harder production seat
+
+- [ ] Auth beyond console-trust (passwords / sessions) — still seat = credential
+- [ ] Untrusted ramdisk binaries: children inherit the parent's galfs tokens
+- [ ] No disk encryption / integrity beyond GALF CRC on the table
+- [ ] `crash` remains a test seam in the shell
+- [ ] `linger`-style tasks can flood the console until killed by policy
+- [ ] Multi-user isolation across TTYs (every F-key shell is still admin)
+
 ## Known limitations / follow-ups
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17

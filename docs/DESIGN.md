@@ -587,9 +587,11 @@ finish; bare program names (`hello`, `linger`) do not. `r8`/`r9` are an
 optional argument, at most 256 bytes, copied onto the child's stack
 (`rdi` is the address, `rsi` the length). `r10` bits are
 `SPAWN_GRANT_QUERY` and/or `SPAWN_WAIT`. Any other bit is `BadValue`.
-The child always receives the console, and it writes the console of the
-task that spawned it. Keyboard, the loader, and power stay with the
-shell. Boot starts one shell on each F-key, pinned to the BSP with the
+User `spawn` rejects the F-key shell names (`shell`…`shell12`) and
+rejects a name that already has a live task (`NoResource`), so typing
+`shell` cannot start a second keyboard-less shell that spins. The child
+always receives the console, and it writes the console of the task that
+spawned it. Keyboard, the loader, and power stay with the shell. Boot starts one shell on each F-key, pinned to the BSP with the
 launcher grants and a full token on actor `admin`'s root. Spawn copies
 those tokens to the child. F1's shell is named `shell`; the others are
 `shell2` through `shell12`. F1–F12 select which cell grid is painted.

@@ -213,6 +213,8 @@ first real program landed in Milestone 13:
 - Shell/identity cleanup ✅ (Milestone 40: default actor is `admin` only;
   `su` drops prior tokens; `SPAWN_WAIT` so utilities finish before the
   prompt; TTY cursor saved after console writes. Suite: 46 QEMU boots).
+- Spawn hardening ✅ (Milestone 41: refuse user spawn of `shell`…`shell12`,
+  unique live task names, keyboard-denied shell exits. Suite: 47 QEMU boots).
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.
