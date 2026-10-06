@@ -318,6 +318,9 @@ struct Thread {
     fs_root: u16,
     /// Tokens that authorize galfs paths. Inherited by spawn.
     fs_tokens: [galfs::Token; galfs::TOKEN_SLOTS],
+    /// Set when the task was created as admin. Survives [`task_su`] so the
+    /// seat can return to admin after switching to another actor.
+    born_admin: bool,
 }
 
 impl Thread {
@@ -627,7 +630,7 @@ pub(crate) struct TaskInit<'a> {
     pub(crate) grants: Grants,
     /// Console the new task writes. A child inherits its parent's.
     pub(crate) tty: u8,
-    /// galfs credentials. The shell and test blobs get alex's root token.
+    /// galfs credentials. Shells get admin's root token.
     pub(crate) fs: galfs::FsCred,
 }
 
@@ -662,6 +665,7 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) {
             tty: init.tty,
             fs_root: init.fs.root,
             fs_tokens: init.fs.tokens,
+            born_admin: galfs::is_admin_root(init.fs.root),
         });
     });
 }
@@ -707,6 +711,7 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             tty: 0,
             fs_root: galfs::NO_OBJECT,
             fs_tokens: [galfs::Token::empty(); galfs::TOKEN_SLOTS],
+            born_admin: false,
         });
         serial_println!("[sched] thread '{}' ready (owner cpu {})", name, owner);
         owner
@@ -746,7 +751,7 @@ pub struct UserRegion {
 /// scratch page right above the stack. The task's own kernel-mode stack
 /// (heap) serves its ring 3→0 crossings via TSS.RSP0. IRQ-gated.
 pub fn spawn_user_task(name: &str, build: impl FnOnce(UserRegion) -> Vec<u8>) -> (UserRegion, u8) {
-    spawn_user_with(name, galfs::alex_cred(), build)
+    spawn_user_with(name, galfs::admin_cred(), build)
 }
 
 /// Like [`spawn_user_task`], with explicit galfs credentials (token tests).
@@ -910,6 +915,7 @@ pub fn spawn_user_with(
             tty: 0,
             fs_root: fs.root,
             fs_tokens: fs.tokens,
+            born_admin: galfs::is_admin_root(fs.root),
         });
         serial_println!(
             "[sched] user task '{}' ready (own tree cr3={:#x}, p4={}, code @ {:#x}, kstack top {:#x})",
@@ -1027,13 +1033,16 @@ pub(crate) const ARG_MAX: usize = 256;
 
 /// One queued `spawn`. The syscall path only copies the name and the
 /// argument (it runs IF=0); the main loop loads the ELF on the kernel
-/// page table, then wakes the caller. The child keeps running.
+/// page table. Without [`galexy_abi::SPAWN_WAIT`], the caller wakes once
+/// the child is running; with it, the caller wakes when the child exits.
 struct PendingSpawn {
     name: [u8; 64],
     len: u8,
     arg: [u8; ARG_MAX],
     arg_len: u16,
     query: bool,
+    /// Park until the child exits (not only until load finishes).
+    wait_exit: bool,
     /// Console the child inherits from the task that asked.
     tty: u8,
     /// Child inherits the waiter's galfs credentials.
@@ -1047,17 +1056,24 @@ static PENDING_SPAWN: Mutex<PendingSpawn> = Mutex::new(PendingSpawn {
     arg: [0; ARG_MAX],
     arg_len: 0,
     query: false,
+    wait_exit: false,
     tty: 0,
     fs: galfs::FsCred::none(),
     armed: false,
 });
 
-/// Queues `name` and parks the current task until the load finishes.
+/// Queues `name` and parks the current task.
 ///
 /// `arg` is handed to the child. `query` adds the query grant on top of
-/// the console. The caller must already be a running user task. Lock
-/// order: this takes `PENDING_SPAWN`, then `THREADS`.
-pub(crate) fn task_spawn(name: &str, arg: &[u8], query: bool) -> Result<(), SysError> {
+/// the console. `wait_exit` keeps the caller parked until the child
+/// exits. The caller must already be a running user task. Lock order:
+/// this takes `PENDING_SPAWN`, then `THREADS`.
+pub(crate) fn task_spawn(
+    name: &str,
+    arg: &[u8],
+    query: bool,
+    wait_exit: bool,
+) -> Result<(), SysError> {
     if name.len() > 64 || arg.len() > ARG_MAX {
         return Err(SysError::BadValue);
     }
@@ -1080,6 +1096,7 @@ pub(crate) fn task_spawn(name: &str, arg: &[u8], query: bool) -> Result<(), SysE
         pending.arg[..arg.len()].copy_from_slice(arg);
         pending.arg_len = arg.len() as u16;
         pending.query = query;
+        pending.wait_exit = wait_exit;
         pending.tty = thread.tty;
         pending.fs = galfs::FsCred {
             root: thread.fs_root,
@@ -1098,8 +1115,9 @@ pub(crate) fn task_spawn(name: &str, arg: &[u8], query: bool) -> Result<(), SysE
 /// Loads a queued program, if the shell has asked for one.
 ///
 /// Runs from the main loop: that context is the kernel page table, which
-/// `spawn_program` clones. The requesting task is already `WAITING`, and
-/// this wakes it once the child is running (or the name is gone).
+/// `spawn_program` clones. Without `wait_exit`, the requesting task is
+/// woken once the child is running (or the name is gone). With
+/// `wait_exit`, the wake happens when the child exits.
 pub fn drain_spawn() {
     let queued = interrupts::without_interrupts(|| {
         let mut pending = PENDING_SPAWN.lock();
@@ -1113,12 +1131,13 @@ pub fn drain_spawn() {
         let mut arg = [0u8; ARG_MAX];
         arg[..arg_len].copy_from_slice(&pending.arg[..arg_len]);
         let query = pending.query;
+        let wait_exit = pending.wait_exit;
         let tty = pending.tty;
         let fs = pending.fs;
         pending.armed = false;
-        Some((len, name, arg_len, arg, query, tty, fs))
+        Some((len, name, arg_len, arg, query, wait_exit, tty, fs))
     });
-    let Some((len, name_raw, arg_len, arg, query, tty, fs)) = queued else {
+    let Some((len, name_raw, arg_len, arg, query, wait_exit, tty, fs)) = queued else {
         return;
     };
     let name = core::str::from_utf8(&name_raw[..len]).unwrap_or("");
@@ -1127,14 +1146,20 @@ pub fn drain_spawn() {
     } else {
         Grants::console()
     };
-    if let Some(bytes) = ramdisk::find(name) {
+    let started = if let Some(bytes) = ramdisk::find(name) {
         loader::spawn_launched(name, bytes, grants, &arg[..arg_len], tty, fs);
+        true
+    } else {
         serial_println!("[sched] spawn '{}' missing at drain; waking waiter", name);
+        false
+    };
+    // Wake now unless the caller asked to wait for exit and the child started.
+    if !wait_exit || !started {
+        interrupts::without_interrupts(|| {
+            let threads = THREADS.lock();
+            wake_waiters(&threads, name);
+        });
     }
-    interrupts::without_interrupts(|| {
-        let threads = THREADS.lock();
-        wake_waiters(&threads, name);
-    });
 }
 
 /// Names of the twelve shells. F1 keeps `shell` so a faulted shell is
@@ -1350,7 +1375,7 @@ pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    interrupts::without_interrupts(|| {
+    let (n, galfs_wrote) = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
         let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
@@ -1359,19 +1384,26 @@ pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
             return Err(SysError::AccessDenied);
         }
         if src.is_empty() {
-            return Ok(0);
+            return Ok((0, false));
         }
         match file.body {
-            FileBody::Galfs(obj) => galfs::append(obj, src).ok_or(SysError::BadCap),
+            FileBody::Galfs(obj) => {
+                let n = galfs::append(obj, src).ok_or(SysError::BadCap)?;
+                Ok((n, n > 0))
+            }
             FileBody::Pipe { id, end } => {
                 if end != pipe::PipeEnd::Write {
                     return Err(SysError::AccessDenied);
                 }
-                pipe::write(id, src)
+                Ok((pipe::write(id, src)?, false))
             }
             FileBody::Archive(_) => Err(SysError::Unsupported),
         }
-    })
+    })?;
+    if galfs_wrote {
+        galfs::sync();
+    }
+    Ok(n)
 }
 
 /// Creates a galfs file or directory for the current user task.
@@ -1394,7 +1426,7 @@ pub(crate) fn task_create(name: &str, replace: bool) -> Result<Cap, SysError> {
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    interrupts::without_interrupts(|| {
+    let cap = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
         if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
@@ -1417,7 +1449,9 @@ pub(crate) fn task_create(name: &str, replace: bool) -> Result<Cap, SysError> {
                 Ok(Cap::new(galexy_abi::FILE_CAP_BASE + index as u64, rights))
             }
         }
-    })
+    })?;
+    galfs::sync();
+    Ok(cap)
 }
 
 /// Deletes a galfs file or an empty directory and frees its slot.
@@ -1463,7 +1497,9 @@ pub(crate) fn task_remove(name: &str) -> Result<(), SysError> {
             }
         }
         Ok(())
-    })
+    })?;
+    galfs::sync();
+    Ok(())
 }
 
 /// Drops one file capability belonging to the current task.
@@ -1682,7 +1718,7 @@ pub(crate) fn task_seek(cap: Cap, offset: i64, whence: u64) -> Result<u64, SysEr
 }
 
 fn admin_caller(fs_root: u16, _tokens: &[galfs::Token; galfs::TOKEN_SLOTS]) -> bool {
-    galfs::is_alex_root(fs_root)
+    galfs::is_admin_root(fs_root)
 }
 
 /// Writes the current actor name into `out`.
@@ -1724,7 +1760,7 @@ pub(crate) fn task_users(out: &mut [u8]) -> Result<usize, SysError> {
     Ok(n)
 }
 
-/// Creates an actor + Desktop. Caller must be alex (or hold ALL on alex).
+/// Creates an actor + Desktop. Caller must be admin.
 pub(crate) fn task_useradd(name: &str) -> Result<(), SysError> {
     let slot = current_slot();
     if slot == 0 {
@@ -1741,17 +1777,22 @@ pub(crate) fn task_useradd(name: &str) -> Result<(), SysError> {
         }
         let _ = galfs::add_user(name)?;
         Ok(())
-    })
+    })?;
+    galfs::sync();
+    Ok(())
 }
 
-/// Deletes an empty actor. Refuses alex and roots still in use.
+/// Deletes an empty actor. Refuses admin and roots still in use.
+///
+/// Also refuses when any task still holds an open galfs cap on that
+/// actor's objects. Tokens naming those objects are cleared on success.
 pub(crate) fn task_userdel(name: &str) -> Result<(), SysError> {
     let slot = current_slot();
     if slot == 0 {
         return Err(SysError::BadCap);
     }
     interrupts::without_interrupts(|| {
-        let threads = THREADS.lock();
+        let mut threads = THREADS.lock();
         let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
         if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
@@ -1769,13 +1810,35 @@ pub(crate) fn task_userdel(name: &str) -> Result<(), SysError> {
         if live {
             return Err(SysError::Unsupported);
         }
-        galfs::remove_user(name)
-    })
+        let mut objs = [galfs::NO_OBJECT; 8];
+        let n = galfs::collect_actor_objects(root, &mut objs);
+        let objs = &objs[..n];
+        for thread in threads.iter() {
+            for open in &thread.files {
+                let Some(file) = open else { continue };
+                if let FileBody::Galfs(obj) = file.body {
+                    if objs.contains(&obj) {
+                        return Err(SysError::Unsupported);
+                    }
+                }
+            }
+        }
+        galfs::remove_user(name)?;
+        for thread in threads.iter_mut() {
+            galfs::drop_tokens_on(&mut thread.fs_tokens, objs);
+        }
+        Ok(())
+    })?;
+    galfs::sync();
+    Ok(())
 }
 
-/// Switches the caller's actor root to `name`, keeping existing tokens and
-/// ensuring a full token on the target. Alex (or a holder of ALL on the
-/// target) may switch; after `su`, whoami follows the new root.
+/// Switches the caller's identity to actor `name`.
+///
+/// Replaces the token table with a single ALL token on the target root —
+/// previous rights are dropped so `su dan` cannot keep creating under
+/// admin's tree. Allowed when the caller is currently admin, was born
+/// admin and is returning to admin, or already holds ALL on the target.
 pub(crate) fn task_su(name: &str) -> Result<(), SysError> {
     let slot = current_slot();
     if slot == 0 {
@@ -1783,20 +1846,24 @@ pub(crate) fn task_su(name: &str) -> Result<(), SysError> {
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let (fs_root, fs_tokens) = {
+        let (fs_root, fs_tokens, born_admin) = {
             let caller = threads.get(slot - 1).ok_or(SysError::BadCap)?;
             if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
                 return Err(SysError::BadCap);
             }
-            (caller.fs_root, caller.fs_tokens)
+            (caller.fs_root, caller.fs_tokens, caller.born_admin)
         };
         let target = galfs::root_named(name)?;
-        let allowed = galfs::is_alex_root(fs_root) || galfs::holds_all(fs_root, &fs_tokens, target);
+        let to_admin = galfs::is_admin_root(target);
+        let allowed = galfs::is_admin_root(fs_root)
+            || (born_admin && to_admin)
+            || galfs::holds_all(fs_root, &fs_tokens, target);
         if !allowed {
             return Err(SysError::AccessDenied);
         }
         let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
         caller.fs_root = target;
+        caller.fs_tokens = [galfs::Token::empty(); galfs::TOKEN_SLOTS];
         galfs::push_token(&mut caller.fs_tokens, target, galfs::RIGHT_ALL)?;
         Ok(())
     })
@@ -1909,6 +1976,8 @@ pub unsafe fn syscall_handoff(
             t.state.store(STATE_EXITED, Ordering::Release);
             let name = core::str::from_utf8(&raw[..n]).unwrap_or("");
             serial_println!("[sched] task '{}' exited ({})", name, reason);
+            // SPAWN_WAIT parents park on this name until exit.
+            wake_waiters(&threads, name);
         }
 
         // Advance the rotation: first eligible slot strictly after the

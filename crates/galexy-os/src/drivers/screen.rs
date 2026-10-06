@@ -569,11 +569,10 @@ impl ScreenWriter {
         self.fg = saved;
     }
 
-    /// Fills one text line's pixels with a solid color, cursor to its start.
+    /// Fills one text line's pixels with a solid color. Does not move the
+    /// text cursor — status-bar redraws must not steal the typing position.
     fn fill_row(&mut self, row: usize) {
         self.clear_row_pixels(row);
-        self.char_x = 0;
-        self.char_y = row;
     }
 
     /// Paints all pixels of one text line's slot with the current fg color.
@@ -879,6 +878,10 @@ pub fn out_str_tty(tty: u8, s: &str) {
         for c in s.chars() {
             screen.write_char(c);
         }
+        // Persist this TTY's cursor even when focus never changed (the
+        // common shell path). Without this, a later focus switch reloads
+        // a stale grid cursor and the input line looks "lost".
+        screen.save_focus();
         screen.focus_on(home);
     });
 }

@@ -120,9 +120,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         "a non-empty directory is Unsupported"
     );
     assert_eq!(report.empty_ok, 1, "an empty directory must be removed");
+    // Boot keeps admin root + Desktop — 62 free of 64.
     assert_eq!(
-        report.fill_ok, 31,
-        "thirty-one files must fit after the frees"
+        report.fill_ok, 62,
+        "sixty-two files must fit after the frees"
     );
     assert_eq!(report.extra_ok, 0, "a full galfs table must fail");
     assert_eq!(
@@ -151,7 +152,8 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let dir = b"box/";
     let leaf = b"box/leaf";
     let dir_name = b"box";
-    let letters = b"abcdefghijklmnopqrstuvwxyz01234";
+    // 62 unique names — boot keeps admin root + Desktop (2 of 64).
+    let letters = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let extra = b"extra";
     let mut code: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
     let data_len = note.len()

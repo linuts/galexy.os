@@ -65,10 +65,11 @@ through a capability and starts a userland program when you type its name
       `reboot`) are reserved caps. Paths may use `owner@name` (`/dan@Desktop`)
 - [x] Shell with commands (`help`, `ls`, `cp`, `mv`, `grant`, `revoke`,
       `whoami`, `users`, `useradd`, `userdel`, `su`, `stats`, `threads`, `shutdown`,
-      `reboot`, ...) + live status bar ("quiet OS" demo) — typing a
-      ramdisk program name starts it and the prompt returns while it
-      runs; a shell fault loads the shell again; F1–F12 switch consoles;
-      the visible console is what COM1 mirrors
+      `reboot`, ...) + live status bar ("quiet OS" demo) — utilities wait
+      for exit before the prompt returns; bare program names keep running;
+      a shell fault loads the shell again; F1–F12 switch consoles;
+      the visible console is what COM1 mirrors. Boot actor is `admin`
+      (add others with `useradd`; `su` replaces tokens)
 - [x] Test harness: host unit tests + per-kernel QEMU integration tests
 - [x] Programs beyond blobs: `galexy-rt` runtime (`entry!`, syscall
       wrappers, user panic handler), kernel ELF loader (static ET_EXEC,
@@ -93,6 +94,9 @@ cargo run
 ```
 
 The kernel's COM1 output appears on the host terminal (`-serial stdio`).
+A persistent `galfs.img` (IDE slave) is created next to the runner on
+first launch so files and users survive reboot; override the path with
+`GALEXY_GALFS_IMG`. The boot image itself stays snapshotted.
 
 ### Run in QEMU (UEFI)
 
@@ -188,7 +192,7 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
    thing a scheduler ever has to swap.
 4. **Test what can be tested.** Host unit tests for the pure primitives
    (`galexy-core`, `galexy-abi`), plus one bootable kernel binary per
-   integration test — 44 QEMU boots (all at `-smp 2`) assert exit codes and
+   integration test — 46 QEMU boots (all at `-smp 2`) assert exit codes and
    serial output on every run.
 5. **Ownership beats locks for per-CPU state.** Rotation cursors, TSS.RSP0,
    syscall scratch and the LAPIC registers are touched by exactly one CPU

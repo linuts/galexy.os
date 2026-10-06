@@ -4,7 +4,8 @@
 mod common;
 
 use common::{
-    boot, boot_and_type, boot_and_type_uefi, boot_liveness, boot_uefi, image, QEMU_EXIT_SUCCESS,
+    boot, boot_and_type, boot_and_type_uefi, boot_liveness, boot_uefi, boot_with_galfs,
+    boot_with_galfs_recover, image, QEMU_EXIT_SUCCESS,
 };
 use std::time::Duration;
 
@@ -452,6 +453,52 @@ fn galfs_test_passes() {
 }
 
 #[test]
+fn galfs_disk_persists_across_reboot() {
+    let (code1, serial1, code2, serial2) = boot_with_galfs(&image("test-galfs-disk"));
+    assert_eq!(
+        code1,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-galfs-disk write boot should exit with Success; serial:\n{serial1}"
+    );
+    assert!(
+        serial1.contains("[test-galfs-disk] wrote"),
+        "write marker missing; serial:\n{serial1}"
+    );
+    assert_eq!(
+        code2,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-galfs-disk verify boot should exit with Success; serial:\n{serial2}"
+    );
+    assert!(
+        serial2.contains("[test-galfs-disk] passed"),
+        "verify marker missing; serial:\n{serial2}"
+    );
+}
+
+#[test]
+fn galfs_disk_recovers_from_corrupt_slot() {
+    let (code1, serial1, code2, serial2) = boot_with_galfs_recover(&image("test-galfs-disk"));
+    assert_eq!(
+        code1,
+        Some(QEMU_EXIT_SUCCESS),
+        "write boot should succeed; serial:\n{serial1}"
+    );
+    assert!(
+        serial1.contains("[test-galfs-disk] wrote"),
+        "write marker missing; serial:\n{serial1}"
+    );
+    assert_eq!(
+        code2,
+        Some(QEMU_EXIT_SUCCESS),
+        "recover boot should succeed from older slot; serial:\n{serial2}"
+    );
+    assert!(
+        serial2.contains("[test-galfs-disk] passed"),
+        "recover marker missing; serial:\n{serial2}"
+    );
+}
+
+#[test]
 fn pipe_test_passes() {
     let (code, serial) = boot(&image("test-pipe"));
     assert_eq!(
@@ -630,7 +677,7 @@ const SUPERVISOR_KEYS: &[(&str, &str)] = &[
     ("ret", "killing the task"),
     // `x` is echoed by the new shell. Sync on the prompt: a bare `x` also
     // matches the `0x` in the loader's log line.
-    ("x", "galexy> "),
+    ("x", "admin@galexy> "),
     ("y", "beat\n"),
 ];
 
@@ -680,9 +727,9 @@ const QUERY_KEYS: &[(&str, &str)] = &[
 ];
 
 /// `cat`, redirection, `mkdir` / `cd` / `ls`. Enter syncs on text that
-/// appears only after the command runs. A redirected `echo`, `mkdir`, and
-/// a successful `rm` print nothing of their own; the prompt is back as
-/// soon as the program is loaded, so those wait for the task's exit line.
+/// appears only after the command runs. Utilities use `SPAWN_WAIT`, so a
+/// redirected `echo`, `mkdir`, and a successful `rm` finish before the
+/// prompt returns; syncs still use the exit line or command output.
 const UTIL_KEYS: &[(&str, &str)] = &[
     ("c", "c"),
     ("a", "a"),
@@ -774,7 +821,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("b", "b"),
     ("o", "o"),
     ("x", "x"),
-    ("ret", "galexy:/box> "),
+    ("ret", "admin@galexy:/box> "),
     ("e", "e"),
     ("c", "c"),
     ("h", "h"),
@@ -810,7 +857,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("spc", " "),
     ("dot", "."),
     ("dot", "."),
-    ("ret", "galexy> "),
+    ("ret", "admin@galexy> "),
     ("l", "l"),
     ("s", "s"),
     ("ret", "box/"),
@@ -875,7 +922,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("b", "b"),
     ("o", "o"),
     ("x", "x"),
-    ("ret", "galexy:/box> "),
+    ("ret", "admin@galexy:/box> "),
     ("r", "r"),
     ("m", "m"),
     ("spc", " "),
@@ -889,7 +936,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("spc", " "),
     ("dot", "."),
     ("dot", "."),
-    ("ret", "galexy> "),
+    ("ret", "admin@galexy> "),
     ("r", "r"),
     ("m", "m"),
     ("spc", " "),
@@ -960,7 +1007,7 @@ fn shell_util_typing_e2e() {
         "typed `echo >>` did not append; serial:\n{serial}"
     );
     assert!(
-        serial.contains("galexy:/box> "),
+        serial.contains("admin@galexy:/box> "),
         "typed `cd box` did not enter the directory; serial:\n{serial}"
     );
     assert!(
@@ -1019,7 +1066,7 @@ fn shell_run_hello_typing_e2e() {
         .find("[pf] ring-3 task fault")
         .expect("typed `crash` never faulted the shell");
     let after_fault = &serial[fault_at..];
-    let prompt_at = after_fault.find("galexy> ").unwrap_or_else(|| {
+    let prompt_at = after_fault.find("admin@galexy> ").unwrap_or_else(|| {
         panic!("a new shell prompt never appeared after the fault; serial:\n{serial}")
     });
     assert!(

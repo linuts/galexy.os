@@ -12,6 +12,9 @@
 mod bitmap;
 #[cfg(test)]
 mod bitmap_test;
+mod crc32;
+#[cfg(test)]
+mod crc32_test;
 mod ring;
 #[cfg(test)]
 mod ring_test;
@@ -20,5 +23,6 @@ mod tar;
 mod tar_test;
 
 pub use bitmap::Bitmap;
+pub use crc32::crc32;
 pub use ring::Ring;
 pub use tar::TarCursor;

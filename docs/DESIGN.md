@@ -18,7 +18,7 @@ crates/
 │       ├── bin/         # test kernels: one bin per QEMU integration test
 │       ├── shell.rs     # the "shell": consumes driver input, produces screen output
 │       ├── arch/        # THE PORT WALL: x86_64 hardware code lives only here
-│       ├── drivers/     # device drivers (screen, serial, keyboard, ...)
+│       ├── drivers/     # device drivers (screen, serial, keyboard, ata, ...)
 │       └── sched/       # scheduler + syscall dispatch table (policy layer)
 ├── galexy-abi/          # THE SYSCALL ABI: numbers, capability model, error
 │                        #   codes. The ONLY kernel<->userspace shared surface.
@@ -171,6 +171,23 @@ cannot fit the next character's UTF-8 puts that character back
 pub fn add_scancode(scancode: u8)   // called from the IRQ handler only
 pub fn pop_key() -> Option<char>    // drains TTY 0
 pub fn pop_key_tty(tty: u8) -> Option<char>
+```
+
+### ata — "the galfs disk" (`drivers/`)
+
+PIO LBA28 on the primary IDE slave (drive index 1). The boot image is
+the master and is never touched. `present()` probes once via IDENTIFY;
+when the slave is absent every read/write returns `Unsupported` and
+galfs stays RAM-only. `flush()` issues FLUSH CACHE after a committed
+GALF slot write. The runner attaches a second raw image at
+`if=ide,index=1` without a snapshot (`cargo run` and the persistence
+tests) so writes survive across QEMU processes.
+
+```rust
+pub fn present() -> bool
+pub fn read_sectors(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError>
+pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError>
+pub fn flush() -> Result<(), SysError>
 ```
 
 The handler never takes the screen lock. Locks are tiny and never nested
@@ -490,8 +507,8 @@ from `FILE_CAP_BASE` (3), authoritative grant intersected with the
 handle snapshot. `read` copies the next bytes of an open file
 (short-read at 1 KiB, 0 at EOF);
 `close` drops the slot. `create(name, len, flags)` (syscall 9) puts a
-path in a fixed galfs table (32 objects, actors with one root each,
-64-byte component names, 256-byte file buffers, no heap on the syscall
+path in a fixed galfs table (64 objects, 16 actors with one root each,
+64-byte component names, 512-byte file buffers, no heap on the syscall
 path). A path ending in `/` is a directory and returns 0. A file returns
 READ|WRITE. `RDX == 1` empties an existing file; any other value creates
 only when the name is new. Uniqueness is the parent plus the component.
@@ -521,9 +538,8 @@ missing path or task is `NotFound`. A full token table on the target
 is `NoResource`. Same-object grants merge rights. The shell's
 `grant lr <path> <task>` uses it. `revoke` (syscall 12) uses the same
 registers and clears those rights from the target's token that names
-the object exactly; a zeroed slot is freed. Boot also creates actor
-`dan` with an empty Desktop; the F2 shell (`shell2`) runs as dan so
-sharing works from the console. `pipe(addr)` (syscall 13) writes a
+the object exactly; a zeroed slot is freed. Cross-actor sharing uses
+`useradd` plus `grant` from the console. `pipe(addr)` (syscall 13) writes a
 READ cap and a WRITE cap into a 16-byte user buffer for an anonymous
 pipe (8 pipes × 256-byte rings). `give(cap, task, len)` (syscall 14)
 moves an open file or pipe end to another live user task and returns
@@ -533,11 +549,24 @@ sets the read cursor on an archive or galfs open (`SEEK_SET` /
 ramdisk programs (mv copies then removes). `user(addr, len, op)`
 (syscall 16) manages actors: `USER_WHOAMI` / `USER_USERS` write names
 into a buffer; `USER_ADD` creates an actor plus empty Desktop;
-`USER_DEL` removes an empty actor (never alex, never one a live task
-still uses); `USER_SU` switches the caller's root to that actor while
-keeping tokens and ensuring ALL on the target. Add/del require the
-caller's root to be alex. The shell exposes `whoami`, `users`,
-`useradd`, `userdel`, and `su`.
+`USER_DEL` removes an empty actor (never `admin`, never one a live task
+still uses); `USER_SU` replaces the caller's tokens with ALL on the
+target (so a switched seat cannot keep writing the previous actor's
+tree). Add/del require the caller's root to be `admin`. A seat born as
+admin may `su admin` to return. The shell exposes `whoami`, `users`,
+`useradd`, `userdel`, and `su` (and resets cwd on `su`). Boot formats
+one immortal actor, `admin`, with Desktop. When the primary IDE slave
+is present, `galfs::init` loads the newest valid GALF v3 slot (dual
+80-sector images with generation + CRC-32 + structural checks) or
+formats that admin tree; create/remove/append/useradd/userdel sync to
+the inactive slot and flush the cache. `userdel` also refuses open caps
+on that actor and clears tokens that named its objects. Without a slave
+the table stays RAM-only. The table holds 16 actors, 64 objects, and
+512-byte files. `cargo run` attaches a persistent `galfs.img`.
+`bin/test-galfs-disk` proves a file survives two QEMU boots and that a
+corrupt newest slot still recovers from the older copy. Shell utilities
+use `SPAWN_WAIT` so the prompt returns after `ls` / `mkdir` exit.
+Auth is console-trust: the seat is the credential (no password database).
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing
@@ -551,20 +580,21 @@ programs: the shell composes the path and `spawn`s them. `ls` and `rm`
 also receive the query grant, so they can read the files snapshot.
 `cd` stays in the shell, because that path lives there. A program name
 on its own is a launch: `spawn` on the loader cap (EXEC) parks the
-caller (`STATE_WAITING`) only until the main loop has loaded the ELF.
-The prompt then returns and the child keeps running. `r8`/`r9` are an
+caller (`STATE_WAITING`) until the main loop has loaded the ELF
+(without `SPAWN_WAIT`) or until the child exits (with `SPAWN_WAIT`).
+Shell utilities set `SPAWN_WAIT` so the prompt returns after they
+finish; bare program names (`hello`, `linger`) do not. `r8`/`r9` are an
 optional argument, at most 256 bytes, copied onto the child's stack
-(`rdi` is the address, `rsi` the length). `r10` bit 0
-(`SPAWN_GRANT_QUERY`) adds the query grant. Any other bit is
-`BadValue`. The child always receives the console, and it writes the
-console of the task that spawned it. Keyboard, the
-loader, and power stay with the shell. Boot starts one shell on each
-F-key, pinned to the BSP with the launcher grants and a full token on
-actor `alex`'s root. Spawn copies those tokens to the child. F1's shell
-is named `shell`; the others are `shell2` through `shell12`. F1–F12
-select which cell grid is painted. The keyboard interrupt only records
-that index; the main loop paints it. Keys go to the visible console.
-COM1 mirrors only that console.
+(`rdi` is the address, `rsi` the length). `r10` bits are
+`SPAWN_GRANT_QUERY` and/or `SPAWN_WAIT`. Any other bit is `BadValue`.
+The child always receives the console, and it writes the console of the
+task that spawned it. Keyboard, the loader, and power stay with the
+shell. Boot starts one shell on each F-key, pinned to the BSP with the
+launcher grants and a full token on actor `admin`'s root. Spawn copies
+those tokens to the child. F1's shell is named `shell`; the others are
+`shell2` through `shell12`. F1–F12 select which cell grid is painted.
+The keyboard interrupt only records that index; the main loop paints
+it. Keys go to the visible console. COM1 mirrors only that console.
 Presenting a reserved index is not enough; the task must have been
 granted it. A ramdisk entry that is not an ELF is `Unsupported`. The
 main loop, which is on the kernel page
@@ -572,10 +602,11 @@ table, loads the ELF. `FreshL4` copies the kernel root cached at init,
 so the new table does not inherit another task's user mappings. The
 load stays on the main loop because the loader allocates and a syscall
 runs with interrupts off.
-The waiter is marked runnable when that load finishes. The child's exit
-does not wake anyone. If one of those shells is not running or waiting,
-the main loop loads that shell again with the launcher grants and
-alex's root token. Other tasks keep running. The new shell starts at `/`. `power` on the power cap (POWER right) shuts the
+Without `SPAWN_WAIT`, the waiter is marked runnable when that load
+finishes. With it, the child's exit wakes the waiter. If one of those
+shells is not running or waiting, the main loop loads that shell again
+with the launcher grants and admin's root token. Other tasks keep
+running. The new shell starts at `/`. `power` on the power cap (POWER right) shuts the
 machine down (`op` 0, ACPI S5) or resets it (`op` 1). It does not
 return when the platform honors it; a return is Unsupported and the
 shell says the machine stayed up. Console `write` accepts backspace

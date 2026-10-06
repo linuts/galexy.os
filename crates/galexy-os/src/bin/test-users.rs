@@ -28,9 +28,9 @@ struct Report {
     who2_n: u64,
     who2: [u8; 16],
     add_as_eve_err: u64,
-    su_alex_ok: u64,
+    su_admin_ok: u64,
     del_ok: u64,
-    del_alex_err: u64,
+    del_admin_err: u64,
 }
 
 fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
@@ -75,17 +75,16 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         }
     };
 
-    assert_eq!(&report.who[..report.who_n as usize], b"alex");
+    assert_eq!(&report.who[..report.who_n as usize], b"admin");
     let users = &report.users[..report.users_n as usize];
-    assert!(users.windows(5).any(|w| w == b"alex\n"));
-    assert!(users.windows(4).any(|w| w == b"dan\n"));
+    assert!(users.windows(6).any(|w| w == b"admin\n"));
     assert_eq!(report.add_ok, 1);
     assert_eq!(report.su_ok, 1);
     assert_eq!(&report.who2[..report.who2_n as usize], b"eve");
     assert_eq!(report.add_as_eve_err, SysError::AccessDenied as u64);
-    assert_eq!(report.su_alex_ok, 1);
+    assert_eq!(report.su_admin_ok, 1);
     assert_eq!(report.del_ok, 1);
-    assert_eq!(report.del_alex_err, SysError::Unsupported as u64);
+    assert_eq!(report.del_admin_err, SysError::Unsupported as u64);
 
     loop {
         x86_64::instructions::hlt();
@@ -102,64 +101,51 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
 fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let eve = b"eve";
-    let alex = b"alex";
+    let admin = b"admin";
     let bob = b"bob";
     let mut code = alloc::vec::Vec::new();
-    let data_len = eve.len() + alex.len() + bob.len();
+    let data_len = eve.len() + admin.len() + bob.len();
     code.push(0xEB);
     code.push(data_len as u8);
     let eve_addr = code_base + 2;
     code.extend_from_slice(eve);
-    let alex_addr = eve_addr + eve.len() as u64;
-    code.extend_from_slice(alex);
-    let bob_addr = alex_addr + alex.len() as u64;
+    let admin_addr = eve_addr + eve.len() as u64;
+    code.extend_from_slice(admin);
+    let bob_addr = admin_addr + admin.len() as u64;
     code.extend_from_slice(bob);
 
     mov_r64_imm(&mut code, 15, scratch);
 
-    // whoami → scratch+0x10 (who), len at 0x08
     call_user(&mut code, scratch + 0x10, 16, USER_WHOAMI);
-    store(&mut code, 0, 0x08); // who_n = rax
+    store(&mut code, 0, 0x08);
 
-    // users → scratch+0x28
     call_user(&mut code, scratch + 0x28, 64, USER_USERS);
-    store(&mut code, 0, 0x20); // users_n
+    store(&mut code, 0, 0x20);
 
-    // useradd eve
     call_user_name(&mut code, eve_addr, eve.len() as u64, USER_ADD);
-    store(&mut code, 2, 0x68); // add_ok
+    store(&mut code, 2, 0x68);
 
-    // su eve
     call_user_name(&mut code, eve_addr, eve.len() as u64, USER_SU);
-    store(&mut code, 2, 0x70); // su_ok
+    store(&mut code, 2, 0x70);
 
-    // whoami → who2 at 0x80
     call_user(&mut code, scratch + 0x80, 16, USER_WHOAMI);
-    store(&mut code, 0, 0x78); // who2_n
+    store(&mut code, 0, 0x78);
 
-    // useradd bob as eve → AccessDenied; store err in rax when !ok
     call_user_name(&mut code, bob_addr, bob.len() as u64, USER_ADD);
-    // if ok (rdx), store 0; else store rax. Use: mov rcx,rax; test rdx; cmovz eax uses...
-    // simpler: store rax always as err code when failed; if ok rax is 0.
-    // On failure rdx=0 rax=err. On success rdx=1 rax=0.
-    // We want add_as_eve_err = err code. If somehow ok, 0.
-    code.extend_from_slice(&[0x48, 0x85, 0xD2]); // test rdx,rdx
-    code.extend_from_slice(&[0x48, 0xC7, 0xC1, 0, 0, 0, 0]); // mov rcx, 0
-    code.extend_from_slice(&[0x48, 0x0F, 0x44, 0xC8]); // cmovz rcx, rax (if ZF, rcx=rax)
-                                                       // store rcx to 0x88 — use rax: mov rax,rcx; store
+    code.extend_from_slice(&[0x48, 0x85, 0xD2]);
+    code.extend_from_slice(&[0x48, 0xC7, 0xC1, 0, 0, 0, 0]);
+    code.extend_from_slice(&[0x48, 0x0F, 0x44, 0xC8]);
     code.extend_from_slice(&[0x48, 0x89, 0xC8]);
     store(&mut code, 0, 0x90);
 
-    // su alex
-    call_user_name(&mut code, alex_addr, alex.len() as u64, USER_SU);
+    // born_admin may return to admin
+    call_user_name(&mut code, admin_addr, admin.len() as u64, USER_SU);
     store(&mut code, 2, 0x98);
 
-    // userdel eve
     call_user_name(&mut code, eve_addr, eve.len() as u64, USER_DEL);
     store(&mut code, 2, 0xa0);
 
-    // userdel alex → Unsupported
-    call_user_name(&mut code, alex_addr, alex.len() as u64, USER_DEL);
+    call_user_name(&mut code, admin_addr, admin.len() as u64, USER_DEL);
     code.extend_from_slice(&[0x48, 0x85, 0xD2]);
     code.extend_from_slice(&[0x48, 0xC7, 0xC1, 0, 0, 0, 0]);
     code.extend_from_slice(&[0x48, 0x0F, 0x44, 0xC8]);

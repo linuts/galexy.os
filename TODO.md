@@ -937,10 +937,57 @@ Actors are accounts. Suite: 44 QEMU boots.
 
 - [x] **Syscall `user`=16**: ops whoami / users / add / del / su
 - [x] Shell: `whoami`, `users`, `useradd`, `userdel`, `su`
-- [x] Add/del require alex's root; su needs alex or ALL on the target;
-      tokens are kept across su so alex can switch back
+- [x] Add/del require admin's root; su needs admin / born-admin return /
+      ALL on the target (Milestone 40 drops kept tokens across su)
 - [x] `bin/test-users` covers the happy path and access checks
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
+## Milestone 38 — disk-backed galfs ✅
+
+The table lives on the primary IDE slave when QEMU attaches one.
+Suite: 45 QEMU boots.
+
+- [x] **ATA PIO** (`drivers/ata.rs`): LBA28 read/write on primary slave
+      (index=1). Absent slave → galfs stays RAM-only (existing suite)
+- [x] **GALF image**: 24 sectors at LBA 0; load-or-format in `galfs::init`;
+      sync after create/remove/append/useradd/userdel
+- [x] `bin/test-galfs-disk` + runner `boot_with_galfs`: write on boot 1,
+      verify on boot 2 with the same data image (boot drive still snapshotted)
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
+## Milestone 39 — hardened galfs (crash-safe + capacity) ✅
+
+Make the on-disk table production-shaped for a single-seat console.
+Suite: 46 QEMU boots.
+
+- [x] **GALF v2 dual slots**: generation + IEEE CRC-32; sync writes the
+      inactive slot then `FLUSH CACHE`. Load picks the newest valid slot;
+      structural validation rejects corrupt-but-checksum-ok images
+- [x] **Capacity**: 16 actors, 64 objects, 512-byte files; alex and dan
+      each get Desktop at format
+- [x] **userdel**: refuses open caps on the actor's objects; drops tokens
+      that named them
+- [x] **Interactive persistence**: `cargo run` attaches `galfs.img` as
+      IDE slave (boot drive still snapshotted)
+- [x] `galfs_disk_recovers_from_corrupt_slot` host-corrupts the newest
+      slot between boots
+- [x] `galexy-core::crc32` host-tested
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
+## Milestone 40 — shell and identity cleanup ✅
+
+Default seat is `admin` only. Suite: 46 QEMU boots.
+
+- [x] **Boot actor `admin`**: format creates admin + Desktop; alex/dan
+      removed. GALF disk version 3. All shells start as admin
+- [x] **`su` isolation**: replace tokens with ALL on the target; born-admin
+      seats may return with `su admin`; shell resets cwd on su
+- [x] **`SPAWN_WAIT`**: shell utilities park until the child exits (fixes
+      `ls` needing an extra Enter). Bare launches (`hello`, `linger`) do not
+- [x] **TTY cursor**: console writes save the focused TTY cursor so the
+      input line stays visible after status-bar / focus churn
+- [x] **Prompt**: `user@galexy>` / `user@galexy:/path> ` (whoami each draw)
+- [x] Tests/docs: `test-users`, `test-galfs`, `test-rm`, `test-galfs-disk`
 
 ## Known limitations / follow-ups
 
@@ -972,7 +1019,8 @@ Actors are accounts. Suite: 44 QEMU boots.
 - [ ] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
       ESC). A blinking cursor is still future screen work
-- [ ] There is no glob or disk-backed store yet
+- [x] ~~There is no glob or disk-backed store yet~~ — disk-backed store
+      CLOSED by Milestone 38; glob still future
 - [x] ~~`run` leaks the task name, and freed slots panic the table at
       64~~ — CLOSED by Milestone 26 (name copied into the slot; a
       `Freed` record is reused once no CPU is current on it)

@@ -189,19 +189,30 @@ first real program landed in Milestone 13:
 - galfs tokens ✅ (Milestone 34: each actor has one root. `/Desktop` is
   yours; `/dan@Desktop` is dan's. A token, not the path, grants rights.
   The shell and programs inherit the parent's tokens. Boot creates
-  actor `alex`. `bin/test-galfs` proves AccessDenied without a token
+  actor `admin`. `bin/test-galfs` proves AccessDenied without a token
   and a listing once LIST is installed).
 - grant syscall ✅ (Milestone 35: `grant`=11 installs a token on a live
   user task. The caller must already hold the rights. The shell's
-  `grant lr <path> <task>` uses it. `bin/test-galfs` has dan grant
-  `/Desktop` to a reader that then opens `dan@Desktop/secret`).
+  `grant lr <path> <task>` uses it. `bin/test-galfs` has a second actor
+  grant `/Desktop` to a reader that then opens `dan@Desktop/secret`).
 - Revoke, pipes, seek, mv/cp ✅ (Milestone 36: `revoke`=12 drops token
-  rights; boot creates actor `dan` with Desktop and F2's shell is dan;
-  `pipe`=13 + `give`=14 move pipe ends between tasks; `seek`=15 sets the
-  read cursor; `cp`/`mv` are ramdisk utils. Suite: 43 QEMU boots).
+  rights; `pipe`=13 + `give`=14 move pipe ends between tasks; `seek`=15
+  sets the read cursor; `cp`/`mv` are ramdisk utils. Suite: 43 QEMU boots).
 - User management ✅ (Milestone 37: `user`=16 with whoami/users/add/del/su.
-  Alex can add and delete empty actors; `su` switches the shell's root
-  while keeping tokens. `bin/test-users`. Suite: 44 QEMU boots).
+  Admin can add and delete empty actors; `su` replaces tokens with ALL
+  on the target. `bin/test-users`. Suite: 44 QEMU boots).
+- Disk-backed galfs ✅ (Milestone 38: ATA PIO on the primary IDE slave;
+  GALF image at LBA 0 load-or-format at boot; sync after mutate.
+  `bin/test-galfs-disk` writes then verifies across two QEMU boots
+  sharing one data image. Suite: 45 QEMU boots).
+- Hardened galfs ✅ (Milestone 39: dual-slot GALF with CRC-32 and
+  generation; ATA FLUSH CACHE; 16 actors / 64 objects / 512-byte files;
+  admin Desktop at format; userdel clears tokens and refuses open caps;
+  `cargo run` attaches persistent `galfs.img`; recover-from-corrupt-slot
+  test. Suite: 46 QEMU boots).
+- Shell/identity cleanup ✅ (Milestone 40: default actor is `admin` only;
+  `su` drops prior tokens; `SPAWN_WAIT` so utilities finish before the
+  prompt; TTY cursor saved after console writes. Suite: 46 QEMU boots).
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.
