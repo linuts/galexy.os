@@ -46,18 +46,16 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let alex = galfs::alex_root();
     assert_ne!(alex, galfs::NO_OBJECT, "alex must exist");
 
-    if let Some(desktop) = galfs::find_under(alex, "Desktop") {
-        if let Some(file) = galfs::find_under(desktop, "persist") {
-            let mut buf = [0u8; 32];
-            let n = galfs::read_file_bytes(file, &mut buf).expect("read persist");
-            assert_eq!(&buf[..n], MARKER, "persist file must hold {MARKER:?}");
-            println!("[test-galfs-disk] loaded persist across reboot");
-            serial_println!("[test-galfs-disk] passed");
-            exit_qemu(QemuExitCode::Success);
-        }
+    let desktop = galfs::find_under(alex, "Desktop").expect("alex Desktop");
+    if let Some(file) = galfs::find_under(desktop, "persist") {
+        let mut buf = [0u8; 32];
+        let n = galfs::read_file_bytes(file, &mut buf).expect("read persist");
+        assert_eq!(&buf[..n], MARKER, "persist file must hold {MARKER:?}");
+        println!("[test-galfs-disk] loaded persist across reboot");
+        serial_println!("[test-galfs-disk] passed");
+        exit_qemu(QemuExitCode::Success);
     }
 
-    let desktop = galfs::mkdir_under_root(alex, "Desktop").expect("Desktop");
     let file = galfs::create_file_under(desktop, "persist").expect("persist");
     let n = galfs::append_file(file, MARKER).expect("append");
     assert_eq!(n, MARKER.len());

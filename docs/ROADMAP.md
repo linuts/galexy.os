@@ -206,6 +206,11 @@ first real program landed in Milestone 13:
   GALF image at LBA 0 load-or-format at boot; sync after mutate.
   `bin/test-galfs-disk` writes then verifies across two QEMU boots
   sharing one data image. Suite: 45 QEMU boots).
+- Hardened galfs ✅ (Milestone 39: dual-slot GALF v2 with CRC-32 and
+  generation; ATA FLUSH CACHE; 16 actors / 64 objects / 512-byte files;
+  alex Desktop at format; userdel clears tokens and refuses open caps;
+  `cargo run` attaches persistent `galfs.img`; recover-from-corrupt-slot
+  test. Suite: 46 QEMU boots).
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.

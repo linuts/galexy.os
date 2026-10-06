@@ -178,14 +178,16 @@ pub fn pop_key_tty(tty: u8) -> Option<char>
 PIO LBA28 on the primary IDE slave (drive index 1). The boot image is
 the master and is never touched. `present()` probes once via IDENTIFY;
 when the slave is absent every read/write returns `Unsupported` and
-galfs stays RAM-only. The runner's persistence test attaches a second
-raw image at `if=ide,index=1` without a snapshot so writes survive a
-second QEMU process.
+galfs stays RAM-only. `flush()` issues FLUSH CACHE after a committed
+GALF slot write. The runner attaches a second raw image at
+`if=ide,index=1` without a snapshot (`cargo run` and the persistence
+tests) so writes survive across QEMU processes.
 
 ```rust
 pub fn present() -> bool
 pub fn read_sectors(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError>
 pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError>
+pub fn flush() -> Result<(), SysError>
 ```
 
 The handler never takes the screen lock. Locks are tiny and never nested
@@ -553,10 +555,16 @@ still uses); `USER_SU` switches the caller's root to that actor while
 keeping tokens and ensuring ALL on the target. Add/del require the
 caller's root to be alex. The shell exposes `whoami`, `users`,
 `useradd`, `userdel`, and `su`. When the primary IDE slave is present,
-`galfs::init` loads a GALF image from LBA 0 (or formats alex+dan and
-writes it); create/remove/append/useradd/userdel sync the table back.
-Without a slave the table stays RAM-only. `bin/test-galfs-disk` proves
-a file survives two QEMU boots sharing one data image.
+`galfs::init` loads the newest valid GALF v2 slot (dual 80-sector
+images with generation + CRC-32 + structural checks) or formats
+alex+dan each with Desktop; create/remove/append/useradd/userdel sync
+to the inactive slot and flush the cache. `userdel` also refuses open
+caps on that actor and clears tokens that named its objects. Without a
+slave the table stays RAM-only. The table holds 16 actors, 64 objects,
+and 512-byte files. `cargo run` attaches a persistent `galfs.img`.
+`bin/test-galfs-disk` proves a file survives two QEMU boots and that a
+corrupt newest slot still recovers from the older copy.
+Auth is console-trust: the seat is the credential (no password database).
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing

@@ -1758,13 +1758,16 @@ pub(crate) fn task_useradd(name: &str) -> Result<(), SysError> {
 }
 
 /// Deletes an empty actor. Refuses alex and roots still in use.
+///
+/// Also refuses when any task still holds an open galfs cap on that
+/// actor's objects. Tokens naming those objects are cleared on success.
 pub(crate) fn task_userdel(name: &str) -> Result<(), SysError> {
     let slot = current_slot();
     if slot == 0 {
         return Err(SysError::BadCap);
     }
     interrupts::without_interrupts(|| {
-        let threads = THREADS.lock();
+        let mut threads = THREADS.lock();
         let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
         if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
@@ -1782,7 +1785,24 @@ pub(crate) fn task_userdel(name: &str) -> Result<(), SysError> {
         if live {
             return Err(SysError::Unsupported);
         }
-        galfs::remove_user(name)
+        let mut objs = [galfs::NO_OBJECT; 8];
+        let n = galfs::collect_actor_objects(root, &mut objs);
+        let objs = &objs[..n];
+        for thread in threads.iter() {
+            for open in &thread.files {
+                let Some(file) = open else { continue };
+                if let FileBody::Galfs(obj) = file.body {
+                    if objs.contains(&obj) {
+                        return Err(SysError::Unsupported);
+                    }
+                }
+            }
+        }
+        galfs::remove_user(name)?;
+        for thread in threads.iter_mut() {
+            galfs::drop_tokens_on(&mut thread.fs_tokens, objs);
+        }
+        Ok(())
     })?;
     galfs::sync();
     Ok(())

@@ -29,6 +29,7 @@ const SR_BSY: u8 = 1 << 7;
 const CMD_READ: u8 = 0x20;
 const CMD_WRITE: u8 = 0x30;
 const CMD_IDENTIFY: u8 = 0xEC;
+const CMD_FLUSH: u8 = 0xE7;
 
 /// Bytes in one ATA sector.
 pub const SECTOR: usize = 512;
@@ -111,6 +112,22 @@ pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
     }
     let _g = LOCK.lock();
     pio_write(lba, src)
+}
+
+/// Issues FLUSH CACHE so prior writes reach stable media before return.
+pub fn flush() -> Result<(), SysError> {
+    if !present() {
+        return Err(SysError::Unsupported);
+    }
+    let _g = LOCK.lock();
+    select_drive(0);
+    outb(COMMAND, CMD_FLUSH);
+    wait_not_bsy()?;
+    let status = inb(STATUS);
+    if status & (SR_ERR | SR_DF) != 0 {
+        return Err(SysError::Unsupported);
+    }
+    Ok(())
 }
 
 fn select_drive(lba: u32) {

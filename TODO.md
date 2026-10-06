@@ -955,6 +955,25 @@ Suite: 45 QEMU boots.
       verify on boot 2 with the same data image (boot drive still snapshotted)
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 39 — hardened galfs (crash-safe + capacity) ✅
+
+Make the on-disk table production-shaped for a single-seat console.
+Suite: 46 QEMU boots.
+
+- [x] **GALF v2 dual slots**: generation + IEEE CRC-32; sync writes the
+      inactive slot then `FLUSH CACHE`. Load picks the newest valid slot;
+      structural validation rejects corrupt-but-checksum-ok images
+- [x] **Capacity**: 16 actors, 64 objects, 512-byte files; alex and dan
+      each get Desktop at format
+- [x] **userdel**: refuses open caps on the actor's objects; drops tokens
+      that named them
+- [x] **Interactive persistence**: `cargo run` attaches `galfs.img` as
+      IDE slave (boot drive still snapshotted)
+- [x] `galfs_disk_recovers_from_corrupt_slot` host-corrupts the newest
+      slot between boots
+- [x] `galexy-core::crc32` host-tested
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17

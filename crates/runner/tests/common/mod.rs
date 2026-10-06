@@ -117,6 +117,20 @@ fn qemu_command_with_galfs(img_path: &str, galfs_path: &PathBuf, serial_path: &P
 /// same data disk so the guest can prove the table survived. Returns
 /// `(first_exit, first_serial, second_exit, second_serial)`.
 pub fn boot_with_galfs(image: &Image) -> (Option<i32>, String, Option<i32>, String) {
+    boot_with_galfs_inner(image, false)
+}
+
+/// Like [`boot_with_galfs`], but after the write boot the host destroys the
+/// newest GALF slot's magic so the verify boot must recover from the older
+/// dual-slot copy.
+pub fn boot_with_galfs_recover(image: &Image) -> (Option<i32>, String, Option<i32>, String) {
+    boot_with_galfs_inner(image, true)
+}
+
+fn boot_with_galfs_inner(
+    image: &Image,
+    corrupt_newest: bool,
+) -> (Option<i32>, String, Option<i32>, String) {
     let galfs_path = std::env::temp_dir().join(format!(
         "galexy-galfs-{}-{}.img",
         image.name.replace('-', "_"),
@@ -125,17 +139,46 @@ pub fn boot_with_galfs(image: &Image) -> (Option<i32>, String, Option<i32>, Stri
             .expect("clock")
             .as_nanos()
     ));
-    // 1 MiB zeroed IDE slave — plenty for the 24-sector GALF image.
+    // 1 MiB zeroed IDE slave — covers both 80-sector GALF slots.
     std::fs::write(&galfs_path, vec![0u8; 1024 * 1024]).expect("create galfs.img");
 
     let (code1, serial1) = boot_once_with_galfs(&image.bios, &galfs_path, &image.name);
-    // Ensure host buffers hit the file before the second QEMU opens it.
     if let Ok(file) = std::fs::File::options().write(true).open(&galfs_path) {
         let _ = file.sync_all();
+    }
+    if corrupt_newest {
+        corrupt_newest_galfs_slot(&galfs_path);
     }
     let (code2, serial2) = boot_once_with_galfs(&image.bios, &galfs_path, &image.name);
     let _ = std::fs::remove_file(&galfs_path);
     (code1, serial1, code2, serial2)
+}
+
+/// Dual-slot layout must match `galfs::DISK_SECTORS` (80 × 512).
+const GALFS_SLOT_SECTORS: usize = 80;
+const GALFS_SECTOR: usize = 512;
+
+fn corrupt_newest_galfs_slot(path: &PathBuf) {
+    let mut data = std::fs::read(path).expect("read galfs.img");
+    let mut best_gen = 0u64;
+    let mut best_off: Option<usize> = None;
+    for slot in 0..2 {
+        let off = slot * GALFS_SLOT_SECTORS * GALFS_SECTOR;
+        if data.len() < off + 28 || &data[off..off + 4] != b"GALF" {
+            continue;
+        }
+        let gen = u64::from_le_bytes(data[off + 16..off + 24].try_into().unwrap());
+        if best_off.is_none() || gen >= best_gen {
+            best_gen = gen;
+            best_off = Some(off);
+        }
+    }
+    let off = best_off.expect("expected at least one GALF slot after write boot");
+    data[off] ^= 0xFF; // break magic; CRC/path will reject the slot
+    std::fs::write(path, &data).expect("write corrupted galfs.img");
+    if let Ok(file) = std::fs::File::options().write(true).open(path) {
+        let _ = file.sync_all();
+    }
 }
 
 fn boot_once_with_galfs(
