@@ -4,12 +4,18 @@
 //! named Desktop. `/dan@Desktop` is dan's. A token names an object and a
 //! set of rights; the path is only a lookup. Lock order: [`THREADS`]
 //! then this table.
+//!
+//! When the primary IDE slave is present, the table is loaded from LBA 0
+//! at boot (or formatted if the magic is missing) and written back after
+//! every mutate. Without a slave the table stays RAM-only.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use spin::Mutex;
 
 use galexy_abi::SysError;
+
+use crate::drivers::ata;
 
 /// Objects the kernel will hold (files, directories, and actor roots).
 pub const OBJECT_SLOTS: usize = 32;
@@ -153,14 +159,32 @@ static TABLE: Mutex<Table> = Mutex::new(Table {
 });
 
 static BOOTED: AtomicBool = AtomicBool::new(false);
+/// True when the ATA slave accepted a load or format write.
+static DISK_LIVE: AtomicBool = AtomicBool::new(false);
 
 /// Alex's root object. Valid after [`init`].
 static ALEX_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(NO_OBJECT);
 static DAN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(NO_OBJECT);
 
-/// Builds actors `alex` and `dan` (dan gets an empty Desktop). Call once.
+/// On-disk image: header + actors + objects, packed into fixed sectors.
+const DISK_MAGIC: [u8; 4] = *b"GALF";
+const DISK_VERSION: u16 = 1;
+const DISK_SECTORS: usize = 24;
+const DISK_HEADER: usize = 16;
+const ACTOR_ON_DISK: usize = 36;
+const OBJECT_ON_DISK: usize = 328;
+
+static DISK_BUF: Mutex<[[u8; ata::SECTOR]; DISK_SECTORS]> =
+    Mutex::new([[0u8; ata::SECTOR]; DISK_SECTORS]);
+
+/// Builds actors `alex` and `dan` (dan gets an empty Desktop), or loads
+/// them from the ATA slave when a GALF image is already there. Call once.
 pub fn init() {
     if BOOTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if ata::present() && load_from_disk() {
+        crate::serial_println!("[galfs] loaded from disk");
         return;
     }
     let mut table = TABLE.lock();
@@ -169,6 +193,165 @@ pub fn init() {
     let dan = add_actor(&mut table, "dan").expect("galfs: dan");
     DAN_ROOT.store(dan, Ordering::Relaxed);
     mkdir_locked(&mut table, dan, "Desktop").expect("galfs: dan Desktop");
+    drop(table);
+    if sync_to_disk() {
+        crate::serial_println!("[galfs] formatted disk");
+    }
+}
+
+/// True when this boot is using the ATA slave for the table.
+pub fn disk_backed() -> bool {
+    DISK_LIVE.load(Ordering::Acquire)
+}
+
+/// Writes the in-RAM table to the slave. No-op when no disk is attached.
+pub fn sync() {
+    let _ = sync_to_disk();
+}
+
+fn sync_to_disk() -> bool {
+    if !ata::present() {
+        return false;
+    }
+    let mut buf = DISK_BUF.lock();
+    {
+        let table = TABLE.lock();
+        encode_table(&table, &mut *buf);
+    }
+    match ata::write_sectors(0, &*buf) {
+        Ok(()) => {
+            DISK_LIVE.store(true, Ordering::Release);
+            true
+        }
+        Err(_) => {
+            crate::serial_println!("[galfs] disk sync failed");
+            false
+        }
+    }
+}
+
+fn load_from_disk() -> bool {
+    let mut buf = DISK_BUF.lock();
+    if ata::read_sectors(0, &mut *buf).is_err() {
+        return false;
+    }
+    let mut table = TABLE.lock();
+    if !decode_table(&*buf, &mut table) {
+        return false;
+    }
+    refresh_roots(&table);
+    DISK_LIVE.store(true, Ordering::Release);
+    true
+}
+
+fn refresh_roots(table: &Table) {
+    let mut alex = NO_OBJECT;
+    let mut dan = NO_OBJECT;
+    for actor in &table.actors {
+        if !actor.used {
+            continue;
+        }
+        if actor.name_is("alex") {
+            alex = actor.root;
+        } else if actor.name_is("dan") {
+            dan = actor.root;
+        }
+    }
+    ALEX_ROOT.store(alex, Ordering::Relaxed);
+    DAN_ROOT.store(dan, Ordering::Relaxed);
+}
+
+fn encode_table(table: &Table, sectors: &mut [[u8; ata::SECTOR]; DISK_SECTORS]) {
+    let flat = sectors_flat_mut(sectors);
+    flat.fill(0);
+    flat[0..4].copy_from_slice(&DISK_MAGIC);
+    flat[4..6].copy_from_slice(&DISK_VERSION.to_le_bytes());
+    flat[6..8].copy_from_slice(&(ACTOR_SLOTS as u16).to_le_bytes());
+    flat[8..10].copy_from_slice(&(OBJECT_SLOTS as u16).to_le_bytes());
+    flat[10..12].copy_from_slice(&(FILE_BYTES as u16).to_le_bytes());
+    let mut off = DISK_HEADER;
+    for actor in &table.actors {
+        flat[off] = u8::from(actor.used);
+        flat[off + 1] = actor.name_len;
+        flat[off + 2..off + 2 + ACTOR_NAME].copy_from_slice(&actor.name);
+        flat[off + 2 + ACTOR_NAME..off + 4 + ACTOR_NAME]
+            .copy_from_slice(&actor.root.to_le_bytes());
+        off += ACTOR_ON_DISK;
+    }
+    for obj in &table.objects {
+        flat[off] = obj.kind;
+        flat[off + 1] = obj.actor;
+        flat[off + 2] = obj.name_len;
+        flat[off + 4..off + 6].copy_from_slice(&obj.parent.to_le_bytes());
+        flat[off + 6..off + 8].copy_from_slice(&obj.len.to_le_bytes());
+        flat[off + 8..off + 8 + NAME_CAP].copy_from_slice(&obj.name);
+        flat[off + 8 + NAME_CAP..off + 8 + NAME_CAP + FILE_BYTES].copy_from_slice(&obj.data);
+        off += OBJECT_ON_DISK;
+    }
+    debug_assert!(off <= flat.len());
+}
+
+fn decode_table(sectors: &[[u8; ata::SECTOR]; DISK_SECTORS], table: &mut Table) -> bool {
+    let flat = sectors_flat(sectors);
+    if flat[0..4] != DISK_MAGIC {
+        return false;
+    }
+    let version = u16::from_le_bytes([flat[4], flat[5]]);
+    let actors = u16::from_le_bytes([flat[6], flat[7]]) as usize;
+    let objects = u16::from_le_bytes([flat[8], flat[9]]) as usize;
+    let file_bytes = u16::from_le_bytes([flat[10], flat[11]]) as usize;
+    if version != DISK_VERSION
+        || actors != ACTOR_SLOTS
+        || objects != OBJECT_SLOTS
+        || file_bytes != FILE_BYTES
+    {
+        return false;
+    }
+    let mut off = DISK_HEADER;
+    for actor in &mut table.actors {
+        *actor = Actor::empty();
+        actor.used = flat[off] != 0;
+        actor.name_len = flat[off + 1].min(ACTOR_NAME as u8);
+        actor.name.copy_from_slice(&flat[off + 2..off + 2 + ACTOR_NAME]);
+        actor.root = u16::from_le_bytes([
+            flat[off + 2 + ACTOR_NAME],
+            flat[off + 3 + ACTOR_NAME],
+        ]);
+        off += ACTOR_ON_DISK;
+    }
+    for obj in &mut table.objects {
+        *obj = Object::empty();
+        obj.kind = flat[off];
+        obj.actor = flat[off + 1];
+        obj.name_len = flat[off + 2].min(NAME_CAP as u8);
+        obj.parent = u16::from_le_bytes([flat[off + 4], flat[off + 5]]);
+        obj.len = u16::from_le_bytes([flat[off + 6], flat[off + 7]]);
+        obj.name.copy_from_slice(&flat[off + 8..off + 8 + NAME_CAP]);
+        obj.data
+            .copy_from_slice(&flat[off + 8 + NAME_CAP..off + 8 + NAME_CAP + FILE_BYTES]);
+        off += OBJECT_ON_DISK;
+    }
+    true
+}
+
+fn sectors_flat(sectors: &[[u8; ata::SECTOR]; DISK_SECTORS]) -> &[u8] {
+    // SAFETY: `[[u8; SECTOR]; N]` is contiguous bytes with no padding.
+    unsafe {
+        core::slice::from_raw_parts(
+            sectors.as_ptr().cast::<u8>(),
+            DISK_SECTORS * ata::SECTOR,
+        )
+    }
+}
+
+fn sectors_flat_mut(sectors: &mut [[u8; ata::SECTOR]; DISK_SECTORS]) -> &mut [u8] {
+    // SAFETY: `[[u8; SECTOR]; N]` is contiguous bytes with no padding.
+    unsafe {
+        core::slice::from_raw_parts_mut(
+            sectors.as_mut_ptr().cast::<u8>(),
+            DISK_SECTORS * ata::SECTOR,
+        )
+    }
 }
 
 /// Credentials for the default boot actor.
@@ -332,7 +515,10 @@ pub fn mkdir_under_root(root: u16, name: &str) -> Result<u16, SysError> {
         return Err(SysError::BadValue);
     }
     let mut table = TABLE.lock();
-    mkdir_locked(&mut table, root, name)
+    let oi = mkdir_locked(&mut table, root, name)?;
+    drop(table);
+    sync();
+    Ok(oi)
 }
 
 fn mkdir_locked(table: &mut Table, root: u16, name: &str) -> Result<u16, SysError> {
@@ -377,6 +563,8 @@ pub fn create_file_under(parent: u16, name: &str) -> Result<u16, SysError> {
     place_name(obj, name);
     obj.data = [0; FILE_BYTES];
     obj.len = 0;
+    drop(table);
+    sync();
     Ok(oi as u16)
 }
 

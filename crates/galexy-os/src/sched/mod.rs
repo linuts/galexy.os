@@ -1350,7 +1350,7 @@ pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    interrupts::without_interrupts(|| {
+    let (n, galfs_wrote) = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
         let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
@@ -1359,19 +1359,26 @@ pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
             return Err(SysError::AccessDenied);
         }
         if src.is_empty() {
-            return Ok(0);
+            return Ok((0, false));
         }
         match file.body {
-            FileBody::Galfs(obj) => galfs::append(obj, src).ok_or(SysError::BadCap),
+            FileBody::Galfs(obj) => {
+                let n = galfs::append(obj, src).ok_or(SysError::BadCap)?;
+                Ok((n, n > 0))
+            }
             FileBody::Pipe { id, end } => {
                 if end != pipe::PipeEnd::Write {
                     return Err(SysError::AccessDenied);
                 }
-                pipe::write(id, src)
+                Ok((pipe::write(id, src)?, false))
             }
             FileBody::Archive(_) => Err(SysError::Unsupported),
         }
-    })
+    })?;
+    if galfs_wrote {
+        galfs::sync();
+    }
+    Ok(n)
 }
 
 /// Creates a galfs file or directory for the current user task.
@@ -1394,7 +1401,7 @@ pub(crate) fn task_create(name: &str, replace: bool) -> Result<Cap, SysError> {
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    interrupts::without_interrupts(|| {
+    let cap = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
         if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
@@ -1417,7 +1424,9 @@ pub(crate) fn task_create(name: &str, replace: bool) -> Result<Cap, SysError> {
                 Ok(Cap::new(galexy_abi::FILE_CAP_BASE + index as u64, rights))
             }
         }
-    })
+    })?;
+    galfs::sync();
+    Ok(cap)
 }
 
 /// Deletes a galfs file or an empty directory and frees its slot.
@@ -1463,7 +1472,9 @@ pub(crate) fn task_remove(name: &str) -> Result<(), SysError> {
             }
         }
         Ok(())
-    })
+    })?;
+    galfs::sync();
+    Ok(())
 }
 
 /// Drops one file capability belonging to the current task.
@@ -1741,7 +1752,9 @@ pub(crate) fn task_useradd(name: &str) -> Result<(), SysError> {
         }
         let _ = galfs::add_user(name)?;
         Ok(())
-    })
+    })?;
+    galfs::sync();
+    Ok(())
 }
 
 /// Deletes an empty actor. Refuses alex and roots still in use.
@@ -1770,7 +1783,9 @@ pub(crate) fn task_userdel(name: &str) -> Result<(), SysError> {
             return Err(SysError::Unsupported);
         }
         galfs::remove_user(name)
-    })
+    })?;
+    galfs::sync();
+    Ok(())
 }
 
 /// Switches the caller's actor root to `name`, keeping existing tokens and

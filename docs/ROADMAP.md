@@ -202,6 +202,10 @@ first real program landed in Milestone 13:
 - User management ✅ (Milestone 37: `user`=16 with whoami/users/add/del/su.
   Alex can add and delete empty actors; `su` switches the shell's root
   while keeping tokens. `bin/test-users`. Suite: 44 QEMU boots).
+- Disk-backed galfs ✅ (Milestone 38: ATA PIO on the primary IDE slave;
+  GALF image at LBA 0 load-or-format at boot; sync after mutate.
+  `bin/test-galfs-disk` writes then verifies across two QEMU boots
+  sharing one data image. Suite: 45 QEMU boots).
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.

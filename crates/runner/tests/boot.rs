@@ -4,7 +4,8 @@
 mod common;
 
 use common::{
-    boot, boot_and_type, boot_and_type_uefi, boot_liveness, boot_uefi, image, QEMU_EXIT_SUCCESS,
+    boot, boot_and_type, boot_and_type_uefi, boot_liveness, boot_uefi, boot_with_galfs, image,
+    QEMU_EXIT_SUCCESS,
 };
 use std::time::Duration;
 
@@ -448,6 +449,29 @@ fn galfs_test_passes() {
     assert!(
         serial.contains("[test-galfs] passed"),
         "test-galfs success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn galfs_disk_persists_across_reboot() {
+    let (code1, serial1, code2, serial2) = boot_with_galfs(&image("test-galfs-disk"));
+    assert_eq!(
+        code1,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-galfs-disk write boot should exit with Success; serial:\n{serial1}"
+    );
+    assert!(
+        serial1.contains("[test-galfs-disk] wrote"),
+        "write marker missing; serial:\n{serial1}"
+    );
+    assert_eq!(
+        code2,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-galfs-disk verify boot should exit with Success; serial:\n{serial2}"
+    );
+    assert!(
+        serial2.contains("[test-galfs-disk] passed"),
+        "verify marker missing; serial:\n{serial2}"
     );
 }
 

@@ -942,6 +942,19 @@ Actors are accounts. Suite: 44 QEMU boots.
 - [x] `bin/test-users` covers the happy path and access checks
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 38 — disk-backed galfs ✅
+
+The table lives on the primary IDE slave when QEMU attaches one.
+Suite: 45 QEMU boots.
+
+- [x] **ATA PIO** (`drivers/ata.rs`): LBA28 read/write on primary slave
+      (index=1). Absent slave → galfs stays RAM-only (existing suite)
+- [x] **GALF image**: 24 sectors at LBA 0; load-or-format in `galfs::init`;
+      sync after create/remove/append/useradd/userdel
+- [x] `bin/test-galfs-disk` + runner `boot_with_galfs`: write on boot 1,
+      verify on boot 2 with the same data image (boot drive still snapshotted)
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17
@@ -972,7 +985,8 @@ Actors are accounts. Suite: 44 QEMU boots.
 - [ ] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
       ESC). A blinking cursor is still future screen work
-- [ ] There is no glob or disk-backed store yet
+- [x] ~~There is no glob or disk-backed store yet~~ — disk-backed store
+      CLOSED by Milestone 38; glob still future
 - [x] ~~`run` leaks the task name, and freed slots panic the table at
       64~~ — CLOSED by Milestone 26 (name copied into the slot; a
       `Freed` record is reused once no CPU is current on it)

@@ -18,7 +18,7 @@ crates/
 │       ├── bin/         # test kernels: one bin per QEMU integration test
 │       ├── shell.rs     # the "shell": consumes driver input, produces screen output
 │       ├── arch/        # THE PORT WALL: x86_64 hardware code lives only here
-│       ├── drivers/     # device drivers (screen, serial, keyboard, ...)
+│       ├── drivers/     # device drivers (screen, serial, keyboard, ata, ...)
 │       └── sched/       # scheduler + syscall dispatch table (policy layer)
 ├── galexy-abi/          # THE SYSCALL ABI: numbers, capability model, error
 │                        #   codes. The ONLY kernel<->userspace shared surface.
@@ -171,6 +171,21 @@ cannot fit the next character's UTF-8 puts that character back
 pub fn add_scancode(scancode: u8)   // called from the IRQ handler only
 pub fn pop_key() -> Option<char>    // drains TTY 0
 pub fn pop_key_tty(tty: u8) -> Option<char>
+```
+
+### ata — "the galfs disk" (`drivers/`)
+
+PIO LBA28 on the primary IDE slave (drive index 1). The boot image is
+the master and is never touched. `present()` probes once via IDENTIFY;
+when the slave is absent every read/write returns `Unsupported` and
+galfs stays RAM-only. The runner's persistence test attaches a second
+raw image at `if=ide,index=1` without a snapshot so writes survive a
+second QEMU process.
+
+```rust
+pub fn present() -> bool
+pub fn read_sectors(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError>
+pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError>
 ```
 
 The handler never takes the screen lock. Locks are tiny and never nested
@@ -537,7 +552,11 @@ into a buffer; `USER_ADD` creates an actor plus empty Desktop;
 still uses); `USER_SU` switches the caller's root to that actor while
 keeping tokens and ensuring ALL on the target. Add/del require the
 caller's root to be alex. The shell exposes `whoami`, `users`,
-`useradd`, `userdel`, and `su`.
+`useradd`, `userdel`, and `su`. When the primary IDE slave is present,
+`galfs::init` loads a GALF image from LBA 0 (or formats alex+dan and
+writes it); create/remove/append/useradd/userdel sync the table back.
+Without a slave the table stays RAM-only. `bin/test-galfs-disk` proves
+a file survives two QEMU boots sharing one data image.
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing

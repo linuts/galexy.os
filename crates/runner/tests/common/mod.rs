@@ -83,6 +83,96 @@ fn qemu_command(img_path: &str, serial_path: &PathBuf) -> Command {
     cmd
 }
 
+/// Like [`qemu_command`], but the boot drive uses a per-drive snapshot and
+/// `galfs_path` is attached as the primary IDE slave without a snapshot so
+/// writes persist for a second boot of the same image.
+fn qemu_command_with_galfs(img_path: &str, galfs_path: &PathBuf, serial_path: &PathBuf) -> Command {
+    let mut cmd = Command::new("qemu-system-x86_64");
+    cmd.arg("-drive")
+        .arg(format!(
+            "format=raw,file={img_path},if=ide,index=0,snapshot=on"
+        ))
+        .arg("-drive")
+        .arg(format!(
+            "format=raw,file={},if=ide,index=1,cache=writethrough",
+            galfs_path.display()
+        ))
+        .arg("-smp")
+        .arg("2")
+        .arg("-cpu")
+        .arg("max")
+        .arg("-display")
+        .arg("none")
+        .arg("-no-reboot")
+        .arg("-serial")
+        .arg(format!("file:{}", serial_path.display()))
+        .arg("-device")
+        .arg("isa-debug-exit,iobase=0xf4,iosize=0x04")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    cmd
+}
+
+/// Boots `image` with a fresh empty galfs data disk, then again with the
+/// same data disk so the guest can prove the table survived. Returns
+/// `(first_exit, first_serial, second_exit, second_serial)`.
+pub fn boot_with_galfs(image: &Image) -> (Option<i32>, String, Option<i32>, String) {
+    let galfs_path = std::env::temp_dir().join(format!(
+        "galexy-galfs-{}-{}.img",
+        image.name.replace('-', "_"),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    // 1 MiB zeroed IDE slave — plenty for the 24-sector GALF image.
+    std::fs::write(&galfs_path, vec![0u8; 1024 * 1024]).expect("create galfs.img");
+
+    let (code1, serial1) = boot_once_with_galfs(&image.bios, &galfs_path, &image.name);
+    // Ensure host buffers hit the file before the second QEMU opens it.
+    if let Ok(file) = std::fs::File::options().write(true).open(&galfs_path) {
+        let _ = file.sync_all();
+    }
+    let (code2, serial2) = boot_once_with_galfs(&image.bios, &galfs_path, &image.name);
+    let _ = std::fs::remove_file(&galfs_path);
+    (code1, serial1, code2, serial2)
+}
+
+fn boot_once_with_galfs(
+    img_path: &str,
+    galfs_path: &PathBuf,
+    name: &str,
+) -> (Option<i32>, String) {
+    let serial_path = serial_log_path(name);
+    let mut child = qemu_command_with_galfs(img_path, galfs_path, &serial_path)
+        .spawn()
+        .expect("failed to launch qemu-system-x86_64 (galfs disk)");
+
+    let deadline = Instant::now() + TEST_TIMEOUT;
+    let code = loop {
+        match child.try_wait().expect("try_wait failed") {
+            Some(status) => break status.code(),
+            None if Instant::now() > deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            None => std::thread::sleep(Duration::from_millis(100)),
+        }
+    };
+    let mut qemu_err = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let _ = stderr.read_to_string(&mut qemu_err);
+    }
+    let serial = std::fs::read_to_string(&serial_path).unwrap_or_default();
+    let serial = if serial.is_empty() && code.is_none() {
+        format!("(qemu stderr: {qemu_err})")
+    } else {
+        serial
+    };
+    (code, serial)
+}
+
 /// Boots `image` headless until it exits or the timeout elapses.
 ///
 /// Returns the QEMU exit code (see [`QEMU_EXIT_SUCCESS`] / [`QEMU_EXIT_FAILED`];
