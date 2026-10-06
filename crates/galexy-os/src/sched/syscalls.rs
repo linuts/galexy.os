@@ -123,6 +123,10 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             );
             Outcome::Resume
         }
+        n if n == Syscall::User as u64 => {
+            stamp(frame, syscall_user(frame.rdi, frame.rsi, frame.rdx));
+            Outcome::Resume
+        }
         // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));
@@ -431,6 +435,70 @@ fn syscall_seek(cap: Cap, offset_bits: u64, whence: u64) -> SyscallResult {
     match crate::sched::task_seek(cap, offset, whence) {
         Ok(pos) => SyscallResult::ok(pos),
         Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_user(addr: u64, len: u64, op: u64) -> SyscallResult {
+    match op {
+        galexy_abi::USER_WHOAMI | galexy_abi::USER_USERS => {
+            if len == 0 || len > MAX_READ {
+                return SyscallResult::err(SysError::BadValue);
+            }
+            if user_buffer(addr, len, true).is_err() {
+                return SyscallResult::err(SysError::BadBuffer);
+            }
+            let mut staged = [0u8; MAX_READ as usize];
+            let result = if op == galexy_abi::USER_WHOAMI {
+                crate::sched::task_whoami(&mut staged[..len as usize])
+            } else {
+                crate::sched::task_users(&mut staged[..len as usize])
+            };
+            match result {
+                Ok(n) => {
+                    // SAFETY: buffer accepted as writable user memory.
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            staged.as_ptr(),
+                            VirtAddr::new(addr).as_mut_ptr::<u8>(),
+                            n,
+                        );
+                    }
+                    SyscallResult::ok(n as u64)
+                }
+                Err(err) => SyscallResult::err(err),
+            }
+        }
+        galexy_abi::USER_ADD | galexy_abi::USER_DEL | galexy_abi::USER_SU => {
+            if len == 0 || len > MAX_NAME {
+                return SyscallResult::err(SysError::BadValue);
+            }
+            if user_buffer(addr, len, false).is_err() {
+                return SyscallResult::err(SysError::BadBuffer);
+            }
+            let mut raw = [0u8; MAX_NAME as usize];
+            // SAFETY: `user_buffer` accepted every byte.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    VirtAddr::new(addr).as_ptr::<u8>(),
+                    raw.as_mut_ptr(),
+                    len as usize,
+                );
+            }
+            let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
+            if !file_name_ok(name) {
+                return SyscallResult::err(SysError::BadValue);
+            }
+            let result = match op {
+                galexy_abi::USER_ADD => crate::sched::task_useradd(name),
+                galexy_abi::USER_DEL => crate::sched::task_userdel(name),
+                _ => crate::sched::task_su(name),
+            };
+            match result {
+                Ok(()) => SyscallResult::ok(0),
+                Err(err) => SyscallResult::err(err),
+            }
+        }
+        _ => SyscallResult::err(SysError::BadValue),
     }
 }
 

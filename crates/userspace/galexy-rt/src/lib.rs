@@ -150,6 +150,28 @@ pub fn seek(cap: Cap, offset: i64, whence: u64) -> SyscallResult {
     syscall(Syscall::Seek as u64, cap.bits(), offset as u64, whence)
 }
 
+/// Actor whoami/users: write into `buf`. `op` is [`galexy_abi::USER_WHOAMI`]
+/// or [`galexy_abi::USER_USERS`]. On success, `value` is the byte count.
+pub fn user(buf: &mut [u8], op: u64) -> SyscallResult {
+    syscall(
+        Syscall::User as u64,
+        buf.as_mut_ptr() as u64,
+        buf.len() as u64,
+        op,
+    )
+}
+
+/// Actor add/del/su. `op` is [`galexy_abi::USER_ADD`], [`galexy_abi::USER_DEL`],
+/// or [`galexy_abi::USER_SU`].
+pub fn user_name(name: &[u8], op: u64) -> SyscallResult {
+    syscall(
+        Syscall::User as u64,
+        name.as_ptr() as u64,
+        name.len() as u64,
+        op,
+    )
+}
+
 /// Like [`create`], and if the path is an existing scratch file its bytes
 /// are emptied first.
 pub fn create_replace(name: &[u8]) -> SyscallResult {

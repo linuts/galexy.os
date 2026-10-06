@@ -230,6 +230,17 @@ pub const SEEK_CUR: u64 = 1;
 /// `seek` whence: move the cursor by `offset` from the end of the file.
 pub const SEEK_END: u64 = 2;
 
+/// `user` op (`RDX`): write the calling task's actor name into a buffer.
+pub const USER_WHOAMI: u64 = 0;
+/// `user` op: write every actor name, one per line.
+pub const USER_USERS: u64 = 1;
+/// `user` op: create an actor and an empty Desktop (alex admin).
+pub const USER_ADD: u64 = 2;
+/// `user` op: delete an empty actor (not alex; no live task on that root).
+pub const USER_DEL: u64 = 3;
+/// `user` op: switch this task to another actor's launcher credentials.
+pub const USER_SU: u64 = 4;
+
 /// Lowest capability index a per-task file open may return. `0` is null,
 /// [`reserved::CONSOLE_INDEX`] is the console, [`reserved::SELF_INDEX`] is
 /// the calling task. File indexes are per-task (not a global fd table):
@@ -379,11 +390,22 @@ pub enum Syscall {
     /// Returns: `SyscallResult` (rax = new offset). Archive and galfs
     /// files only; a pipe is `Unsupported`. Past-end seeks clamp to EOF.
     Seek,
+    /// `user(addr, len, op)` — actor identity and account management.
+    ///
+    /// Args: `RDI = user address`, `RSI = byte count`, `RDX = op`
+    /// ([`USER_WHOAMI`], [`USER_USERS`], [`USER_ADD`], [`USER_DEL`],
+    /// or [`USER_SU`]). Returns: `SyscallResult`. Whoami/users write
+    /// into the buffer and return the byte count. Add/del/su return 0.
+    /// Add and del require the caller to be actor `alex` (root match).
+    /// Su requires alex, or `TOKEN_ALL` on the target's root. Deleting
+    /// alex, a non-empty tree, or an actor a live task still uses is
+    /// `Unsupported` / `NotFound`.
+    User,
 }
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (fixing the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 16] = [
+pub const SYSCALLS: [Syscall; 17] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -400,6 +422,7 @@ pub const SYSCALLS: [Syscall; 16] = [
     Syscall::Pipe,
     Syscall::Give,
     Syscall::Seek,
+    Syscall::User,
 ];
 
 /// Maximum syscall number (upper bound for a u64 dispatch table).

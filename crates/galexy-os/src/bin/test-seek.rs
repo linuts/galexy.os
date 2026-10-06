@@ -111,7 +111,7 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     mov_r64_imm(&mut code, 2, 0);
     code.extend_from_slice(&[0x0F, 0x05]);
     store(&mut code, 2, 0x08); // create_ok
-    // save cap in r14
+                               // save cap in r14
     code.extend_from_slice(&[0x49, 0x89, 0xC6]); // mov r14, rax
 
     // write

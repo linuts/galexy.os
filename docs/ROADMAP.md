@@ -199,6 +199,9 @@ first real program landed in Milestone 13:
   rights; boot creates actor `dan` with Desktop and F2's shell is dan;
   `pipe`=13 + `give`=14 move pipe ends between tasks; `seek`=15 sets the
   read cursor; `cp`/`mv` are ramdisk utils. Suite: 43 QEMU boots).
+- User management ✅ (Milestone 37: `user`=16 with whoami/users/add/del/su.
+  Alex can add and delete empty actors; `su` switches the shell's root
+  while keeping tokens. `bin/test-users`. Suite: 44 QEMU boots).
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.

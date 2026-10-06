@@ -88,9 +88,9 @@ pub fn spawn_program_bsp(name: &str, bytes: &[u8]) -> ProgramRegion {
 }
 
 /// Pins a launcher shell named `name` to the BSP on console `tty`.
-/// TTY 1 (F2) is actor `dan`; every other console is `alex`.
+/// TTY 1 (F2) is actor `dan` when that actor still exists; otherwise alex.
 pub fn spawn_shell_on(name: &str, bytes: &[u8], tty: u8) -> ProgramRegion {
-    let fs = if tty == 1 {
+    let fs = if tty == 1 && crate::sched::galfs::dan_root() != crate::sched::galfs::NO_OBJECT {
         crate::sched::galfs::dan_cred()
     } else {
         crate::sched::galfs::alex_cred()

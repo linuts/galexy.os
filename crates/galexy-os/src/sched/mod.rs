@@ -1681,6 +1681,127 @@ pub(crate) fn task_seek(cap: Cap, offset: i64, whence: u64) -> Result<u64, SysEr
     })
 }
 
+fn admin_caller(fs_root: u16, _tokens: &[galfs::Token; galfs::TOKEN_SLOTS]) -> bool {
+    galfs::is_alex_root(fs_root)
+}
+
+/// Writes the current actor name into `out`.
+pub(crate) fn task_whoami(out: &mut [u8]) -> Result<usize, SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        galfs::name_of_root(thread.fs_root, out)
+    })
+}
+
+/// Writes every actor name, one per line, into `out`.
+pub(crate) fn task_users(out: &mut [u8]) -> Result<usize, SysError> {
+    let mut n = 0usize;
+    let mut overflow = false;
+    galfs::for_each_actor(|name| {
+        if overflow {
+            return;
+        }
+        let need = name.len() + 1;
+        if n + need > out.len() {
+            overflow = true;
+            return;
+        }
+        out[n..n + name.len()].copy_from_slice(name);
+        out[n + name.len()] = b'\n';
+        n += need;
+    });
+    if overflow {
+        return Err(SysError::BadBuffer);
+    }
+    Ok(n)
+}
+
+/// Creates an actor + Desktop. Caller must be alex (or hold ALL on alex).
+pub(crate) fn task_useradd(name: &str) -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        if !admin_caller(thread.fs_root, &thread.fs_tokens) {
+            return Err(SysError::AccessDenied);
+        }
+        let _ = galfs::add_user(name)?;
+        Ok(())
+    })
+}
+
+/// Deletes an empty actor. Refuses alex and roots still in use.
+pub(crate) fn task_userdel(name: &str) -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        if !admin_caller(thread.fs_root, &thread.fs_tokens) {
+            return Err(SysError::AccessDenied);
+        }
+        let root = galfs::root_named(name)?;
+        let live = threads.iter().any(|t| {
+            t.is_user && t.fs_root == root && {
+                let s = t.state.load(Ordering::Acquire);
+                s == STATE_RUNNING || s == STATE_WAITING
+            }
+        });
+        if live {
+            return Err(SysError::Unsupported);
+        }
+        galfs::remove_user(name)
+    })
+}
+
+/// Switches the caller's actor root to `name`, keeping existing tokens and
+/// ensuring a full token on the target. Alex (or a holder of ALL on the
+/// target) may switch; after `su`, whoami follows the new root.
+pub(crate) fn task_su(name: &str) -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let (fs_root, fs_tokens) = {
+            let caller = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+            if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
+                return Err(SysError::BadCap);
+            }
+            (caller.fs_root, caller.fs_tokens)
+        };
+        let target = galfs::root_named(name)?;
+        let allowed = galfs::is_alex_root(fs_root) || galfs::holds_all(fs_root, &fs_tokens, target);
+        if !allowed {
+            return Err(SysError::AccessDenied);
+        }
+        let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        caller.fs_root = target;
+        galfs::push_token(&mut caller.fs_tokens, target, galfs::RIGHT_ALL)?;
+        Ok(())
+    })
+}
+
 /// File-table index for a user cap, or `BadCap` when it is not a file index.
 fn file_slot(cap: Cap) -> Result<usize, SysError> {
     let index = cap.index();

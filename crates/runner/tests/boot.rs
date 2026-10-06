@@ -480,6 +480,20 @@ fn seek_test_passes() {
 }
 
 #[test]
+fn users_test_passes() {
+    let (code, serial) = boot(&image("test-users"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-users should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-users] passed"),
+        "test-users success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn scratch_test_passes() {
     let (code, serial) = boot(&image("test-scratch"));
     assert_eq!(

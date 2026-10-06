@@ -530,7 +530,14 @@ moves an open file or pipe end to another live user task and returns
 the target's new Cap bits. `seek(cap, offset, whence)` (syscall 15)
 sets the read cursor on an archive or galfs open (`SEEK_SET` /
 `SEEK_CUR` / `SEEK_END`); a pipe is `Unsupported`. `cp` and `mv` are
-ramdisk programs (mv copies then removes).
+ramdisk programs (mv copies then removes). `user(addr, len, op)`
+(syscall 16) manages actors: `USER_WHOAMI` / `USER_USERS` write names
+into a buffer; `USER_ADD` creates an actor plus empty Desktop;
+`USER_DEL` removes an empty actor (never alex, never one a live task
+still uses); `USER_SU` switches the caller's root to that actor while
+keeping tokens and ensuring ALL on the target. Add/del require the
+caller's root to be alex. The shell exposes `whoami`, `users`,
+`useradd`, `userdel`, and `su`.
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing

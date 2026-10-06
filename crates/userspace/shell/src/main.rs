@@ -15,7 +15,7 @@
 use galexy_abi::{Cap, SysError};
 use galexy_rt::{
     entry, files_cap, grant, keyboard_cap, read, reboot, revoke, shutdown, spawn_with, stats_cap,
-    tasks_cap, threads_cap, write_console, yield_now,
+    tasks_cap, threads_cap, user, user_name, write_console, yield_now,
 };
 
 entry!(main);
@@ -88,7 +88,8 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) {
     }
     if line == b"help" {
         write_console(b"commands: help, ls, echo, cat, touch, mkdir, cd, rm,\n");
-        write_console(b"cp, mv, grant, revoke, stats, tasks, threads, about, clear\n");
+        write_console(b"cp, mv, grant, revoke, whoami, users, useradd, userdel, su,\n");
+        write_console(b"stats, tasks, threads, about, clear\n");
         write_console(b"a program name on its own starts it\n");
         write_console(b"grant/revoke: <rights> <path> <task>  (r w l c x)\n");
         write_console(b"power: shutdown, reboot\n");
@@ -156,6 +157,26 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) {
     }
     if let Some(name) = arg_of(line, b"rm") {
         rm(cwd, name);
+        return;
+    }
+    if line == b"whoami" {
+        whoami(cwd);
+        return;
+    }
+    if line == b"users" {
+        users_cmd(cwd);
+        return;
+    }
+    if let Some(rest) = arg_of(line, b"useradd") {
+        user_op(cwd, rest, galexy_abi::USER_ADD, b"useradd");
+        return;
+    }
+    if let Some(rest) = arg_of(line, b"userdel") {
+        user_op(cwd, rest, galexy_abi::USER_DEL, b"userdel");
+        return;
+    }
+    if let Some(rest) = arg_of(line, b"su") {
+        user_op(cwd, rest, galexy_abi::USER_SU, b"su");
         return;
     }
     if let Some(rest) = arg_of(line, b"grant") {
@@ -414,6 +435,64 @@ fn two_path_util(cwd: &Cwd, program: &[u8], rest: &[u8]) {
     arg[sn] = 0;
     arg[sn + 1..sn + 1 + dn].copy_from_slice(&dbuf[..dn]);
     launch_util(cwd, program, &arg[..sn + 1 + dn], false);
+}
+
+fn whoami(cwd: &Cwd) {
+    let mut buf = [0u8; 64];
+    let got = user(&mut buf, galexy_abi::USER_WHOAMI);
+    if !got.ok {
+        write_console(b"whoami: failed\n");
+        prompt(cwd);
+        return;
+    }
+    let n = (got.value as usize).min(buf.len());
+    write_console(&buf[..n]);
+    write_console(b"\n");
+    prompt(cwd);
+}
+
+fn users_cmd(cwd: &Cwd) {
+    let mut buf = [0u8; 256];
+    let got = user(&mut buf, galexy_abi::USER_USERS);
+    if !got.ok {
+        write_console(b"users: failed\n");
+        prompt(cwd);
+        return;
+    }
+    let n = (got.value as usize).min(buf.len());
+    if n > 0 {
+        write_console(&buf[..n]);
+    }
+    prompt(cwd);
+}
+
+fn user_op(cwd: &Cwd, rest: &[u8], op: u64, label: &[u8]) {
+    let name = trim(rest);
+    if name.is_empty()
+        || !name
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'.' || *b == b'_' || *b == b'-')
+    {
+        write_console(b"usage: ");
+        write_console(label);
+        write_console(b" <name>\n");
+        prompt(cwd);
+        return;
+    }
+    let result = user_name(name, op);
+    if !result.ok {
+        write_console(label);
+        write_console(b": ");
+        match SysError::from_code(result.value) {
+            SysError::NotFound => write_console(b"not found\n"),
+            SysError::AccessDenied => write_console(b"access denied\n"),
+            SysError::Unsupported => write_console(b"unsupported\n"),
+            SysError::NoResource => write_console(b"no resource\n"),
+            SysError::BadValue => write_console(b"bad value\n"),
+            _ => write_console(b"failed\n"),
+        };
+    }
+    prompt(cwd);
 }
 
 fn cd(cwd: &mut Cwd, name: &[u8]) {

@@ -931,6 +931,17 @@ Complete the share path and a few utilities. Suite: 43 QEMU boots.
 - [x] `bin/test-galfs` proves grant then revoke
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 37 — user management ✅
+
+Actors are accounts. Suite: 44 QEMU boots.
+
+- [x] **Syscall `user`=16**: ops whoami / users / add / del / su
+- [x] Shell: `whoami`, `users`, `useradd`, `userdel`, `su`
+- [x] Add/del require alex's root; su needs alex or ALL on the target;
+      tokens are kept across su so alex can switch back
+- [x] `bin/test-users` covers the happy path and access checks
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17

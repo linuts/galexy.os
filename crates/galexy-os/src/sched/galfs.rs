@@ -190,6 +190,102 @@ pub fn dan_root() -> u16 {
     DAN_ROOT.load(Ordering::Relaxed)
 }
 
+/// Alex's actor root object index.
+pub fn alex_root() -> u16 {
+    ALEX_ROOT.load(Ordering::Relaxed)
+}
+
+/// Whether `root` is alex's actor root.
+pub fn is_alex_root(root: u16) -> bool {
+    root != NO_OBJECT && root == ALEX_ROOT.load(Ordering::Relaxed)
+}
+
+/// Writes the actor name for `root` into `out`. Returns the byte count.
+pub fn name_of_root(root: u16, out: &mut [u8]) -> Result<usize, SysError> {
+    let table = TABLE.lock();
+    let actor = table
+        .actors
+        .iter()
+        .find(|a| a.used && a.root == root)
+        .ok_or(SysError::NotFound)?;
+    let n = actor.name_len as usize;
+    if n > out.len() {
+        return Err(SysError::BadBuffer);
+    }
+    out[..n].copy_from_slice(&actor.name[..n]);
+    Ok(n)
+}
+
+/// Calls `each` with every live actor name.
+pub fn for_each_actor(mut each: impl FnMut(&[u8])) {
+    let table = TABLE.lock();
+    for actor in &table.actors {
+        if !actor.used {
+            continue;
+        }
+        let n = actor.name_len as usize;
+        each(&actor.name[..n]);
+    }
+}
+
+/// Looks up an actor's root by name.
+pub fn root_named(name: &str) -> Result<u16, SysError> {
+    let table = TABLE.lock();
+    find_actor_root(&table, name)
+}
+
+/// Creates an actor and an empty Desktop. Returns the new root.
+pub fn add_user(name: &str) -> Result<u16, SysError> {
+    let mut table = TABLE.lock();
+    let root = add_actor(&mut table, name)?;
+    mkdir_locked(&mut table, root, "Desktop")?;
+    Ok(root)
+}
+
+/// Deletes an actor whose tree is only an empty root (and optional empty Desktop).
+///
+/// Refuses alex. Clears [`DAN_ROOT`] when dan is removed. Caller must ensure
+/// no live task still uses this root.
+pub fn remove_user(name: &str) -> Result<(), SysError> {
+    if name == "alex" {
+        return Err(SysError::Unsupported);
+    }
+    let mut table = TABLE.lock();
+    let Some(ai) = table.actors.iter().position(|a| a.used && a.name_is(name)) else {
+        return Err(SysError::NotFound);
+    };
+    let root = table.actors[ai].root;
+    let mut desktop: Option<usize> = None;
+    for (i, obj) in table.objects.iter().enumerate() {
+        if obj.kind == KIND_EMPTY || obj.parent != root {
+            continue;
+        }
+        if desktop.is_some() {
+            return Err(SysError::Unsupported);
+        }
+        if obj.kind != KIND_DIR || !obj.name_is("Desktop") || has_child(&table, i as u16) {
+            return Err(SysError::Unsupported);
+        }
+        desktop = Some(i);
+    }
+    if let Some(di) = desktop {
+        table.objects[di] = Object::empty();
+    }
+    table.objects[root as usize] = Object::empty();
+    table.actors[ai] = Actor::empty();
+    if DAN_ROOT.load(Ordering::Relaxed) == root {
+        DAN_ROOT.store(NO_OBJECT, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+/// True when `cred` holds every right on `object` (exact or ancestor token).
+pub fn holds_all(root: u16, tokens: &[Token; TOKEN_SLOTS], object: u16) -> bool {
+    let table = TABLE.lock();
+    let cred = cred_from_tokens(root, tokens);
+    token_allows(&table, &cred, object, RIGHT_ALL)
+}
+
 /// Adds an actor and an empty root. Test and boot only.
 pub fn add_actor_named(name: &str) -> Result<u16, SysError> {
     let mut table = TABLE.lock();
