@@ -74,6 +74,8 @@ impl ScreenWriter {
     fn write_char(&mut self, c: char) {
         match c {
             '\n' => self.new_line(),
+            '\u{0008}' => self.backspace(),
+            '\u{000c}' => self.clear(),
             c => {
                 if self.char_x >= self.max_char_x() {
                     self.new_line();

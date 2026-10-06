@@ -74,6 +74,16 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, syscall_close(Cap::from_bits(frame.rdi)));
             Outcome::Resume
         }
+        n if n == Syscall::Spawn as u64 => {
+            let result = syscall_spawn(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx);
+            let park = result.ok;
+            stamp(frame, result);
+            if park {
+                Outcome::Handoff
+            } else {
+                Outcome::Resume
+            }
+        }
         // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));
@@ -131,11 +141,11 @@ fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
             len as usize,
         );
     }
-    // Printable ASCII + newline: the console's charset discipline (TODO:
-    // tab/CR/ESC handling is future screen work).
+    // Printable ASCII, newline, backspace (0x08), and form feed (0x0c,
+    // clear). Tab/CR/ESC stay future screen work.
     let printable = staged[..len as usize]
         .iter()
-        .all(|b| b.is_ascii_graphic() || *b == b' ' || *b == b'\n');
+        .all(|b| b.is_ascii_graphic() || *b == b' ' || *b == b'\n' || *b == 0x08 || *b == 0x0c);
     if !printable {
         return SyscallResult::err(SysError::BadValue);
     }
@@ -173,6 +183,9 @@ fn syscall_open(addr: u64, len: u64) -> SyscallResult {
 }
 
 fn syscall_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+    if cap.index() == galexy_abi::reserved::KEYBOARD_INDEX {
+        return syscall_read_keyboard(cap, addr, len);
+    }
     // Short read: a request larger than the staging cap returns a prefix.
     let len = len.min(MAX_READ);
     if len > 0 && user_buffer(addr, len, true).is_err() {
@@ -194,6 +207,80 @@ fn syscall_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {
         }
     }
     SyscallResult::ok(n as u64)
+}
+
+fn syscall_read_keyboard(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+    if !cap.rights().contains(CapRights::READ) {
+        return SyscallResult::err(SysError::AccessDenied);
+    }
+    let len = len.min(MAX_READ);
+    if len == 0 {
+        return SyscallResult::ok(0);
+    }
+    if user_buffer(addr, len, true).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut staged = [0u8; MAX_READ as usize];
+    let mut filled = 0usize;
+    while filled < len as usize {
+        let Some(c) = crate::drivers::keyboard::pop_key() else {
+            break;
+        };
+        let mut tmp = [0u8; 4];
+        let encoded = c.encode_utf8(&mut tmp);
+        if filled + encoded.len() > len as usize {
+            crate::drivers::keyboard::unget_key(c);
+            break;
+        }
+        staged[filled..filled + encoded.len()].copy_from_slice(encoded.as_bytes());
+        filled += encoded.len();
+    }
+    if filled > 0 {
+        // SAFETY: the destination was accepted as present, user, writable.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                staged.as_ptr(),
+                VirtAddr::new(addr).as_mut_ptr::<u8>(),
+                filled,
+            );
+        }
+    }
+    SyscallResult::ok(filled as u64)
+}
+
+fn syscall_spawn(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+    if cap.index() != galexy_abi::reserved::LOADER_INDEX {
+        return SyscallResult::err(SysError::BadCap);
+    }
+    if !cap.rights().contains(CapRights::EXEC) {
+        return SyscallResult::err(SysError::AccessDenied);
+    }
+    if len == 0 || len > MAX_NAME {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if user_buffer(addr, len, false).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut raw = [0u8; MAX_NAME as usize];
+    // SAFETY: `user_buffer` accepted every byte of [addr, addr+len).
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            VirtAddr::new(addr).as_ptr::<u8>(),
+            raw.as_mut_ptr(),
+            len as usize,
+        );
+    }
+    let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
+    if !file_name_ok(name) {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if crate::sched::ramdisk::find(name).is_none() {
+        return SyscallResult::err(SysError::NotFound);
+    }
+    match crate::sched::task_spawn(name) {
+        Ok(()) => SyscallResult::ok(0),
+        Err(err) => SyscallResult::err(err),
+    }
 }
 
 fn syscall_close(cap: Cap) -> SyscallResult {

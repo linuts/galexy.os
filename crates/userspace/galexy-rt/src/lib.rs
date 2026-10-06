@@ -81,6 +81,27 @@ pub fn close(cap: Cap) -> SyscallResult {
     syscall(Syscall::Close as u64, cap.bits(), 0, 0)
 }
 
+/// The keyboard capability (READ). `read` of zero bytes means no key is waiting.
+pub fn keyboard_cap() -> Cap {
+    galexy_abi::reserved::keyboard(CapRights::READ)
+}
+
+/// The loader capability (EXEC). [`spawn`] waits until the program exits.
+pub fn loader_cap() -> Cap {
+    galexy_abi::reserved::loader(CapRights::EXEC)
+}
+
+/// Starts the ramdisk program `name` and returns after it exits.
+pub fn spawn(name: &[u8]) -> SyscallResult {
+    let cap = loader_cap();
+    syscall(
+        Syscall::Spawn as u64,
+        cap.bits(),
+        name.as_ptr() as u64,
+        name.len() as u64,
+    )
+}
+
 /// Gives up the rest of the scheduling quantum.
 pub fn yield_now() -> SyscallResult {
     syscall(Syscall::Yield as u64, 0, 0, 0)

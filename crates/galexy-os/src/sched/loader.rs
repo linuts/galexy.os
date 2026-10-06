@@ -41,8 +41,25 @@ pub struct ProgramRegion {
 /// Loads `bytes` as a static ELF64 program and spawns the task running it.
 ///
 /// Same rotation/lifecycle as every task: kernel stack via TSS.RSP0, CR3
-/// own tree, tombstone + tree-walk reaping.
+/// own tree, tombstone + tree-walk reaping. Owner CPU round-robins.
 pub fn spawn_program(name: &'static str, bytes: &[u8]) -> ProgramRegion {
+    spawn_program_placed(name, bytes, None, false)
+}
+
+/// Like [`spawn_program`], pinned to the BSP, and idle CPUs do not steal it.
+///
+/// The interactive shell lives here: the keyboard IRQ and the framebuffer
+/// both have a single consumer, and that consumer is the BSP.
+pub fn spawn_program_bsp(name: &'static str, bytes: &[u8]) -> ProgramRegion {
+    spawn_program_placed(name, bytes, Some(0), true)
+}
+
+fn spawn_program_placed(
+    name: &'static str,
+    bytes: &[u8],
+    owner: Option<u8>,
+    no_steal: bool,
+) -> ProgramRegion {
     let elf = ElfFile::new(bytes).expect("spawn_program: invalid ELF");
     // Only static executables: relocatable/DYN would need relocation work.
     match elf.header.pt2.type_().as_type() {
@@ -163,6 +180,8 @@ pub fn spawn_program(name: &'static str, bytes: &[u8]) -> ProgramRegion {
             kstack_top,
             cr3: root.start_address().as_u64(),
             user_p4: p4_index_of(image),
+            owner,
+            no_steal,
         });
         serial_println!(
             "[loader] program '{}' ready (own tree cr3={:#x}, entry {:#x})",

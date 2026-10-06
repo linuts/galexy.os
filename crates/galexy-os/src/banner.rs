@@ -13,7 +13,7 @@ const OK_COLOR: Color = Color::new(0x51, 0xC8, 0x78);
 const VALUE_COLOR: Color = Color::new(0xB0, 0xB0, 0xB0);
 const TEXT_COLOR: Color = Color::new(0xE0, 0xE0, 0xE0);
 
-/// Renders the boot banner and the first shell prompt.
+/// Renders the boot banner. The ring-3 shell prints the first prompt.
 pub fn show() {
     screen::clear_screen();
 
@@ -91,9 +91,5 @@ pub fn show() {
     print!("shell: type 'help' for commands\n");
 
     screen::out_str("\n\n");
-
-    // First prompt
-    screen::set_color(crate::shell::PROMPT_COLOR);
-    screen::out_str("galexy> ");
     screen::set_color(TEXT_COLOR);
 }

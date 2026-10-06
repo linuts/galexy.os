@@ -78,10 +78,12 @@ contract between them.
    from inside either side without a version bump.
 8. **ABI stability (capabilities day one).** The `galexy-abi` decisions —
    opaque `Cap` handles (48-bit index + 16-bit rights), reserved indexes
-   (console=1, self=2; file caps start at 3, per task), syscall numbers
-   (exit=0, yield=1, write=2, cap_info=3, open=4, read=5, close=6), error
-   codes (BadCap=1, AccessDenied=2, BadBuffer=3, Unsupported=4, BadValue=5,
-   NotFound=6, NoResource=7) — are permanent. New syscalls APPEND;
+   (console=1, self=2; file caps start at 3, per task; keyboard=0x8000
+   and loader=0x8001 in the high reserved band, above any file slot),
+   syscall numbers (exit=0, yield=1, write=2, cap_info=3, open=4, read=5,
+   close=6, spawn=7), error codes (BadCap=1, AccessDenied=2, BadBuffer=3,
+   Unsupported=4, BadValue=5, NotFound=6, NoResource=7) — are permanent.
+   New syscalls APPEND;
    renumbering/renaming = ABI major bump. NO file descriptors at this ABI
    level: resources are capabilities kernel-side, validated on every call,
    revoked easily. Files/ports/handles-to-come all become caps.
@@ -147,7 +149,11 @@ controller work, not interrupt-controller work — it runs on every boot path.
 
 IRQ1 handler (LAPIC-delivered via the I/O APIC) → `pc_keyboard` (US layout,
 scancode set 1) → Unicode chars
-pushed into a `kcore::Ring`. Consumers drain via `keyboard::pop_key()`:
+pushed into a `kcore::Ring`. The kernel drains via `keyboard::pop_key()`.
+The ring-3 shell does not: it `read`s the keyboard capability
+(`reserved::KEYBOARD_INDEX`, READ). A zero-length success means the queue
+is empty, not that input ended. A short read that cannot fit the next
+character's UTF-8 puts that character back (`unget_key`).
 
 ```rust
 pub fn add_scancode(scancode: u8)   // called from the IRQ handler only
@@ -460,8 +466,15 @@ handle snapshot. `open(name)` is an exact ramdisk lookup; `read` copies
 the next bytes (short-read at 1 KiB, 0 at EOF); `close` drops the slot.
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
-buffer. Unknown numbers → Unsupported. Kernel-origin syscalls are
-impossible-by-structure: the arch shim dies loudly instead.
+buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing
+queued). `spawn` on the loader cap (EXEC) parks the caller (`STATE_WAITING`)
+and queues the program name; the main loop, which is on the kernel page
+table, loads the ELF — a user CR3 must not be cloned into a new task.
+The waiter is marked runnable when that program exits, including a
+ring-3 page fault. Console `write` accepts backspace (`0x08`) and form
+feed (`0x0c`, clear) so the ring-3 shell can edit a line. Unknown numbers
+→ Unsupported. Kernel-origin syscalls are impossible-by-structure: the
+arch shim dies loudly instead.
 
 ### arch/syscall — "the mechanism" (arch/)
 
@@ -546,10 +559,12 @@ not free ramdisk bytes.
   locks. The IRQ gate is still part of every acquisition (a local
   `hlt`-sleeping CPU must not re-enter a held lock). Steal correctness
   rides this lock; there is no separate migration lock.
-- **BSP homeownership**: cooperative tasks (`SCHED` queue), the shell
-  (typing, status bar, foreground), and the framebuffer stay BSP-only by
-  design — one display, one input queue, one accounting yardstick
-  (`main_ticks` = the BSP's slot-0 counter).
+- **BSP homeownership**: cooperative tasks (`SCHED` queue), the status
+  bar, and the framebuffer stay BSP-only by design — one display, one
+  input queue, one accounting yardstick (`main_ticks` = the BSP's slot-0
+  counter). The interactive shell is a ring-3 program (Milestone 21)
+  spawned on the BSP with `no_steal`, so idle CPUs cannot migrate it
+  onto the AP where the keyboard IRQ is not delivered.
 - **Kernel-half remaps are shootdowns (M19).** Shared kernel-half PTEs
   are no longer frozen after boot. `map_kernel_page_broadcast` maps,
   flushes locally, and broadcasts precise INVLPG (vector 0xF8, mailbox

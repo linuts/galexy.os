@@ -647,4 +647,8 @@ fn main_kernel_boots_and_timer_ticks() {
         serial.contains("[timer] 1s up"),
         "timer heartbeat missing; serial:\n{serial}"
     );
+    assert!(
+        serial.contains("[loader] program 'shell' ready"),
+        "ring-3 shell was not spawned; serial:\n{serial}"
+    );
 }

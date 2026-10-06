@@ -139,6 +139,23 @@ pub mod reserved {
             super::CapRights::READ.union(super::CapRights::WRITE),
         )
     }
+
+    /// The keyboard. Appended after file caps took the low indexes
+    /// (`FILE_CAP_BASE` upward), so this lives in the high reserved band
+    /// and is never a per-task file slot.
+    pub const KEYBOARD_INDEX: u64 = 0x8000;
+    /// The program loader. Same high band as the keyboard, next index.
+    pub const LOADER_INDEX: u64 = 0x8001;
+
+    /// The keyboard capability. `read` copies waiting keystrokes.
+    pub const fn keyboard(rights: super::CapRights) -> Cap {
+        Cap::new(KEYBOARD_INDEX, rights)
+    }
+
+    /// The loader capability. `spawn` starts a ramdisk program.
+    pub const fn loader(rights: super::CapRights) -> Cap {
+        Cap::new(LOADER_INDEX, rights)
+    }
 }
 
 /// Lowest capability index a per-task file open may return. `0` is null,
@@ -191,23 +208,35 @@ pub enum Syscall {
     /// Returns: `SyscallResult` (rax = new `Cap` bits, READ right).
     /// The cap is private to the calling task.
     Open,
-    /// `read(cap, addr, len)` — copy bytes from an open file into a buffer.
+    /// `read(cap, addr, len)` — copy bytes from a capability into a buffer.
     ///
     /// Args: `RDI = cap bits`, `RSI = user address`, `RDX = byte count`.
-    /// Returns: `SyscallResult` (rax = bytes copied; `0` is end of file).
-    /// A long request short-reads rather than failing. Requires
-    /// CapRights::READ on both the kernel grant and the handle snapshot.
+    /// Returns: `SyscallResult` (rax = bytes copied). A long request
+    /// short-reads rather than failing. Requires CapRights::READ.
+    ///
+    /// On a file cap, `0` is end of file. On the keyboard cap, `0` means
+    /// no keystroke is waiting (the queue does not end).
     Read,
     /// `close(cap)` — drop a file capability opened by this task.
     ///
     /// Args: `RDI = cap bits`. Returns: `SyscallResult` (rax = 0).
-    /// Reserved caps (console, self) are not files and fail `BadCap`.
+    /// Reserved caps (console, self, keyboard, loader) are not files and
+    /// fail `BadCap`.
     Close,
+    /// `spawn(cap, name, len)` — start a ramdisk program and wait until it
+    /// exits.
+    ///
+    /// Args: `RDI = loader cap bits`, `RSI = user address of the name`,
+    /// `RDX = byte count`. Returns: `SyscallResult` (rax = 0) after the
+    /// program has exited. Requires CapRights::EXEC on the loader cap.
+    /// The load itself runs on the kernel's page table (main-loop drain);
+    /// the caller is parked until then.
+    Spawn,
 }
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (fixing the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 7] = [
+pub const SYSCALLS: [Syscall; 8] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -215,6 +244,7 @@ pub const SYSCALLS: [Syscall; 7] = [
     Syscall::Open,
     Syscall::Read,
     Syscall::Close,
+    Syscall::Spawn,
 ];
 
 /// Maximum syscall number (upper bound for a u64 dispatch table).
@@ -275,7 +305,8 @@ pub enum SysError {
     BadValue = 5,
     /// `open` found no ramdisk file with that exact name.
     NotFound = 6,
-    /// The calling task's file-capability table is full.
+    /// A fixed kernel slot this call needs is already taken (the task's
+    /// file table, or the single queued program spawn).
     NoResource = 7,
 }
 

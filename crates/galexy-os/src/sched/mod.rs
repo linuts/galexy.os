@@ -144,6 +144,7 @@ impl FxArea {
 const STATE_RUNNING: u8 = 0;
 const STATE_EXITED: u8 = 1; // returned from its entry; reaped by the main loop
 const STATE_FREED: u8 = 2; // stack + fx freed; rotation-skipped tombstone
+const STATE_WAITING: u8 = 3; // parked inside `spawn` until that child exits
 
 /// Magic word painted at the very bottom of each thread's stack (lowest
 /// address). A stack that overflows far enough to corrupt the heap walks
@@ -205,6 +206,14 @@ struct Thread {
     /// File capabilities belonging to this task. Empty for kernel threads.
     /// Indexes are [`galexy_abi::FILE_CAP_BASE`] + slot. Cleared on reap.
     files: [Option<OpenFile>; MAX_OPEN_FILES],
+    /// Idle stealing skips this thread. The interactive shell is resident
+    /// on the BSP: the keyboard and the framebuffer have one consumer.
+    no_steal: bool,
+    /// When `state` is [`STATE_WAITING`], the child name this task is
+    /// parked on. The bytes are written under `THREADS` before the state
+    /// store; `wait_for_len` is what readers trust.
+    wait_for: [u8; 64],
+    wait_for_len: AtomicU8,
 }
 
 // SAFETY: `fx` is an exclusively-owned allocation, dereferenced only by the
@@ -458,6 +467,10 @@ pub(crate) struct TaskInit {
     pub(crate) cr3: u64,
     /// The task's P4 entry index inside its tree.
     pub(crate) user_p4: u16,
+    /// `Some` pins the owner CPU. `None` round-robins via [`next_cpu`].
+    pub(crate) owner: Option<u8>,
+    /// Idle stealing must leave this task on its spawn CPU.
+    pub(crate) no_steal: bool,
 }
 
 pub(crate) fn register_user_task(init: TaskInit) {
@@ -466,7 +479,7 @@ pub(crate) fn register_user_task(init: TaskInit) {
         let mut kstack = init.kstack;
         kstack[..8].copy_from_slice(&STACK_CANARY.to_le_bytes());
         let fx = Box::into_raw(Box::new(FxArea::new()));
-        let owner = next_cpu();
+        let owner = init.owner.unwrap_or_else(next_cpu);
         push_thread(Thread {
             name: init.name,
             state: AtomicU8::new(STATE_RUNNING),
@@ -482,6 +495,9 @@ pub(crate) fn register_user_task(init: TaskInit) {
             owner,
             stolen_at: AtomicU64::new(0),
             files: [None; MAX_OPEN_FILES],
+            no_steal: init.no_steal,
+            wait_for: [0; 64],
+            wait_for_len: AtomicU8::new(0),
         });
     });
 }
@@ -518,6 +534,9 @@ pub fn spawn_thread(name: &'static str, entry: extern "C" fn()) -> u8 {
             owner,
             stolen_at: AtomicU64::new(0),
             files: [None; MAX_OPEN_FILES],
+            no_steal: false,
+            wait_for: [0; 64],
+            wait_for_len: AtomicU8::new(0),
         });
         serial_println!("[sched] thread '{}' ready (owner cpu {})", name, owner);
         owner
@@ -704,6 +723,9 @@ pub fn spawn_user_task(
             owner,
             stolen_at: AtomicU64::new(0),
             files: [None; MAX_OPEN_FILES],
+            no_steal: false,
+            wait_for: [0; 64],
+            wait_for_len: AtomicU8::new(0),
         });
         serial_println!(
             "[sched] user task '{}' ready (own tree cr3={:#x}, p4={}, code @ {:#x}, kstack top {:#x})",
@@ -796,6 +818,103 @@ pub fn is_name_running(name: &str) -> bool {
 }
 
 // (main_ticks moved into the per-CPU table above.)
+
+/// One queued `spawn`. The syscall path only copies the name (it runs
+/// IF=0); the main loop loads the ELF on the kernel page table.
+struct PendingSpawn {
+    name: [u8; 64],
+    len: u8,
+    armed: bool,
+}
+
+static PENDING_SPAWN: Mutex<PendingSpawn> = Mutex::new(PendingSpawn {
+    name: [0; 64],
+    len: 0,
+    armed: false,
+});
+
+/// Queues `name` and parks the current task until that program exits.
+///
+/// The caller must already be a running user task. Lock order: this takes
+/// `PENDING_SPAWN`, then `THREADS`.
+pub(crate) fn task_spawn(name: &str) -> Result<(), SysError> {
+    if name.len() > 64 {
+        return Err(SysError::BadValue);
+    }
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut pending = PENDING_SPAWN.lock();
+        if pending.armed {
+            return Err(SysError::NoResource);
+        }
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        pending.name[..name.len()].copy_from_slice(name.as_bytes());
+        pending.len = name.len() as u8;
+        pending.armed = true;
+        thread.wait_for[..name.len()].copy_from_slice(name.as_bytes());
+        thread
+            .wait_for_len
+            .store(name.len() as u8, Ordering::Relaxed);
+        thread.state.store(STATE_WAITING, Ordering::Release);
+        Ok(())
+    })
+}
+
+/// Loads a queued program, if the shell has asked for one.
+///
+/// Runs from the main loop: that context is the kernel page table, which
+/// `spawn_program` clones. The requesting task is already `WAITING`.
+pub fn drain_spawn() {
+    let name = interrupts::without_interrupts(|| {
+        let mut pending = PENDING_SPAWN.lock();
+        if !pending.armed {
+            return None;
+        }
+        let len = pending.len as usize;
+        let mut raw = [0u8; 64];
+        raw[..len].copy_from_slice(&pending.name[..len]);
+        pending.armed = false;
+        let text = core::str::from_utf8(&raw[..len]).unwrap_or("");
+        Some(alloc::string::String::from(text))
+    });
+    let Some(name) = name else {
+        return;
+    };
+    let leaked: &'static str = alloc::boxed::Box::leak(name.into_boxed_str());
+    if let Some(bytes) = ramdisk::find(leaked) {
+        loader::spawn_program(leaked, bytes);
+    } else {
+        serial_println!("[sched] spawn '{}' missing at drain; waking waiter", leaked);
+        interrupts::without_interrupts(|| {
+            let threads = THREADS.lock();
+            wake_waiters(&threads, leaked);
+        });
+    }
+}
+
+/// Marks every task parked on `name` runnable again. `threads` is the
+/// `THREADS` guard. A waiter with an empty name is not parked.
+fn wake_waiters(threads: &[Thread], name: &str) {
+    let bytes = name.as_bytes();
+    for thread in threads.iter() {
+        let n = thread.wait_for_len.load(Ordering::Relaxed) as usize;
+        if n == 0 || n != bytes.len() || &thread.wait_for[..n] != bytes {
+            continue;
+        }
+        if thread.state.load(Ordering::Acquire) != STATE_WAITING {
+            continue;
+        }
+        thread.wait_for_len.store(0, Ordering::Relaxed);
+        thread.state.store(STATE_RUNNING, Ordering::Release);
+    }
+}
 
 /// Opens a ramdisk file for the current user task. `name` is the exact
 /// archive entry (`banner.txt`, `hello`). The returned cap carries READ.
@@ -941,8 +1060,10 @@ pub unsafe fn syscall_handoff(
         t.ctx.store(frame as u64, Ordering::Relaxed);
         context::fx_save(t.fx as *mut u8);
         if exit {
+            let name = t.name;
             t.state.store(STATE_EXITED, Ordering::Release);
-            serial_println!("[sched] task '{}' exited ({})", t.name, reason);
+            serial_println!("[sched] task '{}' exited ({})", name, reason);
+            wake_waiters(&threads, name);
         }
 
         // Advance the rotation: first eligible slot strictly after the
@@ -1111,11 +1232,12 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
                     let stolen_at = t.stolen_at.load(Ordering::Relaxed);
                     if t.owner == my_cpu
                         || t.state.load(Ordering::Acquire) != STATE_RUNNING
+                        || t.no_steal
                         || now < stolen_at + STEAL_COOLDOWN_TICKS
                         || CPU_SCHED[t.owner as usize].current.load(Ordering::Relaxed) == slot_no
                         || !CTX_STABLE[i].load(Ordering::Acquire)
                     {
-                        continue; // own / dead / cooling down / current / tail still on its stack
+                        continue; // own / dead / resident / cooling / current / tail still on its stack
                     }
                     let victim = t.owner;
                     t.owner = my_cpu;

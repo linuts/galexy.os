@@ -1,0 +1,16 @@
+[package]
+name = "shell"
+version = "0.1.0"
+edition = "2021"
+description = "The galexy.os interactive shell, as a ring-3 program."
+
+[[bin]]
+name = "shell"
+path = "src/main.rs"
+
+[dependencies]
+galexy-rt = { path = "../galexy-rt" }
+galexy-abi = { path = "../../galexy-abi" }
+
+[build-dependencies]
+galexy-abi = { path = "../../galexy-abi" }

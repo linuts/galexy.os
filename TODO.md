@@ -643,6 +643,32 @@ bytes; `close` drops the slot.** Suite: 31 QEMU boot tests, all `-smp 2`.
 - [x] **`galexy-rt`**: `open` / `read` / `close` wrappers
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 21 — A ring-3 shell ✅
+
+The interactive shell is a user program. **It reads the keyboard
+capability, writes the console, and `spawn`s ramdisk programs through
+the loader capability.** The kernel keeps the status bar and performs
+the ELF load on its own page table. Suite: 31 QEMU boot tests, all
+`-smp 2`.
+    … 47 output lines hidden · ctrl+o to expand
+
+- [x] **ABI**: keyboard index `0x8000`, loader index `0x8001` (high
+      reserved band, above file caps). `spawn`=7. `read` on the keyboard
+      returns 0 when no key is waiting. `spawn` requires EXEC and does
+      not return until the program has exited
+- [x] **Park, don't clone a user page table** (`sched`): the syscall
+      copies the name into one fixed slot and marks the caller
+      `WAITING`. The main loop drains that slot with `spawn_program`
+      (kernel CR3). Exit, including a ring-3 fault, wakes the waiter
+- [x] **BSP-resident** (`no_steal`): the shell is pinned to CPU 0 and
+      idle stealing skips it. The keyboard IRQ and the framebuffer stay
+      single-consumer
+- [x] **`crates/userspace/shell`**: line editing (backspace, form-feed
+      clear), `help` / `about` / `run <program>`. The boot path spawns
+      it instead of `shell::poll`. `shell::exec` remains for the
+      in-kernel `run hello` test
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17
@@ -673,7 +699,11 @@ bytes; `close` drops the slot.** Suite: 31 QEMU boot tests, all `-smp 2`.
 - [ ] `write` printable-ASCII rule is a stand-in for a real console
       charset policy (newlines work; tab/CR/ESC are future screen work)
 - [ ] File caps are ramdisk reads only: no write, seek, or directory
-      listing, and the shell's `run` still loads by name in the kernel
+      listing. `spawn` still loads the ELF on the kernel page table
+      (a user CR3 must not be cloned into the child)
+- [ ] The ring-3 shell has `help`, `about`, `clear`, and `run`. `stats`,
+      `tasks`, and `threads` stay on the kernel status bar — there is no
+      query capability yet
 - [ ] `run` leaks the task name (`Box::leak`, a few bytes per spawn) —
       fine at this scale; a slot free-list is the fix if tasks churn
 - [ ] Tombstone slots live forever (a few bytes per dead thread) — fine

@@ -39,6 +39,17 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     sched::init();
     sched::demo::spawn_all(); // silent preemptive threads
     banner::show();
+    // The interactive shell is a ring-3 program pinned to the BSP. The
+    // kernel loop only drains its spawn requests and keeps the status bar.
+    // Without that ELF, the in-kernel line editor stays the consumer.
+    let user_shell = if let Some(bytes) = sched::ramdisk::find("shell") {
+        sched::loader::spawn_program_bsp("shell", bytes);
+        true
+    } else {
+        serial_println!("[boot] no shell program on the ramdisk; kernel shell stays");
+        shell::init();
+        false
+    };
     serial_println!("[boot] main loop ready");
     let mut last_second = 0u64;
     loop {
@@ -48,9 +59,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             last_second = second;
             shell::render_status_bar();
         }
-        // Serve input, reap exited threads, sweep tasks, then sleep until
-        // the next interrupt.
-        shell::poll();
+        // A queued `run` loads on this loop (kernel page table). The
+        // in-kernel editor only consumes keys when no ring-3 shell owns them.
+        sched::drain_spawn();
+        if !user_shell {
+            shell::poll();
+        }
         sched::reap();
         sched::run();
         x86_64::instructions::hlt();

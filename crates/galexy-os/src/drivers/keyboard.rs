@@ -20,6 +20,10 @@ static KEYBOARD: Mutex<PS2Keyboard<layouts::Us104Key, ScancodeSet1>> =
     ));
 
 static KEY_QUEUE: Mutex<Ring<char, QUEUE_CAPACITY>> = Mutex::new(Ring::new());
+/// One key put back by a short `read` that could not fit its UTF-8.
+/// `pop_key` returns it before the queue. At most one: the reader just
+/// took it.
+static UNGOT: Mutex<Option<char>> = Mutex::new(None);
 
 /// Brings the PS/2 controller's first port (keyboard) online: the enable
 /// command + stale-buffer drain. Formerly part of `arch::pics::init` — it
@@ -70,5 +74,21 @@ pub fn add_scancode(scancode: u8) {
 /// Lock-audit rule: queued-lock access must not be preemptable.
 pub fn pop_key() -> Option<char> {
     use x86_64::instructions::interrupts;
-    interrupts::without_interrupts(|| KEY_QUEUE.lock().pop())
+    interrupts::without_interrupts(|| {
+        if let Some(c) = UNGOT.lock().take() {
+            return Some(c);
+        }
+        KEY_QUEUE.lock().pop()
+    })
+}
+
+/// Puts `c` back so the next [`pop_key`] returns it. Only the key just
+/// popped may be returned, and only when a `read` buffer cannot hold it.
+pub fn unget_key(c: char) {
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| {
+        let mut ungot = UNGOT.lock();
+        assert!(ungot.is_none(), "keyboard: unget already holds a key");
+        *ungot = Some(c);
+    });
 }

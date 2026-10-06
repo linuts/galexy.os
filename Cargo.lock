@@ -395,6 +395,7 @@ dependencies = [
  "bootloader",
  "galexy-os",
  "hello",
+ "shell",
  "tar",
 ]
 
@@ -473,6 +474,14 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "shell"
+version = "0.1.0"
+dependencies = [
+ "galexy-abi",
+ "galexy-rt",
 ]
 
 [[package]]

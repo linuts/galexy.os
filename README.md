@@ -6,7 +6,8 @@ memory management, cooperative tasks, timer-preemptive kernel threads, and a
 real userland: ring-3 tasks with their own address spaces (running on either
 CPU), actual Rust programs loaded as ELF from a tar ramdisk, printing through
 the syscall ABI, killed cleanly when they crash — the OS survives user bugs.
-The interactive shell launches userland programs by name (`run hello`).
+The interactive shell is itself a ring-3 program. It reads the keyboard
+through a capability and launches userland programs by name (`run hello`).
 
 ## Features
 
@@ -24,9 +25,9 @@ The interactive shell launches userland programs by name (`run hello`).
       mechanized with precise-INVLPG shootdown IPIs (vector 0xF8, lock-free
       handler, mailbox pool); every boot test runs at `-smp 2`
 - [x] PS/2 keyboard input with scancode translation
-- [x] Shell: line editing (Backspace), commands (`help`, `stats`, `threads`,
-      `tasks`, `run <program>`, `clear`, `about`), `command not found` for
-      unknown lines
+- [x] Shell: a ring-3 program — line editing (Backspace), commands
+      (`help`, `about`, `clear`, `run <program>`), `command not found` for
+      unknown lines. The kernel keeps the live status bar
 - [x] Physical frame allocator over the bootloader memory map
 - [x] Paging: map/unmap pages with TLB flushes, page-fault reporting (CR2),
       fresh page-table trees (per-task isolation groundwork)
@@ -45,7 +46,8 @@ The interactive shell launches userland programs by name (`run hello`).
 - [x] `galexy-abi`: the syscall ABI — numbered syscalls + capability model
       (no fds; capabilities day one) — frozen and host-tested before any
       ring-3 code exists. `open`/`read`/`close` turn ramdisk files into
-      per-task capabilities
+      per-task capabilities; the keyboard and the loader are reserved
+      caps (`read` keystrokes, `spawn` a program)
 - [x] Shell with commands (`help`, `stats`, `threads`, `run <program>`,
       ...) + live status bar ("quiet OS" demo) — `run` launches real
       userland programs from the ramdisk; console output = screen + serial
