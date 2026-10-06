@@ -186,6 +186,9 @@ fn syscall_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if cap.index() == galexy_abi::reserved::KEYBOARD_INDEX {
         return syscall_read_keyboard(cap, addr, len);
     }
+    if let Some(kind) = query_kind(cap.index()) {
+        return syscall_read_query(cap, kind, addr, len);
+    }
     // Short read: a request larger than the staging cap returns a prefix.
     let len = len.min(MAX_READ);
     if len > 0 && user_buffer(addr, len, true).is_err() {
@@ -207,6 +210,147 @@ fn syscall_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {
         }
     }
     SyscallResult::ok(n as u64)
+}
+
+/// Which query snapshot a high-band index names, if it names one.
+fn query_kind(index: u64) -> Option<Query> {
+    match index {
+        galexy_abi::reserved::STATS_INDEX => Some(Query::Stats),
+        galexy_abi::reserved::TASKS_INDEX => Some(Query::Tasks),
+        galexy_abi::reserved::THREADS_INDEX => Some(Query::Threads),
+        _ => None,
+    }
+}
+
+enum Query {
+    Stats,
+    Tasks,
+    Threads,
+}
+
+fn syscall_read_query(cap: Cap, kind: Query, addr: u64, len: u64) -> SyscallResult {
+    if !cap.rights().contains(CapRights::READ) {
+        return SyscallResult::err(SysError::AccessDenied);
+    }
+    let len = len.min(MAX_READ);
+    if len == 0 {
+        return SyscallResult::ok(0);
+    }
+    if user_buffer(addr, len, true).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut staged = [0u8; MAX_READ as usize];
+    let mut out = TextBuf {
+        dst: &mut staged[..len as usize],
+        n: 0,
+    };
+    match kind {
+        Query::Stats => render_stats(&mut out),
+        Query::Tasks => render_tasks(&mut out),
+        Query::Threads => render_threads(&mut out),
+    }
+    let n = out.n;
+    if n > 0 {
+        // SAFETY: the destination was accepted as present, user, writable.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                staged.as_ptr(),
+                VirtAddr::new(addr).as_mut_ptr::<u8>(),
+                n,
+            );
+        }
+    }
+    SyscallResult::ok(n as u64)
+}
+
+/// A stack buffer for query text. The syscall runs with interrupts off, so
+/// this must not allocate.
+struct TextBuf<'a> {
+    dst: &'a mut [u8],
+    n: usize,
+}
+
+impl TextBuf<'_> {
+    fn push(&mut self, bytes: &[u8]) {
+        let room = self.dst.len().saturating_sub(self.n);
+        let take = bytes.len().min(room);
+        self.dst[self.n..self.n + take].copy_from_slice(&bytes[..take]);
+        self.n += take;
+    }
+
+    fn push_u64(&mut self, value: u64) {
+        if value == 0 {
+            self.push(b"0");
+            return;
+        }
+        let mut tmp = [0u8; 20];
+        let mut i = tmp.len();
+        let mut n = value;
+        while n > 0 {
+            i -= 1;
+            tmp[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+        self.push(&tmp[i..]);
+    }
+
+    /// `{:#x}` form: `0x` plus lowercase digits, no leading zeros (`0x0` for 0).
+    fn push_hex(&mut self, value: u64) {
+        self.push(b"0x");
+        if value == 0 {
+            self.push(b"0");
+            return;
+        }
+        let mut tmp = [0u8; 16];
+        let mut i = tmp.len();
+        let mut n = value;
+        while n > 0 {
+            i -= 1;
+            let digit = (n & 0xf) as u8;
+            tmp[i] = if digit < 10 {
+                b'0' + digit
+            } else {
+                b'a' + (digit - 10)
+            };
+            n >>= 4;
+        }
+        self.push(&tmp[i..]);
+    }
+}
+
+fn render_stats(out: &mut TextBuf<'_>) {
+    let (heap_start, heap_size) = crate::arch::mm::heap::stats();
+    out.push(b"frames free: ");
+    out.push_u64(crate::arch::mm::free_frames() as u64);
+    out.push(b"\nheap: ");
+    out.push_u64(crate::arch::mm::heap::used_bytes() as u64);
+    out.push(b" used, ");
+    out.push_u64(crate::arch::mm::heap::free_bytes() as u64);
+    out.push(b" free of ");
+    out.push_u64(heap_size / 1024);
+    out.push(b" KiB\nheap at ");
+    out.push_hex(heap_start);
+    out.push(b"\n");
+}
+
+fn render_tasks(out: &mut TextBuf<'_>) {
+    out.push(b"cooperative tasks: ");
+    out.push_u64(crate::sched::active_tasks() as u64);
+    out.push(b" active, ");
+    out.push_u64(crate::sched::spawned_total() as u64);
+    out.push(b" spawned since boot\npreemption: timer @ ~1kHz, round-robin incl. main loop\n");
+}
+
+fn render_threads(out: &mut TextBuf<'_>) {
+    crate::sched::for_running_threads(|name, ticks| {
+        out.push(name.as_bytes());
+        out.push(b": ");
+        out.push_u64(ticks);
+        out.push(b" ticks\n");
+    });
+    out.push(b"main loop: ");
+    out.push_u64(crate::sched::main_ticks());
+    out.push(b" ticks\n");
 }
 
 fn syscall_read_keyboard(cap: Cap, addr: u64, len: u64) -> SyscallResult {

@@ -146,6 +146,13 @@ pub mod reserved {
     pub const KEYBOARD_INDEX: u64 = 0x8000;
     /// The program loader. Same high band as the keyboard, next index.
     pub const LOADER_INDEX: u64 = 0x8001;
+    /// Free frames and heap counters. `read` returns a fresh text snapshot.
+    pub const STATS_INDEX: u64 = 0x8002;
+    /// Cooperative-task counters. Same snapshot rule as [`STATS_INDEX`].
+    pub const TASKS_INDEX: u64 = 0x8003;
+    /// Running threads and their tick counts. Same snapshot rule as
+    /// [`STATS_INDEX`].
+    pub const THREADS_INDEX: u64 = 0x8004;
 
     /// The keyboard capability. `read` copies waiting keystrokes.
     pub const fn keyboard(rights: super::CapRights) -> Cap {
@@ -155,6 +162,21 @@ pub mod reserved {
     /// The loader capability. `spawn` starts a ramdisk program.
     pub const fn loader(rights: super::CapRights) -> Cap {
         Cap::new(LOADER_INDEX, rights)
+    }
+
+    /// The stats capability. `read` copies the current frame and heap report.
+    pub const fn stats(rights: super::CapRights) -> Cap {
+        Cap::new(STATS_INDEX, rights)
+    }
+
+    /// The tasks capability. `read` copies the cooperative-task report.
+    pub const fn tasks(rights: super::CapRights) -> Cap {
+        Cap::new(TASKS_INDEX, rights)
+    }
+
+    /// The threads capability. `read` copies the running-thread report.
+    pub const fn threads(rights: super::CapRights) -> Cap {
+        Cap::new(THREADS_INDEX, rights)
     }
 }
 
@@ -215,13 +237,15 @@ pub enum Syscall {
     /// short-reads rather than failing. Requires CapRights::READ.
     ///
     /// On a file cap, `0` is end of file. On the keyboard cap, `0` means
-    /// no keystroke is waiting (the queue does not end).
+    /// no keystroke is waiting (the queue does not end). On a query cap
+    /// (stats, tasks, threads), each call returns a fresh snapshot, so
+    /// `0` means the caller asked for no bytes.
     Read,
     /// `close(cap)` — drop a file capability opened by this task.
     ///
     /// Args: `RDI = cap bits`. Returns: `SyscallResult` (rax = 0).
-    /// Reserved caps (console, self, keyboard, loader) are not files and
-    /// fail `BadCap`.
+    /// Reserved caps (console, self, keyboard, loader, stats, tasks,
+    /// threads) are not files and fail `BadCap`.
     Close,
     /// `spawn(cap, name, len)` — start a ramdisk program and wait until it
     /// exits.

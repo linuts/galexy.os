@@ -137,6 +137,10 @@ first real program landed in Milestone 13:
   keystroke E2E over QMP proves the real input path)
 - Userland print hygiene: console = screen + serial mirror ✅ (Milestone
   16); ANSI-ish console layer still future work.
+- Query capabilities ✅ (Milestone 22: `stats` / `tasks` / `threads`
+  are reserved caps. `read` returns a fresh text snapshot, rendered
+  without allocating on the IF=0 syscall path. The ring-3 shell types
+  all three; `bin` coverage is the QMP typing test).
 - Userland shell ✅ (Milestone 21: the interactive shell is a ring-3
   program. Keyboard cap + `read` for keystrokes, loader cap + `spawn`
   which parks the caller until the child exits, the ELF load drained on

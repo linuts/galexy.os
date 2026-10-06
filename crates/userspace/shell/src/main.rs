@@ -7,8 +7,10 @@
 #![no_std]
 #![no_main]
 
-use galexy_abi::SysError;
-use galexy_rt::{entry, keyboard_cap, read, spawn, write_console, yield_now};
+use galexy_abi::{Cap, SysError};
+use galexy_rt::{
+    entry, keyboard_cap, read, spawn, stats_cap, tasks_cap, threads_cap, write_console, yield_now,
+};
 
 entry!(main);
 
@@ -62,7 +64,7 @@ fn dispatch(line: &[u8]) {
         return;
     }
     if line == b"help" {
-        write_console(b"commands: help, about, clear, run <program>\n");
+        write_console(b"commands: help, stats, tasks, threads, about, clear, run <program>\n");
         prompt();
         return;
     }
@@ -70,6 +72,18 @@ fn dispatch(line: &[u8]) {
         write_console(b"galexy.os - a small Rust OS\n");
         write_console(b"this shell is a ring-3 program\n");
         prompt();
+        return;
+    }
+    if line == b"stats" {
+        show(stats_cap());
+        return;
+    }
+    if line == b"tasks" {
+        show(tasks_cap());
+        return;
+    }
+    if line == b"threads" {
+        show(threads_cap());
         return;
     }
     if line == b"clear" {
@@ -129,6 +143,21 @@ fn trim(bytes: &[u8]) -> &[u8] {
         end -= 1;
     }
     &bytes[start..end]
+}
+
+fn show(cap: Cap) {
+    let mut buf = [0u8; 1024];
+    let got = read(cap, &mut buf);
+    if !got.ok {
+        write_console(b"query: denied\n");
+    } else if got.value > 0 {
+        let n = (got.value as usize).min(buf.len());
+        write_console(&buf[..n]);
+        if buf[n - 1] != b'\n' {
+            write_console(b"\n");
+        }
+    }
+    prompt();
 }
 
 fn prompt() {

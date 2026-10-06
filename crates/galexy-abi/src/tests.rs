@@ -71,6 +71,9 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(FILE_CAP_BASE, 3);
     assert_eq!(reserved::KEYBOARD_INDEX, 0x8000);
     assert_eq!(reserved::LOADER_INDEX, 0x8001);
+    assert_eq!(reserved::STATS_INDEX, 0x8002);
+    assert_eq!(reserved::TASKS_INDEX, 0x8003);
+    assert_eq!(reserved::THREADS_INDEX, 0x8004);
     assert!(reserved::KEYBOARD_INDEX > FILE_CAP_BASE);
     assert!(matches!(SYSCALLS[4], Syscall::Open));
     assert!(matches!(SYSCALLS[5], Syscall::Read));
@@ -82,6 +85,17 @@ fn reserved_caps_have_permanent_indexes() {
     let loader = reserved::loader(CapRights::EXEC);
     assert_eq!(loader.index(), reserved::LOADER_INDEX);
     assert!(loader.rights().contains(CapRights::EXEC));
+    let stats = reserved::stats(CapRights::READ);
+    assert_eq!(stats.index(), reserved::STATS_INDEX);
+    assert!(stats.rights().contains(CapRights::READ));
+    assert_eq!(
+        reserved::tasks(CapRights::READ).index(),
+        reserved::TASKS_INDEX
+    );
+    assert_eq!(
+        reserved::threads(CapRights::READ).index(),
+        reserved::THREADS_INDEX
+    );
     let console = reserved::console(CapRights::WRITE);
     assert_eq!(console.index(), 1);
     let self_cap = reserved::self_cap();

@@ -650,7 +650,6 @@ capability, writes the console, and `spawn`s ramdisk programs through
 the loader capability.** The kernel keeps the status bar and performs
 the ELF load on its own page table. Suite: 31 QEMU boot tests, all
 `-smp 2`.
-    … 47 output lines hidden · ctrl+o to expand
 
 - [x] **ABI**: keyboard index `0x8000`, loader index `0x8001` (high
       reserved band, above file caps). `spawn`=7. `read` on the keyboard
@@ -667,6 +666,23 @@ the ELF load on its own page table. Suite: 31 QEMU boot tests, all
       clear), `help` / `about` / `run <program>`. The boot path spawns
       it instead of `shell::poll`. `shell::exec` remains for the
       in-kernel `run hello` test
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
+## Milestone 22 — Query capabilities ✅
+
+The ring-3 shell can see the machine again. **`stats`, `tasks`, and
+`threads` are reserved caps; `read` copies a fresh text snapshot.**
+Suite: 32 QEMU boot tests, all `-smp 2`.
+
+- [x] **ABI**: indexes `0x8002` / `0x8003` / `0x8004`, next to the
+      keyboard and the loader. READ required. Each `read` is a new
+      snapshot (no cursor, so `0` means the caller asked for no bytes)
+- [x] **No allocation on the syscall** (`sched/syscalls.rs`): the text
+      is rendered into the staging array. Thread names are walked under
+      `THREADS` without building a `Vec`
+- [x] **Shell commands**: `stats`, `tasks`, `threads` print that text.
+      A typed QMP test runs all three and checks `frames free:`,
+      `thread-a:`, and `cooperative tasks:`
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
 ## Known limitations / follow-ups
@@ -701,9 +717,6 @@ the ELF load on its own page table. Suite: 31 QEMU boot tests, all
 - [ ] File caps are ramdisk reads only: no write, seek, or directory
       listing. `spawn` still loads the ELF on the kernel page table
       (a user CR3 must not be cloned into the child)
-- [ ] The ring-3 shell has `help`, `about`, `clear`, and `run`. `stats`,
-      `tasks`, and `threads` stay on the kernel status bar — there is no
-      query capability yet
 - [ ] `run` leaks the task name (`Box::leak`, a few bytes per spawn) —
       fine at this scale; a slot free-list is the fix if tasks churn
 - [ ] Tombstone slots live forever (a few bytes per dead thread) — fine

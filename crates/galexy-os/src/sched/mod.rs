@@ -793,6 +793,20 @@ pub fn thread_tick_total() -> u64 {
     })
 }
 
+/// Calls `each` with every RUNNING thread's name and tick count.
+///
+/// No allocation: the syscall path renders query text into a stack buffer
+/// and must not grow the heap (a grow there broadcasts a shootdown).
+pub(crate) fn for_running_threads(mut each: impl FnMut(&'static str, u64)) {
+    interrupts::without_interrupts(|| {
+        for thread in THREADS.lock().iter() {
+            if thread.state.load(Ordering::Relaxed) == STATE_RUNNING {
+                each(thread.name, thread.ticks.load(Ordering::Relaxed));
+            }
+        }
+    });
+}
+
 pub fn thread_stats() -> alloc::vec::Vec<(&'static str, u64)> {
     interrupts::without_interrupts(|| {
         THREADS

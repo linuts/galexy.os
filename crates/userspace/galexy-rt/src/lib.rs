@@ -91,6 +91,21 @@ pub fn loader_cap() -> Cap {
     galexy_abi::reserved::loader(CapRights::EXEC)
 }
 
+/// The stats capability (READ). [`read`] returns a fresh frame and heap report.
+pub fn stats_cap() -> Cap {
+    galexy_abi::reserved::stats(CapRights::READ)
+}
+
+/// The tasks capability (READ). [`read`] returns a fresh cooperative-task report.
+pub fn tasks_cap() -> Cap {
+    galexy_abi::reserved::tasks(CapRights::READ)
+}
+
+/// The threads capability (READ). [`read`] returns a fresh running-thread report.
+pub fn threads_cap() -> Cap {
+    galexy_abi::reserved::threads(CapRights::READ)
+}
+
 /// Starts the ramdisk program `name` and returns after it exits.
 pub fn spawn(name: &[u8]) -> SyscallResult {
     let cap = loader_cap();

@@ -455,6 +455,57 @@ const RUN_HELLO_KEYS: &[(&str, &str)] = &[
     ("ret", HELLO_TEXT),
 ];
 
+/// `stats`, then `threads`, then `tasks`. Each Enter syncs on a line only
+/// the query `read` produces (the banner's "frames free" is screen-only).
+const QUERY_KEYS: &[(&str, &str)] = &[
+    ("s", "s"),
+    ("t", "t"),
+    ("a", "a"),
+    ("t", "t"),
+    ("s", "s"),
+    ("ret", "frames free:"),
+    ("t", "t"),
+    ("h", "h"),
+    ("r", "r"),
+    ("e", "e"),
+    ("a", "a"),
+    ("d", "d"),
+    ("s", "s"),
+    ("ret", "main loop:"),
+    ("t", "t"),
+    ("a", "a"),
+    ("s", "s"),
+    ("k", "k"),
+    ("s", "s"),
+    ("ret", "cooperative tasks:"),
+];
+
+/// The ring-3 shell's query caps: typed `stats` / `threads` / `tasks`
+/// come back as console text (screen + serial), including a live thread.
+#[test]
+fn shell_query_typing_e2e() {
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        QUERY_KEYS,
+        "[boot] main loop ready",
+        "",
+        Duration::from_millis(30),
+        Duration::from_secs(60),
+    );
+    assert!(
+        serial.contains("frames free:"),
+        "typed `stats` never produced the frame line; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("thread-a:"),
+        "typed `threads` never listed thread-a; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("cooperative tasks:"),
+        "typed `tasks` never produced the task line; serial:\n{serial}"
+    );
+}
+
 /// True end-to-end: TYPES `run hello` into the running kernel through
 /// QEMU's QMP `send-key` (real PS/2 IRQs into the keyboard driver) and
 /// asserts the user program's console output on COM1 (screen+serial
