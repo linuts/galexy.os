@@ -106,6 +106,32 @@ pub fn threads_cap() -> Cap {
     galexy_abi::reserved::threads(CapRights::READ)
 }
 
+/// The power capability. [`shutdown`] and [`reboot`] do not return when the
+/// machine honors them.
+pub fn power_cap() -> Cap {
+    galexy_abi::reserved::power(CapRights::POWER)
+}
+
+/// Turns the machine off. Returns if it stayed up.
+pub fn shutdown() -> SyscallResult {
+    syscall(
+        Syscall::Power as u64,
+        power_cap().bits(),
+        galexy_abi::POWER_SHUTDOWN,
+        0,
+    )
+}
+
+/// Resets the machine. Returns if it stayed up.
+pub fn reboot() -> SyscallResult {
+    syscall(
+        Syscall::Power as u64,
+        power_cap().bits(),
+        galexy_abi::POWER_REBOOT,
+        0,
+    )
+}
+
 /// Starts the ramdisk program `name` and returns after it exits.
 pub fn spawn(name: &[u8]) -> SyscallResult {
     let cap = loader_cap();

@@ -9,7 +9,8 @@
 
 use galexy_abi::{Cap, SysError};
 use galexy_rt::{
-    entry, keyboard_cap, read, spawn, stats_cap, tasks_cap, threads_cap, write_console, yield_now,
+    entry, keyboard_cap, read, reboot, shutdown, spawn, stats_cap, tasks_cap, threads_cap,
+    write_console, yield_now,
 };
 
 entry!(main);
@@ -65,6 +66,7 @@ fn dispatch(line: &[u8]) {
     }
     if line == b"help" {
         write_console(b"commands: help, stats, tasks, threads, about, clear, run <program>\n");
+        write_console(b"power: shutdown, reboot\n");
         prompt();
         return;
     }
@@ -84,6 +86,18 @@ fn dispatch(line: &[u8]) {
     }
     if line == b"threads" {
         show(threads_cap());
+        return;
+    }
+    if line == b"shutdown" {
+        let _ = shutdown();
+        write_console(b"shutdown: the machine stayed up\n");
+        prompt();
+        return;
+    }
+    if line == b"reboot" {
+        let _ = reboot();
+        write_console(b"reboot: the machine stayed up\n");
+        prompt();
         return;
     }
     if line == b"clear" {

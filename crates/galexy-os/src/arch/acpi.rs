@@ -1,4 +1,4 @@
-//! ACPI discovery: RSDP → XSDT/RSDT → MADT.
+//! ACPI discovery: RSDP → XSDT/RSDT → MADT, plus the FADT power registers.
 //!
 //! `BootInfo` hands us the physical RSDP address; the physical-memory mapping
 //! (fixed in `BOOTLOADER_CONFIG`) lets us walk the tables without any extra
@@ -93,10 +93,46 @@ impl Madt {
 /// Parsed MADT; panics before [`init`] (a bug, not a condition to handle).
 static MADT: Once<Madt> = Once::new();
 
+/// Shutdown and reset registers from the FADT (and `_S5_` in the DSDT).
+///
+/// Absent when the firmware has no FADT. Shutdown then has nothing to
+/// program; reboot can still pulse the keyboard controller.
+#[derive(Debug, Clone, Copy)]
+pub struct PowerInfo {
+    /// PM1a control register, I/O port.
+    pub pm1a_cnt: u16,
+    /// PM1b control register, or 0 when the platform has only PM1a.
+    pub pm1b_cnt: u16,
+    /// SLP_TYPa from the DSDT `_S5_` package (low 3 bits).
+    pub slp_typa: u8,
+    /// SLP_TYPb. Unused when `pm1b_cnt` is 0.
+    pub slp_typb: u8,
+    /// `_S5_` was present, so [`slp_typa`] is meaningful.
+    pub has_s5: bool,
+    /// SMI command port. 0 means ACPI is already enabled.
+    pub smi_cmd: u16,
+    /// Byte written to [`smi_cmd`] to enter ACPI mode.
+    pub acpi_enable: u8,
+    /// ACPI reset register, I/O port, when the FADT advertises one.
+    pub reset_port: u16,
+    /// Value that resets the machine through [`reset_port`].
+    pub reset_value: u8,
+    /// [`reset_port`] is valid.
+    pub has_reset: bool,
+}
+
+/// Parsed FADT power block. `None` before init, or when the firmware has no FADT.
+static POWER: Once<Option<PowerInfo>> = Once::new();
+
 /// The parsed interrupt-controller table. Call after [`init`].
 pub fn madt() -> &'static Madt {
     MADT.get()
         .unwrap_or_else(|| panic!("acpi: MADT not initialized (arch::init runs first)"))
+}
+
+/// FADT shutdown/reset registers, if the firmware published a FADT.
+pub fn power_info() -> Option<&'static PowerInfo> {
+    POWER.get().and_then(|slot| slot.as_ref())
 }
 
 /// Walks RSDP → XSDT/RSDT → MADT and publishes the result.
@@ -113,12 +149,13 @@ pub fn init(rsdp_phys: Option<u64>, phys_offset: u64) {
     };
 
     let rsdp = load_rsdp(rsdp_phys, phys_offset);
-    let madt_phys = match rsdp.xsdt_phys {
+    let (root_phys, entry_size, root_sig) = match rsdp.xsdt_phys {
         // XSDT (v2+): 8-byte child entries. Supersedes the RSDT entirely.
-        Some(xsdt) => find_madt(xsdt, phys_offset, 8, b"XSDT"),
-        None => find_madt(rsdp.rsdt_phys, phys_offset, 4, b"RSDT"),
-    }
-    .unwrap_or_else(|| panic!("acpi: no MADT (signature 'APIC') under the root table"));
+        Some(xsdt) => (xsdt, 8, b"XSDT"),
+        None => (rsdp.rsdt_phys, 4, b"RSDT"),
+    };
+    let madt_phys = find_table(root_phys, phys_offset, entry_size, root_sig, b"APIC")
+        .unwrap_or_else(|| panic!("acpi: no MADT (signature 'APIC') under the root table"));
 
     let madt = parse_madt(madt_phys, phys_offset);
     serial_println!(
@@ -133,6 +170,28 @@ pub fn init(rsdp_phys: Option<u64>, phys_offset: u64) {
         panic!("acpi: MADT parsed twice");
     }
     MADT.call_once(|| madt);
+
+    let power = find_table(root_phys, phys_offset, entry_size, root_sig, b"FACP")
+        .and_then(|fadt| parse_power(fadt, phys_offset));
+    if let Some(info) = power {
+        serial_println!(
+            "[acpi] power: pm1a {:#x}, pm1b {:#x}, s5 {}, reset {:#x}",
+            info.pm1a_cnt,
+            info.pm1b_cnt,
+            if info.has_s5 {
+                info.slp_typa as u16
+            } else {
+                0xFFFF
+            },
+            if info.has_reset { info.reset_port } else { 0 }
+        );
+    } else {
+        serial_println!("[acpi] no usable FADT; shutdown unavailable");
+    }
+    if POWER.get().is_some() {
+        panic!("acpi: power info parsed twice");
+    }
+    POWER.call_once(|| power);
 }
 
 struct Rsdp {
@@ -209,13 +268,14 @@ unsafe fn table_bytes(phys: u64, phys_offset: u64) -> &'static [u8] {
     unsafe { core::slice::from_raw_parts(base, len) }
 }
 
-/// Returns the physical address of the first `APIC` table under the root
-/// system-description table (`entry_size`: 8 for XSDT, 4 for RSDT).
-fn find_madt(
+/// Returns the physical address of the first child table with `sig`
+/// (`entry_size`: 8 for XSDT, 4 for RSDT).
+fn find_table(
     root_phys: u64,
     phys_offset: u64,
     entry_size: usize,
     root_sig: &[u8; 4],
+    sig: &[u8; 4],
 ) -> Option<u64> {
     // SAFETY: the root-table address comes from the validated RSDP.
     let root = unsafe { table_bytes(root_phys, phys_offset) };
@@ -238,7 +298,7 @@ fn find_madt(
             "acpi: child table checksum mismatch at phys {:#x}",
             child
         );
-        (&bytes[0..4] == b"APIC").then_some(child)
+        (&bytes[0..4] == sig).then_some(child)
     })
 }
 
@@ -327,5 +387,168 @@ fn parse_madt(phys: u64, phys_offset: u64) -> Madt {
         cpus,
         enabled_ids,
         overrides,
+    }
+}
+
+/// Reads the FADT's power and reset registers, and `_S5_` out of its DSDT.
+fn parse_power(fadt_phys: u64, phys_offset: u64) -> Option<PowerInfo> {
+    // SAFETY: the address came from the validated root table.
+    let fadt = unsafe { table_bytes(fadt_phys, phys_offset) };
+    if &fadt[0..4] != b"FACP" || fadt.len() < 72 {
+        serial_println!("[acpi] FADT too short for PM1a_CNT");
+        return None;
+    }
+    let smi_cmd = le(fadt, 48, 4);
+    let acpi_enable = fadt[52];
+    let pm1a = le(fadt, 64, 4);
+    let pm1b = le(fadt, 68, 4);
+    // Extended addresses supersede the 32-bit ones when the table carries them.
+    let pm1a = gas_io(fadt, 172).unwrap_or(pm1a);
+    let pm1b = gas_io(fadt, 184).unwrap_or(pm1b);
+    let (reset_port, reset_value, has_reset) = reset_reg(fadt);
+
+    let dsdt_phys = x_dsdt(fadt).or_else(|| {
+        let addr = le(fadt, 40, 4);
+        (addr != 0).then_some(addr)
+    });
+    let (slp_typa, slp_typb, has_s5) = dsdt_phys
+        .and_then(|phys| {
+            // SAFETY: the DSDT pointer came from the checksummed FADT.
+            let dsdt = unsafe { table_bytes(phys, phys_offset) };
+            if &dsdt[0..4] != b"DSDT" || !checksum_ok(dsdt) {
+                serial_println!("[acpi] DSDT signature or checksum mismatch");
+                return None;
+            }
+            parse_s5(dsdt)
+        })
+        .map(|(a, b)| (a, b, true))
+        .unwrap_or((0, 0, false));
+
+    let pm1a_cnt = u16::try_from(pm1a).ok()?;
+    if pm1a_cnt == 0 {
+        return None;
+    }
+    let pm1b_cnt = u16::try_from(pm1b).unwrap_or(0);
+    Some(PowerInfo {
+        pm1a_cnt,
+        pm1b_cnt,
+        slp_typa,
+        slp_typb,
+        has_s5,
+        smi_cmd: u16::try_from(smi_cmd).unwrap_or(0),
+        acpi_enable,
+        reset_port,
+        reset_value,
+        has_reset,
+    })
+}
+
+/// I/O port from a Generic Address Structure, when it is System I/O and fits
+/// in a port number. `off` is the GAS start inside the FADT.
+fn gas_io(table: &[u8], off: usize) -> Option<u64> {
+    if table.len() < off + 12 {
+        return None;
+    }
+    // 1 = System I/O. Anything else (memory, PCI) is not a port write.
+    if table[off] != 1 {
+        return None;
+    }
+    let addr = le(table, off + 4, 8);
+    (addr != 0 && addr <= u64::from(u16::MAX)).then_some(addr)
+}
+
+/// 64-bit DSDT pointer (FADT offset 140) when the table is long enough.
+fn x_dsdt(fadt: &[u8]) -> Option<u64> {
+    if fadt.len() < 148 {
+        return None;
+    }
+    let addr = le(fadt, 140, 8);
+    (addr != 0).then_some(addr)
+}
+
+/// ACPI reset register (FADT flag bit 10, GAS at 116, value at 128).
+fn reset_reg(fadt: &[u8]) -> (u16, u8, bool) {
+    if fadt.len() < 129 {
+        return (0, 0, false);
+    }
+    let flags = le(fadt, 112, 4);
+    if flags & (1 << 10) == 0 {
+        return (0, 0, false);
+    }
+    match gas_io(fadt, 116) {
+        Some(port) => (port as u16, fadt[128], true),
+        None => (0, 0, false),
+    }
+}
+
+/// `_S5_` in a DSDT: `Name(_S5_, Package { typ_a, typ_b, ... })`.
+///
+/// This is not an AML interpreter. It only accepts the NameOp form QEMU and
+/// the firmware actually emit for the sleep-state package.
+fn parse_s5(dsdt: &[u8]) -> Option<(u8, u8)> {
+    let mut i = 0;
+    while i + 5 < dsdt.len() {
+        if &dsdt[i..i + 4] == b"_S5_" {
+            let named = (i >= 1 && dsdt[i - 1] == 0x08)
+                || (i >= 2 && dsdt[i - 2] == 0x08 && dsdt[i - 1] == 0x5C);
+            if named && dsdt[i + 4] == 0x12 {
+                if let Some(types) = s5_package(&dsdt[i + 5..]) {
+                    return Some(types);
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Package body after PackageOp: PkgLength, element count, then integers.
+fn s5_package(body: &[u8]) -> Option<(u8, u8)> {
+    let (pkg_len, len_bytes) = pkg_length(body)?;
+    if pkg_len < len_bytes || pkg_len > body.len() {
+        return None;
+    }
+    let mut at = len_bytes;
+    let count = *body.get(at)? as usize;
+    at += 1;
+    if count == 0 {
+        return None;
+    }
+    let (a, n) = aml_int(body, at)?;
+    at += n;
+    let b = if count >= 2 {
+        aml_int(body, at).map(|(v, _)| v).unwrap_or(a)
+    } else {
+        a
+    };
+    Some(((a & 7) as u8, (b & 7) as u8))
+}
+
+/// ACPI PkgLength. The returned length includes the length bytes themselves.
+fn pkg_length(body: &[u8]) -> Option<(usize, usize)> {
+    let lead = *body.first()?;
+    let follow = (lead >> 6) as usize;
+    if follow == 0 {
+        return Some((usize::from(lead & 0x3F), 1));
+    }
+    if body.len() < 1 + follow {
+        return None;
+    }
+    let mut len = usize::from(lead & 0x0F);
+    for (k, byte) in body[1..1 + follow].iter().enumerate() {
+        len |= usize::from(*byte) << (4 + 8 * k);
+    }
+    Some((len, 1 + follow))
+}
+
+/// One AML integer. Returns the value and how many bytes it occupied.
+fn aml_int(body: &[u8], at: usize) -> Option<(u64, usize)> {
+    match *body.get(at)? {
+        0x00 => Some((0, 1)),
+        0x01 => Some((1, 1)),
+        0x0A => Some((u64::from(*body.get(at + 1)?), 2)),
+        0x0B if at + 3 <= body.len() => Some((le(body, at + 1, 2), 3)),
+        0x0C if at + 5 <= body.len() => Some((le(body, at + 1, 4), 5)),
+        _ => None,
     }
 }

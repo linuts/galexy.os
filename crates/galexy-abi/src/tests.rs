@@ -74,11 +74,16 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(reserved::STATS_INDEX, 0x8002);
     assert_eq!(reserved::TASKS_INDEX, 0x8003);
     assert_eq!(reserved::THREADS_INDEX, 0x8004);
+    assert_eq!(reserved::POWER_INDEX, 0x8005);
+    assert_eq!(POWER_SHUTDOWN, 0);
+    assert_eq!(POWER_REBOOT, 1);
+    assert_eq!(CapRights::POWER.bits(), 1 << 5);
     assert!(reserved::KEYBOARD_INDEX > FILE_CAP_BASE);
     assert!(matches!(SYSCALLS[4], Syscall::Open));
     assert!(matches!(SYSCALLS[5], Syscall::Read));
     assert!(matches!(SYSCALLS[6], Syscall::Close));
     assert!(matches!(SYSCALLS[7], Syscall::Spawn));
+    assert!(matches!(SYSCALLS[8], Syscall::Power));
     let keyboard = reserved::keyboard(CapRights::READ);
     assert_eq!(keyboard.index(), reserved::KEYBOARD_INDEX);
     assert!(keyboard.rights().contains(CapRights::READ));
@@ -96,6 +101,9 @@ fn reserved_caps_have_permanent_indexes() {
         reserved::threads(CapRights::READ).index(),
         reserved::THREADS_INDEX
     );
+    let power = reserved::power(CapRights::POWER);
+    assert_eq!(power.index(), reserved::POWER_INDEX);
+    assert!(power.rights().contains(CapRights::POWER));
     let console = reserved::console(CapRights::WRITE);
     assert_eq!(console.index(), 1);
     let self_cap = reserved::self_cap();

@@ -141,6 +141,11 @@ first real program landed in Milestone 13:
   are reserved caps. `read` returns a fresh text snapshot, rendered
   without allocating on the IF=0 syscall path. The ring-3 shell types
   all three; `bin` coverage is the QMP typing test).
+- Shutdown and reboot ✅ (Milestone 23: power cap `0x8005`, syscall
+  `power`=8. ACPI S5 from the FADT/`_S5_` package, reset via the FADT
+  register or the keyboard controller. `bin/test-shutdown` and
+  `bin/test-reboot` prove QEMU actually exits. Under `cargo run`,
+  `-no-reboot` means a reboot request quits QEMU).
 - Userland shell ✅ (Milestone 21: the interactive shell is a ring-3
   program. Keyboard cap + `read` for keystrokes, loader cap + `spawn`
   which parks the caller until the child exits, the ELF load drained on

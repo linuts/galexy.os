@@ -51,6 +51,8 @@ impl CapRights {
     pub const WAIT: Self = CapRights(1 << 3);
     /// May execute/spawn from the resource (loader groundwork).
     pub const EXEC: Self = CapRights(1 << 4);
+    /// May shut the machine down or reset it.
+    pub const POWER: Self = CapRights(1 << 5);
     /// The most rights a kernel-grade resource can hold.
     pub const ALL: Self = CapRights(0xFFFF);
 
@@ -178,7 +180,20 @@ pub mod reserved {
     pub const fn threads(rights: super::CapRights) -> Cap {
         Cap::new(THREADS_INDEX, rights)
     }
+
+    /// The power capability. `power` shuts down or resets the machine.
+    pub const POWER_INDEX: u64 = 0x8005;
+
+    /// The power capability.
+    pub const fn power(rights: super::CapRights) -> Cap {
+        Cap::new(POWER_INDEX, rights)
+    }
 }
+
+/// `power` operand: turn the machine off (ACPI S5).
+pub const POWER_SHUTDOWN: u64 = 0;
+/// `power` operand: reset the machine.
+pub const POWER_REBOOT: u64 = 1;
 
 /// Lowest capability index a per-task file open may return. `0` is null,
 /// [`reserved::CONSOLE_INDEX`] is the console, [`reserved::SELF_INDEX`] is
@@ -256,11 +271,17 @@ pub enum Syscall {
     /// The load itself runs on the kernel's page table (main-loop drain);
     /// the caller is parked until then.
     Spawn,
+    /// `power(cap, op)` — shut down or reset the machine.
+    ///
+    /// Args: `RDI = power cap bits`, `RSI = op` ([`POWER_SHUTDOWN`] or
+    /// [`POWER_REBOOT`]). Does not return when the platform honors it.
+    /// Requires CapRights::POWER. A return means the machine stayed up.
+    Power,
 }
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (fixing the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 8] = [
+pub const SYSCALLS: [Syscall; 9] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -269,6 +290,7 @@ pub const SYSCALLS: [Syscall; 8] = [
     Syscall::Read,
     Syscall::Close,
     Syscall::Spawn,
+    Syscall::Power,
 ];
 
 /// Maximum syscall number (upper bound for a u64 dispatch table).

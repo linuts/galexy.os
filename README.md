@@ -27,8 +27,8 @@ through a capability and launches userland programs by name (`run hello`).
 - [x] PS/2 keyboard input with scancode translation
 - [x] Shell: a ring-3 program — line editing (Backspace), commands
       (`help`, `stats`, `tasks`, `threads`, `about`, `clear`,
-      `run <program>`), `command not found` for unknown lines. The kernel
-      keeps the live status bar
+      `run <program>`, `shutdown`, `reboot`), `command not found` for
+      unknown lines. The kernel keeps the live status bar
 - [x] Physical frame allocator over the bootloader memory map
 - [x] Paging: map/unmap pages with TLB flushes, page-fault reporting (CR2),
       fresh page-table trees (per-task isolation groundwork)
@@ -38,7 +38,8 @@ through a capability and launches userland programs by name (`run hello`).
       a real lifecycle: exited threads are reaped (stacks return to the
       heap), slots are stable tombstones, stack canary surfaces overflows
 - [x] User space: ring-3 tasks in the same rotation, SYSCALL/SYSRET
-      (`exit`, `yield`, `write`, `cap_info`, `open`, `read`, `close`),
+      (`exit`, `yield`, `write`, `cap_info`, `open`, `read`, `close`,
+      `spawn`, `power`),
       capability authority
       kernel-side, per-task kernel stacks via TSS.RSP0 — and REAL
       isolation: per-task address spaces (FreshL4), CR3 swapped by the
@@ -48,10 +49,12 @@ through a capability and launches userland programs by name (`run hello`).
       (no fds; capabilities day one) — frozen and host-tested before any
       ring-3 code exists. `open`/`read`/`close` turn ramdisk files into
       per-task capabilities; the keyboard, the loader, and the query caps
-      (`stats`, `tasks`, `threads`) are reserved caps
+      (`stats`, `tasks`, `threads`) and the power cap (`shutdown`,
+      `reboot`) are reserved caps
 - [x] Shell with commands (`help`, `stats`, `threads`, `run <program>`,
-      ...) + live status bar ("quiet OS" demo) — `run` launches real
-      userland programs from the ramdisk; console output = screen + serial
+      `shutdown`, `reboot`, ...) + live status bar ("quiet OS" demo) —
+      `run` launches real userland programs from the ramdisk; console
+      output = screen + serial
 - [x] Test harness: host unit tests + per-kernel QEMU integration tests
 - [x] Programs beyond blobs: `galexy-rt` runtime (`entry!`, syscall
       wrappers, user panic handler), kernel ELF loader (static ET_EXEC,
@@ -171,7 +174,7 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
    thing a scheduler ever has to swap.
 4. **Test what can be tested.** Host unit tests for the pure primitives
    (`galexy-core`, `galexy-abi`), plus one bootable kernel binary per
-   integration test — 32 QEMU boots (all at `-smp 2`) assert exit codes and
+   integration test — 34 QEMU boots (all at `-smp 2`) assert exit codes and
    serial output on every run.
 5. **Ownership beats locks for per-CPU state.** Rotation cursors, TSS.RSP0,
    syscall scratch and the LAPIC registers are touched by exactly one CPU

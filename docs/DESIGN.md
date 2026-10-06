@@ -79,10 +79,10 @@ contract between them.
 8. **ABI stability (capabilities day one).** The `galexy-abi` decisions —
    opaque `Cap` handles (48-bit index + 16-bit rights), reserved indexes
    (console=1, self=2; file caps start at 3, per task; keyboard=0x8000,
-   loader=0x8001, stats=0x8002, tasks=0x8003, threads=0x8004 in the high
-   reserved band, above any file slot),
+   loader=0x8001, stats=0x8002, tasks=0x8003, threads=0x8004,
+   power=0x8005 in the high reserved band, above any file slot),
    syscall numbers (exit=0, yield=1, write=2, cap_info=3, open=4, read=5,
-   close=6, spawn=7), error codes (BadCap=1, AccessDenied=2, BadBuffer=3,
+   close=6, spawn=7, power=8), error codes (BadCap=1, AccessDenied=2, BadBuffer=3,
    Unsupported=4, BadValue=5, NotFound=6, NoResource=7) — are permanent.
    New syscalls APPEND;
    renumbering/renaming = ABI major bump. NO file descriptors at this ABI
@@ -207,6 +207,14 @@ Init order: GDT/TSS (per-CPU slot 0) → per-CPU GS substrate → ACPI (MADT)
   leaves IRQ1 identity).
 - Host-side the boot CPU is always LAPIC id 0 — the code never assumes it;
   the BSP id is read from the MADT; `enabled_ids()` feeds AP bring-up.
+- The same walk looks up `FACP` (the FADT). A missing or unusable FADT
+  is logged and shutdown stays unavailable; the MADT is still required.
+  PM1a/PM1b control ports (the extended GAS when it is System I/O),
+  the SMI command port, and the reset register (flag bit 10) are copied
+  out. `_S5_` is the DSDT `Name(_S5_, Package …)` form only — not an AML
+  interpreter. `arch::power` programs PM1 with that sleep type (then the
+  PIIX4 port `0x604` if the machine is still up) and resets through the
+  FADT register or the i8042 command `0xFE`.
 
 ### arch/cpu — "per-CPU identity + AP bring-up" (arch/)
 
@@ -475,8 +483,12 @@ the caller (`STATE_WAITING`) and queues the program name; the main loop,
 which is on the kernel page
 table, loads the ELF — a user CR3 must not be cloned into a new task.
 The waiter is marked runnable when that program exits, including a
-ring-3 page fault. Console `write` accepts backspace (`0x08`) and form
-feed (`0x0c`, clear) so the ring-3 shell can edit a line. Unknown numbers
+ring-3 page fault. `power` on the power cap (POWER right) shuts the
+machine down (`op` 0, ACPI S5) or resets it (`op` 1). It does not
+return when the platform honors it; a return is Unsupported and the
+shell says the machine stayed up. Console `write` accepts backspace
+(`0x08`) and form feed (`0x0c`, clear) so the ring-3 shell can edit a
+line. Unknown numbers
 → Unsupported. Kernel-origin syscalls are impossible-by-structure: the
 arch shim dies loudly instead.
 
@@ -617,6 +629,8 @@ QEMU exit-code mapping (empirically verified): `Success` (0x10) → exit 33,
   to xAPIC — both are exercised by the access-layer abstraction, only xAPIC
   by the QEMU test suite (assert in `bin/test-apic`).
 - `-no-reboot` is always passed to QEMU so triple faults surface as an exit
-  instead of an infinite reboot loop.
+  instead of an infinite reboot loop. A `reboot` request still pulses the
+  reset line; QEMU then exits rather than restarting the guest. `shutdown`
+  powers the VM off (process exit 0, not the isa-debug-exit code).
 - Fresh artifacts can live in *multiple* `OUT_DIR` hash dirs; pick images by
   mtime (`ls -t`) when testing manually.

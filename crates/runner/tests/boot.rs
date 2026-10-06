@@ -87,6 +87,40 @@ fn heap_test_passes() {
 }
 
 #[test]
+fn shutdown_test_powers_off() {
+    let (code, serial) = boot(&image("test-shutdown"));
+    assert!(
+        serial.contains("[test-shutdown] powering off"),
+        "shutdown never started; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[PANIC]"),
+        "shutdown returned; serial:\n{serial}"
+    );
+    assert!(
+        code.is_some(),
+        "QEMU did not exit after shutdown; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn reboot_test_resets() {
+    let (code, serial) = boot(&image("test-reboot"));
+    assert!(
+        serial.contains("[test-reboot] resetting"),
+        "reboot never started; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[PANIC]"),
+        "reboot returned; serial:\n{serial}"
+    );
+    assert!(
+        code.is_some(),
+        "QEMU did not exit after reboot; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn acpi_test_passes() {
     // MADT discovery is architecture truth for both boot paths: run it on
     // the BIOS image AND the UEFI image (OVMF's tables must parse too).

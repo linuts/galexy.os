@@ -84,6 +84,10 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
                 Outcome::Resume
             }
         }
+        n if n == Syscall::Power as u64 => {
+            stamp(frame, syscall_power(Cap::from_bits(frame.rdi), frame.rsi));
+            Outcome::Resume
+        }
         // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));
@@ -425,6 +429,22 @@ fn syscall_spawn(cap: Cap, addr: u64, len: u64) -> SyscallResult {
         Ok(()) => SyscallResult::ok(0),
         Err(err) => SyscallResult::err(err),
     }
+}
+
+fn syscall_power(cap: Cap, op: u64) -> SyscallResult {
+    if cap.index() != galexy_abi::reserved::POWER_INDEX {
+        return SyscallResult::err(SysError::BadCap);
+    }
+    if !cap.rights().contains(CapRights::POWER) {
+        return SyscallResult::err(SysError::AccessDenied);
+    }
+    match op {
+        galexy_abi::POWER_SHUTDOWN => crate::arch::power::shutdown(),
+        galexy_abi::POWER_REBOOT => crate::arch::power::reboot(),
+        _ => return SyscallResult::err(SysError::BadValue),
+    }
+    // The platform ignored the request. The machine is still up.
+    SyscallResult::err(SysError::Unsupported)
 }
 
 fn syscall_close(cap: Cap) -> SyscallResult {

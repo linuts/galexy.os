@@ -685,6 +685,27 @@ Suite: 32 QEMU boot tests, all `-smp 2`.
       `thread-a:`, and `cooperative tasks:`
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 23 — Shutdown and reboot ✅
+
+The ring-3 shell can turn the machine off or reset it. **`shutdown`
+and `reboot` are a reserved power cap; the syscall programs the
+firmware's PM1 / reset registers.** Suite: 34 QEMU boot tests, all
+`-smp 2`.
+
+- [x] **ABI**: index `0x8005`, `CapRights::POWER`, `power`=8. Operands
+      are shutdown (0) and reboot (1). A return means the platform
+      ignored the request (`Unsupported`)
+- [x] **FADT + `_S5_`** (`arch/acpi.rs`): PM1 control ports, SMI enable,
+      reset register. The DSDT scan accepts only `Name(_S5_, Package)`.
+      A missing FADT is logged; the MADT is still required
+- [x] **`arch/power`**: S5 write, then the PIIX4 port `0x604` if still
+      up. Reset prefers the FADT register, then i8042 `0xFE`. Both run
+      with interrupts off and print before the port write
+- [x] **Shell**: `shutdown` and `reboot`. If the call returns, the
+      shell says the machine stayed up
+- [x] **`bin/test-shutdown` / `bin/test-reboot`**: QEMU exits, no panic
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17
