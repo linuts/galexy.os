@@ -210,6 +210,19 @@ pub const POWER_REBOOT: u64 = 1;
 /// Keyboard, the loader, and power stay with the shell.
 pub const SPAWN_GRANT_QUERY: u64 = 1;
 
+/// `grant` rights (`RDX`): read the object.
+pub const TOKEN_READ: u64 = 1;
+/// `grant` rights: write the object's bytes.
+pub const TOKEN_WRITE: u64 = 2;
+/// `grant` rights: list the object's children (or see it in a listing).
+pub const TOKEN_LIST: u64 = 4;
+/// `grant` rights: create children under a directory.
+pub const TOKEN_CREATE: u64 = 8;
+/// `grant` rights: remove the object.
+pub const TOKEN_REMOVE: u64 = 16;
+/// Every galfs token right. Any other bit in `grant`'s `RDX` is `BadValue`.
+pub const TOKEN_ALL: u64 = TOKEN_READ | TOKEN_WRITE | TOKEN_LIST | TOKEN_CREATE | TOKEN_REMOVE;
+
 /// Lowest capability index a per-task file open may return. `0` is null,
 /// [`reserved::CONSOLE_INDEX`] is the console, [`reserved::SELF_INDEX`] is
 /// the calling task. File indexes are per-task (not a global fd table):
@@ -317,11 +330,22 @@ pub enum Syscall {
     /// `Unsupported`. A missing path is `NotFound`. An open cap on a
     /// removed file becomes `BadCap`.
     Remove,
+    /// `grant(path, len, rights, task, task_len)` — install a galfs token
+    /// on a live user task.
+    ///
+    /// Args: `RDI = user address of the path`, `RSI = byte count`,
+    /// `RDX = rights` ([`TOKEN_READ`] and friends; any other bit is
+    /// `BadValue`), `R8 = user address of the target task name`,
+    /// `R9 = target name byte count`. Returns: `SyscallResult` (rax = 0).
+    /// The caller must already hold every right being granted on the
+    /// resolved object (or an ancestor). A missing path or task is
+    /// `NotFound`. A full token table on the target is `NoResource`.
+    Grant,
 }
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (fixing the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 11] = [
+pub const SYSCALLS: [Syscall; 12] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -333,6 +357,7 @@ pub const SYSCALLS: [Syscall; 11] = [
     Syscall::Power,
     Syscall::Create,
     Syscall::Remove,
+    Syscall::Grant,
 ];
 
 /// Maximum syscall number (upper bound for a u64 dispatch table).

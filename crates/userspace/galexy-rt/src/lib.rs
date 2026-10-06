@@ -78,6 +78,33 @@ pub fn remove(name: &[u8]) -> SyscallResult {
     )
 }
 
+/// Installs a galfs token on a live user task.
+///
+/// `rights` is a mask of [`galexy_abi::TOKEN_READ`] and friends. The
+/// caller must already hold every bit being granted. `r8`/`r9` are the
+/// target task name.
+pub fn grant(path: &[u8], rights: u64, task: &[u8]) -> SyscallResult {
+    let value: u64;
+    let ok: u64;
+    // SAFETY: same syscall entry as [`syscall`]. r8/r9 name the target;
+    // rcx/r11 are clobbered by the instruction.
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") Syscall::Grant as u64 => value,
+            inlateout("rdx") rights => ok,
+            in("rdi") path.as_ptr() as u64,
+            in("rsi") path.len() as u64,
+            in("r8") task.as_ptr() as u64,
+            in("r9") task.len() as u64,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    SyscallResult { ok: ok != 0, value }
+}
+
 /// Like [`create`], and if the path is an existing scratch file its bytes
 /// are emptied first.
 pub fn create_replace(name: &[u8]) -> SyscallResult {

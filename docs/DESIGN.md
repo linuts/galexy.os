@@ -512,7 +512,14 @@ archive open is `Unsupported`. `remove(name, len)` (syscall 10) deletes
 a galfs file or an empty directory and frees the slot. A ramdisk
 name, or a directory that still has a child, is `Unsupported`. A
 missing path is `NotFound`. An open cap on a removed file becomes
-`BadCap`.
+`BadCap`. `grant(path, len, rights, task, task_len)` (syscall 11)
+installs a galfs token on a live user task: `RDX` is a mask of
+`TOKEN_READ`/`WRITE`/`LIST`/`CREATE`/`REMOVE` (any other bit is
+`BadValue`), `R8`/`R9` name the target. The caller must already hold
+every right being granted on the resolved object (or an ancestor). A
+missing path or task is `NotFound`. A full token table on the target
+is `NoResource`. Same-object grants merge rights. The shell's
+`grant lr <path> <task>` uses it.
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing

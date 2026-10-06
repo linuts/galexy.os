@@ -46,7 +46,7 @@ through a capability and starts a userland program when you type its name
       heap), freed slots are reused in place, stack canary surfaces overflows
 - [x] User space: ring-3 tasks in the same rotation, SYSCALL/SYSRET
       (`exit`, `yield`, `write`, `cap_info`, `open`, `read`, `close`,
-      `spawn`, `power`, `create`, `remove`),
+      `spawn`, `power`, `create`, `remove`, `grant`),
       capability authority
       kernel-side, per-task kernel stacks via TSS.RSP0 — and REAL
       isolation: per-task address spaces (FreshL4), CR3 swapped by the
@@ -56,10 +56,11 @@ through a capability and starts a userland program when you type its name
       (no fds; capabilities day one) — frozen and host-tested before any
       ring-3 code exists. `open`/`read`/`close` turn ramdisk files into
       per-task capabilities; `create` adds a galfs file or directory
-      the task can write when it holds a create token; the keyboard, the loader, and the query caps
+      the task can write when it holds a create token; `grant` installs a
+      token on another live task; the keyboard, the loader, and the query caps
       (`stats`, `tasks`, `threads`, `ls`) and the power cap (`shutdown`,
       `reboot`) are reserved caps. Paths may use `owner@name` (`/dan@Desktop`)
-- [x] Shell with commands (`help`, `ls`, `stats`, `threads`, `shutdown`,
+- [x] Shell with commands (`help`, `ls`, `grant`, `stats`, `threads`, `shutdown`,
       `reboot`, ...) + live status bar ("quiet OS" demo) — typing a
       ramdisk program name starts it and the prompt returns while it
       runs; a shell fault loads the shell again; F1–F12 switch consoles;

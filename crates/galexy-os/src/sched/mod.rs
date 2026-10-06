@@ -1469,6 +1469,34 @@ pub(crate) fn task_close(cap: Cap) -> Result<(), SysError> {
     })
 }
 
+/// Installs a galfs token on a live user task named `target`.
+///
+/// The current task must already hold every bit in `rights` on the
+/// resolved object. Lock order: [`THREADS`] then the galfs table.
+pub(crate) fn task_grant(path: &str, rights: u8, target: &str) -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let (fs_root, fs_tokens) = {
+            let caller = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+            if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
+                return Err(SysError::BadCap);
+            }
+            (caller.fs_root, caller.fs_tokens)
+        };
+        let object = galfs::resolve_and_check(fs_root, &fs_tokens, path, rights)?;
+        let Some(ti) = threads.iter().position(|t| {
+            t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
+        }) else {
+            return Err(SysError::NotFound);
+        };
+        galfs::push_token(&mut threads[ti].fs_tokens, object, rights)
+    })
+}
+
 /// File-table index for a user cap, or `BadCap` when it is not a file index.
 fn file_slot(cap: Cap) -> Result<usize, SysError> {
     let index = cap.index();

@@ -903,6 +903,19 @@ tests, all `-smp 2`.
       installed, then lists and opens it
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 35 — grant syscall ✅
+
+A task that holds rights on an object can install a token on another
+live user task. Suite still 41 QEMU boot tests (`test-galfs` extended).
+
+- [x] **Syscall `grant`=11**: path + rights (`TOKEN_*`) + target task
+      name. Caller must hold every bit being granted. Same-object tokens
+      merge rights. Missing path or task is `NotFound`
+- [x] Shell builtin `grant <rights> <path> <task>` (`r`/`w`/`l`/`c`/`x`)
+- [x] `bin/test-galfs`: dan grants `/Desktop` list+read to `reader`;
+      reader opens `/dan@Desktop/secret`
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17

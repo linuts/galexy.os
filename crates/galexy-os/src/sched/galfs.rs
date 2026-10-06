@@ -670,14 +670,40 @@ pub fn for_each_visible(root: u16, tokens: &[Token; TOKEN_SLOTS], mut each: impl
     }
 }
 
-/// Installs a token into a fixed slot array. Test helper.
+/// Resolves `name` and checks that `cred` holds every bit in `rights`.
+/// Returns the object index. Used by the `grant` syscall.
+pub(crate) fn resolve_and_check(
+    root: u16,
+    tokens: &[Token; TOKEN_SLOTS],
+    name: &str,
+    rights: u8,
+) -> Result<u16, SysError> {
+    if rights == 0 {
+        return Err(SysError::BadValue);
+    }
+    let parsed = parse_path(name)?;
+    let cred = cred_from_tokens(root, tokens);
+    let table = TABLE.lock();
+    let (_parent, found) = lookup(&table, &cred, &parsed)?;
+    let index = found as u16;
+    if !token_allows(&table, &cred, index, rights) {
+        return Err(SysError::AccessDenied);
+    }
+    Ok(index)
+}
+
+/// Installs a token into a fixed slot array. Same object merges rights.
 pub fn push_token(
     tokens: &mut [Token; TOKEN_SLOTS],
     object: u16,
     rights: u8,
 ) -> Result<(), SysError> {
-    if object == NO_OBJECT {
+    if object == NO_OBJECT || rights == 0 {
         return Err(SysError::BadValue);
+    }
+    if let Some(slot) = tokens.iter_mut().find(|t| t.object == object) {
+        slot.rights |= rights;
+        return Ok(());
     }
     if let Some(slot) = tokens.iter_mut().find(|t| !t.is_live()) {
         *slot = Token { object, rights };

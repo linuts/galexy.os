@@ -191,6 +191,10 @@ first real program landed in Milestone 13:
   The shell and programs inherit the parent's tokens. Boot creates
   actor `alex`. `bin/test-galfs` proves AccessDenied without a token
   and a listing once LIST is installed).
+- grant syscall ✅ (Milestone 35: `grant`=11 installs a token on a live
+  user task. The caller must already hold the rights. The shell's
+  `grant lr <path> <task>` uses it. `bin/test-galfs` has dan grant
+  `/Desktop` to a reader that then opens `dan@Desktop/secret`).
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.

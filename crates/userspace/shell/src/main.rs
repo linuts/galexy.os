@@ -14,8 +14,8 @@
 
 use galexy_abi::{Cap, SysError};
 use galexy_rt::{
-    entry, files_cap, keyboard_cap, read, reboot, shutdown, spawn_with, stats_cap, tasks_cap,
-    threads_cap, write_console, yield_now,
+    entry, files_cap, grant, keyboard_cap, read, reboot, shutdown, spawn_with, stats_cap,
+    tasks_cap, threads_cap, write_console, yield_now,
 };
 
 entry!(main);
@@ -88,8 +88,9 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) {
     }
     if line == b"help" {
         write_console(b"commands: help, ls, echo, cat, touch, mkdir, cd, rm,\n");
-        write_console(b"stats, tasks, threads, about, clear\n");
+        write_console(b"grant, stats, tasks, threads, about, clear\n");
         write_console(b"a program name on its own starts it\n");
+        write_console(b"grant: grant <rights> <path> <task>  (r w l c x)\n");
         write_console(b"power: shutdown, reboot\n");
         prompt(cwd);
         return;
@@ -155,6 +156,10 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) {
     }
     if let Some(name) = arg_of(line, b"rm") {
         rm(cwd, name);
+        return;
+    }
+    if let Some(rest) = arg_of(line, b"grant") {
+        do_grant(cwd, rest);
         return;
     }
     if !line.contains(&b' ') {
@@ -274,6 +279,77 @@ fn rm(cwd: &Cwd, name: &[u8]) {
         return;
     };
     launch_util(cwd, b"rm", &path[..n], true);
+}
+
+/// `grant <rights> <path> <task>` — hand another live task a token.
+/// Rights letters: `r` read, `w` write, `l` list, `c` create, `x` remove.
+fn do_grant(cwd: &Cwd, rest: &[u8]) {
+    let rest = trim(rest);
+    let Some(sp1) = rest.iter().position(|b| *b == b' ') else {
+        write_console(b"usage: grant <rights> <path> <task>\n");
+        prompt(cwd);
+        return;
+    };
+    let rights_s = &rest[..sp1];
+    let after = trim(&rest[sp1 + 1..]);
+    let Some(sp2) = after.iter().position(|b| *b == b' ') else {
+        write_console(b"usage: grant <rights> <path> <task>\n");
+        prompt(cwd);
+        return;
+    };
+    let path = trim(&after[..sp2]);
+    let task = trim(&after[sp2 + 1..]);
+    if rights_s.is_empty() || path.is_empty() || task.is_empty() || !path_arg_ok(path) {
+        write_console(b"usage: grant <rights> <path> <task>\n");
+        prompt(cwd);
+        return;
+    }
+    if !task
+        .iter()
+        .all(|b| b.is_ascii_alphanumeric() || *b == b'.' || *b == b'_' || *b == b'-')
+    {
+        write_console(b"grant: bad task name\n");
+        prompt(cwd);
+        return;
+    }
+    let mut rights = 0u64;
+    for &b in rights_s {
+        rights |= match b {
+            b'r' | b'R' => galexy_abi::TOKEN_READ,
+            b'w' | b'W' => galexy_abi::TOKEN_WRITE,
+            b'l' | b'L' => galexy_abi::TOKEN_LIST,
+            b'c' | b'C' => galexy_abi::TOKEN_CREATE,
+            b'x' | b'X' => galexy_abi::TOKEN_REMOVE,
+            _ => {
+                write_console(b"grant: rights are r,w,l,c,x\n");
+                prompt(cwd);
+                return;
+            }
+        };
+    }
+    if rights == 0 {
+        write_console(b"usage: grant <rights> <path> <task>\n");
+        prompt(cwd);
+        return;
+    }
+    let mut full = [0u8; PATH_MAX];
+    let Some(n) = compose(cwd, path, path.ends_with(b"/"), &mut full) else {
+        write_console(b"grant: path too long\n");
+        prompt(cwd);
+        return;
+    };
+    let result = grant(&full[..n], rights, task);
+    if !result.ok {
+        write_console(b"grant: ");
+        match SysError::from_code(result.value) {
+            SysError::NotFound => write_console(b"not found\n"),
+            SysError::AccessDenied => write_console(b"access denied\n"),
+            SysError::NoResource => write_console(b"no token slot\n"),
+            SysError::BadValue => write_console(b"bad value\n"),
+            _ => write_console(b"failed\n"),
+        };
+    }
+    prompt(cwd);
 }
 
 fn cd(cwd: &mut Cwd, name: &[u8]) {
