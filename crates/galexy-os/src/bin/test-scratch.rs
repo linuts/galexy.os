@@ -1,8 +1,8 @@
-//! Integration test kernel: scratch files.
+//! Integration test kernel: galfs files.
 //!
 //! A ring-3 blob creates a file, writes bytes, reads them back, proves
 //! `banner.txt` cannot be created over the archive, and still reads the
-//! archive copy. It then fills the scratch table and checks the next
+//! archive copy. It then fills the object table and checks the next
 //! create is `NoResource`.
 
 #![no_std]
@@ -127,12 +127,12 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         "archive bytes unchanged"
     );
 
-    assert_eq!(report.fill_ok, 7, "seven more scratch files must fit");
-    assert_eq!(report.extra_ok, 0, "a full scratch table must fail");
+    assert_eq!(report.fill_ok, 30, "thirty more galfs files must fit");
+    assert_eq!(report.extra_ok, 0, "a full galfs table must fail");
     assert_eq!(
         report.extra_err,
         SysError::NoResource as u64,
-        "a full scratch table is NoResource"
+        "a full galfs table is NoResource"
     );
 
     loop {
@@ -151,7 +151,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let note = b"note";
     let banner = b"banner.txt";
-    let letters = b"abcdefg";
+    let letters = b"abcdefghijklmnopqrstuvwxyz0123";
     let extra = b"extra";
     let mut code: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
     let data_len = note.len() + banner.len() + PAYLOAD.len() + letters.len() + extra.len();

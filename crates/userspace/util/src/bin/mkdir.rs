@@ -1,4 +1,4 @@
-//! mkdir — create a scratch directory. The path ends in `/`.
+//! mkdir — create a galfs directory. The path ends in `/`.
 
 #![no_std]
 #![no_main]

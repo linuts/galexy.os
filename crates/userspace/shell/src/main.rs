@@ -6,7 +6,8 @@
 //! `echo`, `cat`, `touch`, `mkdir`, `rm`, and `ls` are those programs.
 //! The kernel keeps the status bar and the screen, and loads this shell
 //! again if it faults. The current directory lives here and starts over
-//! at `/` after a restart. Archive names stay at `/`.
+//! at `/` after a restart. Archive names stay at `/`. A path may begin
+//! with `/`, and the first component may be `owner@name` (`/dan@Desktop`).
 
 #![no_std]
 #![no_main]
@@ -213,7 +214,7 @@ fn redirection(rest: &[u8]) -> Option<(&[u8], &[u8], bool)> {
 
 fn cat(cwd: &Cwd, name: &[u8]) {
     let name = trim(name);
-    if name.is_empty() || name.contains(&b' ') || name.contains(&b'/') {
+    if !path_arg_ok(name) {
         write_console(b"cat: usage: cat <name>\n");
         prompt(cwd);
         return;
@@ -229,7 +230,7 @@ fn cat(cwd: &Cwd, name: &[u8]) {
 
 fn touch(cwd: &Cwd, name: &[u8]) {
     let name = trim(name);
-    if name.is_empty() || name.contains(&b' ') || name.contains(&b'/') {
+    if !path_arg_ok(name) {
         write_console(b"touch: usage: touch <name>\n");
         prompt(cwd);
         return;
@@ -245,7 +246,7 @@ fn touch(cwd: &Cwd, name: &[u8]) {
 
 fn mkdir(cwd: &Cwd, name: &[u8]) {
     let name = trim(name);
-    if name.is_empty() || name.contains(&b' ') || name.contains(&b'/') {
+    if !path_arg_ok(name) {
         write_console(b"mkdir: usage: mkdir <name>\n");
         prompt(cwd);
         return;
@@ -261,12 +262,7 @@ fn mkdir(cwd: &Cwd, name: &[u8]) {
 
 fn rm(cwd: &Cwd, name: &[u8]) {
     let name = trim(name);
-    if name.is_empty()
-        || name.contains(&b' ')
-        || name.contains(&b'/')
-        || name == b"."
-        || name == b".."
-    {
+    if !path_arg_ok(name) || name == b"." || name == b".." {
         write_console(b"rm: usage: rm <name>\n");
         prompt(cwd);
         return;
@@ -296,7 +292,13 @@ fn cd(cwd: &mut Cwd, name: &[u8]) {
         prompt(cwd);
         return;
     }
-    if name.contains(&b'/') || name.contains(&b' ') {
+    if name.contains(&b' ') {
+        write_console(b"cd: usage: cd <name>\n");
+        prompt(cwd);
+        return;
+    }
+    // Absolute `/Desktop` or `/dan@Desktop`, or a single relative component.
+    if !name.starts_with(b"/") && name.contains(&b'/') {
         write_console(b"cd: usage: cd <name>\n");
         prompt(cwd);
         return;
@@ -378,30 +380,84 @@ fn find_slice(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
-/// `cwd/name`, plus a trailing `/` when `dir`.
+/// `cwd/name`, plus a trailing `/` when `dir`. A name that starts with `/`
+/// is absolute (`/Desktop`, `/dan@Desktop`) and ignores `cwd`.
 fn compose(cwd: &Cwd, name: &[u8], dir: bool, out: &mut [u8; PATH_MAX]) -> Option<usize> {
+    let abs = name.starts_with(b"/");
+    let body = if abs { &name[1..] } else { name };
+    if body.is_empty() && !dir {
+        return None;
+    }
     let extra = usize::from(dir);
-    let need = if cwd.len == 0 {
-        name.len() + extra
+    let need = if abs || cwd.len == 0 {
+        body.len() + extra
     } else {
-        cwd.len + 1 + name.len() + extra
+        cwd.len + 1 + body.len() + extra
     };
     if need == 0 || need > PATH_MAX {
         return None;
     }
     let mut n = 0usize;
-    if cwd.len > 0 {
+    if !abs && cwd.len > 0 {
         out[..cwd.len].copy_from_slice(&cwd.buf[..cwd.len]);
         out[cwd.len] = b'/';
         n = cwd.len + 1;
     }
-    out[n..n + name.len()].copy_from_slice(name);
-    n += name.len();
+    out[n..n + body.len()].copy_from_slice(body);
+    n += body.len();
     if dir {
         out[n] = b'/';
         n += 1;
     }
     Some(n)
+}
+
+/// A path the shell may pass to a utility or store as the cwd.
+fn path_arg_ok(name: &[u8]) -> bool {
+    if name.is_empty() || name.contains(&b' ') {
+        return false;
+    }
+    let body = if name.starts_with(b"/") {
+        &name[1..]
+    } else {
+        name
+    };
+    if body.is_empty() {
+        return false;
+    }
+    let mut first = true;
+    for comp in body.split(|b| *b == b'/') {
+        if comp.is_empty() || comp == b"." || comp == b".." {
+            return false;
+        }
+        if first {
+            if let Some(at) = comp.iter().position(|b| *b == b'@') {
+                let (own, leaf) = comp.split_at(at);
+                let leaf = &leaf[1..];
+                if own.is_empty()
+                    || leaf.is_empty()
+                    || leaf.contains(&b'@')
+                    || !comp_bytes_ok(own)
+                    || !comp_bytes_ok(leaf)
+                {
+                    return false;
+                }
+            } else if !comp_bytes_ok(comp) {
+                return false;
+            }
+            first = false;
+        } else if comp.contains(&b'@') || !comp_bytes_ok(comp) {
+            return false;
+        }
+    }
+    true
+}
+
+fn comp_bytes_ok(comp: &[u8]) -> bool {
+    !comp.is_empty()
+        && comp
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'.' || *b == b'_' || *b == b'-')
 }
 
 fn snapshot_has(line: &[u8]) -> bool {

@@ -1,7 +1,7 @@
-//! echo — print text, or write it into a scratch file.
+//! echo — print text, or write it into a galfs file.
 //!
 //! Argument: mode byte, path length, path, then the text. Mode 0 prints.
-//! Mode 1 replaces a scratch file. Mode 2 appends.
+//! Mode 1 replaces a galfs file. Mode 2 appends.
 
 #![no_std]
 #![no_main]

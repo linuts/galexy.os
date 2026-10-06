@@ -438,6 +438,20 @@ fn rm_test_passes() {
 }
 
 #[test]
+fn galfs_test_passes() {
+    let (code, serial) = boot(&image("test-galfs"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-galfs should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-galfs] passed"),
+        "test-galfs success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn scratch_test_passes() {
     let (code, serial) = boot(&image("test-scratch"));
     assert_eq!(

@@ -621,32 +621,10 @@ fn file_name_ok(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
 }
 
-/// A scratch path: components separated by `/`, optional trailing slash.
+/// A galfs path: optional leading `/`, optional `owner@` on the first
+/// component, then `/`-separated names, optional trailing slash.
 fn path_ok(name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-    let body = name.strip_suffix('/').unwrap_or(name);
-    if body.is_empty() || body.ends_with('/') {
-        return false;
-    }
-    let mut comps = 0usize;
-    for comp in body.split('/') {
-        if comp.is_empty() || comp == "." || comp == ".." {
-            return false;
-        }
-        let ok = comp
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-');
-        if !ok {
-            return false;
-        }
-        comps += 1;
-        if comps > 8 {
-            return false;
-        }
-    }
-    comps > 0
+    !name.is_empty() && crate::sched::galfs::parse_path(name).is_ok()
 }
 
 /// Every page of `[addr, addr+len)` is present and user-accessible in the

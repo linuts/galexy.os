@@ -1,4 +1,4 @@
-//! touch — create a scratch file, or leave an existing one in place.
+//! touch — create a galfs file, or leave an existing one in place.
 
 #![no_std]
 #![no_main]

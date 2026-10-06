@@ -1,4 +1,4 @@
-//! rm — remove a scratch file or an empty directory.
+//! rm — remove a galfs file or an empty directory.
 
 #![no_std]
 #![no_main]

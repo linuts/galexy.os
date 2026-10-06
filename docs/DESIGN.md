@@ -490,20 +490,26 @@ from `FILE_CAP_BASE` (3), authoritative grant intersected with the
 handle snapshot. `read` copies the next bytes of an open file
 (short-read at 1 KiB, 0 at EOF);
 `close` drops the slot. `create(name, len, flags)` (syscall 9) puts a
-path in a fixed global table (8 slots, 64-byte component names,
-256-byte file buffers, no heap on the syscall path). A path ending in
-`/` is a directory and returns 0. A file returns READ|WRITE. `RDX == 1`
-empties an existing scratch file; any other value creates only when
-the name is new. Uniqueness is the parent plus the component.
-`open` of a path with no slash still hits the ramdisk first and grants
-READ. Any other path walks the scratch table and must name a file
-(READ|WRITE). A directory open is `Unsupported`. `write` on a scratch
+path in a fixed galfs table (32 objects, actors with one root each,
+64-byte component names, 256-byte file buffers, no heap on the syscall
+path). A path ending in `/` is a directory and returns 0. A file returns
+READ|WRITE. `RDX == 1` empties an existing file; any other value creates
+only when the name is new. Uniqueness is the parent plus the component.
+The first path component may be `owner@name` (`dan@Desktop`); without an
+owner the walk starts at the task's actor root. A token on the task
+(object id + rights) must cover the target: create needs CREATE on the
+parent, open needs READ, write needs WRITE, remove needs REMOVE, and
+the files snapshot needs LIST. Holding a token on a parent covers the
+children it permits. `open` of a path with no slash and no `@` still
+hits the ramdisk first and grants READ. Any other path walks galfs and
+must name a file (READ|WRITE). A directory open is `Unsupported`. A
+path with no covering token is `AccessDenied`. `write` on a galfs
 cap appends; the read cursor stays at the start. A ramdisk name at
 `/`, or a name that already exists, is `Unsupported`. A missing parent
-is `NotFound`. A full scratch table is `NoResource`. `close` drops the
-task's cap; the scratch bytes stay until `remove`. `write` on an
+is `NotFound`. A full object table is `NoResource`. `close` drops the
+task's cap; the bytes stay until `remove`. `write` on an
 archive open is `Unsupported`. `remove(name, len)` (syscall 10) deletes
-a scratch file or an empty directory and frees the slot. A ramdisk
+a galfs file or an empty directory and frees the slot. A ramdisk
 name, or a directory that still has a child, is `Unsupported`. A
 missing path is `NotFound`. An open cap on a removed file becomes
 `BadCap`.
@@ -512,9 +518,10 @@ must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing
 queued). `read` on the stats, tasks, threads, and files caps copies a fresh text
 snapshot (no cursor; the syscall renders into a stack buffer so it does
-not allocate). The files snapshot is the ramdisk's regular names, then each scratch
-path (`box/`, `box/leaf`), one per line. The shell keeps the current
-directory. `echo`, `cat`, `touch`, `mkdir`, `rm`, and `ls` are ramdisk
+not allocate). The files snapshot is the ramdisk's regular names, then each
+galfs path the task's tokens may list (`Desktop/`, `dan@Desktop/notes`),
+one per line. The shell keeps the current directory and accepts a leading
+`/` plus `owner@` on the first component. `echo`, `cat`, `touch`, `mkdir`, `rm`, and `ls` are ramdisk
 programs: the shell composes the path and `spawn`s them. `ls` and `rm`
 also receive the query grant, so they can read the files snapshot.
 `cd` stays in the shell, because that path lives there. A program name
@@ -527,11 +534,12 @@ optional argument, at most 256 bytes, copied onto the child's stack
 `BadValue`. The child always receives the console, and it writes the
 console of the task that spawned it. Keyboard, the
 loader, and power stay with the shell. Boot starts one shell on each
-F-key, pinned to the BSP with the launcher grants. F1's shell is named
-`shell`; the others are `shell2` through `shell12`. F1–F12 select which
-cell grid is painted. The keyboard interrupt only records that index;
-the main loop paints it. Keys go to the visible console. COM1 mirrors
-only that console.
+F-key, pinned to the BSP with the launcher grants and a full token on
+actor `alex`'s root. Spawn copies those tokens to the child. F1's shell
+is named `shell`; the others are `shell2` through `shell12`. F1–F12
+select which cell grid is painted. The keyboard interrupt only records
+that index; the main loop paints it. Keys go to the visible console.
+COM1 mirrors only that console.
 Presenting a reserved index is not enough; the task must have been
 granted it. A ramdisk entry that is not an ELF is `Unsupported`. The
 main loop, which is on the kernel page
@@ -541,8 +549,8 @@ load stays on the main loop because the loader allocates and a syscall
 runs with interrupts off.
 The waiter is marked runnable when that load finishes. The child's exit
 does not wake anyone. If one of those shells is not running or waiting,
-the main loop loads that shell again with the launcher grants. Other
-tasks keep running. The new shell starts at `/`. `power` on the power cap (POWER right) shuts the
+the main loop loads that shell again with the launcher grants and
+alex's root token. Other tasks keep running. The new shell starts at `/`. `power` on the power cap (POWER right) shuts the
 machine down (`op` 0, ACPI S5) or resets it (`op` 1). It does not
 return when the platform honors it; a return is Unsupported and the
 shell says the machine stayed up. Console `write` accepts backspace

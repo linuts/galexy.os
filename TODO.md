@@ -885,6 +885,24 @@ all `-smp 2`.
       on F2, then a key on F1
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 34 — galfs tokens ✅
+
+Each person has one root. `/Desktop` is yours; `/dan@Desktop` is
+dan's. A token names an object and its rights. Suite: 41 QEMU boot
+tests, all `-smp 2`.
+
+- [x] **Objects and actors**: 32 fixed objects replace the scratch
+      table. Boot creates actor `alex`. Shells and test blobs hold a
+      full token on alex's root. Spawn copies the parent's tokens
+- [x] **Paths**: optional leading `/`; first component may be
+      `owner@name`. Token checks on open, create, write, remove, and
+      the files snapshot. No covering token is `AccessDenied`
+- [x] The shell accepts `/Desktop` and `/dan@Desktop` for `cd` and the
+      utilities. Existing mkdir/echo/rm/ls typing still works on alex
+- [x] `bin/test-galfs` denies `/dan@Desktop` until a list+read token is
+      installed, then lists and opens it
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17

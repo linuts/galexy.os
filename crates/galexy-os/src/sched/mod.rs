@@ -11,6 +11,7 @@
 
 pub mod context;
 pub mod demo;
+pub mod galfs;
 pub mod loader;
 pub mod ramdisk;
 pub mod syscalls;
@@ -69,8 +70,9 @@ impl Scheduler {
     };
 }
 
-/// Initializes the scheduler (empty queues). Call before any spawn.
+/// Initializes the scheduler (empty queues) and the default galfs actor.
 pub fn init() {
+    galfs::init();
     serial_println!("[sched] ready");
 }
 
@@ -165,11 +167,11 @@ const MAX_OPEN_FILES: usize = 8;
 enum FileBody {
     /// Immutable archive bytes. The slice lives in the ramdisk.
     Archive(&'static [u8]),
-    /// Index into [`SCRATCH`]. The bytes are writable.
-    Scratch(u8),
+    /// Index into [`galfs`] object table. The bytes are writable.
+    Galfs(u16),
 }
 
-/// One open file. Archive bytes live in the bootloader's ramdisk; scratch
+/// One open file. Archive bytes live in the bootloader's ramdisk; galfs
 /// bytes live in the global table. Only the cursor is per-open.
 #[derive(Clone, Copy)]
 struct OpenFile {
@@ -179,19 +181,6 @@ struct OpenFile {
     /// is allowed only for the intersection of the two.
     rights: CapRights,
 }
-
-/// Scratch files the kernel will hold. `close` drops the task's cap, not
-/// the bytes. `remove` frees the slot.
-const SCRATCH_SLOTS: usize = 8;
-/// Bytes one scratch file can hold. A longer `write` copies what fits.
-const SCRATCH_BYTES: usize = 256;
-
-/// A scratch slot that holds a file.
-const KIND_FILE: u8 = 1;
-/// A scratch slot that holds a directory. It has no bytes of its own.
-const KIND_DIR: u8 = 2;
-/// `parent` value for an entry whose parent is `/`.
-const PARENT_ROOT: u8 = 0xff;
 
 /// Rights the launcher recorded on a task. A fabricated cap index is not
 /// enough: the matching bit has to be set here.
@@ -269,48 +258,6 @@ impl Grants {
     }
 }
 
-/// One scratch file or directory. The name is one path component.
-/// `create` never allocates.
-#[derive(Clone, Copy)]
-struct ScratchFile {
-    /// `0` empty, [`KIND_FILE`], or [`KIND_DIR`].
-    kind: u8,
-    /// Parent slot, or [`PARENT_ROOT`].
-    parent: u8,
-    name: [u8; NAME_CAP],
-    name_len: u8,
-    data: [u8; SCRATCH_BYTES],
-    len: u16,
-}
-
-impl ScratchFile {
-    const fn empty() -> Self {
-        Self {
-            kind: 0,
-            parent: PARENT_ROOT,
-            name: [0; NAME_CAP],
-            name_len: 0,
-            data: [0; SCRATCH_BYTES],
-            len: 0,
-        }
-    }
-
-    fn name_is(&self, name: &str) -> bool {
-        let n = self.name_len as usize;
-        self.kind != 0 && n == name.len() && &self.name[..n] == name.as_bytes()
-    }
-}
-
-struct ScratchTable {
-    files: [ScratchFile; SCRATCH_SLOTS],
-}
-
-/// Global scratch files. Taken only while [`THREADS`] is already held
-/// (lock order: `THREADS`, then this).
-static SCRATCH: Mutex<ScratchTable> = Mutex::new(ScratchTable {
-    files: [ScratchFile::empty(); SCRATCH_SLOTS],
-});
-
 struct Thread {
     /// Display name. Copied at spawn so the caller's buffer can go away.
     name_bytes: [u8; NAME_CAP],
@@ -364,6 +311,10 @@ struct Thread {
     /// Console this task writes, and whose keyboard queue it reads.
     /// Inherited from the task that spawned it. F1 is 0.
     tty: u8,
+    /// Actor root this task walks from when a path has no `owner@`.
+    fs_root: u16,
+    /// Tokens that authorize galfs paths. Inherited by spawn.
+    fs_tokens: [galfs::Token; galfs::TOKEN_SLOTS],
 }
 
 impl Thread {
@@ -673,6 +624,8 @@ pub(crate) struct TaskInit<'a> {
     pub(crate) grants: Grants,
     /// Console the new task writes. A child inherits its parent's.
     pub(crate) tty: u8,
+    /// galfs credentials. The shell and test blobs get alex's root token.
+    pub(crate) fs: galfs::FsCred,
 }
 
 pub(crate) fn register_user_task(init: TaskInit<'_>) {
@@ -704,6 +657,8 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) {
             wait_for_len: AtomicU8::new(0),
             grants: init.grants,
             tty: init.tty,
+            fs_root: init.fs.root,
+            fs_tokens: init.fs.tokens,
         });
     });
 }
@@ -747,6 +702,8 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             wait_for_len: AtomicU8::new(0),
             grants: Grants::none(),
             tty: 0,
+            fs_root: galfs::NO_OBJECT,
+            fs_tokens: [galfs::Token::empty(); galfs::TOKEN_SLOTS],
         });
         serial_println!("[sched] thread '{}' ready (owner cpu {})", name, owner);
         owner
@@ -786,6 +743,15 @@ pub struct UserRegion {
 /// scratch page right above the stack. The task's own kernel-mode stack
 /// (heap) serves its ring 3→0 crossings via TSS.RSP0. IRQ-gated.
 pub fn spawn_user_task(name: &str, build: impl FnOnce(UserRegion) -> Vec<u8>) -> (UserRegion, u8) {
+    spawn_user_with(name, galfs::alex_cred(), build)
+}
+
+/// Like [`spawn_user_task`], with explicit galfs credentials (token tests).
+pub fn spawn_user_with(
+    name: &str,
+    fs: galfs::FsCred,
+    build: impl FnOnce(UserRegion) -> Vec<u8>,
+) -> (UserRegion, u8) {
     interrupts::without_interrupts(|| {
         // The loader allocates. A syscall runs with interrupts off, so the
         // load stays on the main loop, which is the kernel table.
@@ -939,6 +905,8 @@ pub fn spawn_user_task(name: &str, build: impl FnOnce(UserRegion) -> Vec<u8>) ->
             wait_for_len: AtomicU8::new(0),
             grants: Grants::console(),
             tty: 0,
+            fs_root: fs.root,
+            fs_tokens: fs.tokens,
         });
         serial_println!(
             "[sched] user task '{}' ready (own tree cr3={:#x}, p4={}, code @ {:#x}, kstack top {:#x})",
@@ -1065,6 +1033,8 @@ struct PendingSpawn {
     query: bool,
     /// Console the child inherits from the task that asked.
     tty: u8,
+    /// Child inherits the waiter's galfs credentials.
+    fs: galfs::FsCred,
     armed: bool,
 }
 
@@ -1075,6 +1045,7 @@ static PENDING_SPAWN: Mutex<PendingSpawn> = Mutex::new(PendingSpawn {
     arg_len: 0,
     query: false,
     tty: 0,
+    fs: galfs::FsCred::none(),
     armed: false,
 });
 
@@ -1107,6 +1078,10 @@ pub(crate) fn task_spawn(name: &str, arg: &[u8], query: bool) -> Result<(), SysE
         pending.arg_len = arg.len() as u16;
         pending.query = query;
         pending.tty = thread.tty;
+        pending.fs = galfs::FsCred {
+            root: thread.fs_root,
+            tokens: thread.fs_tokens,
+        };
         pending.armed = true;
         thread.wait_for[..name.len()].copy_from_slice(name.as_bytes());
         thread
@@ -1136,10 +1111,11 @@ pub fn drain_spawn() {
         arg[..arg_len].copy_from_slice(&pending.arg[..arg_len]);
         let query = pending.query;
         let tty = pending.tty;
+        let fs = pending.fs;
         pending.armed = false;
-        Some((len, name, arg_len, arg, query, tty))
+        Some((len, name, arg_len, arg, query, tty, fs))
     });
-    let Some((len, name_raw, arg_len, arg, query, tty)) = queued else {
+    let Some((len, name_raw, arg_len, arg, query, tty, fs)) = queued else {
         return;
     };
     let name = core::str::from_utf8(&name_raw[..len]).unwrap_or("");
@@ -1149,8 +1125,7 @@ pub fn drain_spawn() {
         Grants::console()
     };
     if let Some(bytes) = ramdisk::find(name) {
-        loader::spawn_launched(name, bytes, grants, &arg[..arg_len], tty);
-    } else {
+        loader::spawn_launched(name, bytes, grants, &arg[..arg_len], tty, fs);
         serial_println!("[sched] spawn '{}' missing at drain; waking waiter", name);
     }
     interrupts::without_interrupts(|| {
@@ -1235,157 +1210,33 @@ fn wake_waiters(threads: &[Thread], name: &str) {
     }
 }
 
-/// A path split into at most [`SCRATCH_SLOTS`] components.
-struct ParsedPath<'a> {
-    comps: [&'a str; SCRATCH_SLOTS],
-    n: usize,
-    /// The path ended in `/`: the last component is a directory.
-    dir: bool,
-}
-
-/// Splits `name` on `/`. A trailing slash marks a directory. `.` and `..`
-/// are rejected; the shell resolves those itself.
-fn parse_path(name: &str) -> Result<ParsedPath<'_>, SysError> {
-    let (body, dir) = if let Some(stripped) = name.strip_suffix('/') {
-        if stripped.is_empty() || stripped.ends_with('/') {
-            return Err(SysError::BadValue);
-        }
-        (stripped, true)
-    } else {
-        (name, false)
-    };
-    if body.is_empty() {
-        return Err(SysError::BadValue);
-    }
-    let mut comps = [""; SCRATCH_SLOTS];
-    let mut n = 0usize;
-    for comp in body.split('/') {
-        if comp.is_empty() || comp == "." || comp == ".." || n >= SCRATCH_SLOTS {
-            return Err(SysError::BadValue);
-        }
-        let ok = comp
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-');
-        if !ok {
-            return Err(SysError::BadValue);
-        }
-        comps[n] = comp;
-        n += 1;
-    }
-    if n == 0 {
-        return Err(SysError::BadValue);
-    }
-    Ok(ParsedPath { comps, n, dir })
-}
-
-/// Child of `parent` with this component name, if the slot is occupied.
-fn find_child(table: &ScratchTable, parent: u8, name: &str) -> Option<usize> {
-    table
-        .files
-        .iter()
-        .position(|file| file.kind != 0 && file.parent == parent && file.name_is(name))
-}
-
-/// Walks every component except the last. The last is looked up by the caller.
-fn walk_parents(table: &ScratchTable, parsed: &ParsedPath<'_>) -> Result<u8, SysError> {
-    let mut parent = PARENT_ROOT;
-    for comp in &parsed.comps[..parsed.n - 1] {
-        let Some(index) = find_child(table, parent, comp) else {
-            return Err(SysError::NotFound);
-        };
-        if table.files[index].kind != KIND_DIR {
-            return Err(SysError::NotFound);
-        }
-        parent = index as u8;
-    }
-    Ok(parent)
-}
-
-fn place_name(file: &mut ScratchFile, name: &str) {
-    file.name = [0; NAME_CAP];
-    file.name[..name.len()].copy_from_slice(name.as_bytes());
-    file.name_len = name.len() as u8;
-}
-
-/// Full path of one scratch slot, with a trailing `/` on a directory.
-fn path_bytes(table: &ScratchTable, index: usize, out: &mut [u8]) -> Option<usize> {
-    let mut chain = [0usize; SCRATCH_SLOTS];
-    let mut depth = 0usize;
-    let mut cur = index;
-    loop {
-        if depth >= SCRATCH_SLOTS {
-            return None;
-        }
-        chain[depth] = cur;
-        depth += 1;
-        let parent = table.files[cur].parent;
-        if parent == PARENT_ROOT {
-            break;
-        }
-        cur = parent as usize;
-        if cur >= SCRATCH_SLOTS || table.files[cur].kind == 0 {
-            return None;
-        }
-    }
-    let mut len = 0usize;
-    for slot in chain[..depth].iter().rev() {
-        let file = &table.files[*slot];
-        let name_len = file.name_len as usize;
-        if len > 0 {
-            if len >= out.len() {
-                return None;
-            }
-            out[len] = b'/';
-            len += 1;
-        }
-        if len + name_len > out.len() {
-            return None;
-        }
-        out[len..len + name_len].copy_from_slice(&file.name[..name_len]);
-        len += name_len;
-    }
-    if table.files[index].kind == KIND_DIR {
-        if len >= out.len() {
-            return None;
-        }
-        out[len] = b'/';
-        len += 1;
-    }
-    Some(len)
-}
-
-/// Calls `each` with every scratch path (`docs/`, `docs/note`). The bytes
-/// are only valid inside the callback.
+/// Calls `each` with every galfs path the current task may list
+/// (`Desktop/`, `dan@Desktop/notes`). The bytes are only valid inside
+/// the callback.
 pub(crate) fn for_each_scratch_path(mut each: impl FnMut(&[u8])) {
+    let slot = current_slot();
+    if slot == 0 {
+        return;
+    }
     interrupts::without_interrupts(|| {
-        let scratch = SCRATCH.lock();
-        for index in 0..SCRATCH_SLOTS {
-            if scratch.files[index].kind == 0 {
-                continue;
-            }
-            let mut buf = [0u8; NAME_CAP];
-            let Some(n) = path_bytes(&scratch, index, &mut buf) else {
-                continue;
-            };
-            each(&buf[..n]);
-        }
+        let threads = THREADS.lock();
+        let Some(thread) = threads.get(slot - 1) else {
+            return;
+        };
+        galfs::for_each_visible(thread.fs_root, &thread.fs_tokens, |path| each(path));
     });
 }
 
 /// Opens a file for the current user task.
 ///
 /// An exact ramdisk name (`banner.txt`, `hello`) grants READ. Any other
-/// path is a scratch file and grants READ and WRITE. A directory is
-/// `Unsupported`.
+/// path is a galfs file and grants READ and WRITE when a token covers it.
+/// A directory is `Unsupported`. A path with no token is `AccessDenied`.
 pub(crate) fn task_open(name: &str) -> Result<Cap, SysError> {
-    if !name.contains('/') {
+    if !name.contains('/') && !name.contains('@') {
         if let Some(bytes) = crate::sched::ramdisk::find(name) {
             return install_open(FileBody::Archive(bytes), CapRights::READ);
         }
-    }
-    let parsed = parse_path(name)?;
-    if parsed.dir {
-        return Err(SysError::Unsupported);
     }
     let slot = current_slot();
     if slot == 0 {
@@ -1400,18 +1251,10 @@ pub(crate) fn task_open(name: &str) -> Result<Cap, SysError> {
         let Some(index) = thread.files.iter().position(|slot| slot.is_none()) else {
             return Err(SysError::NoResource);
         };
-        let scratch = SCRATCH.lock();
-        let parent = walk_parents(&scratch, &parsed)?;
-        let last = parsed.comps[parsed.n - 1];
-        let Some(found) = find_child(&scratch, parent, last) else {
-            return Err(SysError::NotFound);
-        };
-        if scratch.files[found].kind != KIND_FILE {
-            return Err(SysError::Unsupported);
-        }
+        let found = galfs::open_file(thread.fs_root, &thread.fs_tokens, name)?;
         let rights = CapRights::READ.union(CapRights::WRITE);
         thread.files[index] = Some(OpenFile {
-            body: FileBody::Scratch(found as u8),
+            body: FileBody::Galfs(found),
             offset: 0,
             rights,
         });
@@ -1472,21 +1315,20 @@ pub(crate) fn task_read(cap: Cap, dst: &mut [u8]) -> Result<usize, SysError> {
                 dst[..n].copy_from_slice(&bytes[start..start + n]);
                 n
             }
-            FileBody::Scratch(index) => {
-                let scratch = SCRATCH.lock();
-                let stored = &scratch.files[index as usize];
+            FileBody::Galfs(obj) => galfs::with_file(obj, |stored| {
                 let available = (stored.len as usize).saturating_sub(start);
                 let n = dst.len().min(available);
                 dst[..n].copy_from_slice(&stored.data[start..start + n]);
                 n
-            }
+            })
+            .ok_or(SysError::BadCap)?,
         };
         file.offset = start + n;
         Ok(n)
     })
 }
 
-/// Appends `src` to a scratch file. An archive open is `Unsupported`.
+/// Appends `src` to a galfs file. An archive open is `Unsupported`.
 ///
 /// The read cursor stays put, so a later `read` still starts at the
 /// beginning. A write that does not fit is short: the count is the bytes
@@ -1501,7 +1343,7 @@ pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
         let mut threads = THREADS.lock();
         let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
         let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
-        let FileBody::Scratch(scratch_index) = file.body else {
+        let FileBody::Galfs(obj) = file.body else {
             return Err(SysError::Unsupported);
         };
         let effective = file.rights.intersection(cap.rights());
@@ -1511,27 +1353,24 @@ pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
         if src.is_empty() {
             return Ok(0);
         }
-        let mut scratch = SCRATCH.lock();
-        let stored = &mut scratch.files[scratch_index as usize];
-        let start = stored.len as usize;
-        let n = src.len().min(SCRATCH_BYTES.saturating_sub(start));
-        stored.data[start..start + n].copy_from_slice(&src[..n]);
-        stored.len = (start + n) as u16;
-        Ok(n)
+        galfs::append(obj, src).ok_or(SysError::BadCap)
     })
 }
 
-/// Creates a scratch file or directory for the current user task.
+/// Creates a galfs file or directory for the current user task.
 ///
 /// A path ending in `/` is a directory and the returned cap is null.
 /// A file cap carries READ and WRITE. `replace` empties an existing
-/// scratch file instead of failing. A ramdisk name at `/` cannot be
+/// file instead of failing. A ramdisk name at `/` cannot be
 /// replaced. A name that already exists is `Unsupported`. A missing
-/// parent is `NotFound`. A full scratch table, or a full per-task file
-/// table, is `NoResource`.
+/// parent is `NotFound`. A full object table, or a full per-task file
+/// table, is `NoResource`. A path with no create token is `AccessDenied`.
 pub(crate) fn task_create(name: &str, replace: bool) -> Result<Cap, SysError> {
-    let parsed = parse_path(name)?;
-    if parsed.n == 1 && crate::sched::ramdisk::find(parsed.comps[0]).is_some() {
+    let parsed = galfs::parse_path(name)?;
+    if parsed.owner.is_none()
+        && parsed.n == 1
+        && crate::sched::ramdisk::find(parsed.comps[0]).is_some()
+    {
         return Err(SysError::Unsupported);
     }
     let slot = current_slot();
@@ -1545,64 +1384,37 @@ pub(crate) fn task_create(name: &str, replace: bool) -> Result<Cap, SysError> {
             return Err(SysError::BadCap);
         }
         let file_index = thread.files.iter().position(|slot| slot.is_none());
-        let mut scratch = SCRATCH.lock();
-        let parent = walk_parents(&scratch, &parsed)?;
-        let last = parsed.comps[parsed.n - 1];
-        if let Some(found) = find_child(&scratch, parent, last) {
-            if replace && !parsed.dir && scratch.files[found].kind == KIND_FILE {
+        let created = galfs::create(thread.fs_root, &thread.fs_tokens, name, replace)?;
+        match created {
+            None => Ok(Cap::null()),
+            Some(obj) => {
                 let Some(index) = file_index else {
                     return Err(SysError::NoResource);
                 };
-                scratch.files[found].data = [0; SCRATCH_BYTES];
-                scratch.files[found].len = 0;
                 let rights = CapRights::READ.union(CapRights::WRITE);
                 thread.files[index] = Some(OpenFile {
-                    body: FileBody::Scratch(found as u8),
+                    body: FileBody::Galfs(obj),
                     offset: 0,
                     rights,
                 });
-                return Ok(Cap::new(galexy_abi::FILE_CAP_BASE + index as u64, rights));
+                Ok(Cap::new(galexy_abi::FILE_CAP_BASE + index as u64, rights))
             }
-            return Err(SysError::Unsupported);
         }
-        let Some(scratch_index) = scratch.files.iter().position(|file| file.kind == 0) else {
-            return Err(SysError::NoResource);
-        };
-        if parsed.dir {
-            let stored = &mut scratch.files[scratch_index];
-            stored.kind = KIND_DIR;
-            stored.parent = parent;
-            place_name(stored, last);
-            stored.len = 0;
-            return Ok(Cap::null());
-        }
-        let Some(index) = file_index else {
-            return Err(SysError::NoResource);
-        };
-        let stored = &mut scratch.files[scratch_index];
-        stored.kind = KIND_FILE;
-        stored.parent = parent;
-        place_name(stored, last);
-        stored.data = [0; SCRATCH_BYTES];
-        stored.len = 0;
-        let rights = CapRights::READ.union(CapRights::WRITE);
-        thread.files[index] = Some(OpenFile {
-            body: FileBody::Scratch(scratch_index as u8),
-            offset: 0,
-            rights,
-        });
-        Ok(Cap::new(galexy_abi::FILE_CAP_BASE + index as u64, rights))
     })
 }
 
-/// Deletes a scratch file or an empty directory and frees its slot.
+/// Deletes a galfs file or an empty directory and frees its slot.
 ///
 /// A ramdisk name at `/` is `Unsupported`. A directory that still has a
 /// child is `Unsupported`. A missing path is `NotFound`. Any task's open
 /// cap on that slot is dropped, so a later read or write is `BadCap`.
+/// A path with no remove token is `AccessDenied`.
 pub(crate) fn task_remove(name: &str) -> Result<(), SysError> {
-    let parsed = parse_path(name)?;
-    if parsed.n == 1 && crate::sched::ramdisk::find(parsed.comps[0]).is_some() {
+    let parsed = galfs::parse_path(name)?;
+    if parsed.owner.is_none()
+        && parsed.n == 1
+        && crate::sched::ramdisk::find(parsed.comps[0]).is_some()
+    {
         return Err(SysError::Unsupported);
     }
     let slot = current_slot();
@@ -1617,41 +1429,24 @@ pub(crate) fn task_remove(name: &str) -> Result<(), SysError> {
                 return Err(SysError::BadCap);
             }
         }
-        let mut scratch = SCRATCH.lock();
-        let parent = walk_parents(&scratch, &parsed)?;
-        let last = parsed.comps[parsed.n - 1];
-        let Some(found) = find_child(&scratch, parent, last) else {
-            return Err(SysError::NotFound);
+        let (fs_root, fs_tokens) = {
+            let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+            (thread.fs_root, thread.fs_tokens)
         };
-        let kind = scratch.files[found].kind;
-        if parsed.dir && kind != KIND_DIR {
-            return Err(SysError::Unsupported);
-        }
-        if kind == KIND_DIR && has_child(&scratch, found as u8) {
-            return Err(SysError::Unsupported);
-        }
-        let index = found as u8;
+        let removed = galfs::remove(fs_root, &fs_tokens, name)?;
         for thread in threads.iter_mut() {
             for open in &mut thread.files {
                 let stale = matches!(
                     *open,
-                    Some(file) if matches!(file.body, FileBody::Scratch(body) if body == index)
+                    Some(file) if matches!(file.body, FileBody::Galfs(body) if body == removed)
                 );
                 if stale {
                     *open = None;
                 }
             }
         }
-        scratch.files[found] = ScratchFile::empty();
         Ok(())
     })
-}
-
-fn has_child(table: &ScratchTable, parent: u8) -> bool {
-    table
-        .files
-        .iter()
-        .any(|file| file.kind != 0 && file.parent == parent)
 }
 
 /// Drops one file capability belonging to the current task.

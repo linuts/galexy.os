@@ -186,6 +186,11 @@ first real program landed in Milestone 13:
   loop paints it. Keys and COM1 follow the visible console. A program
   keeps writing the console it was started on. `bin/test-screen`
   restores a hidden grid, and a typing test runs `echo hi` on F2).
+- galfs tokens ✅ (Milestone 34: each actor has one root. `/Desktop` is
+  yours; `/dan@Desktop` is dan's. A token, not the path, grants rights.
+  The shell and programs inherit the parent's tokens. Boot creates
+  actor `alex`. `bin/test-galfs` proves AccessDenied without a token
+  and a listing once LIST is installed).
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.

@@ -1,9 +1,9 @@
-//! Integration test kernel: removing scratch files.
+//! Integration test kernel: removing galfs files.
 //!
 //! A ring-3 blob creates a file, removes it, and checks the old cap and a
 //! fresh open both fail. A tar name cannot be removed. A directory with a
 //! child cannot be removed; once the child is gone, the directory can.
-//! Eight new files then fit in the freed table, and a ninth does not.
+//! The freed table then fills again, and one more create does not.
 
 #![no_std]
 #![no_main]
@@ -120,12 +120,15 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         "a non-empty directory is Unsupported"
     );
     assert_eq!(report.empty_ok, 1, "an empty directory must be removed");
-    assert_eq!(report.fill_ok, 8, "eight files must fit after the frees");
-    assert_eq!(report.extra_ok, 0, "a full scratch table must fail");
+    assert_eq!(
+        report.fill_ok, 31,
+        "thirty-one files must fit after the frees"
+    );
+    assert_eq!(report.extra_ok, 0, "a full galfs table must fail");
     assert_eq!(
         report.extra_err,
         SysError::NoResource as u64,
-        "a full scratch table is NoResource"
+        "a full galfs table is NoResource"
     );
 
     loop {
@@ -148,7 +151,7 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let dir = b"box/";
     let leaf = b"box/leaf";
     let dir_name = b"box";
-    let letters = b"abcdefgh";
+    let letters = b"abcdefghijklmnopqrstuvwxyz01234";
     let extra = b"extra";
     let mut code: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
     let data_len = note.len()
