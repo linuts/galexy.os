@@ -71,7 +71,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let desktop = galfs::find_under(dan_root, "Desktop").expect("dan Desktop");
     let _secret = galfs::create_file_under(desktop, "secret").expect("secret");
 
-    let (region, _) = sched::spawn_user_task("denied", |gr| {
+    // Guest seat: no root, no tokens — must not open dan's tree.
+    let (region, _) = sched::spawn_user_with("denied", galfs::guest_cred(), |gr| {
         unsafe {
             core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
         }
@@ -118,7 +119,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     );
     assert!(!saw, "admin must not list dan's tree without a token");
 
-    let (holder_region, _) = sched::spawn_user_task("holder", |gr| {
+    // Empty cards until granter installs list+read on dan's Desktop.
+    let (holder_region, _) = sched::spawn_user_with("holder", galfs::guest_cred(), |gr| {
         unsafe {
             core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
         }
