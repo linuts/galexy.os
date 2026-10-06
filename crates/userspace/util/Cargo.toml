@@ -29,6 +29,14 @@ name = "ls"
 path = "src/bin/ls.rs"
 
 [[bin]]
+name = "cp"
+path = "src/bin/cp.rs"
+
+[[bin]]
+name = "mv"
+path = "src/bin/mv.rs"
+
+[[bin]]
 name = "linger"
 path = "src/bin/linger.rs"
 

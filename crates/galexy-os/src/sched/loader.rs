@@ -88,17 +88,14 @@ pub fn spawn_program_bsp(name: &str, bytes: &[u8]) -> ProgramRegion {
 }
 
 /// Pins a launcher shell named `name` to the BSP on console `tty`.
+/// TTY 1 (F2) is actor `dan`; every other console is `alex`.
 pub fn spawn_shell_on(name: &str, bytes: &[u8], tty: u8) -> ProgramRegion {
-    spawn_program_placed(
-        name,
-        bytes,
-        Some(0),
-        true,
-        Grants::launcher(),
-        &[],
-        tty,
-        crate::sched::galfs::alex_cred(),
-    )
+    let fs = if tty == 1 {
+        crate::sched::galfs::dan_cred()
+    } else {
+        crate::sched::galfs::alex_cred()
+    };
+    spawn_program_placed(name, bytes, Some(0), true, Grants::launcher(), &[], tty, fs)
 }
 
 #[allow(clippy::too_many_arguments)]

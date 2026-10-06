@@ -223,6 +223,13 @@ pub const TOKEN_REMOVE: u64 = 16;
 /// Every galfs token right. Any other bit in `grant`'s `RDX` is `BadValue`.
 pub const TOKEN_ALL: u64 = TOKEN_READ | TOKEN_WRITE | TOKEN_LIST | TOKEN_CREATE | TOKEN_REMOVE;
 
+/// `seek` whence (`RDX`): set the cursor to `offset`.
+pub const SEEK_SET: u64 = 0;
+/// `seek` whence: move the cursor by `offset` from the current position.
+pub const SEEK_CUR: u64 = 1;
+/// `seek` whence: move the cursor by `offset` from the end of the file.
+pub const SEEK_END: u64 = 2;
+
 /// Lowest capability index a per-task file open may return. `0` is null,
 /// [`reserved::CONSOLE_INDEX`] is the console, [`reserved::SELF_INDEX`] is
 /// the calling task. File indexes are per-task (not a global fd table):
@@ -341,11 +348,42 @@ pub enum Syscall {
     /// resolved object (or an ancestor). A missing path or task is
     /// `NotFound`. A full token table on the target is `NoResource`.
     Grant,
+    /// `revoke(path, len, rights, task, task_len)` — drop galfs token
+    /// rights from a live user task.
+    ///
+    /// Same register layout as [`Syscall::Grant`]. Clears `rights` from
+    /// the target's token that names the resolved object exactly. A
+    /// zeroed token slot is freed. The caller must hold every bit being
+    /// revoked. No matching token is `NotFound`.
+    Revoke,
+    /// `pipe(addr)` — create an anonymous pipe; write two caps into a
+    /// 16-byte user buffer (`read` then `write`).
+    ///
+    /// Args: `RDI = user address of 16 bytes`. Returns: `SyscallResult`
+    /// (rax = 0). The read cap has READ; the write cap has WRITE. A full
+    /// pipe table or file table is `NoResource`.
+    Pipe,
+    /// `give(cap, task, task_len)` — move an open file/pipe cap to another
+    /// live user task.
+    ///
+    /// Args: `RDI = cap bits`, `RSI = user address of the task name`,
+    /// `RDX = name byte count`. Returns: `SyscallResult` (rax = the
+    /// target's new `Cap` bits). The caller's slot is cleared. Reserved
+    /// caps are `BadCap`. A missing task or a full target table is
+    /// `NotFound` / `NoResource`.
+    Give,
+    /// `seek(cap, offset, whence)` — set the read cursor on an open file.
+    ///
+    /// Args: `RDI = cap bits`, `RSI = signed offset as u64 bits`,
+    /// `RDX = whence` ([`SEEK_SET`], [`SEEK_CUR`], or [`SEEK_END`]).
+    /// Returns: `SyscallResult` (rax = new offset). Archive and galfs
+    /// files only; a pipe is `Unsupported`. Past-end seeks clamp to EOF.
+    Seek,
 }
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (fixing the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 12] = [
+pub const SYSCALLS: [Syscall; 16] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -358,6 +396,10 @@ pub const SYSCALLS: [Syscall; 12] = [
     Syscall::Create,
     Syscall::Remove,
     Syscall::Grant,
+    Syscall::Revoke,
+    Syscall::Pipe,
+    Syscall::Give,
+    Syscall::Seek,
 ];
 
 /// Maximum syscall number (upper bound for a u64 dispatch table).

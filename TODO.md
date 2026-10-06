@@ -906,7 +906,7 @@ tests, all `-smp 2`.
 ## Milestone 35 — grant syscall ✅
 
 A task that holds rights on an object can install a token on another
-live user task. Suite still 41 QEMU boot tests (`test-galfs` extended).
+live user task. Suite was 41 QEMU boot tests (`test-galfs` extended).
 
 - [x] **Syscall `grant`=11**: path + rights (`TOKEN_*`) + target task
       name. Caller must hold every bit being granted. Same-object tokens
@@ -914,6 +914,21 @@ live user task. Suite still 41 QEMU boot tests (`test-galfs` extended).
 - [x] Shell builtin `grant <rights> <path> <task>` (`r`/`w`/`l`/`c`/`x`)
 - [x] `bin/test-galfs`: dan grants `/Desktop` list+read to `reader`;
       reader opens `/dan@Desktop/secret`
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
+## Milestone 36 — revoke, pipes, seek, mv/cp ✅
+
+Complete the share path and a few utilities. Suite: 43 QEMU boots.
+
+- [x] **`revoke`=12**: same layout as grant; clears rights on the
+      target's exact-object token. Shell `revoke <rights> <path> <task>`
+- [x] **Boot actor `dan`**: Desktop at init; F2's shell (`shell2`) gets
+      dan credentials so grant works from the console
+- [x] **`pipe`=13 / `give`=14**: anonymous pipe with read+write caps;
+      `give` moves an open to another live task. `bin/test-pipe`
+- [x] **`seek`=15**: SET/CUR/END on archive and galfs opens. `bin/test-seek`
+- [x] **`cp` / `mv`** ramdisk utils (mv is copy then remove)
+- [x] `bin/test-galfs` proves grant then revoke
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
 ## Known limitations / follow-ups
@@ -946,8 +961,7 @@ live user task. Suite still 41 QEMU boot tests (`test-galfs` extended).
 - [ ] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
       ESC). A blinking cursor is still future screen work
-- [ ] Scratch files have no seek. There is no pipe, `mv`, `cp`, glob,
-      or disk
+- [ ] There is no glob or disk-backed store yet
 - [x] ~~`run` leaks the task name, and freed slots panic the table at
       64~~ — CLOSED by Milestone 26 (name copied into the slot; a
       `Freed` record is reused once no CPU is current on it)

@@ -452,6 +452,34 @@ fn galfs_test_passes() {
 }
 
 #[test]
+fn pipe_test_passes() {
+    let (code, serial) = boot(&image("test-pipe"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-pipe should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-pipe] passed"),
+        "test-pipe success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn seek_test_passes() {
+    let (code, serial) = boot(&image("test-seek"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-seek should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-seek] passed"),
+        "test-seek success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn scratch_test_passes() {
     let (code, serial) = boot(&image("test-scratch"));
     assert_eq!(

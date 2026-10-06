@@ -101,6 +101,28 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, syscall_grant(frame));
             Outcome::Resume
         }
+        n if n == Syscall::Revoke as u64 => {
+            stamp(frame, syscall_revoke(frame));
+            Outcome::Resume
+        }
+        n if n == Syscall::Pipe as u64 => {
+            stamp(frame, syscall_pipe(frame.rdi));
+            Outcome::Resume
+        }
+        n if n == Syscall::Give as u64 => {
+            stamp(
+                frame,
+                syscall_give(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx),
+            );
+            Outcome::Resume
+        }
+        n if n == Syscall::Seek as u64 => {
+            stamp(
+                frame,
+                syscall_seek(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx),
+            );
+            Outcome::Resume
+        }
         // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));
@@ -306,6 +328,108 @@ fn syscall_grant(frame: &Context) -> SyscallResult {
     }
     match crate::sched::task_grant(path, rights as u8, task) {
         Ok(()) => SyscallResult::ok(0),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_revoke(frame: &Context) -> SyscallResult {
+    let path_addr = frame.rdi;
+    let path_len = frame.rsi;
+    let rights = frame.rdx;
+    let task_addr = frame.r8;
+    let task_len = frame.r9;
+    if path_len == 0 || path_len > MAX_NAME {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if task_len == 0 || task_len > MAX_NAME {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if rights == 0 || rights & !galexy_abi::TOKEN_ALL != 0 {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if user_buffer(path_addr, path_len, false).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    if user_buffer(task_addr, task_len, false).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut path_raw = [0u8; MAX_NAME as usize];
+    let mut task_raw = [0u8; MAX_NAME as usize];
+    // SAFETY: `user_buffer` accepted every byte of both ranges.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            VirtAddr::new(path_addr).as_ptr::<u8>(),
+            path_raw.as_mut_ptr(),
+            path_len as usize,
+        );
+        core::ptr::copy_nonoverlapping(
+            VirtAddr::new(task_addr).as_ptr::<u8>(),
+            task_raw.as_mut_ptr(),
+            task_len as usize,
+        );
+    }
+    let path = core::str::from_utf8(&path_raw[..path_len as usize]).unwrap_or("");
+    let task = core::str::from_utf8(&task_raw[..task_len as usize]).unwrap_or("");
+    if !path_ok(path) || !file_name_ok(task) {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    match crate::sched::task_revoke(path, rights as u8, task) {
+        Ok(()) => SyscallResult::ok(0),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_pipe(addr: u64) -> SyscallResult {
+    if user_buffer(addr, 16, true).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    match crate::sched::task_pipe() {
+        Ok((read_cap, write_cap)) => {
+            let bits = [read_cap.bits(), write_cap.bits()];
+            // SAFETY: `user_buffer` accepted 16 writable user bytes.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    bits.as_ptr() as *const u8,
+                    VirtAddr::new(addr).as_mut_ptr::<u8>(),
+                    16,
+                );
+            }
+            SyscallResult::ok(0)
+        }
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_give(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+    if len == 0 || len > MAX_NAME {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if user_buffer(addr, len, false).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut raw = [0u8; MAX_NAME as usize];
+    // SAFETY: `user_buffer` accepted every byte of [addr, addr+len).
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            VirtAddr::new(addr).as_ptr::<u8>(),
+            raw.as_mut_ptr(),
+            len as usize,
+        );
+    }
+    let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
+    if !file_name_ok(name) {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    match crate::sched::task_give(cap, name) {
+        Ok(new_cap) => SyscallResult::ok(new_cap.bits()),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_seek(cap: Cap, offset_bits: u64, whence: u64) -> SyscallResult {
+    let offset = offset_bits as i64;
+    match crate::sched::task_seek(cap, offset, whence) {
+        Ok(pos) => SyscallResult::ok(pos),
         Err(err) => SyscallResult::err(err),
     }
 }

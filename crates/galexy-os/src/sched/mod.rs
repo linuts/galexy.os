@@ -13,6 +13,7 @@ pub mod context;
 pub mod demo;
 pub mod galfs;
 pub mod loader;
+pub mod pipe;
 pub mod ramdisk;
 pub mod syscalls;
 
@@ -169,6 +170,8 @@ enum FileBody {
     Archive(&'static [u8]),
     /// Index into [`galfs`] object table. The bytes are writable.
     Galfs(u16),
+    /// Anonymous pipe end.
+    Pipe { id: u8, end: pipe::PipeEnd },
 }
 
 /// One open file. Archive bytes live in the bootloader's ramdisk; galfs
@@ -1322,8 +1325,16 @@ pub(crate) fn task_read(cap: Cap, dst: &mut [u8]) -> Result<usize, SysError> {
                 n
             })
             .ok_or(SysError::BadCap)?,
+            FileBody::Pipe { id, end } => {
+                if end != pipe::PipeEnd::Read {
+                    return Err(SysError::AccessDenied);
+                }
+                pipe::read(id, dst)?
+            }
         };
-        file.offset = start + n;
+        if !matches!(file.body, FileBody::Pipe { .. }) {
+            file.offset = start + n;
+        }
         Ok(n)
     })
 }
@@ -1343,9 +1354,6 @@ pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
         let mut threads = THREADS.lock();
         let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
         let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
-        let FileBody::Galfs(obj) = file.body else {
-            return Err(SysError::Unsupported);
-        };
         let effective = file.rights.intersection(cap.rights());
         if !effective.contains(CapRights::WRITE) {
             return Err(SysError::AccessDenied);
@@ -1353,7 +1361,16 @@ pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
         if src.is_empty() {
             return Ok(0);
         }
-        galfs::append(obj, src).ok_or(SysError::BadCap)
+        match file.body {
+            FileBody::Galfs(obj) => galfs::append(obj, src).ok_or(SysError::BadCap),
+            FileBody::Pipe { id, end } => {
+                if end != pipe::PipeEnd::Write {
+                    return Err(SysError::AccessDenied);
+                }
+                pipe::write(id, src)
+            }
+            FileBody::Archive(_) => Err(SysError::Unsupported),
+        }
     })
 }
 
@@ -1462,8 +1479,11 @@ pub(crate) fn task_close(cap: Cap) -> Result<(), SysError> {
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-        if thread.files[index].take().is_none() {
+        let Some(file) = thread.files[index].take() else {
             return Err(SysError::BadCap);
+        };
+        if let FileBody::Pipe { id, end } = file.body {
+            pipe::close_end(id, end);
         }
         Ok(())
     })
@@ -1494,6 +1514,170 @@ pub(crate) fn task_grant(path: &str, rights: u8, target: &str) -> Result<(), Sys
             return Err(SysError::NotFound);
         };
         galfs::push_token(&mut threads[ti].fs_tokens, object, rights)
+    })
+}
+
+/// Drops galfs token rights on a live user task named `target`.
+pub(crate) fn task_revoke(path: &str, rights: u8, target: &str) -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let (fs_root, fs_tokens) = {
+            let caller = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+            if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
+                return Err(SysError::BadCap);
+            }
+            (caller.fs_root, caller.fs_tokens)
+        };
+        let object = galfs::resolve_and_check(fs_root, &fs_tokens, path, rights)?;
+        let Some(ti) = threads.iter().position(|t| {
+            t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
+        }) else {
+            return Err(SysError::NotFound);
+        };
+        galfs::revoke_token(&mut threads[ti].fs_tokens, object, rights)
+    })
+}
+
+/// Creates a pipe and installs both ends in the caller's file table.
+/// Returns `(read_cap, write_cap)`.
+pub(crate) fn task_pipe() -> Result<(Cap, Cap), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        let mut free = [usize::MAX; 2];
+        let mut nfree = 0usize;
+        for (i, slot) in thread.files.iter().enumerate() {
+            if slot.is_none() {
+                free[nfree] = i;
+                nfree += 1;
+                if nfree == 2 {
+                    break;
+                }
+            }
+        }
+        if nfree < 2 {
+            return Err(SysError::NoResource);
+        }
+        let id = pipe::alloc()?;
+        let ri = free[0];
+        let wi = free[1];
+        let read_rights = CapRights::READ;
+        let write_rights = CapRights::WRITE;
+        thread.files[ri] = Some(OpenFile {
+            body: FileBody::Pipe {
+                id,
+                end: pipe::PipeEnd::Read,
+            },
+            offset: 0,
+            rights: read_rights,
+        });
+        thread.files[wi] = Some(OpenFile {
+            body: FileBody::Pipe {
+                id,
+                end: pipe::PipeEnd::Write,
+            },
+            offset: 0,
+            rights: write_rights,
+        });
+        Ok((
+            Cap::new(galexy_abi::FILE_CAP_BASE + ri as u64, read_rights),
+            Cap::new(galexy_abi::FILE_CAP_BASE + wi as u64, write_rights),
+        ))
+    })
+}
+
+/// Moves an open file/pipe from the caller to `target`. Returns the new Cap.
+pub(crate) fn task_give(cap: Cap, target: &str) -> Result<Cap, SysError> {
+    let index = file_slot(cap)?;
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let file = {
+            let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+            if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
+                return Err(SysError::BadCap);
+            }
+            caller.files[index].take().ok_or(SysError::BadCap)?
+        };
+        let Some(ti) = threads.iter().position(|t| {
+            t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
+        }) else {
+            // Put it back — target missing.
+            if let Some(caller) = threads.get_mut(slot - 1) {
+                caller.files[index] = Some(file);
+            } else if let FileBody::Pipe { id, end } = file.body {
+                pipe::close_end(id, end);
+            }
+            return Err(SysError::NotFound);
+        };
+        if ti == slot - 1 {
+            threads[ti].files[index] = Some(file);
+            return Err(SysError::BadValue);
+        }
+        let Some(dest) = threads[ti].files.iter().position(|s| s.is_none()) else {
+            threads[slot - 1].files[index] = Some(file);
+            return Err(SysError::NoResource);
+        };
+        let rights = file.rights;
+        threads[ti].files[dest] = Some(file);
+        Ok(Cap::new(galexy_abi::FILE_CAP_BASE + dest as u64, rights))
+    })
+}
+
+/// Sets the read cursor on an archive or galfs open. Returns the new offset.
+pub(crate) fn task_seek(cap: Cap, offset: i64, whence: u64) -> Result<u64, SysError> {
+    let index = file_slot(cap)?;
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
+        let effective = file.rights.intersection(cap.rights());
+        if !effective.contains(CapRights::READ) && !effective.contains(CapRights::WRITE) {
+            return Err(SysError::AccessDenied);
+        }
+        let len = match file.body {
+            FileBody::Archive(bytes) => bytes.len(),
+            FileBody::Galfs(obj) => {
+                galfs::with_file(obj, |o| o.len as usize).ok_or(SysError::BadCap)?
+            }
+            FileBody::Pipe { .. } => return Err(SysError::Unsupported),
+        };
+        let base = match whence {
+            galexy_abi::SEEK_SET => 0i64,
+            galexy_abi::SEEK_CUR => file.offset as i64,
+            galexy_abi::SEEK_END => len as i64,
+            _ => return Err(SysError::BadValue),
+        };
+        let Some(raw) = base.checked_add(offset) else {
+            return Err(SysError::BadValue);
+        };
+        let new = if raw < 0 {
+            0usize
+        } else if raw as usize > len {
+            len
+        } else {
+            raw as usize
+        };
+        file.offset = new;
+        Ok(new as u64)
     })
 }
 

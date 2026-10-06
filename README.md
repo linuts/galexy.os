@@ -46,7 +46,8 @@ through a capability and starts a userland program when you type its name
       heap), freed slots are reused in place, stack canary surfaces overflows
 - [x] User space: ring-3 tasks in the same rotation, SYSCALL/SYSRET
       (`exit`, `yield`, `write`, `cap_info`, `open`, `read`, `close`,
-      `spawn`, `power`, `create`, `remove`, `grant`),
+      `spawn`, `power`, `create`, `remove`, `grant`, `revoke`, `pipe`,
+      `give`, `seek`),
       capability authority
       kernel-side, per-task kernel stacks via TSS.RSP0 — and REAL
       isolation: per-task address spaces (FreshL4), CR3 swapped by the
@@ -56,11 +57,12 @@ through a capability and starts a userland program when you type its name
       (no fds; capabilities day one) — frozen and host-tested before any
       ring-3 code exists. `open`/`read`/`close` turn ramdisk files into
       per-task capabilities; `create` adds a galfs file or directory
-      the task can write when it holds a create token; `grant` installs a
-      token on another live task; the keyboard, the loader, and the query caps
+      the task can write when it holds a create token; `grant`/`revoke`
+      install or drop tokens on another live task; `pipe`/`give` move
+      pipe ends; `seek` sets the read cursor; the keyboard, the loader, and the query caps
       (`stats`, `tasks`, `threads`, `ls`) and the power cap (`shutdown`,
       `reboot`) are reserved caps. Paths may use `owner@name` (`/dan@Desktop`)
-- [x] Shell with commands (`help`, `ls`, `grant`, `stats`, `threads`, `shutdown`,
+- [x] Shell with commands (`help`, `ls`, `cp`, `mv`, `grant`, `revoke`, `stats`, `threads`, `shutdown`,
       `reboot`, ...) + live status bar ("quiet OS" demo) — typing a
       ramdisk program name starts it and the prompt returns while it
       runs; a shell fault loads the shell again; F1–F12 switch consoles;
@@ -184,7 +186,7 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
    thing a scheduler ever has to swap.
 4. **Test what can be tested.** Host unit tests for the pure primitives
    (`galexy-core`, `galexy-abi`), plus one bootable kernel binary per
-   integration test — 41 QEMU boots (all at `-smp 2`) assert exit codes and
+   integration test — 43 QEMU boots (all at `-smp 2`) assert exit codes and
    serial output on every run.
 5. **Ownership beats locks for per-CPU state.** Rotation cursors, TSS.RSP0,
    syscall scratch and the LAPIC registers are touched by exactly one CPU

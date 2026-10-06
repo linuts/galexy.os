@@ -195,6 +195,10 @@ first real program landed in Milestone 13:
   user task. The caller must already hold the rights. The shell's
   `grant lr <path> <task>` uses it. `bin/test-galfs` has dan grant
   `/Desktop` to a reader that then opens `dan@Desktop/secret`).
+- Revoke, pipes, seek, mv/cp ✅ (Milestone 36: `revoke`=12 drops token
+  rights; boot creates actor `dan` with Desktop and F2's shell is dan;
+  `pipe`=13 + `give`=14 move pipe ends between tasks; `seek`=15 sets the
+  read cursor; `cp`/`mv` are ramdisk utils. Suite: 43 QEMU boots).
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.

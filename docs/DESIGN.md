@@ -519,7 +519,18 @@ installs a galfs token on a live user task: `RDX` is a mask of
 every right being granted on the resolved object (or an ancestor). A
 missing path or task is `NotFound`. A full token table on the target
 is `NoResource`. Same-object grants merge rights. The shell's
-`grant lr <path> <task>` uses it.
+`grant lr <path> <task>` uses it. `revoke` (syscall 12) uses the same
+registers and clears those rights from the target's token that names
+the object exactly; a zeroed slot is freed. Boot also creates actor
+`dan` with an empty Desktop; the F2 shell (`shell2`) runs as dan so
+sharing works from the console. `pipe(addr)` (syscall 13) writes a
+READ cap and a WRITE cap into a 16-byte user buffer for an anonymous
+pipe (8 pipes × 256-byte rings). `give(cap, task, len)` (syscall 14)
+moves an open file or pipe end to another live user task and returns
+the target's new Cap bits. `seek(cap, offset, whence)` (syscall 15)
+sets the read cursor on an archive or galfs open (`SEEK_SET` /
+`SEEK_CUR` / `SEEK_END`); a pipe is `Unsupported`. `cp` and `mv` are
+ramdisk programs (mv copies then removes).
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing

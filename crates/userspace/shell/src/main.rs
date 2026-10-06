@@ -14,7 +14,7 @@
 
 use galexy_abi::{Cap, SysError};
 use galexy_rt::{
-    entry, files_cap, grant, keyboard_cap, read, reboot, shutdown, spawn_with, stats_cap,
+    entry, files_cap, grant, keyboard_cap, read, reboot, revoke, shutdown, spawn_with, stats_cap,
     tasks_cap, threads_cap, write_console, yield_now,
 };
 
@@ -88,9 +88,9 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) {
     }
     if line == b"help" {
         write_console(b"commands: help, ls, echo, cat, touch, mkdir, cd, rm,\n");
-        write_console(b"grant, stats, tasks, threads, about, clear\n");
+        write_console(b"cp, mv, grant, revoke, stats, tasks, threads, about, clear\n");
         write_console(b"a program name on its own starts it\n");
-        write_console(b"grant: grant <rights> <path> <task>  (r w l c x)\n");
+        write_console(b"grant/revoke: <rights> <path> <task>  (r w l c x)\n");
         write_console(b"power: shutdown, reboot\n");
         prompt(cwd);
         return;
@@ -159,7 +159,19 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) {
         return;
     }
     if let Some(rest) = arg_of(line, b"grant") {
-        do_grant(cwd, rest);
+        do_token(cwd, rest, true);
+        return;
+    }
+    if let Some(rest) = arg_of(line, b"revoke") {
+        do_token(cwd, rest, false);
+        return;
+    }
+    if let Some(rest) = arg_of(line, b"cp") {
+        two_path_util(cwd, b"cp", rest);
+        return;
+    }
+    if let Some(rest) = arg_of(line, b"mv") {
+        two_path_util(cwd, b"mv", rest);
         return;
     }
     if !line.contains(&b' ') {
@@ -281,26 +293,30 @@ fn rm(cwd: &Cwd, name: &[u8]) {
     launch_util(cwd, b"rm", &path[..n], true);
 }
 
-/// `grant <rights> <path> <task>` — hand another live task a token.
-/// Rights letters: `r` read, `w` write, `l` list, `c` create, `x` remove.
-fn do_grant(cwd: &Cwd, rest: &[u8]) {
+/// `grant`/`revoke` `<rights> <path> <task>`. Rights: `r`/`w`/`l`/`c`/`x`.
+fn do_token(cwd: &Cwd, rest: &[u8], is_grant: bool) {
     let rest = trim(rest);
+    let usage = if is_grant {
+        &b"usage: grant <rights> <path> <task>\n"[..]
+    } else {
+        &b"usage: revoke <rights> <path> <task>\n"[..]
+    };
     let Some(sp1) = rest.iter().position(|b| *b == b' ') else {
-        write_console(b"usage: grant <rights> <path> <task>\n");
+        write_console(usage);
         prompt(cwd);
         return;
     };
     let rights_s = &rest[..sp1];
     let after = trim(&rest[sp1 + 1..]);
     let Some(sp2) = after.iter().position(|b| *b == b' ') else {
-        write_console(b"usage: grant <rights> <path> <task>\n");
+        write_console(usage);
         prompt(cwd);
         return;
     };
     let path = trim(&after[..sp2]);
     let task = trim(&after[sp2 + 1..]);
     if rights_s.is_empty() || path.is_empty() || task.is_empty() || !path_arg_ok(path) {
-        write_console(b"usage: grant <rights> <path> <task>\n");
+        write_console(usage);
         prompt(cwd);
         return;
     }
@@ -308,7 +324,7 @@ fn do_grant(cwd: &Cwd, rest: &[u8]) {
         .iter()
         .all(|b| b.is_ascii_alphanumeric() || *b == b'.' || *b == b'_' || *b == b'-')
     {
-        write_console(b"grant: bad task name\n");
+        write_console(b"bad task name\n");
         prompt(cwd);
         return;
     }
@@ -321,26 +337,30 @@ fn do_grant(cwd: &Cwd, rest: &[u8]) {
             b'c' | b'C' => galexy_abi::TOKEN_CREATE,
             b'x' | b'X' => galexy_abi::TOKEN_REMOVE,
             _ => {
-                write_console(b"grant: rights are r,w,l,c,x\n");
+                write_console(b"rights are r,w,l,c,x\n");
                 prompt(cwd);
                 return;
             }
         };
     }
     if rights == 0 {
-        write_console(b"usage: grant <rights> <path> <task>\n");
+        write_console(usage);
         prompt(cwd);
         return;
     }
     let mut full = [0u8; PATH_MAX];
     let Some(n) = compose(cwd, path, path.ends_with(b"/"), &mut full) else {
-        write_console(b"grant: path too long\n");
+        write_console(b"path too long\n");
         prompt(cwd);
         return;
     };
-    let result = grant(&full[..n], rights, task);
+    let result = if is_grant {
+        grant(&full[..n], rights, task)
+    } else {
+        revoke(&full[..n], rights, task)
+    };
     if !result.ok {
-        write_console(b"grant: ");
+        write_console(if is_grant { b"grant: " } else { b"revoke: " });
         match SysError::from_code(result.value) {
             SysError::NotFound => write_console(b"not found\n"),
             SysError::AccessDenied => write_console(b"access denied\n"),
@@ -350,6 +370,50 @@ fn do_grant(cwd: &Cwd, rest: &[u8]) {
         };
     }
     prompt(cwd);
+}
+
+/// `cp`/`mv` `<src> <dst>` — both paths composed against cwd.
+fn two_path_util(cwd: &Cwd, program: &[u8], rest: &[u8]) {
+    let rest = trim(rest);
+    let Some(sp) = rest.iter().position(|b| *b == b' ') else {
+        write_console(b"usage: ");
+        write_console(program);
+        write_console(b" <src> <dst>\n");
+        prompt(cwd);
+        return;
+    };
+    let src = trim(&rest[..sp]);
+    let dst = trim(&rest[sp + 1..]);
+    if !path_arg_ok(src) || !path_arg_ok(dst) {
+        write_console(b"usage: ");
+        write_console(program);
+        write_console(b" <src> <dst>\n");
+        prompt(cwd);
+        return;
+    }
+    let mut sbuf = [0u8; PATH_MAX];
+    let mut dbuf = [0u8; PATH_MAX];
+    let Some(sn) = compose(cwd, src, false, &mut sbuf) else {
+        write_console(b"path too long\n");
+        prompt(cwd);
+        return;
+    };
+    let Some(dn) = compose(cwd, dst, false, &mut dbuf) else {
+        write_console(b"path too long\n");
+        prompt(cwd);
+        return;
+    };
+    // Argument is `src\0dst` so the util can split on NUL.
+    let mut arg = [0u8; PATH_MAX * 2 + 1];
+    if sn + 1 + dn > arg.len() {
+        write_console(b"path too long\n");
+        prompt(cwd);
+        return;
+    }
+    arg[..sn].copy_from_slice(&sbuf[..sn]);
+    arg[sn] = 0;
+    arg[sn + 1..sn + 1 + dn].copy_from_slice(&dbuf[..dn]);
+    launch_util(cwd, program, &arg[..sn + 1 + dn], false);
 }
 
 fn cd(cwd: &mut Cwd, name: &[u8]) {

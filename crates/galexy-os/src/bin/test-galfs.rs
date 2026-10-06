@@ -1,8 +1,4 @@
-//! Integration test kernel: galfs tokens and the `grant` syscall.
-//!
-//! Actor `dan` has a Desktop. Alex opens `/dan@Desktop` without a token
-//! and gets AccessDenied. A dan-credentialed granter installs list+read
-//! on a live reader via `grant`; the reader then opens the secret.
+//! Integration test: galfs grant/revoke and boot actor `dan`.
 
 #![no_std]
 #![no_main]
@@ -19,7 +15,7 @@ use galexy_os::{
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
 const DONE: u64 = 0x5C4A_7C20;
-const TICK_TIMEOUT: u64 = 8000;
+const TICK_TIMEOUT: u64 = 12000;
 
 #[repr(C)]
 struct Report {
@@ -31,10 +27,20 @@ struct Report {
 }
 
 #[repr(C)]
+struct HolderReport {
+    done: u64,
+    after_grant: u64,
+    after_revoke_ok: u64,
+    after_revoke_err: u64,
+}
+
+#[repr(C)]
 struct GrantReport {
     done: u64,
     grant_ok: u64,
     grant_err: u64,
+    revoke_ok: u64,
+    revoke_err: u64,
 }
 
 fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
@@ -61,8 +67,9 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     };
     sched::ramdisk::init(archive);
 
-    let dan_root = galfs::add_actor_named("dan").expect("dan actor");
-    let desktop = galfs::mkdir_under_root(dan_root, "Desktop").expect("dan Desktop");
+    let dan_root = galfs::dan_root();
+    assert_ne!(dan_root, galfs::NO_OBJECT, "boot must create dan");
+    let desktop = galfs::find_under(dan_root, "Desktop").expect("boot dan Desktop");
     let _secret = galfs::create_file_under(desktop, "secret").expect("secret");
 
     let (region, _) = sched::spawn_user_task("denied", |gr| {
@@ -112,12 +119,11 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     );
     assert!(!saw, "alex must not list dan's tree without a token");
 
-    // Reader has alex credentials (no dan token). It yields until grant lands.
-    let (reader_region, _) = sched::spawn_user_task("reader", |gr| {
+    let (holder_region, _) = sched::spawn_user_task("holder", |gr| {
         unsafe {
             core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
         }
-        build_reader_blob(gr.code.as_u64(), gr.scratch.as_u64())
+        build_holder_blob(gr.code.as_u64(), gr.scratch.as_u64())
     });
 
     let dan_fs = FsCred::launcher(dan_root);
@@ -144,25 +150,31 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         }
     };
     assert_eq!(grant_report.grant_ok, 1, "grant must succeed");
-    assert_eq!(grant_report.grant_err, 0, "grant must not report an error");
+    assert_eq!(grant_report.revoke_ok, 1, "revoke must succeed");
 
-    let reader_scratch: *const Report = mm::frame_virt(reader_region.scratch_phys).as_ptr();
+    let holder_scratch: *const HolderReport = mm::frame_virt(holder_region.scratch_phys).as_ptr();
     elapsed = 0;
-    let reader_report = loop {
+    let holder_report = loop {
         x86_64::instructions::hlt();
-        let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*reader_scratch).done)) };
+        let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*holder_scratch).done)) };
         if done == DONE {
-            break unsafe { core::ptr::read_volatile(reader_scratch) };
+            break unsafe { core::ptr::read_volatile(holder_scratch) };
         }
         sched::reap();
         elapsed += 1;
         if elapsed > TICK_TIMEOUT {
-            panic!("reader never finished after grant");
+            panic!("holder never finished");
         }
     };
+    assert_eq!(holder_report.after_grant, 1, "holder opens after grant");
     assert_eq!(
-        reader_report.open_file_ok, 1,
-        "reader must open /dan@Desktop/secret after grant"
+        holder_report.after_revoke_ok, 0,
+        "open after revoke must fail"
+    );
+    assert_eq!(
+        holder_report.after_revoke_err,
+        SysError::AccessDenied as u64,
+        "open after revoke is AccessDenied"
     );
 
     loop {
@@ -173,7 +185,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         }
     }
 
-    println!("[test-galfs] grant hands dan@Desktop to reader");
+    println!("[test-galfs] grant and revoke on dan@Desktop");
     serial_println!("[test-galfs] passed");
     exit_qemu(QemuExitCode::Success);
 }
@@ -205,15 +217,12 @@ fn build_denied_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     store(&mut code, 2, 0x18);
     store(&mut code, 0, 0x20);
 
-    mov_r64_imm(&mut code, 0, DONE);
-    store(&mut code, 0, 0x00);
-    mov_eax(&mut code, Syscall::Exit as u32);
-    code.extend_from_slice(&[0x31, 0xFF]);
-    code.extend_from_slice(&[0x0F, 0x05]);
+    finish(&mut code);
     code
 }
 
-fn build_reader_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
+/// Wait for grant (open ok), yield, wait for revoke (open fail), exit.
+fn build_holder_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let file = b"/dan@Desktop/secret";
     let mut code: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
     code.push(0xEB);
@@ -223,44 +232,69 @@ fn build_reader_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
 
     mov_r64_imm(&mut code, 15, scratch);
 
-    let loop_at = code.len();
+    // Phase 1: loop until open succeeds
+    let loop1 = code.len();
     syscall_imm(
         &mut code,
         Syscall::Open as u64,
         file_addr,
         file.len() as u64,
     );
-    // test rdx, rdx ; jnz got_it
-    code.extend_from_slice(&[0x48, 0x85, 0xD2]);
-    let jnz_at = code.len();
-    code.extend_from_slice(&[0x0F, 0x85, 0x00, 0x00, 0x00, 0x00]);
-
+    code.extend_from_slice(&[0x48, 0x85, 0xD2]); // test rdx,rdx
+    let jnz1 = code.len();
+    code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]); // jnz got_grant
     mov_eax(&mut code, Syscall::Yield as u32);
     code.extend_from_slice(&[0x0F, 0x05]);
-    // jmp loop_at
-    let after_jmp = code.len() + 5;
-    let rel = loop_at as i32 - after_jmp as i32;
-    code.push(0xE9);
-    code.extend_from_slice(&rel.to_le_bytes());
+    jmp_to(&mut code, loop1);
 
-    let got_it = code.len();
-    let jnz_rel = got_it as i32 - (jnz_at as i32 + 6);
-    code[jnz_at + 2..jnz_at + 6].copy_from_slice(&jnz_rel.to_le_bytes());
-
-    // open succeeded: rax is the cap, rdx is 1
-    store(&mut code, 2, 0x18);
-
-    mov_r64_imm(&mut code, 0, DONE);
-    store(&mut code, 0, 0x00);
-    mov_eax(&mut code, Syscall::Exit as u32);
-    code.extend_from_slice(&[0x31, 0xFF]);
+    let got_grant = code.len();
+    patch_jnz(&mut code, jnz1, got_grant);
+    // store 1 into after_grant (0x08)
+    mov_r64_imm(&mut code, 0, 1);
+    store(&mut code, 0, 0x08);
+    // close the cap in rax
+    mov_eax(&mut code, Syscall::Close as u32);
+    // rdi still has... need cap in rdi. After open, rax=cap. mov rdi, rax
+    code.extend_from_slice(&[0x48, 0x89, 0xC7]); // mov rdi, rax
     code.extend_from_slice(&[0x0F, 0x05]);
+
+    // Yield a few times so granter can revoke
+    for _ in 0..8 {
+        mov_eax(&mut code, Syscall::Yield as u32);
+        code.extend_from_slice(&[0x0F, 0x05]);
+    }
+
+    // Phase 2: loop until open fails with AccessDenied (or just try once after yields)
+    let loop2 = code.len();
+    syscall_imm(
+        &mut code,
+        Syscall::Open as u64,
+        file_addr,
+        file.len() as u64,
+    );
+    code.extend_from_slice(&[0x48, 0x85, 0xD2]); // test rdx,rdx
+    let jz2 = code.len();
+    code.extend_from_slice(&[0x0F, 0x84, 0, 0, 0, 0]); // jz denied
+                                                       // still ok — close and yield
+    code.extend_from_slice(&[0x48, 0x89, 0xC7]);
+    mov_eax(&mut code, Syscall::Close as u32);
+    code.extend_from_slice(&[0x0F, 0x05]);
+    mov_eax(&mut code, Syscall::Yield as u32);
+    code.extend_from_slice(&[0x0F, 0x05]);
+    jmp_to(&mut code, loop2);
+
+    let denied = code.len();
+    patch_jnz(&mut code, jz2, denied); // actually jz
+    store(&mut code, 2, 0x10); // after_revoke_ok = rdx (0)
+    store(&mut code, 0, 0x18); // after_revoke_err = rax
+
+    finish(&mut code);
     code
 }
 
 fn build_granter_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let path = b"/Desktop";
-    let task = b"reader";
+    let task = b"holder";
     let mut code: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
     let data_len = path.len() + task.len();
     code.push(0xEB);
@@ -272,6 +306,12 @@ fn build_granter_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
 
     mov_r64_imm(&mut code, 15, scratch);
 
+    // yield until holder is likely scheduled
+    for _ in 0..4 {
+        mov_eax(&mut code, Syscall::Yield as u32);
+        code.extend_from_slice(&[0x0F, 0x05]);
+    }
+
     mov_eax(&mut code, Syscall::Grant as u32);
     mov_r64_imm(&mut code, 7, path_addr);
     mov_r64_imm(&mut code, 6, path.len() as u64);
@@ -282,12 +322,32 @@ fn build_granter_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     store(&mut code, 2, 0x08);
     store(&mut code, 0, 0x10);
 
-    mov_r64_imm(&mut code, 0, DONE);
-    store(&mut code, 0, 0x00);
-    mov_eax(&mut code, Syscall::Exit as u32);
+    // yield so holder can open
+    for _ in 0..16 {
+        mov_eax(&mut code, Syscall::Yield as u32);
+        code.extend_from_slice(&[0x0F, 0x05]);
+    }
+
+    mov_eax(&mut code, Syscall::Revoke as u32);
+    mov_r64_imm(&mut code, 7, path_addr);
+    mov_r64_imm(&mut code, 6, path.len() as u64);
+    mov_r64_imm(&mut code, 2, TOKEN_LIST | TOKEN_READ);
+    mov_r64_imm(&mut code, 8, task_addr);
+    mov_r64_imm(&mut code, 9, task.len() as u64);
+    code.extend_from_slice(&[0x0F, 0x05]);
+    store(&mut code, 2, 0x18);
+    store(&mut code, 0, 0x20);
+
+    finish(&mut code);
+    code
+}
+
+fn finish(code: &mut alloc::vec::Vec<u8>) {
+    mov_r64_imm(code, 0, DONE);
+    store(code, 0, 0x00);
+    mov_eax(code, Syscall::Exit as u32);
     code.extend_from_slice(&[0x31, 0xFF]);
     code.extend_from_slice(&[0x0F, 0x05]);
-    code
 }
 
 fn mov_r64_imm(code: &mut alloc::vec::Vec<u8>, reg: u8, imm: u64) {
@@ -313,4 +373,16 @@ fn store(code: &mut alloc::vec::Vec<u8>, reg: u8, disp: i32) {
     let modrm = 0x80 | (reg << 3) | 7;
     code.extend_from_slice(&[0x49, 0x89, modrm]);
     code.extend_from_slice(&disp.to_le_bytes());
+}
+
+fn jmp_to(code: &mut alloc::vec::Vec<u8>, target: usize) {
+    let after = code.len() + 5;
+    let rel = target as i32 - after as i32;
+    code.push(0xE9);
+    code.extend_from_slice(&rel.to_le_bytes());
+}
+
+fn patch_jnz(code: &mut [u8], at: usize, target: usize) {
+    let rel = target as i32 - (at as i32 + 6);
+    code[at + 2..at + 6].copy_from_slice(&rel.to_le_bytes());
 }

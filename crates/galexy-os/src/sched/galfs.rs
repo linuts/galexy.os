@@ -156,15 +156,19 @@ static BOOTED: AtomicBool = AtomicBool::new(false);
 
 /// Alex's root object. Valid after [`init`].
 static ALEX_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(NO_OBJECT);
+static DAN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(NO_OBJECT);
 
-/// Builds actor `alex` and its empty root. Call once from scheduler init.
+/// Builds actors `alex` and `dan` (dan gets an empty Desktop). Call once.
 pub fn init() {
     if BOOTED.swap(true, Ordering::SeqCst) {
         return;
     }
     let mut table = TABLE.lock();
-    let root = add_actor(&mut table, "alex").expect("galfs: alex");
-    ALEX_ROOT.store(root, Ordering::Relaxed);
+    let alex = add_actor(&mut table, "alex").expect("galfs: alex");
+    ALEX_ROOT.store(alex, Ordering::Relaxed);
+    let dan = add_actor(&mut table, "dan").expect("galfs: dan");
+    DAN_ROOT.store(dan, Ordering::Relaxed);
+    mkdir_locked(&mut table, dan, "Desktop").expect("galfs: dan Desktop");
 }
 
 /// Credentials for the default boot actor.
@@ -172,6 +176,18 @@ pub fn alex_cred() -> FsCred {
     let root = ALEX_ROOT.load(Ordering::Relaxed);
     debug_assert!(root != NO_OBJECT, "galfs: init before alex_cred");
     FsCred::launcher(root)
+}
+
+/// Credentials for the second boot actor (F2's shell).
+pub fn dan_cred() -> FsCred {
+    let root = DAN_ROOT.load(Ordering::Relaxed);
+    debug_assert!(root != NO_OBJECT, "galfs: init before dan_cred");
+    FsCred::launcher(root)
+}
+
+/// Dan's actor root object index (for tests).
+pub fn dan_root() -> u16 {
+    DAN_ROOT.load(Ordering::Relaxed)
 }
 
 /// Adds an actor and an empty root. Test and boot only.
@@ -208,19 +224,29 @@ fn add_actor(table: &mut Table, name: &str) -> Result<u16, SysError> {
     Ok(oi as u16)
 }
 
+/// Looks up a direct child by name. Test helper.
+pub fn find_under(parent: u16, name: &str) -> Option<u16> {
+    let table = TABLE.lock();
+    find_child(&table, parent, name).map(|i| i as u16)
+}
+
 /// Creates a directory under an actor's root. Test helper.
 pub fn mkdir_under_root(root: u16, name: &str) -> Result<u16, SysError> {
     if !component_ok(name) {
         return Err(SysError::BadValue);
     }
     let mut table = TABLE.lock();
+    mkdir_locked(&mut table, root, name)
+}
+
+fn mkdir_locked(table: &mut Table, root: u16, name: &str) -> Result<u16, SysError> {
     if root as usize >= OBJECT_SLOTS || table.objects[root as usize].kind != KIND_DIR {
         return Err(SysError::NotFound);
     }
-    if find_child(&table, root, name).is_some() {
+    if find_child(table, root, name).is_some() {
         return Err(SysError::Unsupported);
     }
-    let Some(oi) = free_object(&table) else {
+    let Some(oi) = free_object(table) else {
         return Err(SysError::NoResource);
     };
     let actor = table.objects[root as usize].actor;
@@ -711,4 +737,23 @@ pub fn push_token(
     } else {
         Err(SysError::NoResource)
     }
+}
+
+/// Clears `rights` from the token that names `object` exactly.
+pub fn revoke_token(
+    tokens: &mut [Token; TOKEN_SLOTS],
+    object: u16,
+    rights: u8,
+) -> Result<(), SysError> {
+    if object == NO_OBJECT || rights == 0 {
+        return Err(SysError::BadValue);
+    }
+    let Some(slot) = tokens.iter_mut().find(|t| t.object == object) else {
+        return Err(SysError::NotFound);
+    };
+    slot.rights &= !rights;
+    if slot.rights == 0 {
+        *slot = Token::empty();
+    }
+    Ok(())
 }

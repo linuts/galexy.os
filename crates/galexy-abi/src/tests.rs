@@ -88,7 +88,14 @@ fn reserved_caps_have_permanent_indexes() {
     assert!(matches!(SYSCALLS[9], Syscall::Create));
     assert!(matches!(SYSCALLS[10], Syscall::Remove));
     assert!(matches!(SYSCALLS[11], Syscall::Grant));
+    assert!(matches!(SYSCALLS[12], Syscall::Revoke));
+    assert!(matches!(SYSCALLS[13], Syscall::Pipe));
+    assert!(matches!(SYSCALLS[14], Syscall::Give));
+    assert!(matches!(SYSCALLS[15], Syscall::Seek));
     assert_eq!(TOKEN_ALL, 31);
+    assert_eq!(SEEK_SET, 0);
+    assert_eq!(SEEK_CUR, 1);
+    assert_eq!(SEEK_END, 2);
     let keyboard = reserved::keyboard(CapRights::READ);
     assert_eq!(keyboard.index(), reserved::KEYBOARD_INDEX);
     assert!(keyboard.rights().contains(CapRights::READ));

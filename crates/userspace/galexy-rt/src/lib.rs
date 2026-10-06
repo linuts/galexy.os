@@ -105,6 +105,51 @@ pub fn grant(path: &[u8], rights: u64, task: &[u8]) -> SyscallResult {
     SyscallResult { ok: ok != 0, value }
 }
 
+/// Drops galfs token rights from a live user task. Same layout as [`grant`].
+pub fn revoke(path: &[u8], rights: u64, task: &[u8]) -> SyscallResult {
+    let value: u64;
+    let ok: u64;
+    // SAFETY: same syscall entry as [`grant`].
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") Syscall::Revoke as u64 => value,
+            inlateout("rdx") rights => ok,
+            in("rdi") path.as_ptr() as u64,
+            in("rsi") path.len() as u64,
+            in("r8") task.as_ptr() as u64,
+            in("r9") task.len() as u64,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    SyscallResult { ok: ok != 0, value }
+}
+
+/// Creates a pipe. On success, `out` receives `[read_cap, write_cap]` bits.
+pub fn pipe(out: &mut [u64; 2]) -> SyscallResult {
+    syscall(Syscall::Pipe as u64, out.as_mut_ptr() as u64, 0, 0)
+}
+
+/// Moves an open file or pipe cap to another live user task.
+///
+/// On success, `value` is the target's new capability bits.
+pub fn give(cap: Cap, task: &[u8]) -> SyscallResult {
+    syscall(
+        Syscall::Give as u64,
+        cap.bits(),
+        task.as_ptr() as u64,
+        task.len() as u64,
+    )
+}
+
+/// Sets the read cursor on an open file. `whence` is [`galexy_abi::SEEK_SET`],
+/// [`galexy_abi::SEEK_CUR`], or [`galexy_abi::SEEK_END`].
+pub fn seek(cap: Cap, offset: i64, whence: u64) -> SyscallResult {
+    syscall(Syscall::Seek as u64, cap.bits(), offset as u64, whence)
+}
+
 /// Like [`create`], and if the path is an existing scratch file its bytes
 /// are emptied first.
 pub fn create_replace(name: &[u8]) -> SyscallResult {
