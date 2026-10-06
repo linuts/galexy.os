@@ -127,7 +127,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         "archive bytes unchanged"
     );
 
-    assert_eq!(report.fill_ok, 30, "thirty more galfs files must fit");
+    // Boot admin+Desktop+note leave 61 free of 64.
+    assert_eq!(report.fill_ok, 61, "sixty-one more galfs files must fit");
     assert_eq!(report.extra_ok, 0, "a full galfs table must fail");
     assert_eq!(
         report.extra_err,
@@ -151,7 +152,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let note = b"note";
     let banner = b"banner.txt";
-    let letters = b"abcdefghijklmnopqrstuvwxyz0123";
+    // 61 unique names after note — fills the 64-slot table with admin+Desktop.
+    let letters = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345678";
     let extra = b"extra";
     let mut code: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
     let data_len = note.len() + banner.len() + PAYLOAD.len() + letters.len() + extra.len();

@@ -677,7 +677,7 @@ const SUPERVISOR_KEYS: &[(&str, &str)] = &[
     ("ret", "killing the task"),
     // `x` is echoed by the new shell. Sync on the prompt: a bare `x` also
     // matches the `0x` in the loader's log line.
-    ("x", "galexy> "),
+    ("x", "admin@galexy> "),
     ("y", "beat\n"),
 ];
 
@@ -727,9 +727,9 @@ const QUERY_KEYS: &[(&str, &str)] = &[
 ];
 
 /// `cat`, redirection, `mkdir` / `cd` / `ls`. Enter syncs on text that
-/// appears only after the command runs. A redirected `echo`, `mkdir`, and
-/// a successful `rm` print nothing of their own; the prompt is back as
-/// soon as the program is loaded, so those wait for the task's exit line.
+/// appears only after the command runs. Utilities use `SPAWN_WAIT`, so a
+/// redirected `echo`, `mkdir`, and a successful `rm` finish before the
+/// prompt returns; syncs still use the exit line or command output.
 const UTIL_KEYS: &[(&str, &str)] = &[
     ("c", "c"),
     ("a", "a"),
@@ -821,7 +821,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("b", "b"),
     ("o", "o"),
     ("x", "x"),
-    ("ret", "galexy:/box> "),
+    ("ret", "admin@galexy:/box> "),
     ("e", "e"),
     ("c", "c"),
     ("h", "h"),
@@ -857,7 +857,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("spc", " "),
     ("dot", "."),
     ("dot", "."),
-    ("ret", "galexy> "),
+    ("ret", "admin@galexy> "),
     ("l", "l"),
     ("s", "s"),
     ("ret", "box/"),
@@ -922,7 +922,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("b", "b"),
     ("o", "o"),
     ("x", "x"),
-    ("ret", "galexy:/box> "),
+    ("ret", "admin@galexy:/box> "),
     ("r", "r"),
     ("m", "m"),
     ("spc", " "),
@@ -936,7 +936,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("spc", " "),
     ("dot", "."),
     ("dot", "."),
-    ("ret", "galexy> "),
+    ("ret", "admin@galexy> "),
     ("r", "r"),
     ("m", "m"),
     ("spc", " "),
@@ -1007,7 +1007,7 @@ fn shell_util_typing_e2e() {
         "typed `echo >>` did not append; serial:\n{serial}"
     );
     assert!(
-        serial.contains("galexy:/box> "),
+        serial.contains("admin@galexy:/box> "),
         "typed `cd box` did not enter the directory; serial:\n{serial}"
     );
     assert!(
@@ -1066,7 +1066,7 @@ fn shell_run_hello_typing_e2e() {
         .find("[pf] ring-3 task fault")
         .expect("typed `crash` never faulted the shell");
     let after_fault = &serial[fault_at..];
-    let prompt_at = after_fault.find("galexy> ").unwrap_or_else(|| {
+    let prompt_at = after_fault.find("admin@galexy> ").unwrap_or_else(|| {
         panic!("a new shell prompt never appeared after the fault; serial:\n{serial}")
     });
     assert!(

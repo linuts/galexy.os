@@ -285,10 +285,11 @@ pub fn spawn(name: &[u8]) -> SyscallResult {
     spawn_with(name, &[], 0)
 }
 
-/// Starts `name` with `arg` and `grants` ([`galexy_abi::SPAWN_GRANT_QUERY`] or zero).
+/// Starts `name` with `arg` and `grants` (`SPAWN_GRANT_QUERY`, `SPAWN_WAIT`, or both).
 ///
-/// Returns once the program is loaded. The child keeps running. `r8`, `r9`,
-/// and `r10` are set explicitly so a leftover register is not an argument.
+/// Returns once the program is loaded, or — when `SPAWN_WAIT` is set — once
+/// the child exits. `r8`, `r9`, and `r10` are set explicitly so a leftover
+/// register is not an argument.
 pub fn spawn_with(name: &[u8], arg: &[u8], grants: u64) -> SyscallResult {
     let value: u64;
     let ok: u64;

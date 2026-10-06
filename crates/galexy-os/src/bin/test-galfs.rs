@@ -1,4 +1,4 @@
-//! Integration test: galfs grant/revoke and boot actor `dan`.
+//! Integration test: galfs grant/revoke across actors.
 
 #![no_std]
 #![no_main]
@@ -67,9 +67,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     };
     sched::ramdisk::init(archive);
 
-    let dan_root = galfs::dan_root();
-    assert_ne!(dan_root, galfs::NO_OBJECT, "boot must create dan");
-    let desktop = galfs::find_under(dan_root, "Desktop").expect("boot dan Desktop");
+    let dan_root = galfs::add_user("dan").expect("add dan");
+    let desktop = galfs::find_under(dan_root, "Desktop").expect("dan Desktop");
     let _secret = galfs::create_file_under(desktop, "secret").expect("secret");
 
     let (region, _) = sched::spawn_user_task("denied", |gr| {
@@ -109,15 +108,15 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     let mut saw = false;
     galfs::for_each_visible(
-        galfs::alex_cred().root,
-        &galfs::alex_cred().tokens,
+        galfs::admin_cred().root,
+        &galfs::admin_cred().tokens,
         |path| {
             if path.starts_with(b"dan@") {
                 saw = true;
             }
         },
     );
-    assert!(!saw, "alex must not list dan's tree without a token");
+    assert!(!saw, "admin must not list dan's tree without a token");
 
     let (holder_region, _) = sched::spawn_user_task("holder", |gr| {
         unsafe {

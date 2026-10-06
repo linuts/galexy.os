@@ -57,7 +57,7 @@ pub fn spawn_program(name: &str, bytes: &[u8]) -> ProgramRegion {
         Grants::console(),
         &[],
         0,
-        crate::sched::galfs::alex_cred(),
+        crate::sched::galfs::admin_cred(),
     )
 }
 
@@ -82,20 +82,24 @@ pub(crate) fn spawn_launched(
 /// F1's shell lives here. Each F-key shell is pinned the same way: the
 /// framebuffer has one painter, and that painter is the BSP. The shell
 /// receives the launcher grant (console, keyboard, loader, queries, power),
-/// alex's root token, and writes the console `tty` names.
+/// admin's root token, and writes the console `tty` names.
 pub fn spawn_program_bsp(name: &str, bytes: &[u8]) -> ProgramRegion {
     spawn_shell_on(name, bytes, 0)
 }
 
 /// Pins a launcher shell named `name` to the BSP on console `tty`.
-/// TTY 1 (F2) is actor `dan` when that actor still exists; otherwise alex.
+/// Every shell starts as admin; add actors with `useradd` and switch with `su`.
 pub fn spawn_shell_on(name: &str, bytes: &[u8], tty: u8) -> ProgramRegion {
-    let fs = if tty == 1 && crate::sched::galfs::dan_root() != crate::sched::galfs::NO_OBJECT {
-        crate::sched::galfs::dan_cred()
-    } else {
-        crate::sched::galfs::alex_cred()
-    };
-    spawn_program_placed(name, bytes, Some(0), true, Grants::launcher(), &[], tty, fs)
+    spawn_program_placed(
+        name,
+        bytes,
+        Some(0),
+        true,
+        Grants::launcher(),
+        &[],
+        tty,
+        crate::sched::galfs::admin_cred(),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

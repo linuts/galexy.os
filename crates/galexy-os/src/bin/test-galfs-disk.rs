@@ -43,10 +43,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         "ATA slave must back galfs for this test"
     );
 
-    let alex = galfs::alex_root();
-    assert_ne!(alex, galfs::NO_OBJECT, "alex must exist");
+    let admin = galfs::admin_root();
+    assert_ne!(admin, galfs::NO_OBJECT, "admin must exist");
 
-    let desktop = galfs::find_under(alex, "Desktop").expect("alex Desktop");
+    let desktop = galfs::find_under(admin, "Desktop").expect("admin Desktop");
     if let Some(file) = galfs::find_under(desktop, "persist") {
         let mut buf = [0u8; 32];
         let n = galfs::read_file_bytes(file, &mut buf).expect("read persist");

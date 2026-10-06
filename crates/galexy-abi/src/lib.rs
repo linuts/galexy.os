@@ -209,6 +209,10 @@ pub const POWER_REBOOT: u64 = 1;
 /// The child always receives the console. Any other bit is rejected.
 /// Keyboard, the loader, and power stay with the shell.
 pub const SPAWN_GRANT_QUERY: u64 = 1;
+/// `spawn` grant bit (`r10`): park the caller until the child exits
+/// (not only until the ELF is loaded). Shell utilities use this so the
+/// prompt returns after `ls` / `mkdir` finish.
+pub const SPAWN_WAIT: u64 = 2;
 
 /// `grant` rights (`RDX`): read the object.
 pub const TOKEN_READ: u64 = 1;
@@ -234,9 +238,9 @@ pub const SEEK_END: u64 = 2;
 pub const USER_WHOAMI: u64 = 0;
 /// `user` op: write every actor name, one per line.
 pub const USER_USERS: u64 = 1;
-/// `user` op: create an actor and an empty Desktop (alex admin).
+/// `user` op: create an actor and an empty Desktop (admin only).
 pub const USER_ADD: u64 = 2;
-/// `user` op: delete an empty actor (not alex; no live task on that root).
+/// `user` op: delete an empty actor (not admin; no live task on that root).
 pub const USER_DEL: u64 = 3;
 /// `user` op: switch this task to another actor's launcher credentials.
 pub const USER_SU: u64 = 4;
@@ -314,11 +318,12 @@ pub enum Syscall {
     /// Args: `RDI = loader cap bits`, `RSI = user address of the name`,
     /// `RDX = byte count`. Optional: `R8 = user address of an argument`,
     /// `R9 = argument byte count` (at most 256; zero means none),
-    /// `R10 = grant bits` ([`SPAWN_GRANT_QUERY`] or zero). Returns:
-    /// `SyscallResult` (rax = 0) once the program is loaded and running.
-    /// Requires CapRights::EXEC on the loader cap. The load itself runs
-    /// on the kernel's page table (main-loop drain); the caller is parked
-    /// only until that load finishes. The child keeps running.
+    /// `R10 = grant bits` ([`SPAWN_GRANT_QUERY`], [`SPAWN_WAIT`], or both).
+    /// Returns: `SyscallResult` (rax = 0). Requires CapRights::EXEC on the
+    /// loader cap. The load itself runs on the kernel's page table
+    /// (main-loop drain). Without `SPAWN_WAIT` the caller is parked only
+    /// until that load finishes and the child keeps running; with it the
+    /// caller stays parked until the child exits.
     Spawn,
     /// `power(cap, op)` — shut down or reset the machine.
     ///
@@ -396,10 +401,11 @@ pub enum Syscall {
     /// ([`USER_WHOAMI`], [`USER_USERS`], [`USER_ADD`], [`USER_DEL`],
     /// or [`USER_SU`]). Returns: `SyscallResult`. Whoami/users write
     /// into the buffer and return the byte count. Add/del/su return 0.
-    /// Add and del require the caller to be actor `alex` (root match).
-    /// Su requires alex, or `TOKEN_ALL` on the target's root. Deleting
-    /// alex, a non-empty tree, or an actor a live task still uses is
-    /// `Unsupported` / `NotFound`.
+    /// Add and del require the caller to be actor `admin` (root match).
+    /// Su replaces tokens with ALL on the target; allowed for current
+    /// admin, a seat born as admin returning to admin, or a holder of
+    /// `TOKEN_ALL` on the target. Deleting admin, a non-empty tree, or
+    /// an actor a live task still uses is `Unsupported` / `NotFound`.
     User,
 }
 

@@ -937,8 +937,8 @@ Actors are accounts. Suite: 44 QEMU boots.
 
 - [x] **Syscall `user`=16**: ops whoami / users / add / del / su
 - [x] Shell: `whoami`, `users`, `useradd`, `userdel`, `su`
-- [x] Add/del require alex's root; su needs alex or ALL on the target;
-      tokens are kept across su so alex can switch back
+- [x] Add/del require admin's root; su needs admin / born-admin return /
+      ALL on the target (Milestone 40 drops kept tokens across su)
 - [x] `bin/test-users` covers the happy path and access checks
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
@@ -973,6 +973,20 @@ Suite: 46 QEMU boots.
       slot between boots
 - [x] `galexy-core::crc32` host-tested
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
+## Milestone 40 — shell and identity cleanup ✅
+
+Default seat is `admin` only. Suite: 46 QEMU boots.
+
+- [x] **Boot actor `admin`**: format creates admin + Desktop; alex/dan
+      removed. GALF disk version 3. All shells start as admin
+- [x] **`su` isolation**: replace tokens with ALL on the target; born-admin
+      seats may return with `su admin`; shell resets cwd on su
+- [x] **`SPAWN_WAIT`**: shell utilities park until the child exits (fixes
+      `ls` needing an extra Enter). Bare launches (`hello`, `linger`) do not
+- [x] **TTY cursor**: console writes save the focused TTY cursor so the
+      input line stays visible after status-bar / focus churn
+- [x] Tests/docs: `test-users`, `test-galfs`, `test-rm`, `test-galfs-disk`
 
 ## Known limitations / follow-ups
 

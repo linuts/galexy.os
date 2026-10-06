@@ -1,13 +1,14 @@
 //! The interactive shell: a ring-3 program.
 //!
-//! Keys arrive through the keyboard capability. A program name starts that
-//! program through the loader capability; this task is parked only until
-//! the load finishes, then the prompt returns while the program runs.
-//! `echo`, `cat`, `touch`, `mkdir`, `rm`, and `ls` are those programs.
+//! Keys arrive through the keyboard capability. Utilities spawn with
+//! `SPAWN_WAIT` so the prompt returns after they exit; a bare program
+//! name returns once the load finishes and keeps running.
+//! `echo`, `cat`, `touch`, `mkdir`, `rm`, and `ls` are those utilities.
 //! The kernel keeps the status bar and the screen, and loads this shell
 //! again if it faults. The current directory lives here and starts over
 //! at `/` after a restart. Archive names stay at `/`. A path may begin
 //! with `/`, and the first component may be `owner@name` (`/dan@Desktop`).
+//! The prompt is `user@galexy>` (with `:/path` when cwd is not `/`).
 
 #![no_std]
 #![no_main]
@@ -22,6 +23,7 @@ entry!(main);
 
 const LINE_MAX: usize = 80;
 const PATH_MAX: usize = 64;
+const USER_MAX: usize = 16;
 
 struct Cwd {
     buf: [u8; PATH_MAX],
@@ -466,7 +468,7 @@ fn users_cmd(cwd: &Cwd) {
     prompt(cwd);
 }
 
-fn user_op(cwd: &Cwd, rest: &[u8], op: u64, label: &[u8]) {
+fn user_op(cwd: &mut Cwd, rest: &[u8], op: u64, label: &[u8]) {
     let name = trim(rest);
     if name.is_empty()
         || !name
@@ -491,6 +493,10 @@ fn user_op(cwd: &Cwd, rest: &[u8], op: u64, label: &[u8]) {
             SysError::BadValue => write_console(b"bad value\n"),
             _ => write_console(b"failed\n"),
         };
+    } else if op == galexy_abi::USER_SU {
+        // Paths are per-actor; keep the shell from creating under the
+        // previous actor's cwd after the identity switch.
+        cwd.len = 0;
     }
     prompt(cwd);
 }
@@ -544,19 +550,23 @@ fn ls(cwd: &Cwd) {
 }
 
 /// Starts the ramdisk program `name`. A missing name, or a file that is
-/// not an ELF, is reported as an unknown command.
+/// not an ELF, is reported as an unknown command. The prompt returns
+/// once the program is loaded (linger / hello keep running).
 fn launch(cwd: &Cwd, name: &[u8]) {
-    launch_util(cwd, name, b"", false);
+    spawn_and_prompt(cwd, name, b"", 0);
 }
 
-/// Spawns `program` with `arg`. `query` adds the files snapshot grant.
-/// The prompt returns once the program is running.
+/// Spawns a utility with `arg`. `query` adds the files snapshot grant.
+/// Waits for the child to exit before the prompt returns.
 fn launch_util(cwd: &Cwd, program: &[u8], arg: &[u8], query: bool) {
-    let grants = if query {
-        galexy_abi::SPAWN_GRANT_QUERY
-    } else {
-        0
-    };
+    let mut grants = galexy_abi::SPAWN_WAIT;
+    if query {
+        grants |= galexy_abi::SPAWN_GRANT_QUERY;
+    }
+    spawn_and_prompt(cwd, program, arg, grants);
+}
+
+fn spawn_and_prompt(cwd: &Cwd, program: &[u8], arg: &[u8], grants: u64) {
     let result = spawn_with(program, arg, grants);
     if !result.ok {
         if result.value == SysError::NoResource as u64 {
@@ -715,10 +725,22 @@ fn show(cap: Cap, cwd: &Cwd) {
 
 fn prompt(cwd: &Cwd) {
     // One write, so a kernel log on the serial mirror cannot land between
-    // `galexy` and `> `.
-    let mut line = [0u8; 6 + 2 + PATH_MAX + 2];
-    line[..6].copy_from_slice(b"galexy");
-    let mut n = 6usize;
+    // the name and `> `. Shape: `user@galexy>` or `user@galexy:/path> `.
+    let mut name = [0u8; USER_MAX];
+    let got = user(&mut name, galexy_abi::USER_WHOAMI);
+    let uname = if got.ok && got.value > 0 {
+        &name[..(got.value as usize).min(USER_MAX)]
+    } else {
+        b"?"
+    };
+    let mut line = [0u8; USER_MAX + 1 + 6 + 2 + PATH_MAX + 2];
+    let mut n = 0usize;
+    line[n..n + uname.len()].copy_from_slice(uname);
+    n += uname.len();
+    line[n] = b'@';
+    n += 1;
+    line[n..n + 6].copy_from_slice(b"galexy");
+    n += 6;
     if cwd.len > 0 {
         line[n] = b':';
         line[n + 1] = b'/';

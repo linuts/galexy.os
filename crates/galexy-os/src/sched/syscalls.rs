@@ -780,7 +780,7 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
     if len == 0 || len > MAX_NAME {
         return SyscallResult::err(SysError::BadValue);
     }
-    if frame.r10 & !galexy_abi::SPAWN_GRANT_QUERY != 0 {
+    if frame.r10 & !(galexy_abi::SPAWN_GRANT_QUERY | galexy_abi::SPAWN_WAIT) != 0 {
         return SyscallResult::err(SysError::BadValue);
     }
     let arg_len = frame.r9;
@@ -824,7 +824,8 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
         return SyscallResult::err(SysError::Unsupported);
     }
     let query = frame.r10 & galexy_abi::SPAWN_GRANT_QUERY != 0;
-    match crate::sched::task_spawn(name, &arg[..arg_len as usize], query) {
+    let wait_exit = frame.r10 & galexy_abi::SPAWN_WAIT != 0;
+    match crate::sched::task_spawn(name, &arg[..arg_len as usize], query, wait_exit) {
         Ok(()) => SyscallResult::ok(0),
         Err(err) => SyscallResult::err(err),
     }

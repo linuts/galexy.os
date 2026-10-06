@@ -2,8 +2,8 @@
 //!
 //! Each actor has one root directory. `/Desktop` is that actor's child
 //! named Desktop. `/dan@Desktop` is dan's. A token names an object and a
-//! set of rights; the path is only a lookup. Lock order: [`THREADS`]
-//! then this table.
+//! set of rights; the path is only a lookup. Boot creates one immortal
+//! actor, [`ADMIN_NAME`]. Lock order: [`THREADS`] then this table.
 //!
 //! When the primary IDE slave is present, the table is loaded from a
 //! dual-slot GALF image (checksum + generation) or formatted if both
@@ -168,9 +168,11 @@ static ACTIVE_SLOT: AtomicU32 = AtomicU32::new(0);
 /// Generation of the active slot (next sync writes gen + 1).
 static ACTIVE_GEN: AtomicU64 = AtomicU64::new(0);
 
-/// Alex's root object. Valid after [`init`].
-static ALEX_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(NO_OBJECT);
-static DAN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(NO_OBJECT);
+/// Name of the immortal boot actor.
+pub const ADMIN_NAME: &str = "admin";
+
+/// Admin's root object. Valid after [`init`].
+static ADMIN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(NO_OBJECT);
 
 /// On-disk image: dual slots of header + actors + objects.
 ///
@@ -178,7 +180,8 @@ static DAN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::
 /// LBA [`DISK_SECTORS`]. A sync writes the inactive slot with gen+1 and a
 /// CRC, then flushes — a crash mid-write leaves the previous slot intact.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-pub const DISK_VERSION: u16 = 2;
+/// Bumped when the boot actor set changes (admin-only format).
+pub const DISK_VERSION: u16 = 3;
 pub const DISK_SECTORS: usize = 80;
 pub const DISK_SLOT_COUNT: usize = 2;
 const DISK_HEADER: usize = 32;
@@ -188,8 +191,8 @@ const OBJECT_ON_DISK: usize = 8 + NAME_CAP + FILE_BYTES; // 584
 static DISK_BUF: Mutex<[[u8; ata::SECTOR]; DISK_SECTORS]> =
     Mutex::new([[0u8; ata::SECTOR]; DISK_SECTORS]);
 
-/// Builds actors `alex` and `dan` (each with an empty Desktop), or loads
-/// the newest valid GALF slot from the ATA slave. Call once.
+/// Builds actor [`ADMIN_NAME`] with an empty Desktop, or loads the newest
+/// valid GALF slot from the ATA slave. Call once.
 pub fn init() {
     if BOOTED.swap(true, Ordering::SeqCst) {
         return;
@@ -203,12 +206,9 @@ pub fn init() {
         return;
     }
     let mut table = TABLE.lock();
-    let alex = add_actor(&mut table, "alex").expect("galfs: alex");
-    ALEX_ROOT.store(alex, Ordering::Relaxed);
-    mkdir_locked(&mut table, alex, "Desktop").expect("galfs: alex Desktop");
-    let dan = add_actor(&mut table, "dan").expect("galfs: dan");
-    DAN_ROOT.store(dan, Ordering::Relaxed);
-    mkdir_locked(&mut table, dan, "Desktop").expect("galfs: dan Desktop");
+    let admin = add_actor(&mut table, ADMIN_NAME).expect("galfs: admin");
+    ADMIN_ROOT.store(admin, Ordering::Relaxed);
+    mkdir_locked(&mut table, admin, "Desktop").expect("galfs: admin Desktop");
     drop(table);
     ACTIVE_SLOT.store(0, Ordering::Relaxed);
     ACTIVE_GEN.store(0, Ordering::Relaxed);
@@ -296,20 +296,14 @@ fn load_from_disk() -> bool {
 }
 
 fn refresh_roots(table: &Table) {
-    let mut alex = NO_OBJECT;
-    let mut dan = NO_OBJECT;
+    let mut admin = NO_OBJECT;
     for actor in &table.actors {
-        if !actor.used {
-            continue;
-        }
-        if actor.name_is("alex") {
-            alex = actor.root;
-        } else if actor.name_is("dan") {
-            dan = actor.root;
+        if actor.used && actor.name_is(ADMIN_NAME) {
+            admin = actor.root;
+            break;
         }
     }
-    ALEX_ROOT.store(alex, Ordering::Relaxed);
-    DAN_ROOT.store(dan, Ordering::Relaxed);
+    ADMIN_ROOT.store(admin, Ordering::Relaxed);
 }
 
 fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; ata::SECTOR]; DISK_SECTORS]) {
@@ -402,7 +396,7 @@ fn decode_table(sectors: &[[u8; ata::SECTOR]; DISK_SECTORS], table: &mut Table) 
 /// Structural checks after CRC so a bit-flipped-but-checksum-ok image cannot
 /// take the kernel into undefined object walks.
 fn validate_table(table: &Table) -> bool {
-    let mut saw_alex = false;
+    let mut saw_admin = false;
     for (ai, actor) in table.actors.iter().enumerate() {
         if !actor.used {
             continue;
@@ -418,11 +412,11 @@ fn validate_table(table: &Table) -> bool {
         if obj.kind != KIND_DIR || obj.parent != NO_PARENT || obj.actor != ai as u8 {
             return false;
         }
-        if actor.name_is("alex") {
-            saw_alex = true;
+        if actor.name_is(ADMIN_NAME) {
+            saw_admin = true;
         }
     }
-    if !saw_alex {
+    if !saw_admin {
         return false;
     }
     for (i, obj) in table.objects.iter().enumerate() {
@@ -528,32 +522,20 @@ pub fn drop_tokens_on(tokens: &mut [Token; TOKEN_SLOTS], objects: &[u16]) {
 }
 
 /// Credentials for the default boot actor.
-pub fn alex_cred() -> FsCred {
-    let root = ALEX_ROOT.load(Ordering::Relaxed);
-    debug_assert!(root != NO_OBJECT, "galfs: init before alex_cred");
+pub fn admin_cred() -> FsCred {
+    let root = ADMIN_ROOT.load(Ordering::Relaxed);
+    debug_assert!(root != NO_OBJECT, "galfs: init before admin_cred");
     FsCred::launcher(root)
 }
 
-/// Credentials for the second boot actor (F2's shell).
-pub fn dan_cred() -> FsCred {
-    let root = DAN_ROOT.load(Ordering::Relaxed);
-    debug_assert!(root != NO_OBJECT, "galfs: init before dan_cred");
-    FsCred::launcher(root)
+/// Admin's actor root object index.
+pub fn admin_root() -> u16 {
+    ADMIN_ROOT.load(Ordering::Relaxed)
 }
 
-/// Dan's actor root object index (for tests).
-pub fn dan_root() -> u16 {
-    DAN_ROOT.load(Ordering::Relaxed)
-}
-
-/// Alex's actor root object index.
-pub fn alex_root() -> u16 {
-    ALEX_ROOT.load(Ordering::Relaxed)
-}
-
-/// Whether `root` is alex's actor root.
-pub fn is_alex_root(root: u16) -> bool {
-    root != NO_OBJECT && root == ALEX_ROOT.load(Ordering::Relaxed)
+/// Whether `root` is the immortal admin actor root.
+pub fn is_admin_root(root: u16) -> bool {
+    root != NO_OBJECT && root == ADMIN_ROOT.load(Ordering::Relaxed)
 }
 
 /// Writes the actor name for `root` into `out`. Returns the byte count.
@@ -592,6 +574,9 @@ pub fn root_named(name: &str) -> Result<u16, SysError> {
 
 /// Creates an actor and an empty Desktop. Returns the new root.
 pub fn add_user(name: &str) -> Result<u16, SysError> {
+    if name == ADMIN_NAME {
+        return Err(SysError::Unsupported);
+    }
     let mut table = TABLE.lock();
     let root = add_actor(&mut table, name)?;
     mkdir_locked(&mut table, root, "Desktop")?;
@@ -600,10 +585,9 @@ pub fn add_user(name: &str) -> Result<u16, SysError> {
 
 /// Deletes an actor whose tree is only an empty root (and optional empty Desktop).
 ///
-/// Refuses alex. Clears [`DAN_ROOT`] when dan is removed. Caller must ensure
-/// no live task still uses this root.
+/// Refuses [`ADMIN_NAME`]. Caller must ensure no live task still uses this root.
 pub fn remove_user(name: &str) -> Result<(), SysError> {
-    if name == "alex" {
+    if name == ADMIN_NAME {
         return Err(SysError::Unsupported);
     }
     let mut table = TABLE.lock();
@@ -629,9 +613,6 @@ pub fn remove_user(name: &str) -> Result<(), SysError> {
     }
     table.objects[root as usize] = Object::empty();
     table.actors[ai] = Actor::empty();
-    if DAN_ROOT.load(Ordering::Relaxed) == root {
-        DAN_ROOT.store(NO_OBJECT, Ordering::Relaxed);
-    }
     Ok(())
 }
 
