@@ -186,10 +186,21 @@ const SCRATCH_SLOTS: usize = 8;
 /// Bytes one scratch file can hold. A longer `write` copies what fits.
 const SCRATCH_BYTES: usize = 256;
 
-/// One scratch file. Fixed name, fixed buffer: `create` never allocates.
+/// A scratch slot that holds a file.
+const KIND_FILE: u8 = 1;
+/// A scratch slot that holds a directory. It has no bytes of its own.
+const KIND_DIR: u8 = 2;
+/// `parent` value for an entry whose parent is `/`.
+const PARENT_ROOT: u8 = 0xff;
+
+/// One scratch file or directory. The name is one path component.
+/// `create` never allocates.
 #[derive(Clone, Copy)]
 struct ScratchFile {
-    used: bool,
+    /// `0` empty, [`KIND_FILE`], or [`KIND_DIR`].
+    kind: u8,
+    /// Parent slot, or [`PARENT_ROOT`].
+    parent: u8,
     name: [u8; NAME_CAP],
     name_len: u8,
     data: [u8; SCRATCH_BYTES],
@@ -199,7 +210,8 @@ struct ScratchFile {
 impl ScratchFile {
     const fn empty() -> Self {
         Self {
-            used: false,
+            kind: 0,
+            parent: PARENT_ROOT,
             name: [0; NAME_CAP],
             name_len: 0,
             data: [0; SCRATCH_BYTES],
@@ -209,7 +221,7 @@ impl ScratchFile {
 
     fn name_is(&self, name: &str) -> bool {
         let n = self.name_len as usize;
-        self.used && n == name.len() && &self.name[..n] == name.as_bytes()
+        self.kind != 0 && n == name.len() && &self.name[..n] == name.as_bytes()
     }
 }
 
@@ -1042,10 +1054,158 @@ fn wake_waiters(threads: &[Thread], name: &str) {
     }
 }
 
-/// Opens a ramdisk file for the current user task. `name` is the exact
-/// archive entry (`banner.txt`, `hello`). The returned cap carries READ.
+/// A path split into at most [`SCRATCH_SLOTS`] components.
+struct ParsedPath<'a> {
+    comps: [&'a str; SCRATCH_SLOTS],
+    n: usize,
+    /// The path ended in `/`: the last component is a directory.
+    dir: bool,
+}
+
+/// Splits `name` on `/`. A trailing slash marks a directory. `.` and `..`
+/// are rejected; the shell resolves those itself.
+fn parse_path(name: &str) -> Result<ParsedPath<'_>, SysError> {
+    let (body, dir) = if let Some(stripped) = name.strip_suffix('/') {
+        if stripped.is_empty() || stripped.ends_with('/') {
+            return Err(SysError::BadValue);
+        }
+        (stripped, true)
+    } else {
+        (name, false)
+    };
+    if body.is_empty() {
+        return Err(SysError::BadValue);
+    }
+    let mut comps = [""; SCRATCH_SLOTS];
+    let mut n = 0usize;
+    for comp in body.split('/') {
+        if comp.is_empty() || comp == "." || comp == ".." || n >= SCRATCH_SLOTS {
+            return Err(SysError::BadValue);
+        }
+        let ok = comp
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-');
+        if !ok {
+            return Err(SysError::BadValue);
+        }
+        comps[n] = comp;
+        n += 1;
+    }
+    if n == 0 {
+        return Err(SysError::BadValue);
+    }
+    Ok(ParsedPath { comps, n, dir })
+}
+
+/// Child of `parent` with this component name, if the slot is occupied.
+fn find_child(table: &ScratchTable, parent: u8, name: &str) -> Option<usize> {
+    table
+        .files
+        .iter()
+        .position(|file| file.kind != 0 && file.parent == parent && file.name_is(name))
+}
+
+/// Walks every component except the last. The last is looked up by the caller.
+fn walk_parents(table: &ScratchTable, parsed: &ParsedPath<'_>) -> Result<u8, SysError> {
+    let mut parent = PARENT_ROOT;
+    for comp in &parsed.comps[..parsed.n - 1] {
+        let Some(index) = find_child(table, parent, comp) else {
+            return Err(SysError::NotFound);
+        };
+        if table.files[index].kind != KIND_DIR {
+            return Err(SysError::NotFound);
+        }
+        parent = index as u8;
+    }
+    Ok(parent)
+}
+
+fn place_name(file: &mut ScratchFile, name: &str) {
+    file.name = [0; NAME_CAP];
+    file.name[..name.len()].copy_from_slice(name.as_bytes());
+    file.name_len = name.len() as u8;
+}
+
+/// Full path of one scratch slot, with a trailing `/` on a directory.
+fn path_bytes(table: &ScratchTable, index: usize, out: &mut [u8]) -> Option<usize> {
+    let mut chain = [0usize; SCRATCH_SLOTS];
+    let mut depth = 0usize;
+    let mut cur = index;
+    loop {
+        if depth >= SCRATCH_SLOTS {
+            return None;
+        }
+        chain[depth] = cur;
+        depth += 1;
+        let parent = table.files[cur].parent;
+        if parent == PARENT_ROOT {
+            break;
+        }
+        cur = parent as usize;
+        if cur >= SCRATCH_SLOTS || table.files[cur].kind == 0 {
+            return None;
+        }
+    }
+    let mut len = 0usize;
+    for slot in chain[..depth].iter().rev() {
+        let file = &table.files[*slot];
+        let name_len = file.name_len as usize;
+        if len > 0 {
+            if len >= out.len() {
+                return None;
+            }
+            out[len] = b'/';
+            len += 1;
+        }
+        if len + name_len > out.len() {
+            return None;
+        }
+        out[len..len + name_len].copy_from_slice(&file.name[..name_len]);
+        len += name_len;
+    }
+    if table.files[index].kind == KIND_DIR {
+        if len >= out.len() {
+            return None;
+        }
+        out[len] = b'/';
+        len += 1;
+    }
+    Some(len)
+}
+
+/// Calls `each` with every scratch path (`docs/`, `docs/note`). The bytes
+/// are only valid inside the callback.
+pub(crate) fn for_each_scratch_path(mut each: impl FnMut(&[u8])) {
+    interrupts::without_interrupts(|| {
+        let scratch = SCRATCH.lock();
+        for index in 0..SCRATCH_SLOTS {
+            if scratch.files[index].kind == 0 {
+                continue;
+            }
+            let mut buf = [0u8; NAME_CAP];
+            let Some(n) = path_bytes(&scratch, index, &mut buf) else {
+                continue;
+            };
+            each(&buf[..n]);
+        }
+    });
+}
+
+/// Opens a file for the current user task.
+///
+/// An exact ramdisk name (`banner.txt`, `hello`) grants READ. Any other
+/// path is a scratch file and grants READ and WRITE. A directory is
+/// `Unsupported`.
 pub(crate) fn task_open(name: &str) -> Result<Cap, SysError> {
-    let bytes = crate::sched::ramdisk::find(name).ok_or(SysError::NotFound)?;
+    if !name.contains('/') {
+        if let Some(bytes) = crate::sched::ramdisk::find(name) {
+            return install_open(FileBody::Archive(bytes), CapRights::READ);
+        }
+    }
+    let parsed = parse_path(name)?;
+    if parsed.dir {
+        return Err(SysError::Unsupported);
+    }
     let slot = current_slot();
     if slot == 0 {
         return Err(SysError::BadCap);
@@ -1059,9 +1219,41 @@ pub(crate) fn task_open(name: &str) -> Result<Cap, SysError> {
         let Some(index) = thread.files.iter().position(|slot| slot.is_none()) else {
             return Err(SysError::NoResource);
         };
-        let rights = CapRights::READ;
+        let scratch = SCRATCH.lock();
+        let parent = walk_parents(&scratch, &parsed)?;
+        let last = parsed.comps[parsed.n - 1];
+        let Some(found) = find_child(&scratch, parent, last) else {
+            return Err(SysError::NotFound);
+        };
+        if scratch.files[found].kind != KIND_FILE {
+            return Err(SysError::Unsupported);
+        }
+        let rights = CapRights::READ.union(CapRights::WRITE);
         thread.files[index] = Some(OpenFile {
-            body: FileBody::Archive(bytes),
+            body: FileBody::Scratch(found as u8),
+            offset: 0,
+            rights,
+        });
+        Ok(Cap::new(galexy_abi::FILE_CAP_BASE + index as u64, rights))
+    })
+}
+
+fn install_open(body: FileBody, rights: CapRights) -> Result<Cap, SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        let Some(index) = thread.files.iter().position(|slot| slot.is_none()) else {
+            return Err(SysError::NoResource);
+        };
+        thread.files[index] = Some(OpenFile {
+            body,
             offset: 0,
             rights,
         });
@@ -1148,14 +1340,17 @@ pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
     })
 }
 
-/// Creates a scratch file for the current user task and returns a cap
-/// with READ and WRITE.
+/// Creates a scratch file or directory for the current user task.
 ///
-/// A ramdisk name, or a name already in the scratch table, is
-/// `Unsupported`. The scratch table and the task's file table are both
-/// fixed; either being full is `NoResource`.
-pub(crate) fn task_create(name: &str) -> Result<Cap, SysError> {
-    if crate::sched::ramdisk::find(name).is_some() {
+/// A path ending in `/` is a directory and the returned cap is null.
+/// A file cap carries READ and WRITE. `replace` empties an existing
+/// scratch file instead of failing. A ramdisk name at `/` cannot be
+/// replaced. A name that already exists is `Unsupported`. A missing
+/// parent is `NotFound`. A full scratch table, or a full per-task file
+/// table, is `NoResource`.
+pub(crate) fn task_create(name: &str, replace: bool) -> Result<Cap, SysError> {
+    let parsed = parse_path(name)?;
+    if parsed.n == 1 && crate::sched::ramdisk::find(parsed.comps[0]).is_some() {
         return Err(SysError::Unsupported);
     }
     let slot = current_slot();
@@ -1168,21 +1363,45 @@ pub(crate) fn task_create(name: &str) -> Result<Cap, SysError> {
         if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
         }
-        let Some(index) = thread.files.iter().position(|slot| slot.is_none()) else {
-            return Err(SysError::NoResource);
-        };
+        let file_index = thread.files.iter().position(|slot| slot.is_none());
         let mut scratch = SCRATCH.lock();
-        if scratch.files.iter().any(|file| file.name_is(name)) {
+        let parent = walk_parents(&scratch, &parsed)?;
+        let last = parsed.comps[parsed.n - 1];
+        if let Some(found) = find_child(&scratch, parent, last) {
+            if replace && !parsed.dir && scratch.files[found].kind == KIND_FILE {
+                let Some(index) = file_index else {
+                    return Err(SysError::NoResource);
+                };
+                scratch.files[found].data = [0; SCRATCH_BYTES];
+                scratch.files[found].len = 0;
+                let rights = CapRights::READ.union(CapRights::WRITE);
+                thread.files[index] = Some(OpenFile {
+                    body: FileBody::Scratch(found as u8),
+                    offset: 0,
+                    rights,
+                });
+                return Ok(Cap::new(galexy_abi::FILE_CAP_BASE + index as u64, rights));
+            }
             return Err(SysError::Unsupported);
         }
-        let Some(scratch_index) = scratch.files.iter().position(|file| !file.used) else {
+        let Some(scratch_index) = scratch.files.iter().position(|file| file.kind == 0) else {
+            return Err(SysError::NoResource);
+        };
+        if parsed.dir {
+            let stored = &mut scratch.files[scratch_index];
+            stored.kind = KIND_DIR;
+            stored.parent = parent;
+            place_name(stored, last);
+            stored.len = 0;
+            return Ok(Cap::null());
+        }
+        let Some(index) = file_index else {
             return Err(SysError::NoResource);
         };
         let stored = &mut scratch.files[scratch_index];
-        stored.used = true;
-        stored.name = [0; NAME_CAP];
-        stored.name[..name.len()].copy_from_slice(name.as_bytes());
-        stored.name_len = name.len() as u8;
+        stored.kind = KIND_FILE;
+        stored.parent = parent;
+        place_name(stored, last);
         stored.data = [0; SCRATCH_BYTES];
         stored.len = 0;
         let rights = CapRights::READ.union(CapRights::WRITE);

@@ -3,31 +3,44 @@
 //! Keys arrive through the keyboard capability. Programs start through the
 //! loader capability, and this task stays parked until they exit. The
 //! kernel keeps the status bar and the screen.
+//!
+//! The current directory lives here. Archive names stay at `/`. `run`
+//! still takes a ramdisk program name, not a path.
 
 #![no_std]
 #![no_main]
 
 use galexy_abi::{Cap, SysError};
 use galexy_rt::{
-    entry, files_cap, keyboard_cap, read, reboot, shutdown, spawn, stats_cap, tasks_cap,
-    threads_cap, write_console, yield_now,
+    close, create, create_replace, entry, files_cap, keyboard_cap, open, read, reboot, shutdown,
+    spawn, stats_cap, tasks_cap, threads_cap, write, write_console, yield_now,
 };
 
 entry!(main);
 
 const LINE_MAX: usize = 80;
+const PATH_MAX: usize = 64;
+
+struct Cwd {
+    buf: [u8; PATH_MAX],
+    len: usize,
+}
 
 fn main() -> i32 {
     let kbd = keyboard_cap();
     let mut line = [0u8; LINE_MAX];
     let mut len = 0usize;
-    prompt();
+    let mut cwd = Cwd {
+        buf: [0; PATH_MAX],
+        len: 0,
+    };
+    prompt(&cwd);
     loop {
         let mut buf = [0u8; 8];
         let got = read(kbd, &mut buf);
         if !got.ok {
             write_console(b"\nread: keyboard denied\n");
-            prompt();
+            prompt(&cwd);
             continue;
         }
         if got.value == 0 {
@@ -39,7 +52,7 @@ fn main() -> i32 {
             match byte {
                 b'\n' | b'\r' => {
                     write_console(b"\n");
-                    dispatch(trim(&line[..len]));
+                    dispatch(trim(&line[..len]), &mut cwd);
                     len = 0;
                 }
                 0x08 => {
@@ -59,69 +72,359 @@ fn main() -> i32 {
     }
 }
 
-fn dispatch(line: &[u8]) {
+fn dispatch(line: &[u8], cwd: &mut Cwd) {
     if line.is_empty() {
-        prompt();
+        prompt(cwd);
         return;
     }
     if line == b"help" {
-        write_console(b"commands: help, ls, stats, tasks, threads, about, clear, run <program>\n");
+        write_console(b"commands: help, ls, echo, cat, touch, mkdir, cd,\n");
+        write_console(b"stats, tasks, threads, about, clear, run <program>\n");
         write_console(b"power: shutdown, reboot\n");
-        prompt();
+        prompt(cwd);
         return;
     }
     if line == b"about" {
         write_console(b"galexy.os - a small Rust OS\n");
         write_console(b"this shell is a ring-3 program\n");
-        prompt();
+        prompt(cwd);
         return;
     }
     if line == b"ls" {
-        show(files_cap());
+        ls(cwd);
         return;
     }
     if line == b"stats" {
-        show(stats_cap());
+        show(stats_cap(), cwd);
         return;
     }
     if line == b"tasks" {
-        show(tasks_cap());
+        show(tasks_cap(), cwd);
         return;
     }
     if line == b"threads" {
-        show(threads_cap());
+        show(threads_cap(), cwd);
         return;
     }
     if line == b"shutdown" {
         let _ = shutdown();
         write_console(b"shutdown: the machine stayed up\n");
-        prompt();
+        prompt(cwd);
         return;
     }
     if line == b"reboot" {
         let _ = reboot();
         write_console(b"reboot: the machine stayed up\n");
-        prompt();
+        prompt(cwd);
         return;
     }
     if line == b"clear" {
         write_console(&[0x0c]);
-        prompt();
+        prompt(cwd);
+        return;
+    }
+    if let Some(name) = arg_of(line, b"echo") {
+        echo(cwd, name);
+        return;
+    }
+    if let Some(name) = arg_of(line, b"cat") {
+        cat(cwd, name);
+        return;
+    }
+    if let Some(name) = arg_of(line, b"touch") {
+        touch(cwd, name);
+        return;
+    }
+    if let Some(name) = arg_of(line, b"mkdir") {
+        mkdir(cwd, name);
+        return;
+    }
+    if let Some(name) = arg_of(line, b"cd") {
+        cd(cwd, name);
         return;
     }
     if let Some(name) = run_arg(line) {
-        run(name);
+        run(cwd, name);
         return;
     }
     write_console(line);
     write_console(b": command not found\n");
-    prompt();
+    prompt(cwd);
 }
 
-fn run(name: &[u8]) {
+fn echo(cwd: &Cwd, rest: &[u8]) {
+    if let Some((text, name, append)) = redirection(rest) {
+        write_redir(cwd, text, name, append);
+        return;
+    }
+    write_console(rest);
+    write_console(b"\n");
+    prompt(cwd);
+}
+
+fn redirection(rest: &[u8]) -> Option<(&[u8], &[u8], bool)> {
+    if let Some(rest) = rest.strip_prefix(b">> ") {
+        return Some((b"", trim(rest), true));
+    }
+    if let Some(rest) = rest.strip_prefix(b"> ") {
+        return Some((b"", trim(rest), false));
+    }
+    if let Some(at) = find_slice(rest, b" >> ") {
+        return Some((trim(&rest[..at]), trim(&rest[at + 4..]), true));
+    }
+    if let Some(at) = find_slice(rest, b" > ") {
+        return Some((trim(&rest[..at]), trim(&rest[at + 3..]), false));
+    }
+    None
+}
+
+fn write_redir(cwd: &Cwd, text: &[u8], name: &[u8], append: bool) {
+    if name.is_empty() || name.contains(&b' ') || name.contains(&b'/') {
+        write_console(b"echo: usage: echo [text] > name\n");
+        prompt(cwd);
+        return;
+    }
+    let mut path = [0u8; PATH_MAX];
+    let Some(n) = compose(cwd, name, false, &mut path) else {
+        write_console(b"echo: path too long\n");
+        prompt(cwd);
+        return;
+    };
+    let opened = if append {
+        let existing = open(&path[..n]);
+        if existing.ok {
+            existing
+        } else if existing.value == SysError::NotFound as u64 {
+            create(&path[..n])
+        } else {
+            existing
+        }
+    } else {
+        create_replace(&path[..n])
+    };
+    if !opened.ok {
+        if opened.value == SysError::Unsupported as u64 {
+            write_console(b"echo: cannot replace\n");
+        } else if opened.value == SysError::NotFound as u64 {
+            write_console(b"echo: no such directory\n");
+        } else {
+            write_console(b"echo: failed\n");
+        }
+        prompt(cwd);
+        return;
+    }
+    let cap = Cap::from_bits(opened.value);
+    let mut payload = [0u8; LINE_MAX + 1];
+    let ncopy = text.len().min(LINE_MAX);
+    payload[..ncopy].copy_from_slice(&text[..ncopy]);
+    payload[ncopy] = b'\n';
+    let wrote = write(cap, &payload[..=ncopy]);
+    let _ = close(cap);
+    if !wrote.ok || wrote.value != (ncopy + 1) as u64 {
+        write_console(b"echo: failed\n");
+    }
+    prompt(cwd);
+}
+
+fn cat(cwd: &Cwd, name: &[u8]) {
+    let name = trim(name);
+    if name.is_empty() || name.contains(&b' ') || name.contains(&b'/') {
+        write_console(b"cat: usage: cat <name>\n");
+        prompt(cwd);
+        return;
+    }
+    let mut path = [0u8; PATH_MAX];
+    let Some(n) = compose(cwd, name, false, &mut path) else {
+        write_console(b"cat: path too long\n");
+        prompt(cwd);
+        return;
+    };
+    let opened = open(&path[..n]);
+    if !opened.ok {
+        if opened.value == SysError::NotFound as u64 {
+            write_console(b"cat: no such file\n");
+        } else {
+            write_console(b"cat: failed\n");
+        }
+        prompt(cwd);
+        return;
+    }
+    let cap = Cap::from_bits(opened.value);
+    let mut buf = [0u8; 256];
+    let mut ended_nl = true;
+    loop {
+        let got = read(cap, &mut buf);
+        if !got.ok || got.value == 0 {
+            break;
+        }
+        let chunk = &buf[..(got.value as usize).min(buf.len())];
+        let wrote = write_console(chunk);
+        if !wrote.ok {
+            write_console(b"\ncat: not text\n");
+            let _ = close(cap);
+            prompt(cwd);
+            return;
+        }
+        ended_nl = chunk.last() == Some(&b'\n');
+    }
+    let _ = close(cap);
+    if !ended_nl {
+        write_console(b"\n");
+    }
+    prompt(cwd);
+}
+
+fn touch(cwd: &Cwd, name: &[u8]) {
+    let name = trim(name);
+    if name.is_empty() || name.contains(&b' ') || name.contains(&b'/') {
+        write_console(b"touch: usage: touch <name>\n");
+        prompt(cwd);
+        return;
+    }
+    let mut path = [0u8; PATH_MAX];
+    let Some(n) = compose(cwd, name, false, &mut path) else {
+        write_console(b"touch: path too long\n");
+        prompt(cwd);
+        return;
+    };
+    let made = create(&path[..n]);
+    if made.ok {
+        if made.value != 0 {
+            let _ = close(Cap::from_bits(made.value));
+        }
+        prompt(cwd);
+        return;
+    }
+    if made.value == SysError::Unsupported as u64 && snapshot_has(&path[..n]) {
+        prompt(cwd);
+        return;
+    }
+    if made.value == SysError::Unsupported as u64 {
+        write_console(b"touch: cannot replace\n");
+    } else if made.value == SysError::NotFound as u64 {
+        write_console(b"touch: no such directory\n");
+    } else {
+        write_console(b"touch: failed\n");
+    }
+    prompt(cwd);
+}
+
+fn mkdir(cwd: &Cwd, name: &[u8]) {
+    let name = trim(name);
+    if name.is_empty() || name.contains(&b' ') || name.contains(&b'/') {
+        write_console(b"mkdir: usage: mkdir <name>\n");
+        prompt(cwd);
+        return;
+    }
+    let mut path = [0u8; PATH_MAX];
+    let Some(n) = compose(cwd, name, true, &mut path) else {
+        write_console(b"mkdir: path too long\n");
+        prompt(cwd);
+        return;
+    };
+    let made = create(&path[..n]);
+    if !made.ok {
+        if made.value == SysError::Unsupported as u64 {
+            write_console(b"mkdir: cannot replace\n");
+        } else if made.value == SysError::NotFound as u64 {
+            write_console(b"mkdir: no such directory\n");
+        } else {
+            write_console(b"mkdir: failed\n");
+        }
+    }
+    prompt(cwd);
+}
+
+fn cd(cwd: &mut Cwd, name: &[u8]) {
+    let name = trim(name);
+    if name.is_empty() || name == b"/" {
+        cwd.len = 0;
+        prompt(cwd);
+        return;
+    }
+    if name == b".." {
+        if let Some(slash) = cwd.buf[..cwd.len].iter().rposition(|b| *b == b'/') {
+            cwd.len = slash;
+        } else {
+            cwd.len = 0;
+        }
+        prompt(cwd);
+        return;
+    }
+    if name.contains(&b'/') || name.contains(&b' ') {
+        write_console(b"cd: usage: cd <name>\n");
+        prompt(cwd);
+        return;
+    }
+    let mut path = [0u8; PATH_MAX];
+    let Some(n) = compose(cwd, name, true, &mut path) else {
+        write_console(b"cd: path too long\n");
+        prompt(cwd);
+        return;
+    };
+    if !snapshot_has(&path[..n]) {
+        write_console(b"cd: no such directory\n");
+        prompt(cwd);
+        return;
+    }
+    let bare = n - 1;
+    cwd.buf[..bare].copy_from_slice(&path[..bare]);
+    cwd.len = bare;
+    prompt(cwd);
+}
+
+fn ls(cwd: &Cwd) {
+    let mut buf = [0u8; 1024];
+    let got = read(files_cap(), &mut buf);
+    if !got.ok {
+        write_console(b"ls: denied\n");
+        prompt(cwd);
+        return;
+    }
+    let n = (got.value as usize).min(buf.len());
+    let mut i = 0usize;
+    while i < n {
+        let rest = &buf[i..n];
+        let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());
+        if let Some(shown) = ls_name(cwd, &rest[..end]) {
+            write_console(shown);
+            write_console(b"\n");
+        }
+        i += end + 1;
+    }
+    prompt(cwd);
+}
+
+fn ls_name<'a>(cwd: &Cwd, line: &'a [u8]) -> Option<&'a [u8]> {
+    if line.is_empty() {
+        return None;
+    }
+    if cwd.len == 0 {
+        let slashes = line.iter().filter(|b| **b == b'/').count();
+        if slashes == 0 || (slashes == 1 && line.ends_with(b"/")) {
+            return Some(line);
+        }
+        return None;
+    }
+    if line.len() <= cwd.len + 1 {
+        return None;
+    }
+    if line[..cwd.len] != cwd.buf[..cwd.len] || line[cwd.len] != b'/' {
+        return None;
+    }
+    let rest = &line[cwd.len + 1..];
+    let slashes = rest.iter().filter(|b| **b == b'/').count();
+    if slashes == 0 || (slashes == 1 && rest.ends_with(b"/")) {
+        Some(rest)
+    } else {
+        None
+    }
+}
+
+fn run(cwd: &Cwd, name: &[u8]) {
     if name.is_empty() {
         write_console(b"run: no program named (usage: run <program>)\n");
-        prompt();
+        prompt(cwd);
         return;
     }
     let result = spawn(name);
@@ -136,17 +439,21 @@ fn run(name: &[u8]) {
             write_console(b"run: failed\n");
         }
     }
-    prompt();
+    prompt(cwd);
 }
 
 /// `run` with nothing after it, or the trimmed argument after `run `.
 fn run_arg(line: &[u8]) -> Option<&[u8]> {
-    if line == b"run" {
+    arg_of(line, b"run")
+}
+
+/// The bytes after `cmd`, or empty when the line is exactly `cmd`.
+fn arg_of<'a>(line: &'a [u8], cmd: &[u8]) -> Option<&'a [u8]> {
+    if line == cmd {
         return Some(b"");
     }
-    let prefix = b"run ";
-    if line.starts_with(prefix) {
-        return Some(trim(&line[prefix.len()..]));
+    if line.starts_with(cmd) && line.get(cmd.len()) == Some(&b' ') {
+        return Some(trim(&line[cmd.len() + 1..]));
     }
     None
 }
@@ -163,7 +470,59 @@ fn trim(bytes: &[u8]) -> &[u8] {
     &bytes[start..end]
 }
 
-fn show(cap: Cap) {
+fn find_slice(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > hay.len() {
+        return None;
+    }
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+/// `cwd/name`, plus a trailing `/` when `dir`.
+fn compose(cwd: &Cwd, name: &[u8], dir: bool, out: &mut [u8; PATH_MAX]) -> Option<usize> {
+    let extra = usize::from(dir);
+    let need = if cwd.len == 0 {
+        name.len() + extra
+    } else {
+        cwd.len + 1 + name.len() + extra
+    };
+    if need == 0 || need > PATH_MAX {
+        return None;
+    }
+    let mut n = 0usize;
+    if cwd.len > 0 {
+        out[..cwd.len].copy_from_slice(&cwd.buf[..cwd.len]);
+        out[cwd.len] = b'/';
+        n = cwd.len + 1;
+    }
+    out[n..n + name.len()].copy_from_slice(name);
+    n += name.len();
+    if dir {
+        out[n] = b'/';
+        n += 1;
+    }
+    Some(n)
+}
+
+fn snapshot_has(line: &[u8]) -> bool {
+    let mut buf = [0u8; 1024];
+    let got = read(files_cap(), &mut buf);
+    if !got.ok {
+        return false;
+    }
+    let n = (got.value as usize).min(buf.len());
+    let mut i = 0usize;
+    while i < n {
+        let rest = &buf[i..n];
+        let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());
+        if &rest[..end] == line {
+            return true;
+        }
+        i += end + 1;
+    }
+    false
+}
+
+fn show(cap: Cap, cwd: &Cwd) {
     let mut buf = [0u8; 1024];
     let got = read(cap, &mut buf);
     if !got.ok {
@@ -175,9 +534,14 @@ fn show(cap: Cap) {
             write_console(b"\n");
         }
     }
-    prompt();
+    prompt(cwd);
 }
 
-fn prompt() {
-    write_console(b"galexy> ");
+fn prompt(cwd: &Cwd) {
+    write_console(b"galexy");
+    if cwd.len > 0 {
+        write_console(b":/");
+        write_console(&cwd.buf[..cwd.len]);
+    }
+    write_console(b"> ");
 }

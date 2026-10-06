@@ -791,23 +791,26 @@ mappings.** Suite: 37 QEMU boot tests, all `-smp 2`.
       contain the page
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
-## Milestone 29 — Core utilities
+## Milestone 29 — Core utilities ✅
 
-Planned, after 26–28. The writable names come from the Milestone 27
-table. `rm`, pipes, `mv`, `cp`, globs, and a real disk stay out.
+The ring-3 shell can print, read, and write scratch files, and walk
+directories on the Milestone 27 table. `rm`, pipes, `mv`, `cp`, globs,
+and a real disk stay out. Suite: 38 QEMU boot tests, all `-smp 2`.
 
-- [ ] **Shell only**: `echo` prints its arguments. `cat <name>` opens,
+- [x] **Shell only**: `echo` prints its arguments. `cat <name>` opens,
       reads, and writes the console. Text files work (`banner.txt`).
       A binary such as `hello` still fails the console charset check
-- [ ] **`touch`, `echo >`, `echo >>`**, then `cat` of that name. A tar
-      name cannot be replaced
-- [ ] **Directories on that table**: `mkdir`, `cd`, `cd ..`, and `ls`
+- [x] **`touch`, `echo >`, `echo >>`**, then `cat` of that name. A tar
+      name cannot be replaced. `create`'s third argument is `1` to
+      empty an existing scratch file; any other value still refuses a
+      second create
+- [x] **Directories on that table**: `mkdir`, `cd`, `cd ..`, and `ls`
       of the current directory. The shell keeps the current path.
       Archive files stay at `/`. `run hello` stays a ramdisk program
       name, not a path
-- [ ] A boot test covers `cat banner.txt`, `mkdir` / `cd` / `ls`, and
-      a create-write-read of a scratch file. Docs follow once it is
-      green
+- [x] A boot test covers `cat banner.txt`, `mkdir` / `cd` / `ls`, and
+      a create-write-read of a scratch file
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
 ## Known limitations / follow-ups
 
@@ -839,9 +842,8 @@ table. `rm`, pipes, `mv`, `cp`, globs, and a real disk stay out.
 - [ ] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
       ESC). A blinking cursor is still future screen work
-- [ ] Scratch files have no seek, and `ls` is still the ramdisk
-      snapshot. `echo`, `cat`, `touch`, redirection, then `mkdir` /
-      `cd` are Milestone 29
+- [ ] Scratch files have no seek. There is no `rm`, pipe, `mv`, `cp`,
+      glob, or disk
 - [x] ~~`run` leaks the task name, and freed slots panic the table at
       64~~ — CLOSED by Milestone 26 (name copied into the slot; a
       `Freed` record is reused once no CPU is current on it)

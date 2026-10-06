@@ -567,6 +567,174 @@ const QUERY_KEYS: &[(&str, &str)] = &[
     ("ret", "banner.txt"),
 ];
 
+/// `cat`, redirection, `mkdir` / `cd` / `ls`. Enter syncs on text that
+/// appears only after the command runs. A redirected `echo` and `mkdir`
+/// print nothing but the next prompt, and the typed line is already
+/// behind the per-key cursor.
+const UTIL_KEYS: &[(&str, &str)] = &[
+    ("c", "c"),
+    ("a", "a"),
+    ("t", "t"),
+    ("spc", " "),
+    ("b", "b"),
+    ("a", "a"),
+    ("n", "n"),
+    ("n", "n"),
+    ("e", "e"),
+    ("r", "r"),
+    ("dot", "."),
+    ("t", "t"),
+    ("x", "x"),
+    ("t", "t"),
+    ("ret", "plumbing works"),
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("s", "s"),
+    ("c", "c"),
+    ("r", "r"),
+    ("a", "a"),
+    ("t", "t"),
+    ("c", "c"),
+    ("h", "h"),
+    ("minus", "-"),
+    ("h", "h"),
+    ("i", "i"),
+    ("spc", " "),
+    ("shift+dot", ">"),
+    ("spc", " "),
+    ("n", "n"),
+    ("o", "o"),
+    ("t", "t"),
+    ("e", "e"),
+    ("ret", "galexy> "),
+    ("c", "c"),
+    ("a", "a"),
+    ("t", "t"),
+    ("spc", " "),
+    ("n", "n"),
+    ("o", "o"),
+    ("t", "t"),
+    ("e", "e"),
+    ("ret", "scratch-hi\n"),
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("m", "m"),
+    ("o", "o"),
+    ("r", "r"),
+    ("e", "e"),
+    ("spc", " "),
+    ("shift+dot", ">"),
+    ("shift+dot", ">"),
+    ("spc", " "),
+    ("n", "n"),
+    ("o", "o"),
+    ("t", "t"),
+    ("e", "e"),
+    ("ret", "galexy> "),
+    ("c", "c"),
+    ("a", "a"),
+    ("t", "t"),
+    ("spc", " "),
+    ("n", "n"),
+    ("o", "o"),
+    ("t", "t"),
+    ("e", "e"),
+    ("ret", "more\n"),
+    ("m", "m"),
+    ("k", "k"),
+    ("d", "d"),
+    ("i", "i"),
+    ("r", "r"),
+    ("spc", " "),
+    ("b", "b"),
+    ("o", "o"),
+    ("x", "x"),
+    ("ret", "galexy> "),
+    ("c", "c"),
+    ("d", "d"),
+    ("spc", " "),
+    ("b", "b"),
+    ("o", "o"),
+    ("x", "x"),
+    ("ret", "galexy:/box> "),
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("i", "i"),
+    ("n", "n"),
+    ("b", "b"),
+    ("o", "o"),
+    ("x", "x"),
+    ("spc", " "),
+    ("shift+dot", ">"),
+    ("spc", " "),
+    ("l", "l"),
+    ("e", "e"),
+    ("a", "a"),
+    ("f", "f"),
+    ("ret", "galexy:/box> "),
+    ("l", "l"),
+    ("s", "s"),
+    ("ret", "leaf\n"),
+    ("c", "c"),
+    ("a", "a"),
+    ("t", "t"),
+    ("spc", " "),
+    ("l", "l"),
+    ("e", "e"),
+    ("a", "a"),
+    ("f", "f"),
+    ("ret", "inbox\n"),
+    ("c", "c"),
+    ("d", "d"),
+    ("spc", " "),
+    ("dot", "."),
+    ("dot", "."),
+    ("ret", "galexy> "),
+    ("l", "l"),
+    ("s", "s"),
+    ("ret", "box/"),
+    ("c", "c"),
+    ("a", "a"),
+    ("t", "t"),
+    ("spc", " "),
+    ("h", "h"),
+    ("e", "e"),
+    ("l", "l"),
+    ("l", "l"),
+    ("o", "o"),
+    ("ret", "cat: not text"),
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("n", "n"),
+    ("o", "o"),
+    ("spc", " "),
+    ("shift+dot", ">"),
+    ("spc", " "),
+    ("b", "b"),
+    ("a", "a"),
+    ("n", "n"),
+    ("n", "n"),
+    ("e", "e"),
+    ("r", "r"),
+    ("dot", "."),
+    ("t", "t"),
+    ("x", "x"),
+    ("t", "t"),
+    ("ret", "echo: cannot replace"),
+];
+
 /// The ring-3 shell's query caps: typed `stats` / `threads` / `tasks` /
 /// `ls` come back as console text (screen + serial), including a live
 /// thread and the ramdisk's `banner.txt`.
@@ -599,6 +767,52 @@ fn shell_query_typing_e2e() {
     assert!(
         serial.contains("hello\n"),
         "typed `ls` never listed hello; serial:\n{serial}"
+    );
+}
+
+/// `cat banner.txt`, a scratch file written with `echo`, and `mkdir` /
+/// `cd` / `ls`. `hello` is not console text. A tar name cannot be replaced.
+#[test]
+fn shell_util_typing_e2e() {
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        UTIL_KEYS,
+        "[boot] main loop ready",
+        "echo: cannot replace",
+        Duration::from_millis(30),
+        Duration::from_secs(120),
+    );
+    assert!(
+        serial.contains("plumbing works"),
+        "typed `cat banner.txt` missed the archive text; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("scratch-hi\n"),
+        "typed `echo >` did not round-trip; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("more\n"),
+        "typed `echo >>` did not append; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("galexy:/box> "),
+        "typed `cd box` did not enter the directory; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("inbox\n"),
+        "typed create/write/read inside the directory failed; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("box/"),
+        "typed `ls` after `cd ..` missed the directory; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("cat: not text"),
+        "typed `cat hello` should fail the console charset; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("echo: cannot replace"),
+        "typed `echo > banner.txt` should be rejected; serial:\n{serial}"
     );
 }
 

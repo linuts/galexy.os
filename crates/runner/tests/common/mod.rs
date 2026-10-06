@@ -182,9 +182,13 @@ use std::os::unix::net::UnixStream;
 /// exactly as the greeting/handshake reader does).
 pub fn qmp_send_keys(reader: &mut BufReader<UnixStream>, qcodes: &[&str]) {
     for code in qcodes {
-        let cmd = format!(
-            "{{\"execute\":\"send-key\",\"arguments\":{{\"keys\":[{{\"type\":\"qcode\",\"data\":\"{code}\"}}]}}}}\n"
-        );
+        // `shift+dot` is one chord (`>`). A code with no `+` is a single key.
+        let keys = code
+            .split('+')
+            .map(|part| format!("{{\"type\":\"qcode\",\"data\":\"{part}\"}}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let cmd = format!("{{\"execute\":\"send-key\",\"arguments\":{{\"keys\":[{keys}]}}}}\n");
         reader
             .get_mut()
             .write_all(cmd.as_bytes())
@@ -236,6 +240,37 @@ fn qmp_read_until(reader: &mut BufReader<UnixStream>, needle: &[u8], deadline: I
             return true;
         }
     }
+}
+
+/// Shell transcript with heartbeat lines and NUL padding removed.
+///
+/// The timer IRQ prints `[timer] Ns up` on COM1, sometimes in the middle
+/// of an echoed key, and the serial file can contain a run of NULs. Either
+/// one pulls a single-character cursor past the prompt. Indexes into this
+/// string stay stable as the log grows: only shell and boot text remain,
+/// in order.
+fn typing_visible(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = String::with_capacity(raw.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0 {
+            i += 1;
+            continue;
+        }
+        if bytes[i..].starts_with(b"[timer]") {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            if i < bytes.len() {
+                i += 1;
+            }
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }
 
 /// Boots the interactive kernel with a QMP monitor; once the machine is
@@ -290,6 +325,30 @@ pub fn boot_and_type_uefi(
     )
 }
 
+/// Kills the guest if a typing test panics before its normal teardown.
+struct KillOnDrop(std::process::Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+impl std::ops::Deref for KillOnDrop {
+    type Target = std::process::Child;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for KillOnDrop {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 /// Shared body: boots `img_path` (BIOS unless `uefi`, which adds `-bios
 /// OVMF`), QMP monitor attached, types with per-key echo syncs.
 fn boot_and_type_on(
@@ -319,9 +378,10 @@ fn boot_and_type_on(
     }
     cmd.arg("-qmp")
         .arg(format!("unix:{},server,nowait", sock.display()));
-    let mut child = cmd
-        .spawn()
-        .expect("failed to launch qemu-system-x86_64 (QMP typing test)");
+    let mut child = KillOnDrop(
+        cmd.spawn()
+            .expect("failed to launch qemu-system-x86_64 (QMP typing test)"),
+    );
 
     let deadline = Instant::now() + timeout;
     // QMP server comes up as QEMU starts the machine; retry-connect until
@@ -377,30 +437,39 @@ fn boot_and_type_on(
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    // Type, syncing each key on the guest's echo of it (serial). The
-    // cursor advances monotonically: each echo is searched for in bytes
-    // NOT yet accounted for. Single-char echoes can false-match other
-    // serial traffic (a heartbeat's "up"); that only makes one sync
-    // complete a beat early — the queue stays shallow either way, which
-    // is the invariant this sync protects.
+    // Type, syncing each key on the guest's echo of it (serial, with
+    // heartbeats and NUL padding stripped). The cursor advances
+    // monotonically. Single-char echoes can still false-match the boot
+    // log; that only makes one sync complete a beat early. A longer
+    // marker may overlap the cursor when earlier keys already consumed
+    // its prefix.
     let mut seen = 0usize;
     for (qcode, echo) in sync_pairs {
         qmp_send_keys(&mut reader, &[qcode]);
         std::thread::sleep(key_delay);
         loop {
             if Instant::now() > deadline {
+                let serial =
+                    typing_visible(&std::fs::read_to_string(&serial_path).unwrap_or_default());
+                let lo = seen.saturating_sub(400).min(serial.len());
+                let hi = (seen + 200).min(serial.len());
                 panic!(
-                    "echo '{echo}' never appeared after key '{qcode}'; serial tail:\n{}",
-                    std::fs::read_to_string(&serial_path).unwrap_or_default()
+                    "echo '{echo}' never appeared after key '{qcode}' (seen {seen}/{}):\n{}",
+                    serial.len(),
+                    &serial[lo..hi]
                 );
             }
             if child.try_wait().expect("try_wait failed").is_some() {
                 panic!("guest exited mid-typing (key '{qcode}')");
             }
-            let data = std::fs::read_to_string(&serial_path).unwrap_or_default();
-            let hay = &data[seen.min(data.len())..];
-            if let Some(at) = hay.find(echo) {
-                seen += at + echo.len();
+            let data = typing_visible(&std::fs::read_to_string(&serial_path).unwrap_or_default());
+            // A multi-byte marker may start before `seen` (the per-key
+            // cursor already ate its first characters) and finish after.
+            // Accept the earliest match that ends past the cursor.
+            let start = seen.saturating_sub(echo.len().saturating_sub(1));
+            let start = start.min(data.len());
+            if let Some(at) = data[start..].find(echo) {
+                seen = start + at + echo.len();
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));

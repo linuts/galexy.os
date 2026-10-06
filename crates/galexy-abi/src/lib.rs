@@ -287,14 +287,19 @@ pub enum Syscall {
     /// [`POWER_REBOOT`]). Does not return when the platform honors it.
     /// Requires CapRights::POWER. A return means the machine stayed up.
     Power,
-    /// `create(name, len)` — create a scratch file and return a cap for it.
+    /// `create(name, len, flags)` — create a scratch file or directory.
     ///
-    /// Args: `RDI = user address of the name`, `RSI = byte count`.
-    /// Returns: `SyscallResult` (rax = new `Cap` bits, READ and WRITE).
-    /// The bytes live in a fixed kernel table, not the ramdisk. A name
-    /// that already exists in the archive or the scratch table is
-    /// `Unsupported`. A full scratch table, or a full per-task file
-    /// table, is `NoResource`.
+    /// Args: `RDI = user address of the path`, `RSI = byte count`,
+    /// `RDX = flags` (`1` replaces an existing scratch file; any other
+    /// value creates only when the name is new).
+    /// Returns: `SyscallResult`. A file's rax is a READ|WRITE `Cap`. A
+    /// directory (path ending in `/`) returns `0`.
+    /// The bytes live in a fixed kernel table, not the ramdisk. A
+    /// ramdisk name at `/`, or a name that already exists, is
+    /// `Unsupported` (unless `RDX` is `1` and the name is a scratch
+    /// file, which is emptied). A missing parent directory is
+    /// `NotFound`. A full scratch table, or a full per-task file table,
+    /// is `NoResource`.
     Create,
 }
 

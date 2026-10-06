@@ -479,22 +479,32 @@ screen + COM1, which is what makes userland output observable headless);
 are ramdisk files as capabilities (Milestone 20): each user task has a
 fixed table of 8 opens (no allocation on the IF=0 syscall path), indexes
 from `FILE_CAP_BASE` (3), authoritative grant intersected with the
-handle snapshot. `open(name)` is an exact ramdisk lookup and grants
-READ; `read` copies the next bytes (short-read at 1 KiB, 0 at EOF);
-`close` drops the slot. `create(name)` (syscall 9) puts a new name in
-a fixed global table (8 files, 64-byte names, 256-byte buffers, no
-heap on the syscall path) and returns READ|WRITE. `write` on that cap
-appends; the read cursor stays at the start. A ramdisk name, or a
-name already in the scratch table, is `Unsupported`. A full scratch
-table is `NoResource`. `close` drops the task's cap; the scratch bytes
-stay until reboot. `write` on an archive open is `Unsupported`.
+handle snapshot. `read` copies the next bytes of an open file
+(short-read at 1 KiB, 0 at EOF);
+`close` drops the slot. `create(name, len, flags)` (syscall 9) puts a
+path in a fixed global table (8 slots, 64-byte component names,
+256-byte file buffers, no heap on the syscall path). A path ending in
+`/` is a directory and returns 0. A file returns READ|WRITE. `RDX == 1`
+empties an existing scratch file; any other value creates only when
+the name is new. Uniqueness is the parent plus the component.
+`open` of a path with no slash still hits the ramdisk first and grants
+READ. Any other path walks the scratch table and must name a file
+(READ|WRITE). A directory open is `Unsupported`. `write` on a scratch
+cap appends; the read cursor stays at the start. A ramdisk name at
+`/`, or a name that already exists, is `Unsupported`. A missing parent
+is `NotFound`. A full scratch table is `NoResource`. `close` drops the
+task's cap; the scratch bytes stay until reboot. `write` on an archive
+open is `Unsupported`.
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing
 queued). `read` on the stats, tasks, threads, and files caps copies a fresh text
 snapshot (no cursor; the syscall renders into a stack buffer so it does
-not allocate). The files snapshot is the ramdisk's regular names, one
-per line, in archive order. `spawn` on the loader cap (EXEC) parks
+not allocate). The files snapshot is the ramdisk's regular names, then each scratch
+path (`box/`, `box/leaf`), one per line. The ring-3 shell's `ls`
+shows the current directory only. The shell keeps that path; `run`
+is still a ramdisk program name. `echo`, `cat`, `touch`, `mkdir`, and
+`cd` are shell commands on this table. `spawn` on the loader cap (EXEC) parks
 the caller (`STATE_WAITING`) and queues the program name; the main loop,
 which is on the kernel page
 table, loads the ELF. `FreshL4` copies the kernel root cached at init,

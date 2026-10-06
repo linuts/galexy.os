@@ -52,15 +52,38 @@ pub fn write_console(bytes: &[u8]) -> SyscallResult {
     )
 }
 
-/// Creates a scratch file. On success, `value` is a READ and WRITE capability.
+/// Creates a scratch file or directory. On success, a file's `value` is a
+/// READ and WRITE capability. A directory path (ending in `/`) returns `0`.
 ///
-/// The name is not a ramdisk entry. The bytes live in a fixed kernel table.
+/// The name is a path (`note`, `box/leaf`, `box/`). A ramdisk name at `/`
+/// is rejected. The bytes live in a fixed kernel table.
 pub fn create(name: &[u8]) -> SyscallResult {
     syscall(
         Syscall::Create as u64,
         name.as_ptr() as u64,
         name.len() as u64,
         0,
+    )
+}
+
+/// Like [`create`], and if the path is an existing scratch file its bytes
+/// are emptied first.
+pub fn create_replace(name: &[u8]) -> SyscallResult {
+    syscall(
+        Syscall::Create as u64,
+        name.as_ptr() as u64,
+        name.len() as u64,
+        1,
+    )
+}
+
+/// Writes bytes to a capability (a scratch file, or the console).
+pub fn write(cap: Cap, bytes: &[u8]) -> SyscallResult {
+    syscall(
+        Syscall::Write as u64,
+        cap.bits(),
+        bytes.as_ptr() as u64,
+        bytes.len() as u64,
     )
 }
 

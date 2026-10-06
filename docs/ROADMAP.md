@@ -157,6 +157,12 @@ first real program landed in Milestone 13:
   path. The cap is READ|WRITE; `write` appends. A tar name is
   `Unsupported`, a full table is `NoResource`. `bin/test-scratch`
   writes, reads back, and still sees the archive `banner.txt`).
+- Core utilities ✅ (Milestone 29: the ring-3 shell has `echo`, `cat`,
+  `touch`, `mkdir`, and `cd`. A path ending in `/` is a directory in
+  the scratch table. `create` with `RDX == 1` empties an existing
+  scratch file, so `echo >` can replace it. Archive names stay at `/`,
+  and `run` is still a program name. The typing test cats `banner.txt`,
+  writes a scratch file, and walks `mkdir` / `cd` / `ls`).
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.

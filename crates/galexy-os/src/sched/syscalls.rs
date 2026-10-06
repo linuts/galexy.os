@@ -89,7 +89,7 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             Outcome::Resume
         }
         n if n == Syscall::Create as u64 => {
-            stamp(frame, syscall_create(frame.rdi, frame.rsi));
+            stamp(frame, syscall_create(frame.rdi, frame.rsi, frame.rdx));
             Outcome::Resume
         }
         // Unknown numbers inside the table (none today) still answer.
@@ -197,7 +197,7 @@ fn syscall_write_file(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     }
 }
 
-fn syscall_create(addr: u64, len: u64) -> SyscallResult {
+fn syscall_create(addr: u64, len: u64, flags: u64) -> SyscallResult {
     if len == 0 || len > MAX_NAME {
         return SyscallResult::err(SysError::BadValue);
     }
@@ -214,10 +214,13 @@ fn syscall_create(addr: u64, len: u64) -> SyscallResult {
         );
     }
     let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
-    if !file_name_ok(name) {
+    if !path_ok(name) {
         return SyscallResult::err(SysError::BadValue);
     }
-    match crate::sched::task_create(name) {
+    // Only flag 1 is defined (replace an existing scratch file). Any other
+    // value, including whatever an older caller left in RDX, creates only
+    // when the name is new.
+    match crate::sched::task_create(name, flags == 1) {
         Ok(cap) => SyscallResult::ok(cap.bits()),
         Err(err) => SyscallResult::err(err),
     }
@@ -240,7 +243,7 @@ fn syscall_open(addr: u64, len: u64) -> SyscallResult {
         );
     }
     let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
-    if !file_name_ok(name) {
+    if !path_ok(name) {
         return SyscallResult::err(SysError::BadValue);
     }
     match crate::sched::task_open(name) {
@@ -416,6 +419,10 @@ fn render_files(out: &mut TextBuf<'_>) {
         out.push(name.as_bytes());
         out.push(b"\n");
     });
+    crate::sched::for_each_scratch_path(|path| {
+        out.push(path);
+        out.push(b"\n");
+    });
     // A positive read of an empty archive is still a snapshot, not "you
     // asked for zero bytes".
     if out.n == 0 {
@@ -532,12 +539,40 @@ fn syscall_close(cap: Cap) -> SyscallResult {
     }
 }
 
-/// Exact ramdisk names: `banner.txt`, `hello`. No directories, no spaces.
+/// Exact ramdisk program names: `banner.txt`, `hello`. No slashes.
 fn file_name_ok(name: &str) -> bool {
     !name.is_empty()
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
+}
+
+/// A scratch path: components separated by `/`, optional trailing slash.
+fn path_ok(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let body = name.strip_suffix('/').unwrap_or(name);
+    if body.is_empty() || body.ends_with('/') {
+        return false;
+    }
+    let mut comps = 0usize;
+    for comp in body.split('/') {
+        if comp.is_empty() || comp == "." || comp == ".." {
+            return false;
+        }
+        let ok = comp
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-');
+        if !ok {
+            return false;
+        }
+        comps += 1;
+        if comps > 8 {
+            return false;
+        }
+    }
+    comps > 0
 }
 
 /// Every page of `[addr, addr+len)` is present and user-accessible in the
