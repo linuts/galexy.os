@@ -106,6 +106,11 @@ pub fn threads_cap() -> Cap {
     galexy_abi::reserved::threads(CapRights::READ)
 }
 
+/// The files capability (READ). [`read`] returns a fresh ramdisk name list.
+pub fn files_cap() -> Cap {
+    galexy_abi::reserved::files(CapRights::READ)
+}
+
 /// The power capability. [`shutdown`] and [`reboot`] do not return when the
 /// machine honors them.
 pub fn power_cap() -> Cap {

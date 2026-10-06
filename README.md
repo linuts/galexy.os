@@ -27,7 +27,7 @@ through a capability and launches userland programs by name (`run hello`).
       handler, mailbox pool); every boot test runs at `-smp 2`
 - [x] PS/2 keyboard input with scancode translation
 - [x] Shell: a ring-3 program — line editing (Backspace), commands
-      (`help`, `stats`, `tasks`, `threads`, `about`, `clear`,
+      (`help`, `ls`, `stats`, `tasks`, `threads`, `about`, `clear`,
       `run <program>`, `shutdown`, `reboot`), `command not found` for
       unknown lines. The kernel keeps the live status bar
 - [x] Physical frame allocator over the bootloader memory map
@@ -50,9 +50,9 @@ through a capability and launches userland programs by name (`run hello`).
       (no fds; capabilities day one) — frozen and host-tested before any
       ring-3 code exists. `open`/`read`/`close` turn ramdisk files into
       per-task capabilities; the keyboard, the loader, and the query caps
-      (`stats`, `tasks`, `threads`) and the power cap (`shutdown`,
+      (`stats`, `tasks`, `threads`, `ls`) and the power cap (`shutdown`,
       `reboot`) are reserved caps
-- [x] Shell with commands (`help`, `stats`, `threads`, `run <program>`,
+- [x] Shell with commands (`help`, `ls`, `stats`, `threads`, `run <program>`,
       `shutdown`, `reboot`, ...) + live status bar ("quiet OS" demo) —
       `run` launches real userland programs from the ramdisk; console
       output = screen + serial

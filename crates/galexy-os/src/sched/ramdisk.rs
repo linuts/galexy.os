@@ -26,6 +26,21 @@ pub fn init(bytes: &'static [u8]) {
     serial_println!("[ramdisk] set: {} byte(s)", bytes.len());
 }
 
+/// Calls `f` with each regular file's name, in archive order.
+///
+/// The walk does not allocate. `f` runs while the ramdisk lock is held,
+/// so it must not call back into this module.
+pub fn for_each_name(mut f: impl FnMut(&str)) {
+    let guard = RAMDISK.lock();
+    let Some(archive) = *guard else {
+        return;
+    };
+    let mut cursor = TarCursor::new(archive);
+    while let Some((name, _)) = cursor.next_file() {
+        f(name);
+    }
+}
+
 /// Looks up a regular file by exact name.
 pub fn find(name: &str) -> Option<&'static [u8]> {
     let archive = (*RAMDISK.lock())?;

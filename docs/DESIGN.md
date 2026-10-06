@@ -80,7 +80,7 @@ contract between them.
    opaque `Cap` handles (48-bit index + 16-bit rights), reserved indexes
    (console=1, self=2; file caps start at 3, per task; keyboard=0x8000,
    loader=0x8001, stats=0x8002, tasks=0x8003, threads=0x8004,
-   power=0x8005 in the high reserved band, above any file slot),
+   power=0x8005, files=0x8006 in the high reserved band, above any file slot),
    syscall numbers (exit=0, yield=1, write=2, cap_info=3, open=4, read=5,
    close=6, spawn=7, power=8), error codes (BadCap=1, AccessDenied=2, BadBuffer=3,
    Unsupported=4, BadValue=5, NotFound=6, NoResource=7) — are permanent.
@@ -481,9 +481,10 @@ the next bytes (short-read at 1 KiB, 0 at EOF); `close` drops the slot.
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing
-queued). `read` on the stats, tasks, and threads caps copies a fresh text
-snapshot of those counters (no cursor; the syscall renders into a stack
-buffer so it does not allocate). `spawn` on the loader cap (EXEC) parks
+queued). `read` on the stats, tasks, threads, and files caps copies a fresh text
+snapshot (no cursor; the syscall renders into a stack buffer so it does
+not allocate). The files snapshot is the ramdisk's regular names, one
+per line, in archive order. `spawn` on the loader cap (EXEC) parks
 the caller (`STATE_WAITING`) and queues the program name; the main loop,
 which is on the kernel page
 table, loads the ELF — a user CR3 must not be cloned into a new task.
@@ -559,7 +560,8 @@ The runner packs user programs into a USTAR tar and the bootloader maps it
 (`BootInfo.ramdisk_addr` = a VIRTUAL address, framebuffer-like contract).
 `sched::ramdisk::init` publishes those bytes once (kernel-lifetime, so a
 `&'static [u8]` view); `find(name)` walks them read-only via
-`galexy-core::TarCursor` per call. Consumers (the shell's `run`, `open`,
+`galexy-core::TarCursor` per call. `for_each_name` walks those names
+for the files capability. Consumers (the shell's `run` and `ls`, `open`,
 test kernels) never touch raw BootInfo ramdisk fields again. An `open`
 holds that `&'static` slice plus a per-cap cursor; closing the cap does
 not free ramdisk bytes.

@@ -75,6 +75,7 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(reserved::TASKS_INDEX, 0x8003);
     assert_eq!(reserved::THREADS_INDEX, 0x8004);
     assert_eq!(reserved::POWER_INDEX, 0x8005);
+    assert_eq!(reserved::FILES_INDEX, 0x8006);
     assert_eq!(POWER_SHUTDOWN, 0);
     assert_eq!(POWER_REBOOT, 1);
     assert_eq!(CapRights::POWER.bits(), 1 << 5);
@@ -104,6 +105,9 @@ fn reserved_caps_have_permanent_indexes() {
     let power = reserved::power(CapRights::POWER);
     assert_eq!(power.index(), reserved::POWER_INDEX);
     assert!(power.rights().contains(CapRights::POWER));
+    let files = reserved::files(CapRights::READ);
+    assert_eq!(files.index(), reserved::FILES_INDEX);
+    assert!(files.rights().contains(CapRights::READ));
     let console = reserved::console(CapRights::WRITE);
     assert_eq!(console.index(), 1);
     let self_cap = reserved::self_cap();

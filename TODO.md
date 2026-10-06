@@ -726,6 +726,79 @@ above the status row.** Suite: 34 QEMU boot tests, all `-smp 2`.
       CSI bytes on COM1
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 25 — List the ramdisk ✅
+
+The shell can see what it can run. **`ls` reads a reserved files
+cap; the snapshot is the archive's regular names, one per line.**
+Suite: 34 QEMU boot tests, all `-smp 2`.
+
+- [x] **ABI**: index `0x8006`, READ, same high band as the other query
+      caps. No new syscall. Each `read` is a new snapshot
+- [x] **No allocation on the syscall**: `TarCursor` walks names into
+      the stack buffer. An empty archive is still one newline, so a
+      positive `len` does not come back as `0`
+- [x] **Shell**: `ls`. The existing query typing test also types `ls`
+      and checks `banner.txt` and `hello`
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
+## Milestone 26 — Reuse thread slots
+
+Planned, not started. The table caps at 64 and panics when it fills,
+because a freed slot is never reused. Every `run` also leaks the
+program name. Repeated `run hello` dies on that.
+
+- [ ] Store the name in a fixed buffer on the thread. Stop leaking a
+      `String` per spawn
+- [ ] Hand a freed slot back out when no CPU is current on it. Stacks
+      and the FXSAVE area are still freed first. Steal rules stay as
+      they are
+- [ ] A boot test spawns and exits more than 64 tasks and still reaches
+      the success exit. `threads` still prints the live names
+
+## Milestone 27 — Scratch files
+
+Planned, not started. The tar stays immutable. `open` keeps granting
+READ on an archive entry. `write` today requires the console cap.
+
+- [ ] Append a `create` syscall. One fixed table: fixed name length,
+      fixed byte buffer, no heap on the syscall path. The cap it
+      returns has READ and WRITE
+- [ ] `write` on that cap copies into the buffer. A tar name is
+      `Unsupported`. A full table is `NoResource`
+- [ ] A boot test creates a file, writes bytes, reads them back, and
+      checks that `banner.txt` is still the archive copy
+
+## Milestone 28 — Clone the kernel page table
+
+Planned, not started. A new program is already mapped into its own
+page table. That table is copied from whichever table is in CR3, so
+spawn is only safe on the kernel table.
+
+- [ ] `FreshL4` clones the kernel root cached at init. A child cannot
+      inherit another task's user mappings
+- [ ] The load stays on the main loop. The loader allocates, and the
+      syscall runs with interrupts off
+- [ ] A boot test installs a user mapping, builds a fresh table, and
+      checks that mapping is absent from the child
+
+## Milestone 29 — Core utilities
+
+Planned, after 26–28. The writable names come from the Milestone 27
+table. `rm`, pipes, `mv`, `cp`, globs, and a real disk stay out.
+
+- [ ] **Shell only**: `echo` prints its arguments. `cat <name>` opens,
+      reads, and writes the console. Text files work (`banner.txt`).
+      A binary such as `hello` still fails the console charset check
+- [ ] **`touch`, `echo >`, `echo >>`**, then `cat` of that name. A tar
+      name cannot be replaced
+- [ ] **Directories on that table**: `mkdir`, `cd`, `cd ..`, and `ls`
+      of the current directory. The shell keeps the current path.
+      Archive files stay at `/`. `run hello` stays a ramdisk program
+      name, not a path
+- [ ] A boot test covers `cat banner.txt`, `mkdir` / `cd` / `ls`, and
+      a create-write-read of a scratch file. Docs follow once it is
+      green
+
 ## Known limitations / follow-ups
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17
@@ -756,13 +829,14 @@ above the status row.** Suite: 34 QEMU boot tests, all `-smp 2`.
 - [ ] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
       ESC). A blinking cursor is still future screen work
-- [ ] File caps are ramdisk reads only: no write, seek, or directory
-      listing. `spawn` still loads the ELF on the kernel page table
-      (a user CR3 must not be cloned into the child)
-- [ ] `run` leaks the task name (`Box::leak`, a few bytes per spawn) —
-      fine at this scale; a slot free-list is the fix if tasks churn
-- [ ] Tombstone slots live forever (a few bytes per dead thread) — fine
-      until tasks churn; a free-list of slots is the fix if ever needed
+- [ ] File caps are ramdisk reads only: no write or seek. `ls` is a
+      flat name snapshot, not a directory tree. Writable names are
+      Milestone 27; `echo`, `cat`, `touch`, redirection, then
+      `mkdir` / `cd` are Milestone 29. `spawn` still clones whichever
+      page table is in CR3 (Milestone 28)
+- [ ] `run` leaks the task name (`Box::leak`, a few bytes per spawn).
+      Freed slots are never reused, so the table panics at 64. Both
+      are Milestone 26
 - [x] ~~Status bar can overwrite the typing line when the screen is full~~
       — CLOSED by Milestone 24 (text scrolls above the status row)
 - [ ] Framebuffer is used as the bootloader mapped it (deliberate — BootInfo

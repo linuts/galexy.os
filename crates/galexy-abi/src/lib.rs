@@ -188,6 +188,15 @@ pub mod reserved {
     pub const fn power(rights: super::CapRights) -> Cap {
         Cap::new(POWER_INDEX, rights)
     }
+
+    /// Ramdisk file names. `read` copies a fresh newline-separated list.
+    /// Same snapshot rule as [`STATS_INDEX`].
+    pub const FILES_INDEX: u64 = 0x8006;
+
+    /// The files capability.
+    pub const fn files(rights: super::CapRights) -> Cap {
+        Cap::new(FILES_INDEX, rights)
+    }
 }
 
 /// `power` operand: turn the machine off (ACPI S5).
@@ -253,8 +262,9 @@ pub enum Syscall {
     ///
     /// On a file cap, `0` is end of file. On the keyboard cap, `0` means
     /// no keystroke is waiting (the queue does not end). On a query cap
-    /// (stats, tasks, threads), each call returns a fresh snapshot, so
-    /// `0` means the caller asked for no bytes.
+    /// (stats, tasks, threads, files), each call returns a fresh snapshot, so
+    /// `0` means the caller asked for no bytes. An empty files snapshot is
+    /// still one newline, so a positive `len` does not come back as `0`.
     Read,
     /// `close(cap)` — drop a file capability opened by this task.
     ///

@@ -9,8 +9,8 @@
 
 use galexy_abi::{Cap, SysError};
 use galexy_rt::{
-    entry, keyboard_cap, read, reboot, shutdown, spawn, stats_cap, tasks_cap, threads_cap,
-    write_console, yield_now,
+    entry, files_cap, keyboard_cap, read, reboot, shutdown, spawn, stats_cap, tasks_cap,
+    threads_cap, write_console, yield_now,
 };
 
 entry!(main);
@@ -65,7 +65,7 @@ fn dispatch(line: &[u8]) {
         return;
     }
     if line == b"help" {
-        write_console(b"commands: help, stats, tasks, threads, about, clear, run <program>\n");
+        write_console(b"commands: help, ls, stats, tasks, threads, about, clear, run <program>\n");
         write_console(b"power: shutdown, reboot\n");
         prompt();
         return;
@@ -74,6 +74,10 @@ fn dispatch(line: &[u8]) {
         write_console(b"galexy.os - a small Rust OS\n");
         write_console(b"this shell is a ring-3 program\n");
         prompt();
+        return;
+    }
+    if line == b"ls" {
+        show(files_cap());
         return;
     }
     if line == b"stats" {

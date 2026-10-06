@@ -516,10 +516,14 @@ const QUERY_KEYS: &[(&str, &str)] = &[
     ("k", "k"),
     ("s", "s"),
     ("ret", "cooperative tasks:"),
+    ("l", "l"),
+    ("s", "s"),
+    ("ret", "banner.txt"),
 ];
 
-/// The ring-3 shell's query caps: typed `stats` / `threads` / `tasks`
-/// come back as console text (screen + serial), including a live thread.
+/// The ring-3 shell's query caps: typed `stats` / `threads` / `tasks` /
+/// `ls` come back as console text (screen + serial), including a live
+/// thread and the ramdisk's `banner.txt`.
 #[test]
 fn shell_query_typing_e2e() {
     let serial = boot_and_type(
@@ -541,6 +545,14 @@ fn shell_query_typing_e2e() {
     assert!(
         serial.contains("cooperative tasks:"),
         "typed `tasks` never produced the task line; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("banner.txt"),
+        "typed `ls` never listed banner.txt; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("hello\n"),
+        "typed `ls` never listed hello; serial:\n{serial}"
     );
 }
 

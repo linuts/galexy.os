@@ -146,6 +146,9 @@ first real program landed in Milestone 13:
   are reserved caps. `read` returns a fresh text snapshot, rendered
   without allocating on the IF=0 syscall path. The ring-3 shell types
   all three; `bin` coverage is the QMP typing test).
+- Ramdisk listing ✅ (Milestone 25: files cap `0x8006`. `read` returns
+  the archive's regular names, one per line. The shell's `ls` types
+  them; the same QMP test checks `banner.txt` and `hello`).
 - Shutdown and reboot ✅ (Milestone 23: power cap `0x8005`, syscall
   `power`=8. ACPI S5 from the FADT/`_S5_` package, reset via the FADT
   register or the keyboard controller. `bin/test-shutdown` and

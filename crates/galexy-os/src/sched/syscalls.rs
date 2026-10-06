@@ -230,6 +230,7 @@ fn query_kind(index: u64) -> Option<Query> {
         galexy_abi::reserved::STATS_INDEX => Some(Query::Stats),
         galexy_abi::reserved::TASKS_INDEX => Some(Query::Tasks),
         galexy_abi::reserved::THREADS_INDEX => Some(Query::Threads),
+        galexy_abi::reserved::FILES_INDEX => Some(Query::Files),
         _ => None,
     }
 }
@@ -238,6 +239,7 @@ enum Query {
     Stats,
     Tasks,
     Threads,
+    Files,
 }
 
 fn syscall_read_query(cap: Cap, kind: Query, addr: u64, len: u64) -> SyscallResult {
@@ -260,6 +262,7 @@ fn syscall_read_query(cap: Cap, kind: Query, addr: u64, len: u64) -> SyscallResu
         Query::Stats => render_stats(&mut out),
         Query::Tasks => render_tasks(&mut out),
         Query::Threads => render_threads(&mut out),
+        Query::Files => render_files(&mut out),
     }
     let n = out.n;
     if n > 0 {
@@ -351,6 +354,18 @@ fn render_tasks(out: &mut TextBuf<'_>) {
     out.push(b" active, ");
     out.push_u64(crate::sched::spawned_total() as u64);
     out.push(b" spawned since boot\npreemption: timer @ ~1kHz, round-robin incl. main loop\n");
+}
+
+fn render_files(out: &mut TextBuf<'_>) {
+    crate::sched::ramdisk::for_each_name(|name| {
+        out.push(name.as_bytes());
+        out.push(b"\n");
+    });
+    // A positive read of an empty archive is still a snapshot, not "you
+    // asked for zero bytes".
+    if out.n == 0 {
+        out.push(b"\n");
+    }
 }
 
 fn render_threads(out: &mut TextBuf<'_>) {
