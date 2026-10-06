@@ -1,16 +1,26 @@
-//! PS/2 keyboard input: scancode decoding and a small key queue.
+//! PS/2 keyboard input: scancode decoding and one key queue per TTY.
 //!
-//! The IRQ1 handler feeds scancodes in via [`add_scancode`]; consumers drain
-//! decoded characters through [`pop_key`]. Locks are kept tiny and never
-//! nested, so this is safe to call from interrupt context.
+//! The IRQ1 handler feeds scancodes in via [`add_scancode`]. Unicode
+//! characters go to the TTY that is on screen. F1–F12 only record which
+//! TTY to show; the main loop paints it. This handler never takes the
+//! screen lock. Locks are kept tiny and never nested, so this is safe to
+//! call from interrupt context.
+
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use galexy_core::Ring;
-use pc_keyboard::{layouts, DecodedKey, HandleControl, PS2Keyboard, ScancodeSet1};
+use pc_keyboard::{layouts, DecodedKey, HandleControl, KeyCode, PS2Keyboard, ScancodeSet1};
 use spin::Mutex;
 use x86_64::instructions::port::Port;
 
-/// Keyboard queue capacity in characters.
+/// How many text consoles F1–F12 select.
+pub const TTY_COUNT: usize = 12;
+
+/// Keyboard queue capacity in characters, per TTY.
 const QUEUE_CAPACITY: usize = 64;
+
+/// No TTY switch is waiting.
+const SWITCH_NONE: u8 = 0xff;
 
 static KEYBOARD: Mutex<PS2Keyboard<layouts::Us104Key, ScancodeSet1>> =
     Mutex::new(PS2Keyboard::new(
@@ -19,11 +29,16 @@ static KEYBOARD: Mutex<PS2Keyboard<layouts::Us104Key, ScancodeSet1>> =
         HandleControl::Ignore,
     ));
 
-static KEY_QUEUE: Mutex<Ring<char, QUEUE_CAPACITY>> = Mutex::new(Ring::new());
-/// One key put back by a short `read` that could not fit its UTF-8.
-/// `pop_key` returns it before the queue. At most one: the reader just
-/// took it.
-static UNGOT: Mutex<Option<char>> = Mutex::new(None);
+static KEY_QUEUES: [Mutex<Ring<char, QUEUE_CAPACITY>>; TTY_COUNT] =
+    [const { Mutex::new(Ring::new()) }; TTY_COUNT];
+/// One key put back by a short `read` that could not fit its UTF-8, per
+/// TTY. `pop_key_tty` returns it before that TTY's queue.
+static UNGOTS: Mutex<[Option<char>; TTY_COUNT]> = Mutex::new([None; TTY_COUNT]);
+/// TTY that receives the next Unicode character. The screen updates this
+/// when it paints a switch.
+static ACTIVE: AtomicU8 = AtomicU8::new(0);
+/// TTY the main loop should paint. `SWITCH_NONE` means nothing is waiting.
+static PENDING: AtomicU8 = AtomicU8::new(SWITCH_NONE);
 
 /// Brings the PS/2 controller's first port (keyboard) online: the enable
 /// command + stale-buffer drain. Formerly part of `arch::pics::init` — it
@@ -62,33 +77,101 @@ pub fn add_scancode(scancode: u8) {
                 _ => None,
             }
         };
-        if let Some(DecodedKey::Unicode(c)) = decoded {
-            // Overflow drops the key by design; not an error for the decoder.
-            let _ = KEY_QUEUE.lock().push(c);
+        match decoded {
+            Some(DecodedKey::Unicode(c)) => {
+                let tty = (ACTIVE.load(Ordering::Relaxed) as usize).min(TTY_COUNT - 1);
+                // Overflow drops the key by design; not an error for the decoder.
+                let _ = KEY_QUEUES[tty].lock().push(c);
+            }
+            Some(DecodedKey::RawKey(key)) => {
+                if let Some(tty) = tty_index(key) {
+                    PENDING.store(tty, Ordering::Release);
+                }
+            }
+            None => {}
         }
     });
 }
 
-/// Drains one decoded character, if any.
+/// F1 is 0. Other keys are not a console switch.
+fn tty_index(key: KeyCode) -> Option<u8> {
+    let index = match key {
+        KeyCode::F1 => 0,
+        KeyCode::F2 => 1,
+        KeyCode::F3 => 2,
+        KeyCode::F4 => 3,
+        KeyCode::F5 => 4,
+        KeyCode::F6 => 5,
+        KeyCode::F7 => 6,
+        KeyCode::F8 => 7,
+        KeyCode::F9 => 8,
+        KeyCode::F10 => 9,
+        KeyCode::F11 => 10,
+        KeyCode::F12 => 11,
+        _ => return None,
+    };
+    Some(index)
+}
+
+/// TTY that should receive typed characters.
+pub fn set_active(tty: u8) {
+    ACTIVE.store(tty.min(TTY_COUNT as u8 - 1), Ordering::Relaxed);
+}
+
+/// Takes the console switch the keyboard recorded, if one is waiting.
+pub fn take_switch() -> Option<u8> {
+    let tty = PENDING.swap(SWITCH_NONE, Ordering::AcqRel);
+    if tty == SWITCH_NONE {
+        None
+    } else {
+        Some(tty.min(TTY_COUNT as u8 - 1))
+    }
+}
+
+/// Drains one decoded character from TTY 0, if any.
+///
+/// The in-kernel line editor is that console. A ring-3 shell reads its
+/// own TTY through [`pop_key_tty`].
+pub fn pop_key() -> Option<char> {
+    pop_key_tty(0)
+}
+
+/// Drains one decoded character from `tty`, if any.
 ///
 /// Lock-audit rule: queued-lock access must not be preemptable.
-pub fn pop_key() -> Option<char> {
+pub fn pop_key_tty(tty: u8) -> Option<char> {
+    let tty = tty as usize;
+    if tty >= TTY_COUNT {
+        return None;
+    }
     use x86_64::instructions::interrupts;
     interrupts::without_interrupts(|| {
-        if let Some(c) = UNGOT.lock().take() {
+        let mut ungot = UNGOTS.lock();
+        if let Some(c) = ungot[tty].take() {
             return Some(c);
         }
-        KEY_QUEUE.lock().pop()
+        drop(ungot);
+        KEY_QUEUES[tty].lock().pop()
     })
 }
 
-/// Puts `c` back so the next [`pop_key`] returns it. Only the key just
-/// popped may be returned, and only when a `read` buffer cannot hold it.
+/// Puts `c` back on TTY 0. See [`unget_key_tty`].
 pub fn unget_key(c: char) {
+    unget_key_tty(0, c);
+}
+
+/// Puts `c` back so the next [`pop_key_tty`] for `tty` returns it. Only
+/// the key just popped may be returned, and only when a `read` buffer
+/// cannot hold it.
+pub fn unget_key_tty(tty: u8, c: char) {
+    let tty = tty as usize;
+    if tty >= TTY_COUNT {
+        return;
+    }
     use x86_64::instructions::interrupts;
     interrupts::without_interrupts(|| {
-        let mut ungot = UNGOT.lock();
-        assert!(ungot.is_none(), "keyboard: unget already holds a key");
-        *ungot = Some(c);
+        let mut ungot = UNGOTS.lock();
+        assert!(ungot[tty].is_none(), "keyboard: unget already holds a key");
+        ungot[tty] = Some(c);
     });
 }

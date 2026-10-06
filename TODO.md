@@ -865,6 +865,26 @@ new shell; other tasks keep running. Suite: 39 QEMU boot tests, all
       `linger`, types `crash`, sees the new prompt, and still sees `beat`
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 33 — One console per F-key ✅
+
+F1–F12 each show a saved text grid and a shell. The keyboard interrupt
+records the switch. The main loop paints it. Suite: 40 QEMU boot tests,
+all `-smp 2`.
+
+- [x] **Twelve grids.** A console write records characters on the task's
+      TTY. Pixels change only while that TTY is visible. The status bar
+      stays on the last row. COM1 mirrors the visible TTY
+- [x] **Keys follow the screen.** F1–F12 are not typed characters. Each
+      TTY has its own queue. A background shell's `read` does not take
+      the foreground's keys
+- [x] **One shell per key,** pinned to the BSP with the launcher grants.
+      F1 stays named `shell`. A fault loads that shell again. A program
+      started on a console keeps writing it
+- [x] `bin/test-screen` hides a glyph and restores it, including a write
+      that happened while it was hidden. The typing test runs `echo hi`
+      on F2, then a key on F1
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17

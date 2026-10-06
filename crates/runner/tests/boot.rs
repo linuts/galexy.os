@@ -578,6 +578,23 @@ const SUPERVISOR_KEYS: &[(&str, &str)] = &[
     ("y", "beat\n"),
 ];
 
+/// F2 selects the second shell. `echo hi` there, then F1 and a key on the
+/// first shell. Serial mirrors only the console on screen, so each side is
+/// proven by text that appears after its switch.
+const TTY_KEYS: &[(&str, &str)] = &[
+    ("f2", "[tty] 2"),
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("h", "h"),
+    ("i", "i"),
+    ("ret", "hi"),
+    ("f1", "[tty] 1"),
+    ("z", "z"),
+];
+
 /// `stats`, then `threads`, then `tasks`. Each Enter syncs on a line only
 /// the query `read` produces (the banner's "frames free" is screen-only).
 const QUERY_KEYS: &[(&str, &str)] = &[
@@ -982,6 +999,30 @@ fn shell_run_hello_typing_e2e_uefi() {
     assert!(
         last.contains("exited (syscall)"),
         "user task exit marker missing after typed run (UEFI); serial:\n{last}"
+    );
+}
+
+/// F2 runs a command on the second shell; F1 returns to the first.
+#[test]
+fn shell_tty_switch_e2e() {
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        TTY_KEYS,
+        "[boot] main loop ready",
+        "hi",
+        Duration::from_millis(30),
+        Duration::from_secs(90),
+    );
+    let tty2 = serial.find("[tty] 2").expect("F2 never switched consoles");
+    let hi = serial[tty2..]
+        .find("hi")
+        .expect("echo on tty 2 never printed");
+    let tty1 = serial[tty2 + hi..]
+        .find("[tty] 1")
+        .expect("F1 never switched back");
+    assert!(
+        serial[tty2 + hi + tty1..].contains('z'),
+        "the first shell did not echo after F1; serial:\n{serial}"
     );
 }
 

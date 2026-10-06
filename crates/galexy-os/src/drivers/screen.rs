@@ -12,6 +12,7 @@
 use core::fmt;
 use spin::Mutex;
 
+use crate::serial_println;
 use noto_sans_mono_bitmap::{get_raster, FontWeight, RasterHeight};
 
 /// Glyph raster used for all text.
@@ -72,6 +73,7 @@ enum AnsiState {
 
 /// Fixed-size CSI parser. No allocation: a sequence that spans two
 /// `write` calls keeps its place here.
+#[derive(Clone, Copy)]
 struct AnsiParser {
     state: AnsiState,
     params: [u16; 4],
@@ -117,16 +119,59 @@ impl AnsiParser {
     }
 }
 
+/// Columns remembered per TTY. Wider than the 1280-wide QEMU framebuffer
+/// at this font's advance.
+const TTY_COLS: usize = 200;
+/// Text rows remembered per TTY, not counting the status bar.
+const TTY_ROWS: usize = 48;
+
+/// One saved character. A zero `ch` is an empty cell.
+#[derive(Clone, Copy)]
+struct Cell {
+    ch: char,
+    fg: Color,
+}
+
+impl Cell {
+    const BLANK: Self = Self {
+        ch: '\0',
+        fg: Color { r: 0, g: 0, b: 0 },
+    };
+}
+
+/// Saved text for every TTY. Touched only while [`SCREEN`] is already held
+/// (lock order: screen, then this). The framebuffer is painted from the
+/// TTY that is on screen; the others keep their cells.
+struct TtyGrids {
+    cells: [[[Cell; TTY_COLS]; TTY_ROWS]; super::keyboard::TTY_COUNT],
+    x: [usize; super::keyboard::TTY_COUNT],
+    y: [usize; super::keyboard::TTY_COUNT],
+    fg: [Color; super::keyboard::TTY_COUNT],
+    ansi: [AnsiParser; super::keyboard::TTY_COUNT],
+}
+
+static GRIDS: Mutex<TtyGrids> = Mutex::new(TtyGrids {
+    cells: [[[Cell::BLANK; TTY_COLS]; TTY_ROWS]; super::keyboard::TTY_COUNT],
+    x: [0; super::keyboard::TTY_COUNT],
+    y: [0; super::keyboard::TTY_COUNT],
+    fg: [DEFAULT_FG; super::keyboard::TTY_COUNT],
+    ansi: [AnsiParser::ground(); super::keyboard::TTY_COUNT],
+});
+
 /// Terminal state + framebuffer handle, guarded by the global lock.
 struct ScreenWriter {
     fb: FramebufferSpec,
     /// Glyph advance width in pixels (mono font: same for all glyphs).
     char_width: usize,
-    /// Cursor position, in characters.
+    /// Cursor position, in characters. Belongs to [`Self::focus`].
     char_x: usize,
     char_y: usize,
     fg: Color,
     ansi: AnsiParser,
+    /// TTY whose cursor and cells the next glyph updates.
+    focus: usize,
+    /// TTY currently painted on the framebuffer.
+    shown: usize,
 }
 
 impl ScreenWriter {
@@ -168,6 +213,7 @@ impl ScreenWriter {
             self.new_line();
         }
         if self.char_y < self.text_rows() {
+            self.store_cell(c);
             self.draw_glyph(c);
         }
         self.char_x += 1;
@@ -343,6 +389,9 @@ impl ScreenWriter {
     /// are normalized per glyph to the raster's peak — glyph cores render at
     /// full fg color instead of a washed-out fraction of it.
     fn draw_glyph(&mut self, c: char) {
+        if !self.paint_pixels() {
+            return;
+        }
         let raster = match get_raster(c, FONT_WEIGHT, FONT_HEIGHT) {
             Some(raster) => raster,
             // Unknown glyph (or unsupported char): draw a blank.
@@ -426,6 +475,10 @@ impl ScreenWriter {
     /// Clears one character cell to background (black) — used by backspace,
     /// because drawing a space glyph writes nothing (zero-intensity skip).
     fn clear_cell(&mut self) {
+        self.store_cell('\0');
+        if !self.paint_pixels() {
+            return;
+        }
         let x_origin = self.char_x * self.char_width;
         let y_origin = self.char_y * LINE_HEIGHT;
 
@@ -491,18 +544,25 @@ impl ScreenWriter {
         if rows == 0 {
             return;
         }
-        let info = self.fb.info;
-        let line_bytes = LINE_HEIGHT * info.stride * info.bytes_per_pixel;
-        let text_bytes = rows * line_bytes;
-        let buffer = &mut *self.fb.buffer;
-        if line_bytes < text_bytes && text_bytes <= buffer.len() {
-            buffer.copy_within(line_bytes..text_bytes, 0);
+        self.scroll_cells();
+        if self.focus == self.shown {
+            let info = self.fb.info;
+            let line_bytes = LINE_HEIGHT * info.stride * info.bytes_per_pixel;
+            let text_bytes = rows * line_bytes;
+            let buffer = &mut *self.fb.buffer;
+            if line_bytes < text_bytes && text_bytes <= buffer.len() {
+                buffer.copy_within(line_bytes..text_bytes, 0);
+            }
         }
         self.blank_row(rows - 1);
     }
 
     /// Paints one text row black without moving the cursor.
     fn blank_row(&mut self, row: usize) {
+        self.clear_row_cells(row);
+        if self.focus != self.shown {
+            return;
+        }
         let saved = self.fg;
         self.fg = Color::new(0, 0, 0);
         self.clear_row_pixels(row);
@@ -553,18 +613,144 @@ impl ScreenWriter {
         }
     }
 
-    /// Fills the whole framebuffer with black and resets the cursor.
+    /// Fills the focused TTY with black and resets its cursor.
+    ///
+    /// The framebuffer changes only when that TTY is the one on screen, so
+    /// a background clear leaves the visible console alone.
     fn clear(&mut self) {
-        let buffer = &mut *self.fb.buffer;
-        let info = self.fb.info;
-        for pixel in buffer.chunks_exact_mut(info.bytes_per_pixel) {
-            for byte in pixel {
-                *byte = 0;
+        self.clear_all_cells();
+        if self.focus == self.shown {
+            let buffer = &mut *self.fb.buffer;
+            let info = self.fb.info;
+            for pixel in buffer.chunks_exact_mut(info.bytes_per_pixel) {
+                for byte in pixel {
+                    *byte = 0;
+                }
             }
         }
         self.char_x = 0;
         self.char_y = 0;
         self.ansi = AnsiParser::ground();
+    }
+
+    /// True when the next glyph should touch the framebuffer.
+    ///
+    /// Text pixels follow the focused TTY only while it is visible. The
+    /// status row is global, so it always paints.
+    fn paint_pixels(&self) -> bool {
+        self.focus == self.shown || self.char_y >= self.text_rows()
+    }
+
+    fn store_cell(&self, ch: char) {
+        if self.char_y >= TTY_ROWS || self.char_x >= TTY_COLS {
+            return;
+        }
+        let focus = self.focus;
+        if focus >= super::keyboard::TTY_COUNT {
+            return;
+        }
+        let x = self.char_x;
+        let y = self.char_y;
+        GRIDS.lock().cells[focus][y][x] = Cell { ch, fg: self.fg };
+    }
+
+    fn clear_row_cells(&self, row: usize) {
+        if row >= TTY_ROWS || self.focus >= super::keyboard::TTY_COUNT {
+            return;
+        }
+        let focus = self.focus;
+        let mut grids = GRIDS.lock();
+        grids.cells[focus][row].fill(Cell::BLANK);
+    }
+
+    fn clear_all_cells(&self) {
+        if self.focus >= super::keyboard::TTY_COUNT {
+            return;
+        }
+        let focus = self.focus;
+        let mut grids = GRIDS.lock();
+        for row in &mut grids.cells[focus] {
+            row.fill(Cell::BLANK);
+        }
+    }
+
+    fn scroll_cells(&self) {
+        let rows = self.text_rows().min(TTY_ROWS);
+        if rows == 0 || self.focus >= super::keyboard::TTY_COUNT {
+            return;
+        }
+        let focus = self.focus;
+        let mut grids = GRIDS.lock();
+        let cells = &mut grids.cells[focus];
+        for row in 1..rows {
+            cells[row - 1] = cells[row];
+        }
+        cells[rows - 1] = [Cell::BLANK; TTY_COLS];
+    }
+
+    fn save_focus(&self) {
+        if self.focus >= super::keyboard::TTY_COUNT {
+            return;
+        }
+        let mut grids = GRIDS.lock();
+        let i = self.focus;
+        grids.x[i] = self.char_x;
+        grids.y[i] = self.char_y;
+        grids.fg[i] = self.fg;
+        grids.ansi[i] = self.ansi;
+    }
+
+    fn load_focus(&mut self) {
+        if self.focus >= super::keyboard::TTY_COUNT {
+            return;
+        }
+        let grids = GRIDS.lock();
+        let i = self.focus;
+        self.char_x = grids.x[i];
+        self.char_y = grids.y[i];
+        self.fg = grids.fg[i];
+        self.ansi = grids.ansi[i];
+    }
+
+    fn focus_on(&mut self, tty: usize) {
+        if self.focus == tty {
+            return;
+        }
+        self.save_focus();
+        self.focus = tty;
+        self.load_focus();
+    }
+
+    /// Paints the focused TTY's text rows onto the framebuffer.
+    fn repaint_text(&mut self) {
+        let saved_x = self.char_x;
+        let saved_y = self.char_y;
+        let saved_fg = self.fg;
+        let saved_ansi = self.ansi;
+        let rows = self.text_rows().min(TTY_ROWS);
+        let cols = self.max_char_x().min(TTY_COLS);
+        for row in 0..rows {
+            self.fg = Color::new(0, 0, 0);
+            self.clear_row_pixels(row);
+            let mut row_cells = [Cell::BLANK; TTY_COLS];
+            {
+                let grids = GRIDS.lock();
+                row_cells[..cols].copy_from_slice(&grids.cells[self.focus][row][..cols]);
+            }
+            for (col, cell) in row_cells.iter().enumerate().take(cols) {
+                if cell.ch == '\0' || cell.ch == ' ' {
+                    continue;
+                }
+                self.char_x = col;
+                self.char_y = row;
+                self.fg = cell.fg;
+                self.draw_glyph(cell.ch);
+            }
+        }
+        self.char_x = saved_x;
+        self.char_y = saved_y;
+        self.fg = saved_fg;
+        self.ansi = saved_ansi;
     }
 }
 
@@ -615,6 +801,8 @@ pub fn init(boot_info: &mut bootloader_api::info::BootInfo) {
         char_y: 0,
         fg: DEFAULT_FG,
         ansi: AnsiParser::ground(),
+        focus: 0,
+        shown: 0,
     };
     writer.clear();
     *SCREEN.lock() = Some(writer);
@@ -668,18 +856,65 @@ pub fn fill_row(row: usize, color: Color) {
     });
 }
 
-/// Writes one character to the screen.
+/// Writes one character to the screen's visible TTY.
 pub fn out_char(c: char) {
     with_lock(|screen| screen.write_char(c));
 }
 
-/// Writes a string to the screen, interpreting tab, CR, and CSI.
+/// Writes a string to the screen's visible TTY, interpreting tab, CR, and CSI.
 pub fn out_str(s: &str) {
     with_lock(|screen| {
         for c in s.chars() {
             screen.write_char(c);
         }
     });
+}
+
+/// Writes `s` into TTY `tty`. Pixels update only when that TTY is visible.
+pub fn out_str_tty(tty: u8, s: &str) {
+    let tty = (tty as usize).min(super::keyboard::TTY_COUNT - 1);
+    with_lock(|screen| {
+        let home = screen.focus;
+        screen.focus_on(tty);
+        for c in s.chars() {
+            screen.write_char(c);
+        }
+        screen.focus_on(home);
+    });
+}
+
+/// TTY currently painted on the framebuffer. `0` before [`init`].
+pub fn shown_tty() -> u8 {
+    let mut tty = 0u8;
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        if let Some(writer) = SCREEN.lock().as_ref() {
+            tty = writer.shown as u8;
+        }
+    });
+    tty
+}
+
+/// Paints TTY `index` and sends later keystrokes there.
+pub fn show_tty(index: u8) {
+    let index = (index as usize).min(super::keyboard::TTY_COUNT - 1);
+    super::keyboard::set_active(index as u8);
+    with_lock(|screen| {
+        screen.focus_on(index);
+        screen.shown = index;
+        screen.repaint_text();
+    });
+    serial_println!("[tty] {}", index + 1);
+}
+
+/// Paints a TTY switch the keyboard recorded, if one is waiting.
+///
+/// The keyboard interrupt only stores the index. This runs from the main
+/// loop, which already owns the screen, so the two locks never nest.
+pub fn apply_tty_switch() {
+    let Some(index) = super::keyboard::take_switch() else {
+        return;
+    };
+    show_tty(index);
 }
 
 /// Writes glyphs with no escape parsing. The status bar uses this so a

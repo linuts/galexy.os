@@ -207,6 +207,41 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     );
     assert_eq!(home, 0, "CSI H left ink at the home cell");
 
+    /* --- F2 hides tty 0; F1 paints the saved cells, including a write that
+    landed while it was hidden --- */
+
+    screen::clear_screen();
+    console::out_str("A");
+    let tty0 = unsafe { region_max_intensity(addr, info, 0, 0, CHAR_WIDTH, 16) };
+    assert!(tty0 >= 200, "tty 0 glyph missing (intensity {tty0})");
+
+    // Scancode set 1: F2 make 0x3C, break 0xBC. The IRQ only records the
+    // switch; the main loop's apply paints it.
+    use galexy_os::drivers::keyboard;
+    keyboard::add_scancode(0x3C);
+    keyboard::add_scancode(0xBC);
+    screen::apply_tty_switch();
+    let hidden = unsafe { region_max_intensity(addr, info, 0, 0, CHAR_WIDTH, 16) };
+    assert_eq!(hidden, 0, "F2 still shows tty 0");
+
+    screen::out_str_tty(0, "B");
+    let still = unsafe { region_max_intensity(addr, info, CHAR_WIDTH, 0, CHAR_WIDTH, 16) };
+    assert_eq!(still, 0, "a background write painted the visible screen");
+
+    keyboard::add_scancode(0x3B);
+    keyboard::add_scancode(0xBB);
+    screen::apply_tty_switch();
+    let restored = unsafe { region_max_intensity(addr, info, 0, 0, CHAR_WIDTH, 16) };
+    assert!(
+        restored >= 200,
+        "F1 did not restore tty 0 (intensity {restored})"
+    );
+    let kept = unsafe { region_max_intensity(addr, info, CHAR_WIDTH, 0, CHAR_WIDTH, 16) };
+    assert!(
+        kept >= 200,
+        "the background write was not kept (intensity {kept})"
+    );
+
     println!("[test-screen] ink={} erased={} scroll-ok", ink_a, erased_b);
     serial_println!("[test-screen] passed");
     exit_qemu(QemuExitCode::Success);

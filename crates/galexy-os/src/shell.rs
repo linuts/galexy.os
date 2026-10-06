@@ -226,8 +226,8 @@ fn render_status_bar_inner() {
     };
     let last_row = rows - 1;
 
-    // Build the bar text.
-    let mut text = String::new();
+    // Build the bar text. The F-key names the console on screen.
+    let mut text = alloc::format!("F{} | ", screen::shown_tty() + 1);
     for (name, ticks) in crate::sched::thread_stats() {
         text.push_str(&alloc::format!("{} {} | ", name, ticks));
     }

@@ -128,14 +128,17 @@ pub fn set_color(color: Color)   // foreground; background is always black
 pub fn backspace()               // erase last char of the current line
 ```
 
-State (cursor, color, framebuffer snapshot, CSI parser) lives behind a
-single `spin::Mutex` global. Text uses every row except the last, which
-the status bar owns; scrolling shifts only the text rows, by one line
-height. Tab stops are every 8 columns. CR returns to column 0. ESC
-introduces a fixed-size CSI parser (no allocation): SGR colors 30–37
-and 90–97 plus reset, cursor position and movement (`H`/`f`/`A`–`D`),
-erase in display (`J` 0 and 2), and erase in line (`K` 0 and 2). The
-parser state survives a split `write`. A blinking cursor is still future.
+State (cursor, color, framebuffer snapshot, CSI parser) for the visible
+TTY lives behind a single `spin::Mutex` global. Each of the twelve
+consoles also keeps a cell grid (character and color) behind that same
+lock. F1–F12 select which grid is painted; the others keep their cells.
+Text uses every row except the last, which the status bar owns; scrolling
+shifts only the text rows, by one line height. Tab stops are every 8
+columns. CR returns to column 0. ESC introduces a fixed-size CSI parser
+(no allocation): SGR colors 30–37 and 90–97 plus reset, cursor position
+and movement (`H`/`f`/`A`–`D`), erase in display (`J` 0 and 2), and
+erase in line (`K` 0 and 2). The parser state survives a split `write`
+and is saved with the TTY. A blinking cursor is still future.
 
 ### serial — "the side channel" (`drivers/`)
 
@@ -154,20 +157,25 @@ re-asserts the line (the first real keystroke would black-hole). This is
 controller work, not interrupt-controller work — it runs on every boot path.
 
 IRQ1 handler (LAPIC-delivered via the I/O APIC) → `pc_keyboard` (US layout,
-scancode set 1) → Unicode chars
-pushed into a `kcore::Ring`. The kernel drains via `keyboard::pop_key()`.
-The ring-3 shell does not: it `read`s the keyboard capability
-(`reserved::KEYBOARD_INDEX`, READ). A zero-length success means the queue
-is empty, not that input ended. A short read that cannot fit the next
-character's UTF-8 puts that character back (`unget_key`).
+scancode set 1). Unicode characters are pushed into the active TTY's
+`kcore::Ring` (twelve rings, one per F-key). F1–F12 do not become input:
+the handler stores the TTY index and the main loop paints that grid.
+The in-kernel editor drains TTY 0 via `keyboard::pop_key()`. A ring-3
+shell `read`s the keyboard capability (`reserved::KEYBOARD_INDEX`, READ)
+and gets the queue of the TTY it was started on. A zero-length success
+means that queue is empty, not that input ended. A short read that
+cannot fit the next character's UTF-8 puts that character back
+(`unget_key_tty`).
 
 ```rust
 pub fn add_scancode(scancode: u8)   // called from the IRQ handler only
-pub fn pop_key() -> Option<char>    // drains decoded input
+pub fn pop_key() -> Option<char>    // drains TTY 0
+pub fn pop_key_tty(tty: u8) -> Option<char>
 ```
 
-Locks are tiny and never nested (decode under one lock, push under another),
-so IRQ context is safe. Queue overflow drops the newest key (documented).
+The handler never takes the screen lock. Locks are tiny and never nested
+(decode under one lock, push under another), so IRQ context is safe.
+Queue overflow drops the newest key (documented).
 
 ### arch — "the plumbing"
 
@@ -516,9 +524,14 @@ The prompt then returns and the child keeps running. `r8`/`r9` are an
 optional argument, at most 256 bytes, copied onto the child's stack
 (`rdi` is the address, `rsi` the length). `r10` bit 0
 (`SPAWN_GRANT_QUERY`) adds the query grant. Any other bit is
-`BadValue`. The child always receives the console. Keyboard, the
-loader, and power stay with the shell. The shell itself, loaded at
-boot, holds the keyboard, the loader, the query caps, and power.
+`BadValue`. The child always receives the console, and it writes the
+console of the task that spawned it. Keyboard, the
+loader, and power stay with the shell. Boot starts one shell on each
+F-key, pinned to the BSP with the launcher grants. F1's shell is named
+`shell`; the others are `shell2` through `shell12`. F1–F12 select which
+cell grid is painted. The keyboard interrupt only records that index;
+the main loop paints it. Keys go to the visible console. COM1 mirrors
+only that console.
 Presenting a reserved index is not enough; the task must have been
 granted it. A ramdisk entry that is not an ELF is `Unsupported`. The
 main loop, which is on the kernel page
@@ -527,15 +540,16 @@ so the new table does not inherit another task's user mappings. The
 load stays on the main loop because the loader allocates and a syscall
 runs with interrupts off.
 The waiter is marked runnable when that load finishes. The child's exit
-does not wake anyone. If no task named `shell` is running or waiting,
-the main loop loads it again with the launcher grants. Other tasks keep
-running. The new shell starts at `/`. `power` on the power cap (POWER right) shuts the
+does not wake anyone. If one of those shells is not running or waiting,
+the main loop loads that shell again with the launcher grants. Other
+tasks keep running. The new shell starts at `/`. `power` on the power cap (POWER right) shuts the
 machine down (`op` 0, ACPI S5) or resets it (`op` 1). It does not
 return when the platform honors it; a return is Unsupported and the
 shell says the machine stayed up. Console `write` accepts backspace
 (`0x08`), tab (`0x09`), form feed (`0x0c`, clear), CR (`0x0d`), and
 ESC (`0x1b`) so the ring-3 shell can edit a line and programs can emit
-CSI. The screen interprets those; the serial mirror stays raw. Other
+CSI. The screen interprets those; the serial mirror stays raw and follows
+the visible console. Other
 control bytes are still `BadValue`. Unknown numbers
 → Unsupported. Kernel-origin syscalls are impossible-by-structure: the
 arch shim dies loudly instead.

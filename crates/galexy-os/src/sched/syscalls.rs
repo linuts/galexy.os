@@ -173,9 +173,8 @@ fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
         return SyscallResult::err(SysError::BadValue);
     }
     let text = core::str::from_utf8(&staged[..len as usize]).unwrap_or("");
-    // Console policy (drivers::console): screen + serial — visible
-    // interactively and observable headless.
-    crate::drivers::console::out_str(text);
+    // The task's own console. COM1 mirrors it only while that TTY is visible.
+    crate::drivers::console::out_str_tty(crate::sched::current_tty(), text);
     SyscallResult::ok(len)
 }
 
@@ -493,16 +492,17 @@ fn syscall_read_keyboard(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if user_buffer(addr, len, true).is_err() {
         return SyscallResult::err(SysError::BadBuffer);
     }
+    let tty = crate::sched::current_tty();
     let mut staged = [0u8; MAX_READ as usize];
     let mut filled = 0usize;
     while filled < len as usize {
-        let Some(c) = crate::drivers::keyboard::pop_key() else {
+        let Some(c) = crate::drivers::keyboard::pop_key_tty(tty) else {
             break;
         };
         let mut tmp = [0u8; 4];
         let encoded = c.encode_utf8(&mut tmp);
         if filled + encoded.len() > len as usize {
-            crate::drivers::keyboard::unget_key(c);
+            crate::drivers::keyboard::unget_key_tty(tty, c);
             break;
         }
         staged[filled..filled + encoded.len()].copy_from_slice(encoded.as_bytes());

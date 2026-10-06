@@ -39,17 +39,17 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     sched::init();
     sched::demo::spawn_all(); // silent preemptive threads
     banner::show();
-    // The interactive shell is a ring-3 program pinned to the BSP. The
-    // kernel loop only drains its spawn requests and keeps the status bar.
-    // Without that ELF, the in-kernel line editor stays the consumer.
-    let user_shell = if let Some(bytes) = sched::ramdisk::find("shell") {
-        sched::loader::spawn_program_bsp("shell", bytes);
-        true
+    // One ring-3 shell per F-key, each pinned to the BSP. F1 stays named
+    // `shell`. The kernel loop paints a console switch, drains launches,
+    // and keeps the status bar. Without that ELF, the in-kernel line
+    // editor stays the consumer of TTY 0.
+    let user_shell = sched::ramdisk::find("shell").is_some();
+    if user_shell {
+        sched::spawn_all_shells();
     } else {
         serial_println!("[boot] no shell program on the ramdisk; kernel shell stays");
         shell::init();
-        false
-    };
+    }
     serial_println!("[boot] main loop ready");
     let mut last_second = 0u64;
     loop {
@@ -62,7 +62,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         // A queued launch loads on this loop (kernel page table). The
         // in-kernel editor only consumes keys when no ring-3 shell owns them.
         // A faulted shell is loaded again; other tasks keep running.
+        // F1–F12 only record a switch; this loop paints it.
         sched::drain_spawn();
+        screen::apply_tty_switch();
         if user_shell {
             sched::ensure_shell();
         }

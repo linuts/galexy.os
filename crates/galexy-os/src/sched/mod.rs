@@ -361,6 +361,9 @@ struct Thread {
     wait_for_len: AtomicU8,
     /// Reserved services this task may call. Set at spawn, never grown.
     grants: Grants,
+    /// Console this task writes, and whose keyboard queue it reads.
+    /// Inherited from the task that spawned it. F1 is 0.
+    tty: u8,
 }
 
 impl Thread {
@@ -668,6 +671,8 @@ pub(crate) struct TaskInit<'a> {
     pub(crate) no_steal: bool,
     /// Reserved services this program may call.
     pub(crate) grants: Grants,
+    /// Console the new task writes. A child inherits its parent's.
+    pub(crate) tty: u8,
 }
 
 pub(crate) fn register_user_task(init: TaskInit<'_>) {
@@ -698,6 +703,7 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) {
             wait_for: [0; 64],
             wait_for_len: AtomicU8::new(0),
             grants: init.grants,
+            tty: init.tty,
         });
     });
 }
@@ -740,6 +746,7 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             wait_for: [0; 64],
             wait_for_len: AtomicU8::new(0),
             grants: Grants::none(),
+            tty: 0,
         });
         serial_println!("[sched] thread '{}' ready (owner cpu {})", name, owner);
         owner
@@ -931,6 +938,7 @@ pub fn spawn_user_task(name: &str, build: impl FnOnce(UserRegion) -> Vec<u8>) ->
             wait_for: [0; 64],
             wait_for_len: AtomicU8::new(0),
             grants: Grants::console(),
+            tty: 0,
         });
         serial_println!(
             "[sched] user task '{}' ready (own tree cr3={:#x}, p4={}, code @ {:#x}, kstack top {:#x})",
@@ -1055,6 +1063,8 @@ struct PendingSpawn {
     arg: [u8; ARG_MAX],
     arg_len: u16,
     query: bool,
+    /// Console the child inherits from the task that asked.
+    tty: u8,
     armed: bool,
 }
 
@@ -1064,6 +1074,7 @@ static PENDING_SPAWN: Mutex<PendingSpawn> = Mutex::new(PendingSpawn {
     arg: [0; ARG_MAX],
     arg_len: 0,
     query: false,
+    tty: 0,
     armed: false,
 });
 
@@ -1095,6 +1106,7 @@ pub(crate) fn task_spawn(name: &str, arg: &[u8], query: bool) -> Result<(), SysE
         pending.arg[..arg.len()].copy_from_slice(arg);
         pending.arg_len = arg.len() as u16;
         pending.query = query;
+        pending.tty = thread.tty;
         pending.armed = true;
         thread.wait_for[..name.len()].copy_from_slice(name.as_bytes());
         thread
@@ -1123,10 +1135,11 @@ pub fn drain_spawn() {
         let mut arg = [0u8; ARG_MAX];
         arg[..arg_len].copy_from_slice(&pending.arg[..arg_len]);
         let query = pending.query;
+        let tty = pending.tty;
         pending.armed = false;
-        Some((len, name, arg_len, arg, query))
+        Some((len, name, arg_len, arg, query, tty))
     });
-    let Some((len, name_raw, arg_len, arg, query)) = queued else {
+    let Some((len, name_raw, arg_len, arg, query, tty)) = queued else {
         return;
     };
     let name = core::str::from_utf8(&name_raw[..len]).unwrap_or("");
@@ -1136,7 +1149,7 @@ pub fn drain_spawn() {
         Grants::console()
     };
     if let Some(bytes) = ramdisk::find(name) {
-        loader::spawn_launched(name, bytes, grants, &arg[..arg_len]);
+        loader::spawn_launched(name, bytes, grants, &arg[..arg_len], tty);
     } else {
         serial_println!("[sched] spawn '{}' missing at drain; waking waiter", name);
     }
@@ -1146,27 +1159,62 @@ pub fn drain_spawn() {
     });
 }
 
-/// True when a task named `shell` is running or parked on a load.
-pub fn shell_is_live() -> bool {
+/// Names of the twelve shells. F1 keeps `shell` so a faulted shell is
+/// still the task the restart log and the typing tests already know.
+const SHELL_NAMES: [&str; 12] = [
+    "shell", "shell2", "shell3", "shell4", "shell5", "shell6", "shell7", "shell8", "shell9",
+    "shell10", "shell11", "shell12",
+];
+
+/// True when a task named `name` is running or parked on a load.
+fn named_is_live(name: &str) -> bool {
     interrupts::without_interrupts(|| {
         THREADS.lock().iter().any(|thread| {
             let state = thread.state.load(Ordering::Acquire);
-            thread.name() == "shell" && (state == STATE_RUNNING || state == STATE_WAITING)
+            thread.name() == name && (state == STATE_RUNNING || state == STATE_WAITING)
         })
     })
 }
 
-/// Loads the interactive shell again when the previous one has exited.
-///
-/// Other tasks are left alone. The new shell starts at `/` with the
-/// launcher grants. A missing ramdisk entry does nothing.
-pub fn ensure_shell() {
-    if shell_is_live() {
+/// True when a task named `shell` is running or parked on a load.
+pub fn shell_is_live() -> bool {
+    named_is_live("shell")
+}
+
+/// Loads one interactive shell on `tty` when that name is not already live.
+fn ensure_one_shell(name: &str, tty: u8) {
+    if named_is_live(name) {
         return;
     }
-    if let Some(bytes) = ramdisk::find("shell") {
+    let Some(bytes) = ramdisk::find("shell") else {
+        return;
+    };
+    if name == "shell" {
         serial_println!("[sched] shell is gone; loading it again");
-        loader::spawn_program_bsp("shell", bytes);
+    } else {
+        serial_println!("[sched] {} is gone; loading it again", name);
+    }
+    loader::spawn_shell_on(name, bytes, tty);
+}
+
+/// Loads every F-key shell that has exited.
+///
+/// Other tasks are left alone. Each new shell starts at `/` with the
+/// launcher grants, on the console it had. A missing ramdisk entry does
+/// nothing.
+pub fn ensure_shell() {
+    for (tty, name) in SHELL_NAMES.iter().enumerate() {
+        ensure_one_shell(name, tty as u8);
+    }
+}
+
+/// Starts one shell on every F-key before the main loop reports ready.
+pub fn spawn_all_shells() {
+    let Some(bytes) = ramdisk::find("shell") else {
+        return;
+    };
+    for (tty, name) in SHELL_NAMES.iter().enumerate() {
+        loader::spawn_shell_on(name, bytes, tty as u8);
     }
 }
 
@@ -1642,6 +1690,24 @@ fn file_slot(cap: Cap) -> Result<usize, SysError> {
 /// The current rotation slot (0 = main loop; otherwise thread index + 1).
 pub fn current_slot() -> usize {
     cpu_sched().current.load(Ordering::Relaxed)
+}
+
+/// Console the running task writes. The main loop is TTY 0.
+///
+/// The lock is dropped before return, so the caller can take the screen
+/// lock afterwards.
+pub fn current_tty() -> u8 {
+    let slot = current_slot();
+    if slot == 0 {
+        return 0;
+    }
+    interrupts::without_interrupts(|| {
+        THREADS
+            .lock()
+            .get(slot - 1)
+            .map(|thread| thread.tty)
+            .unwrap_or(0)
+    })
 }
 
 /// Whether the current task was granted `grant` at spawn.

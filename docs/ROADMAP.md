@@ -181,6 +181,11 @@ first real program landed in Milestone 13:
   are ramdisk programs. If the shell faults, the main loop loads it
   again and other tasks keep running. The BIOS typing test starts
   `linger`, types `crash`, and still sees `beat`).
+- One console per F-key ✅ (Milestone 33: F1–F12 each have a cell grid
+  and a shell. The keyboard interrupt records the switch; the main
+  loop paints it. Keys and COM1 follow the visible console. A program
+  keeps writing the console it was started on. `bin/test-screen`
+  restores a hidden grid, and a typing test runs `echo hi` on F2).
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.

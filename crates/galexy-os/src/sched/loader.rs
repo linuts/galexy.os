@@ -49,7 +49,7 @@ pub fn looks_like_elf(bytes: &[u8]) -> bool {
 /// task: kernel stack via TSS.RSP0, CR3 own tree, tombstone + tree-walk
 /// reaping. Owner CPU round-robins.
 pub fn spawn_program(name: &str, bytes: &[u8]) -> ProgramRegion {
-    spawn_program_placed(name, bytes, None, false, Grants::console(), &[])
+    spawn_program_placed(name, bytes, None, false, Grants::console(), &[], 0)
 }
 
 /// Like [`spawn_program`], with an explicit grant set and a startup argument.
@@ -61,19 +61,27 @@ pub(crate) fn spawn_launched(
     bytes: &[u8],
     grants: Grants,
     arg: &[u8],
+    tty: u8,
 ) -> ProgramRegion {
-    spawn_program_placed(name, bytes, None, false, grants, arg)
+    spawn_program_placed(name, bytes, None, false, grants, arg, tty)
 }
 
 /// Like [`spawn_program`], pinned to the BSP, and idle CPUs do not steal it.
 ///
-/// The interactive shell lives here: the keyboard IRQ and the framebuffer
-/// both have a single consumer, and that consumer is the BSP. It receives
-/// the launcher grant (console, keyboard, loader, queries, power).
+/// F1's shell lives here. Each F-key shell is pinned the same way: the
+/// framebuffer has one painter, and that painter is the BSP. The shell
+/// receives the launcher grant (console, keyboard, loader, queries, power)
+/// and writes the console `tty` names.
 pub fn spawn_program_bsp(name: &str, bytes: &[u8]) -> ProgramRegion {
-    spawn_program_placed(name, bytes, Some(0), true, Grants::launcher(), &[])
+    spawn_shell_on(name, bytes, 0)
 }
 
+/// Pins a launcher shell named `name` to the BSP on console `tty`.
+pub fn spawn_shell_on(name: &str, bytes: &[u8], tty: u8) -> ProgramRegion {
+    spawn_program_placed(name, bytes, Some(0), true, Grants::launcher(), &[], tty)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn spawn_program_placed(
     name: &str,
     bytes: &[u8],
@@ -81,6 +89,7 @@ fn spawn_program_placed(
     no_steal: bool,
     grants: Grants,
     arg: &[u8],
+    tty: u8,
 ) -> ProgramRegion {
     let elf = ElfFile::new(bytes).expect("spawn_program: invalid ELF");
     // Only static executables: relocatable/DYN would need relocation work.
@@ -210,6 +219,7 @@ fn spawn_program_placed(
             owner,
             no_steal,
             grants,
+            tty,
         });
         serial_println!(
             "[loader] program '{}' ready (own tree cr3={:#x}, entry {:#x})",
