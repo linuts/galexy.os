@@ -294,14 +294,15 @@ Init order: GDT/TSS (per-CPU slot 0) → per-CPU GS substrate → ACPI (MADT)
   adapter. `unmap_page` flushes and returns the frame. `translate(virt)`
   for lookups.
 - `FreshL4` — per-task address spaces (Step B): allocates a frame and
-  clones the active L4 into it, then re-points the recursive entry
-  (P4 511) at the FRESH frame — a verbatim copy would leave the recursive
-  mapping addressing the OLD tree once the fresh table is loaded into CR3
-  (kernel higher-half entries are shared frames either way). Spawn-time
-  guard: `on_kernel_tree()` must hold, or the clone could carry another
-  task's user mappings. Tests can map into a fresh (non-active, coherent)
-  tree via the `unsafe with_table()` mapper (no TLB flush — no CPU can
-  address it).
+  clones the kernel root cached at init, then re-points the recursive
+  entry (P4 511) at the FRESH frame — a verbatim copy would leave the
+  recursive mapping addressing the kernel tree once the fresh table is
+  loaded into CR3 (kernel higher-half entries are shared frames either
+  way). The copy does not follow CR3, so a child cannot inherit another
+  task's user mappings. The loader still runs on the main loop: it
+  allocates, and a syscall runs with interrupts off. Tests can map into
+  a fresh (non-active, coherent) tree via the `unsafe with_table()`
+  mapper (no TLB flush — no CPU can address it).
 - `install_cr3(frame)` — no-op when already active (Redox pattern: a swap
   costs a full TLB flush); `kernel_cr3()` = the boot table, cached at init.
 - `free_user_tree(root, p4_index)` — reclaims a tombstoned task's WHOLE
@@ -496,7 +497,10 @@ not allocate). The files snapshot is the ramdisk's regular names, one
 per line, in archive order. `spawn` on the loader cap (EXEC) parks
 the caller (`STATE_WAITING`) and queues the program name; the main loop,
 which is on the kernel page
-table, loads the ELF — a user CR3 must not be cloned into a new task.
+table, loads the ELF. `FreshL4` copies the kernel root cached at init,
+so the new table does not inherit another task's user mappings. The
+load stays on the main loop because the loader allocates and a syscall
+runs with interrupts off.
 The waiter is marked runnable when that program exits, including a
 ring-3 page fault. `power` on the power cap (POWER right) shuts the
 machine down (`op` 0, ACPI S5) or resets it (`op` 1). It does not

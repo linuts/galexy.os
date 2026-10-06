@@ -77,8 +77,8 @@ first real program landed in Milestone 13:
 
 ### Step B — real isolation ✅
 
-1. Per-task CR3 ✅ — `FreshL4` per task at spawn (kernel-tree guard:
-   spawns must run on the kernel table so the clone stays clean); user
+1. Per-task CR3 ✅ — `FreshL4` per task at spawn (the clone source is
+   the kernel root cached at init, Milestone 28); user
    region per task mapped via `with_table` into its own tree at a scanned
    top-free P4 entry; kernel-side staging through backing frames ✅
 2. CR3 in `Context`'s task record + swap in BOTH switch paths (timer +
@@ -146,6 +146,12 @@ first real program landed in Milestone 13:
   are reserved caps. `read` returns a fresh text snapshot, rendered
   without allocating on the IF=0 syscall path. The ring-3 shell types
   all three; `bin` coverage is the QMP typing test).
+- Kernel-root page tables ✅ (Milestone 28: `FreshL4` copies the
+  kernel root cached at init, not the table in CR3. A child cannot
+  inherit another task's user mappings. The ELF load stays on the main
+  loop, because the loader allocates and a syscall runs with interrupts
+  off. `bin/test-cloneroot` installs a user mapping and checks the
+  next fresh table does not have it).
 - Scratch files ✅ (Milestone 27: `create`=9. Eight fixed slots, a
   64-byte name and a 256-byte buffer each, no heap on the syscall
   path. The cap is READ|WRITE; `write` appends. A tar name is

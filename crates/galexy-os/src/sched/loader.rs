@@ -69,6 +69,8 @@ fn spawn_program_placed(
     let entry_vaddr = elf.header.pt2.entry_point();
 
     interrupts::without_interrupts(|| {
+        // The loader allocates. A syscall runs with interrupts off, so the
+        // load stays on the main loop, which is the kernel table.
         assert!(
             mm::on_kernel_tree(),
             "spawn_program: must run on the kernel tree (main-loop context)"

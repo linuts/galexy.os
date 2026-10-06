@@ -176,7 +176,7 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
    thing a scheduler ever has to swap.
 4. **Test what can be tested.** Host unit tests for the pure primitives
    (`galexy-core`, `galexy-abi`), plus one bootable kernel binary per
-   integration test — 36 QEMU boots (all at `-smp 2`) assert exit codes and
+   integration test — 37 QEMU boots (all at `-smp 2`) assert exit codes and
    serial output on every run.
 5. **Ownership beats locks for per-CPU state.** Rotation cursors, TSS.RSP0,
    syscall scratch and the LAPIC registers are touched by exactly one CPU

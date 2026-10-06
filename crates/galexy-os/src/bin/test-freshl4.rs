@@ -1,6 +1,6 @@
 //! Integration test kernel: fresh page-table trees (ring-3 isolation
 //! groundwork, roadmap Step B). Proves:
-//! 1. `FreshL4` copies the active table (kernel higher half reachable).
+//! 1. `FreshL4` copies the kernel root (kernel higher half reachable).
 //! 2. The fresh table's recursive entry self-points at the fresh frame.
 //! 3. Mappings made into the fresh tree via `with_table` are invisible to
 //!    the active tree (independence).

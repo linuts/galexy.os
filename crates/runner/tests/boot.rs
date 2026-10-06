@@ -240,6 +240,20 @@ fn preempt_test_passes() {
 }
 
 #[test]
+fn cloneroot_test_passes() {
+    let (code, serial) = boot(&image("test-cloneroot"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-cloneroot should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-cloneroot] passed"),
+        "test-cloneroot success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn freshl4_test_passes() {
     let (code, serial) = boot(&image("test-freshl4"));
     assert_eq!(

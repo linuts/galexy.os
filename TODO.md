@@ -776,18 +776,20 @@ written.** Suite: 36 QEMU boot tests, all `-smp 2`.
       `NoResource`
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
-## Milestone 28 — Clone the kernel page table
+## Milestone 28 — Clone the kernel page table ✅
 
-Planned, not started. A new program is already mapped into its own
-page table. That table is copied from whichever table is in CR3, so
-spawn is only safe on the kernel table.
+A new program gets its own page table, copied from the kernel root
+cached at boot. **A child cannot inherit another task's user
+mappings.** Suite: 37 QEMU boot tests, all `-smp 2`.
 
-- [ ] `FreshL4` clones the kernel root cached at init. A child cannot
-      inherit another task's user mappings
-- [ ] The load stays on the main loop. The loader allocates, and the
-      syscall runs with interrupts off
-- [ ] A boot test installs a user mapping, builds a fresh table, and
-      checks that mapping is absent from the child
+- [x] **`FreshL4`** copies `kernel_cr3()`, the root cached at init.
+      The active CR3 is not the source
+- [x] **The load stays on the main loop.** The loader allocates, and
+      a syscall runs with interrupts off. `spawn` still drains there
+- [x] **`bin/test-cloneroot`**: a user page is mapped into one table,
+      that table is installed, and the next fresh table does not
+      contain the page
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
 ## Milestone 29 — Core utilities
 
@@ -839,8 +841,7 @@ table. `rm`, pipes, `mv`, `cp`, globs, and a real disk stay out.
       ESC). A blinking cursor is still future screen work
 - [ ] Scratch files have no seek, and `ls` is still the ramdisk
       snapshot. `echo`, `cat`, `touch`, redirection, then `mkdir` /
-      `cd` are Milestone 29. `spawn` still clones whichever page
-      table is in CR3 (Milestone 28)
+      `cd` are Milestone 29
 - [x] ~~`run` leaks the task name, and freed slots panic the table at
       64~~ — CLOSED by Milestone 26 (name copied into the slot; a
       `Freed` record is reused once no CPU is current on it)

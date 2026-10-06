@@ -686,8 +686,8 @@ pub struct UserRegion {
 /// (heap) serves its ring 3→0 crossings via TSS.RSP0. IRQ-gated.
 pub fn spawn_user_task(name: &str, build: impl FnOnce(UserRegion) -> Vec<u8>) -> (UserRegion, u8) {
     interrupts::without_interrupts(|| {
-        // Spawn MUST run on the kernel tree: a FreshL4 clones whatever is
-        // active, and user mappings live only in task trees from now on.
+        // The loader allocates. A syscall runs with interrupts off, so the
+        // load stays on the main loop, which is the kernel table.
         assert!(
             mm::on_kernel_tree(),
             "spawn_user_task: must run on the kernel tree (main-loop context)"
@@ -1191,10 +1191,7 @@ pub(crate) fn task_create(name: &str) -> Result<Cap, SysError> {
             offset: 0,
             rights,
         });
-        Ok(Cap::new(
-            galexy_abi::FILE_CAP_BASE + index as u64,
-            rights,
-        ))
+        Ok(Cap::new(galexy_abi::FILE_CAP_BASE + index as u64, rights))
     })
 }
 

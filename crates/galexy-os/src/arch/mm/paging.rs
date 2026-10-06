@@ -37,7 +37,8 @@ static READY: AtomicBool = AtomicBool::new(false);
 /// changes.
 static PHYS_OFFSET: AtomicU64 = AtomicU64::new(0);
 /// The kernel's page-table root (physical address), cached at [`init`].
-/// Every FreshL4 tree shares the kernel half of this table verbatim.
+/// [`FreshL4`] copies this root, not the table in CR3. Every task tree
+/// shares its kernel half verbatim.
 static KERNEL_CR3: AtomicU64 = AtomicU64::new(0);
 
 /// Physical-memory offset accessor for internal use (panics if unset).
@@ -343,9 +344,11 @@ pub fn top_user_p4_index() -> Option<u16> {
     top_user_p4_index_in(l4_frame)
 }
 
-/// Is the kernel's (boot) table the active one? Spawn-time guard: user
-/// mappings must only ever enter task trees, so `spawn_user_task` must run
-/// on the kernel tree (a `FreshL4` clones the active table).
+/// Is the kernel's (boot) table the active one?
+///
+/// Spawn stays here: the loader allocates, and a syscall runs with
+/// interrupts off, so the load stays on the main loop. [`FreshL4`] copies
+/// [`kernel_cr3`], not whichever table is active.
 pub fn on_kernel_tree() -> bool {
     let (current, _) = Cr3::read();
     current == kernel_cr3()
@@ -366,38 +369,41 @@ unsafe impl FrameAllocator<Size4KiB> for TaskFrameAlloc {
 
 /* ---------------- fresh (non-active) page tables — Step B groundwork ---- */
 
-/// Physical frame of a freshly allocated, near-verbatim copy of the ACTIVE
-/// L4: kernel higher-half entries are shared (same frames), the user region
-/// is empty (nothing below the kernel half is mapped in the active tables),
-/// and the recursive entry self-points at the fresh frame.
+/// Physical frame of a freshly allocated, near-verbatim copy of the kernel
+/// L4 cached at [`init`]. Kernel higher-half entries are shared (same
+/// frames). The copy does not follow the active CR3, so a task's user
+/// mappings stay in that task's table. The recursive entry self-points at
+/// the fresh frame.
 pub struct FreshL4 {
     /// Physical frame of the new top-level table.
     pub frame: PhysFrame<Size4KiB>,
 }
 
 impl FreshL4 {
-    /// Builds a fresh L4 as a copy of the currently active one.
+    /// Builds a fresh L4 as a copy of the kernel root cached at [`init`].
     ///
     /// The recursive entry (P4 index 511) is re-pointed at the fresh frame
-    /// itself: a verbatim copy would leave it referencing the ORIGINAL L4,
+    /// itself: a verbatim copy would leave it referencing the kernel L4,
     /// and once this table is loaded into CR3 the recursive mapping would
-    /// address the old tree instead of this one (stale translations for
+    /// address the kernel tree instead of this one (stale translations for
     /// every user-region mapping).
     pub fn new() -> Result<Self, PageError> {
         let phys = phys_offset();
         let fresh = super::allocate_frame().ok_or(PageError::NoFrame)?;
-        let (active_frame, _) = Cr3::read();
+        let kernel = kernel_cr3();
 
         let fresh_virt = phys + fresh.start_address().as_u64();
-        let active_virt = phys + active_frame.start_address().as_u64();
+        let kernel_virt = phys + kernel.start_address().as_u64();
 
         // Page ops run with IRQs off (same discipline as the mapper ops).
         x86_64::instructions::interrupts::without_interrupts(|| {
             // SAFETY: both pointers target real page-table frames owned by
             // us — the fresh frame has never been used before this copy; the
-            // active one is the CPU's current CR3 target, read-only here.
+            // kernel root was cached from CR3 at init and is read-only here.
+            // The copy goes through the phys map, so it does not matter which
+            // table is in CR3.
             unsafe {
-                let src = active_virt.as_ptr::<PageTable>();
+                let src = kernel_virt.as_ptr::<PageTable>();
                 let dst = fresh_virt.as_mut_ptr::<PageTable>();
                 // PageTable has no Copy impl — copy the 512 entries as u64s.
                 core::ptr::copy_nonoverlapping(src as *const u64, dst as *mut u64, 512);
