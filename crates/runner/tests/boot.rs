@@ -946,6 +946,16 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("ret", "[sched] task 'rm' exited"),
 ];
 
+/// Typing `shell` must not start a nested console (reserved name).
+const SHELL_RESERVE_KEYS: &[(&str, &str)] = &[
+    ("s", "s"),
+    ("h", "h"),
+    ("e", "e"),
+    ("l", "l"),
+    ("l", "l"),
+    ("ret", "shell: reserved"),
+];
+
 /// The ring-3 shell's query caps: typed `stats` / `threads` / `tasks` /
 /// `ls` come back as console text (screen + serial), including a live
 /// thread and the ramdisk's `banner.txt`.
@@ -978,6 +988,27 @@ fn shell_query_typing_e2e() {
     assert!(
         serial.contains("hello\n"),
         "typed `ls` never listed hello; serial:\n{serial}"
+    );
+}
+
+/// Typing `shell` is refused: F1–F12 own those task names.
+#[test]
+fn shell_nested_spawn_refused_e2e() {
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        SHELL_RESERVE_KEYS,
+        "[boot] main loop ready",
+        "shell: reserved",
+        Duration::from_millis(30),
+        Duration::from_secs(45),
+    );
+    assert!(
+        serial.contains("shell: reserved"),
+        "typed `shell` was not refused; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("keyboard denied"),
+        "typed `shell` started a keyboard-less shell; serial:\n{serial}"
     );
 }
 

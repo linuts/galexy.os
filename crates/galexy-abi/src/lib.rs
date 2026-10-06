@@ -490,7 +490,8 @@ pub enum SysError {
     /// `open` found no ramdisk file with that exact name.
     NotFound = 6,
     /// A fixed kernel slot this call needs is already taken (the task's
-    /// file table, the scratch-file table, or the single queued spawn).
+    /// file table, the object table, the single queued spawn, or a live
+    /// task that already uses the requested spawn name).
     NoResource = 7,
 }
 
