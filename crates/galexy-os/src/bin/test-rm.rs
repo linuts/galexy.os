@@ -120,9 +120,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         "a non-empty directory is Unsupported"
     );
     assert_eq!(report.empty_ok, 1, "an empty directory must be removed");
+    // Boot keeps alex's root, dan's root, and dan's Desktop — 29 free slots.
     assert_eq!(
-        report.fill_ok, 31,
-        "thirty-one files must fit after the frees"
+        report.fill_ok, 29,
+        "twenty-nine files must fit after the frees"
     );
     assert_eq!(report.extra_ok, 0, "a full galfs table must fail");
     assert_eq!(

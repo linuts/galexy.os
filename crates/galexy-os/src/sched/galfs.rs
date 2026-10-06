@@ -216,7 +216,7 @@ fn sync_to_disk() -> bool {
     let mut buf = DISK_BUF.lock();
     {
         let table = TABLE.lock();
-        encode_table(&table, &mut *buf);
+        encode_table(&table, &mut buf);
     }
     match ata::write_sectors(0, &*buf) {
         Ok(()) => {
@@ -236,7 +236,7 @@ fn load_from_disk() -> bool {
         return false;
     }
     let mut table = TABLE.lock();
-    if !decode_table(&*buf, &mut table) {
+    if !decode_table(&buf, &mut table) {
         return false;
     }
     refresh_roots(&table);
@@ -876,6 +876,24 @@ pub(crate) fn append(index: u16, src: &[u8]) -> Option<usize> {
         let n = src.len().min(FILE_BYTES.saturating_sub(start));
         stored.data[start..start + n].copy_from_slice(&src[..n]);
         stored.len = (start + n) as u16;
+        n
+    })
+}
+
+/// Appends bytes to a file by object index. Test helper.
+pub fn append_file(index: u16, src: &[u8]) -> Option<usize> {
+    let n = append(index, src)?;
+    if n > 0 {
+        sync();
+    }
+    Some(n)
+}
+
+/// Copies file bytes into `out`. Returns the length, or `None` if missing.
+pub fn read_file_bytes(index: u16, out: &mut [u8]) -> Option<usize> {
+    with_file(index, |stored| {
+        let n = (stored.len as usize).min(out.len());
+        out[..n].copy_from_slice(&stored.data[..n]);
         n
     })
 }

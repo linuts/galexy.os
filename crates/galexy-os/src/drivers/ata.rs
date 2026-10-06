@@ -62,30 +62,29 @@ pub fn present() -> bool {
 fn identify_slave() -> bool {
     select_drive(0);
     delay();
-    Port::<u8>::new(SECTOR_COUNT).write(0);
-    Port::<u8>::new(LBA_LO).write(0);
-    Port::<u8>::new(LBA_MID).write(0);
-    Port::<u8>::new(LBA_HI).write(0);
-    Port::<u8>::new(COMMAND).write(CMD_IDENTIFY);
+    outb(SECTOR_COUNT, 0);
+    outb(LBA_LO, 0);
+    outb(LBA_MID, 0);
+    outb(LBA_HI, 0);
+    outb(COMMAND, CMD_IDENTIFY);
     delay();
-    let status = Port::<u8>::new(STATUS).read();
+    let status = inb(STATUS);
     if status == 0 {
         return false;
     }
     if wait_not_bsy().is_err() {
         return false;
     }
-    let mid = Port::<u8>::new(LBA_MID).read();
-    let hi = Port::<u8>::new(LBA_HI).read();
+    let mid = inb(LBA_MID);
+    let hi = inb(LBA_HI);
     if mid != 0 || hi != 0 {
         return false;
     }
     if wait_drq().is_err() {
         return false;
     }
-    let mut data = Port::<u16>::new(DATA);
     for _ in 0..256 {
-        let _ = data.read();
+        let _ = inw(DATA);
     }
     true
 }
@@ -116,23 +115,22 @@ pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
 
 fn select_drive(lba: u32) {
     let head = 0xE0 | (SLAVE << 4) | ((lba >> 24) as u8 & 0x0F);
-    Port::<u8>::new(DRIVE).write(head);
+    outb(DRIVE, head);
     delay();
 }
 
 fn pio_read(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError> {
     select_drive(lba);
-    Port::<u8>::new(ERROR).write(0);
-    Port::<u8>::new(SECTOR_COUNT).write(dst.len() as u8);
-    Port::<u8>::new(LBA_LO).write(lba as u8);
-    Port::<u8>::new(LBA_MID).write((lba >> 8) as u8);
-    Port::<u8>::new(LBA_HI).write((lba >> 16) as u8);
-    Port::<u8>::new(COMMAND).write(CMD_READ);
-    let mut data = Port::<u16>::new(DATA);
+    outb(ERROR, 0);
+    outb(SECTOR_COUNT, dst.len() as u8);
+    outb(LBA_LO, lba as u8);
+    outb(LBA_MID, (lba >> 8) as u8);
+    outb(LBA_HI, (lba >> 16) as u8);
+    outb(COMMAND, CMD_READ);
     for sector in dst.iter_mut() {
         wait_drq()?;
-        for chunk in sector.chunks_exact_mut(2) {
-            let w = data.read();
+        for chunk in sector.as_chunks_mut::<2>().0 {
+            let w = inw(DATA);
             chunk[0] = w as u8;
             chunk[1] = (w >> 8) as u8;
         }
@@ -142,22 +140,21 @@ fn pio_read(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError> {
 
 fn pio_write(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
     select_drive(lba);
-    Port::<u8>::new(ERROR).write(0);
-    Port::<u8>::new(SECTOR_COUNT).write(src.len() as u8);
-    Port::<u8>::new(LBA_LO).write(lba as u8);
-    Port::<u8>::new(LBA_MID).write((lba >> 8) as u8);
-    Port::<u8>::new(LBA_HI).write((lba >> 16) as u8);
-    Port::<u8>::new(COMMAND).write(CMD_WRITE);
-    let mut data = Port::<u16>::new(DATA);
+    outb(ERROR, 0);
+    outb(SECTOR_COUNT, src.len() as u8);
+    outb(LBA_LO, lba as u8);
+    outb(LBA_MID, (lba >> 8) as u8);
+    outb(LBA_HI, (lba >> 16) as u8);
+    outb(COMMAND, CMD_WRITE);
     for sector in src.iter() {
         wait_drq()?;
-        for chunk in sector.chunks_exact(2) {
+        for chunk in sector.as_chunks::<2>().0 {
             let w = u16::from(chunk[0]) | (u16::from(chunk[1]) << 8);
-            data.write(w);
+            outw(DATA, w);
         }
     }
     wait_not_bsy()?;
-    let status = Port::<u8>::new(STATUS).read();
+    let status = inb(STATUS);
     if status & (SR_ERR | SR_DF) != 0 {
         return Err(SysError::Unsupported);
     }
@@ -165,9 +162,8 @@ fn pio_write(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
 }
 
 fn wait_not_bsy() -> Result<(), SysError> {
-    let mut status = Port::<u8>::new(STATUS);
     for _ in 0..1_000_000 {
-        let s = status.read();
+        let s = inb(STATUS);
         if s & SR_BSY == 0 {
             if s & SR_ERR != 0 {
                 return Err(SysError::Unsupported);
@@ -179,9 +175,8 @@ fn wait_not_bsy() -> Result<(), SysError> {
 }
 
 fn wait_drq() -> Result<(), SysError> {
-    let mut status = Port::<u8>::new(STATUS);
     for _ in 0..1_000_000 {
-        let s = status.read();
+        let s = inb(STATUS);
         if s & SR_BSY != 0 {
             continue;
         }
@@ -196,8 +191,31 @@ fn wait_drq() -> Result<(), SysError> {
 }
 
 fn delay() {
-    let mut p = Port::<u8>::new(0x80);
     for _ in 0..4 {
-        let _ = p.read();
+        let _ = inb(0x80);
     }
+}
+
+fn outb(port: u16, value: u8) {
+    // SAFETY: fixed ATA primary-channel ports.
+    let mut p = Port::<u8>::new(port);
+    unsafe { p.write(value) };
+}
+
+fn inb(port: u16) -> u8 {
+    // SAFETY: fixed ATA primary-channel ports.
+    let mut p = Port::<u8>::new(port);
+    unsafe { p.read() }
+}
+
+fn outw(port: u16, value: u16) {
+    // SAFETY: fixed ATA data port.
+    let mut p = Port::<u16>::new(port);
+    unsafe { p.write(value) };
+}
+
+fn inw(port: u16) -> u16 {
+    // SAFETY: fixed ATA data port.
+    let mut p = Port::<u16>::new(port);
+    unsafe { p.read() }
 }
