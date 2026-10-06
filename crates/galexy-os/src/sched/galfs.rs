@@ -15,7 +15,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 use galexy_abi::SysError;
-use galexy_core::crc32;
+use galexy_core::{crc32, hash_eq, hash_password, salt_from_seed, HASH_LEN, SALT_LEN};
 
 use crate::drivers::ata;
 
@@ -101,6 +101,8 @@ struct Actor {
     name: [u8; ACTOR_NAME],
     name_len: u8,
     root: u16,
+    salt: [u8; SALT_LEN],
+    pass_hash: [u8; HASH_LEN],
 }
 
 impl Actor {
@@ -110,12 +112,31 @@ impl Actor {
             name: [0; ACTOR_NAME],
             name_len: 0,
             root: NO_OBJECT,
+            salt: [0; SALT_LEN],
+            pass_hash: [0; HASH_LEN],
         }
     }
 
     fn name_is(&self, name: &str) -> bool {
         let n = self.name_len as usize;
         self.used && n == name.len() && &self.name[..n] == name.as_bytes()
+    }
+
+    fn set_password(&mut self, password: &[u8]) {
+        salt_from_seed(password, &mut self.salt);
+        // Mix the actor name into the salt so two users with the same
+        // password do not share a hash.
+        let n = self.name_len as usize;
+        for (i, b) in self.name[..n].iter().enumerate() {
+            self.salt[i % SALT_LEN] ^= *b;
+        }
+        hash_password(password, &self.salt, &mut self.pass_hash);
+    }
+
+    fn check_password(&self, password: &[u8]) -> bool {
+        let mut got = [0u8; HASH_LEN];
+        hash_password(password, &self.salt, &mut got);
+        hash_eq(&got, &self.pass_hash)
     }
 }
 
@@ -180,13 +201,16 @@ static ADMIN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16
 /// LBA [`DISK_SECTORS`]. A sync writes the inactive slot with gen+1 and a
 /// CRC, then flushes — a crash mid-write leaves the previous slot intact.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-/// Bumped when the boot actor set changes (admin-only format).
-pub const DISK_VERSION: u16 = 3;
+/// Bumped when actor records gained password salt/hash (v4).
+pub const DISK_VERSION: u16 = 4;
 pub const DISK_SECTORS: usize = 80;
 pub const DISK_SLOT_COUNT: usize = 2;
 const DISK_HEADER: usize = 32;
-const ACTOR_ON_DISK: usize = 36;
+/// used(1) + name_len(1) + name(32) + root(2) + salt(8) + hash(16) = 60.
+const ACTOR_ON_DISK: usize = 60;
 const OBJECT_ON_DISK: usize = 8 + NAME_CAP + FILE_BYTES; // 584
+/// Default password for the immortal admin account at format.
+pub const ADMIN_DEFAULT_PASSWORD: &str = "admin";
 
 static DISK_BUF: Mutex<[[u8; ata::SECTOR]; DISK_SECTORS]> =
     Mutex::new([[0u8; ata::SECTOR]; DISK_SECTORS]);
@@ -206,7 +230,8 @@ pub fn init() {
         return;
     }
     let mut table = TABLE.lock();
-    let admin = add_actor(&mut table, ADMIN_NAME).expect("galfs: admin");
+    let admin = add_actor(&mut table, ADMIN_NAME, ADMIN_DEFAULT_PASSWORD.as_bytes())
+        .expect("galfs: admin");
     ADMIN_ROOT.store(admin, Ordering::Relaxed);
     mkdir_locked(&mut table, admin, "Desktop").expect("galfs: admin Desktop");
     drop(table);
@@ -324,6 +349,10 @@ fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; ata::SECTOR]
         flat[off + 2..off + 2 + ACTOR_NAME].copy_from_slice(&actor.name);
         flat[off + 2 + ACTOR_NAME..off + 4 + ACTOR_NAME]
             .copy_from_slice(&actor.root.to_le_bytes());
+        let salt_off = off + 4 + ACTOR_NAME;
+        flat[salt_off..salt_off + SALT_LEN].copy_from_slice(&actor.salt);
+        flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN]
+            .copy_from_slice(&actor.pass_hash);
         off += ACTOR_ON_DISK;
     }
     for obj in &table.objects {
@@ -373,6 +402,11 @@ fn decode_table(sectors: &[[u8; ata::SECTOR]; DISK_SECTORS], table: &mut Table) 
             flat[off + 2 + ACTOR_NAME],
             flat[off + 3 + ACTOR_NAME],
         ]);
+        let salt_off = off + 4 + ACTOR_NAME;
+        actor.salt.copy_from_slice(&flat[salt_off..salt_off + SALT_LEN]);
+        actor
+            .pass_hash
+            .copy_from_slice(&flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN]);
         off += ACTOR_ON_DISK;
     }
     for obj in &mut table.objects {
@@ -528,6 +562,11 @@ pub fn admin_cred() -> FsCred {
     FsCred::launcher(root)
 }
 
+/// Unauthenticated seat: no actor root and no tokens.
+pub fn guest_cred() -> FsCred {
+    FsCred::none()
+}
+
 /// Admin's actor root object index.
 pub fn admin_root() -> u16 {
     ADMIN_ROOT.load(Ordering::Relaxed)
@@ -539,7 +578,17 @@ pub fn is_admin_root(root: u16) -> bool {
 }
 
 /// Writes the actor name for `root` into `out`. Returns the byte count.
+///
+/// [`NO_OBJECT`] is the guest session and writes `guest`.
 pub fn name_of_root(root: u16, out: &mut [u8]) -> Result<usize, SysError> {
+    if root == NO_OBJECT {
+        const GUEST: &[u8] = b"guest";
+        if GUEST.len() > out.len() {
+            return Err(SysError::BadBuffer);
+        }
+        out[..GUEST.len()].copy_from_slice(GUEST);
+        return Ok(GUEST.len());
+    }
     let table = TABLE.lock();
     let actor = table
         .actors
@@ -573,14 +622,48 @@ pub fn root_named(name: &str) -> Result<u16, SysError> {
 }
 
 /// Creates an actor and an empty Desktop. Returns the new root.
-pub fn add_user(name: &str) -> Result<u16, SysError> {
+pub fn add_user(name: &str, password: &[u8]) -> Result<u16, SysError> {
     if name == ADMIN_NAME {
         return Err(SysError::Unsupported);
     }
+    if !password_ok(password) {
+        return Err(SysError::BadValue);
+    }
     let mut table = TABLE.lock();
-    let root = add_actor(&mut table, name)?;
+    let root = add_actor(&mut table, name, password)?;
     mkdir_locked(&mut table, root, "Desktop")?;
     Ok(root)
+}
+
+/// True when `password` verifies for actor `name`.
+pub fn verify_password(name: &str, password: &[u8]) -> Result<bool, SysError> {
+    let table = TABLE.lock();
+    let Some(actor) = table.actors.iter().find(|a| a.used && a.name_is(name)) else {
+        return Err(SysError::NotFound);
+    };
+    Ok(actor.check_password(password))
+}
+
+/// Sets the password for actor `name`.
+pub fn set_password(name: &str, password: &[u8]) -> Result<(), SysError> {
+    if !password_ok(password) {
+        return Err(SysError::BadValue);
+    }
+    let mut table = TABLE.lock();
+    let Some(actor) = table.actors.iter_mut().find(|a| a.used && a.name_is(name)) else {
+        return Err(SysError::NotFound);
+    };
+    actor.set_password(password);
+    drop(table);
+    sync();
+    Ok(())
+}
+
+fn password_ok(password: &[u8]) -> bool {
+    (1..=64).contains(&password.len())
+        && password
+            .iter()
+            .all(|b| b.is_ascii_graphic() || *b == b' ')
 }
 
 /// Deletes an actor whose tree is only an empty root (and optional empty Desktop).
@@ -624,12 +707,15 @@ pub fn holds_all(root: u16, tokens: &[Token; TOKEN_SLOTS], object: u16) -> bool 
 }
 
 /// Adds an actor and an empty root. Test and boot only.
-pub fn add_actor_named(name: &str) -> Result<u16, SysError> {
+pub fn add_actor_named(name: &str, password: &[u8]) -> Result<u16, SysError> {
+    if !password_ok(password) {
+        return Err(SysError::BadValue);
+    }
     let mut table = TABLE.lock();
-    add_actor(&mut table, name)
+    add_actor(&mut table, name, password)
 }
 
-fn add_actor(table: &mut Table, name: &str) -> Result<u16, SysError> {
+fn add_actor(table: &mut Table, name: &str, password: &[u8]) -> Result<u16, SysError> {
     if !component_ok(name) || name.len() > ACTOR_NAME {
         return Err(SysError::BadValue);
     }
@@ -648,6 +734,7 @@ fn add_actor(table: &mut Table, name: &str) -> Result<u16, SysError> {
     actor.name[..name.len()].copy_from_slice(name.as_bytes());
     actor.name_len = name.len() as u8;
     actor.root = oi as u16;
+    actor.set_password(password);
     let obj = &mut table.objects[oi];
     *obj = Object::empty();
     obj.kind = KIND_DIR;
@@ -751,7 +838,8 @@ pub(crate) struct ParsedPath<'a> {
 }
 
 /// Splits `name`. A trailing slash marks a directory. The first component
-/// may be `owner@leaf`. `.` and `..` are rejected.
+/// may be `owner@leaf`. `owner@/` (empty leaf, directory) names that
+/// actor's root object — the login/grant path. `.` and `..` are rejected.
 pub(crate) fn parse_path(name: &str) -> Result<ParsedPath<'_>, SysError> {
     let name = name.strip_prefix('/').unwrap_or(name);
     let (body, dir) = if let Some(stripped) = name.strip_suffix('/') {
@@ -774,10 +862,18 @@ pub(crate) fn parse_path(name: &str) -> Result<ParsedPath<'_>, SysError> {
         }
         if i == 0 {
             if let Some((own, leaf)) = comp.split_once('@') {
-                if own.is_empty() || leaf.is_empty() || leaf.contains('@') {
+                if own.is_empty() || leaf.contains('@') || !component_ok(own) {
                     return Err(SysError::BadValue);
                 }
-                if !component_ok(own) || !component_ok(leaf) {
+                // `eve@/` → actor root (no components under the root).
+                if leaf.is_empty() {
+                    if !dir || body.contains('/') {
+                        return Err(SysError::BadValue);
+                    }
+                    owner = Some(own);
+                    break;
+                }
+                if !component_ok(leaf) {
                     return Err(SysError::BadValue);
                 }
                 owner = Some(own);
@@ -794,7 +890,7 @@ pub(crate) fn parse_path(name: &str) -> Result<ParsedPath<'_>, SysError> {
         comps[n] = comp;
         n += 1;
     }
-    if n == 0 {
+    if n == 0 && owner.is_none() {
         return Err(SysError::BadValue);
     }
     Ok(ParsedPath {
@@ -876,6 +972,10 @@ fn covers_object(table: &Table, ancestor: u16, object: u16) -> bool {
 
 /// Whether `cred` holds `need` on `object` or an ancestor.
 fn token_allows(table: &Table, cred: &FsCred, object: u16, need: u8) -> bool {
+    // Logged-in admin may mint and use any card (operator seat).
+    if need != 0 && is_admin_root(cred.root) {
+        return true;
+    }
     for token in &cred.tokens {
         if !token.is_live() || token.rights & need != need {
             continue;
@@ -897,6 +997,10 @@ fn cred_from_tokens(root: u16, tokens: &[Token; TOKEN_SLOTS]) -> FsCred {
 /// Resolves `parsed` to an object index, checking existence only.
 fn lookup(table: &Table, cred: &FsCred, parsed: &ParsedPath<'_>) -> Result<(u16, usize), SysError> {
     let start = start_root(table, cred, parsed)?;
+    if parsed.n == 0 {
+        // Actor root path (`eve@/`).
+        return Ok((NO_PARENT, start as usize));
+    }
     let parent = walk_parents(table, start, parsed)?;
     let last = parsed.comps[parsed.n - 1];
     let Some(found) = find_child(table, parent, last) else {
@@ -936,6 +1040,9 @@ pub(crate) fn create(
     replace: bool,
 ) -> Result<Option<u16>, SysError> {
     let parsed = parse_path(name)?;
+    if parsed.n == 0 {
+        return Err(SysError::Unsupported);
+    }
     let cred = cred_from_tokens(root, tokens);
     let mut table = TABLE.lock();
     let start = start_root(&table, &cred, &parsed)?;
@@ -981,6 +1088,9 @@ pub(crate) fn remove(
     name: &str,
 ) -> Result<u16, SysError> {
     let parsed = parse_path(name)?;
+    if parsed.n == 0 {
+        return Err(SysError::Unsupported);
+    }
     let cred = cred_from_tokens(root, tokens);
     let mut table = TABLE.lock();
     let (_parent, found) = lookup(&table, &cred, &parsed)?;

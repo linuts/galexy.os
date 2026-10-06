@@ -566,7 +566,9 @@ the table stays RAM-only. The table holds 16 actors, 64 objects, and
 `bin/test-galfs-disk` proves a file survives two QEMU boots and that a
 corrupt newest slot still recovers from the older copy. Shell utilities
 use `SPAWN_WAIT` so the prompt returns after `ls` / `mkdir` exit.
-Auth is console-trust: the seat is the credential (no password database).
+Auth is password for identity plus galfs tokens for authorization
+(see `docs/AUTH.md`). F1 boots logged in as `admin`; F2–F12 start as
+guest until `login` or an access card + `su`.
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing

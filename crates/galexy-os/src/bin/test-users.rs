@@ -1,4 +1,4 @@
-//! Integration test: user management (whoami, users, add, del, su).
+//! Integration test: user management (whoami, users, add, login, del, su).
 
 #![no_std]
 #![no_main]
@@ -6,7 +6,9 @@
 extern crate alloc;
 
 use bootloader_api::{entry_point, BootInfo};
-use galexy_abi::{SysError, Syscall, USER_ADD, USER_DEL, USER_SU, USER_USERS, USER_WHOAMI};
+use galexy_abi::{
+    SysError, Syscall, USER_ADD, USER_DEL, USER_LOGIN, USER_SU, USER_USERS, USER_WHOAMI,
+};
 use galexy_os::{
     arch::mm, drivers::screen, exit_qemu, println, sched, serial_println, QemuExitCode,
 };
@@ -24,13 +26,14 @@ struct Report {
     users_n: u64,
     users: [u8; 64],
     add_ok: u64,
-    su_ok: u64,
+    login_ok: u64,
     who2_n: u64,
     who2: [u8; 16],
     add_as_eve_err: u64,
     su_admin_ok: u64,
     del_ok: u64,
     del_admin_err: u64,
+    bad_login_err: u64,
 }
 
 fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
@@ -79,12 +82,13 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let users = &report.users[..report.users_n as usize];
     assert!(users.windows(6).any(|w| w == b"admin\n"));
     assert_eq!(report.add_ok, 1);
-    assert_eq!(report.su_ok, 1);
+    assert_eq!(report.login_ok, 1);
     assert_eq!(&report.who2[..report.who2_n as usize], b"eve");
     assert_eq!(report.add_as_eve_err, SysError::AccessDenied as u64);
     assert_eq!(report.su_admin_ok, 1);
     assert_eq!(report.del_ok, 1);
     assert_eq!(report.del_admin_err, SysError::Unsupported as u64);
+    assert_eq!(report.bad_login_err, SysError::AccessDenied as u64);
 
     loop {
         x86_64::instructions::hlt();
@@ -103,8 +107,10 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let eve = b"eve";
     let admin = b"admin";
     let bob = b"bob";
+    let secret = b"secret";
+    let wrong = b"wrong";
     let mut code = alloc::vec::Vec::new();
-    let data_len = eve.len() + admin.len() + bob.len();
+    let data_len = eve.len() + admin.len() + bob.len() + secret.len() + wrong.len();
     code.push(0xEB);
     code.push(data_len as u8);
     let eve_addr = code_base + 2;
@@ -113,6 +119,10 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     code.extend_from_slice(admin);
     let bob_addr = admin_addr + admin.len() as u64;
     code.extend_from_slice(bob);
+    let secret_addr = bob_addr + bob.len() as u64;
+    code.extend_from_slice(secret);
+    let wrong_addr = secret_addr + secret.len() as u64;
+    code.extend_from_slice(wrong);
 
     mov_r64_imm(&mut code, 15, scratch);
 
@@ -122,23 +132,47 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     call_user(&mut code, scratch + 0x28, 64, USER_USERS);
     store(&mut code, 0, 0x20);
 
-    call_user_name(&mut code, eve_addr, eve.len() as u64, USER_ADD);
+    // useradd eve secret
+    call_user_pass(
+        &mut code,
+        eve_addr,
+        eve.len() as u64,
+        secret_addr,
+        secret.len() as u64,
+        USER_ADD,
+    );
     store(&mut code, 2, 0x68);
 
-    call_user_name(&mut code, eve_addr, eve.len() as u64, USER_SU);
+    // login eve secret
+    call_user_pass(
+        &mut code,
+        eve_addr,
+        eve.len() as u64,
+        secret_addr,
+        secret.len() as u64,
+        USER_LOGIN,
+    );
     store(&mut code, 2, 0x70);
 
     call_user(&mut code, scratch + 0x80, 16, USER_WHOAMI);
     store(&mut code, 0, 0x78);
 
-    call_user_name(&mut code, bob_addr, bob.len() as u64, USER_ADD);
+    // useradd bob as eve → AccessDenied
+    call_user_pass(
+        &mut code,
+        bob_addr,
+        bob.len() as u64,
+        secret_addr,
+        secret.len() as u64,
+        USER_ADD,
+    );
     code.extend_from_slice(&[0x48, 0x85, 0xD2]);
     code.extend_from_slice(&[0x48, 0xC7, 0xC1, 0, 0, 0, 0]);
     code.extend_from_slice(&[0x48, 0x0F, 0x44, 0xC8]);
     code.extend_from_slice(&[0x48, 0x89, 0xC8]);
     store(&mut code, 0, 0x90);
 
-    // born_admin may return to admin
+    // born_admin may return to admin via su
     call_user_name(&mut code, admin_addr, admin.len() as u64, USER_SU);
     store(&mut code, 2, 0x98);
 
@@ -151,6 +185,29 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     code.extend_from_slice(&[0x48, 0x0F, 0x44, 0xC8]);
     code.extend_from_slice(&[0x48, 0x89, 0xC8]);
     store(&mut code, 0, 0xa8);
+
+    // bad login after recreating… re-add eve then wrong password
+    call_user_pass(
+        &mut code,
+        eve_addr,
+        eve.len() as u64,
+        secret_addr,
+        secret.len() as u64,
+        USER_ADD,
+    );
+    call_user_pass(
+        &mut code,
+        eve_addr,
+        eve.len() as u64,
+        wrong_addr,
+        wrong.len() as u64,
+        USER_LOGIN,
+    );
+    code.extend_from_slice(&[0x48, 0x85, 0xD2]);
+    code.extend_from_slice(&[0x48, 0xC7, 0xC1, 0, 0, 0, 0]);
+    code.extend_from_slice(&[0x48, 0x0F, 0x44, 0xC8]);
+    code.extend_from_slice(&[0x48, 0x89, 0xC8]);
+    store(&mut code, 0, 0xb0);
 
     mov_r64_imm(&mut code, 0, DONE);
     store(&mut code, 0, 0x00);
@@ -169,6 +226,23 @@ fn call_user(code: &mut alloc::vec::Vec<u8>, addr: u64, len: u64, op: u64) {
 
 fn call_user_name(code: &mut alloc::vec::Vec<u8>, addr: u64, len: u64, op: u64) {
     call_user(code, addr, len, op);
+}
+
+fn call_user_pass(
+    code: &mut alloc::vec::Vec<u8>,
+    name: u64,
+    name_len: u64,
+    pass: u64,
+    pass_len: u64,
+    op: u64,
+) {
+    mov_eax(code, Syscall::User as u32);
+    mov_r64_imm(code, 7, name);
+    mov_r64_imm(code, 6, name_len);
+    mov_r64_imm(code, 2, op);
+    mov_r64_imm(code, 8, pass); // r8
+    mov_r64_imm(code, 9, pass_len); // r9
+    code.extend_from_slice(&[0x0F, 0x05]);
 }
 
 fn mov_r64_imm(code: &mut alloc::vec::Vec<u8>, reg: u8, imm: u64) {

@@ -250,6 +250,17 @@ impl Grants {
         }
     }
 
+    /// Guest / logged-in seat without power (F2–F12 before/after login).
+    pub(crate) const fn session() -> Self {
+        Self {
+            console: true,
+            keyboard: true,
+            loader: true,
+            query: true,
+            power: false,
+        }
+    }
+
     fn allows(self, grant: Grant) -> bool {
         match grant {
             Grant::Console => self.console,
@@ -316,11 +327,15 @@ struct Thread {
     tty: u8,
     /// Actor root this task walks from when a path has no `owner@`.
     fs_root: u16,
-    /// Tokens that authorize galfs paths. Inherited by spawn.
+    /// Tokens that authorize galfs paths. Utilities inherit; bare spawns do not.
     fs_tokens: [galfs::Token; galfs::TOKEN_SLOTS],
     /// Set when the task was created as admin. Survives [`task_su`] so the
     /// seat can return to admin after switching to another actor.
     born_admin: bool,
+    /// Timer tick when [`console_budget_used`] was last reset.
+    console_budget_tick: u64,
+    /// Console bytes written during [`console_budget_tick`].
+    console_budget_used: u32,
 }
 
 impl Thread {
@@ -666,6 +681,8 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) {
             fs_root: init.fs.root,
             fs_tokens: init.fs.tokens,
             born_admin: galfs::is_admin_root(init.fs.root),
+            console_budget_tick: 0,
+            console_budget_used: 0,
         });
     });
 }
@@ -712,6 +729,8 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             fs_root: galfs::NO_OBJECT,
             fs_tokens: [galfs::Token::empty(); galfs::TOKEN_SLOTS],
             born_admin: false,
+            console_budget_tick: 0,
+            console_budget_used: 0,
         });
         serial_println!("[sched] thread '{}' ready (owner cpu {})", name, owner);
         owner
@@ -916,6 +935,8 @@ pub fn spawn_user_with(
             fs_root: fs.root,
             fs_tokens: fs.tokens,
             born_admin: galfs::is_admin_root(fs.root),
+            console_budget_tick: 0,
+            console_budget_used: 0,
         });
         serial_println!(
             "[sched] user task '{}' ready (own tree cr3={:#x}, p4={}, code @ {:#x}, kstack top {:#x})",
@@ -1112,9 +1133,18 @@ pub(crate) fn task_spawn(
         pending.query = query;
         pending.wait_exit = wait_exit;
         pending.tty = thread.tty;
-        pending.fs = galfs::FsCred {
-            root: thread.fs_root,
-            tokens: thread.fs_tokens,
+        // Utilities (`wait_exit`) inherit the full session. Bare programs
+        // keep the root for path context but hold no access cards.
+        pending.fs = if wait_exit {
+            galfs::FsCred {
+                root: thread.fs_root,
+                tokens: thread.fs_tokens,
+            }
+        } else {
+            galfs::FsCred {
+                root: thread.fs_root,
+                tokens: [galfs::Token::empty(); galfs::TOKEN_SLOTS],
+            }
         };
         pending.armed = true;
         thread.wait_for[..name.len()].copy_from_slice(name.as_bytes());
@@ -1185,7 +1215,7 @@ const SHELL_NAMES: [&str; 12] = [
 
 /// True when `name` is reserved for an F-key console shell.
 fn is_console_shell_name(name: &str) -> bool {
-    SHELL_NAMES.iter().any(|n| *n == name)
+    SHELL_NAMES.contains(&name)
 }
 
 /// True when a task named `name` is running or parked on a load.
@@ -1779,8 +1809,8 @@ pub(crate) fn task_users(out: &mut [u8]) -> Result<usize, SysError> {
     Ok(n)
 }
 
-/// Creates an actor + Desktop. Caller must be admin.
-pub(crate) fn task_useradd(name: &str) -> Result<(), SysError> {
+/// Creates an actor + Desktop with `password`. Caller must be admin.
+pub(crate) fn task_useradd(name: &str, password: &[u8]) -> Result<(), SysError> {
     let slot = current_slot();
     if slot == 0 {
         return Err(SysError::BadCap);
@@ -1794,11 +1824,71 @@ pub(crate) fn task_useradd(name: &str) -> Result<(), SysError> {
         if !admin_caller(thread.fs_root, &thread.fs_tokens) {
             return Err(SysError::AccessDenied);
         }
-        let _ = galfs::add_user(name)?;
+        let _ = galfs::add_user(name, password)?;
         Ok(())
     })?;
     galfs::sync();
     Ok(())
+}
+
+/// Password login: replace the caller's session with `ALL` on `name`'s root.
+pub(crate) fn task_login(name: &str, password: &[u8]) -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    if !galfs::verify_password(name, password)? {
+        return Err(SysError::AccessDenied);
+    }
+    let target = galfs::root_named(name)?;
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        caller.fs_root = target;
+        caller.fs_tokens = [galfs::Token::empty(); galfs::TOKEN_SLOTS];
+        galfs::push_token(&mut caller.fs_tokens, target, galfs::RIGHT_ALL)?;
+        Ok(())
+    })
+}
+
+/// Sets a password. Admin may set any account; others only their own.
+pub(crate) fn task_passwd(name: Option<&str>, password: &[u8]) -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    let mut name_buf = [0u8; 32];
+    let name_len = interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        let is_admin = admin_caller(thread.fs_root, &thread.fs_tokens);
+        if let Some(n) = name {
+            if !is_admin {
+                let nlen = galfs::name_of_root(thread.fs_root, &mut name_buf)?;
+                if &name_buf[..nlen] != n.as_bytes() {
+                    return Err(SysError::AccessDenied);
+                }
+            }
+            if n.len() > name_buf.len() {
+                return Err(SysError::BadValue);
+            }
+            name_buf[..n.len()].copy_from_slice(n.as_bytes());
+            Ok(n.len())
+        } else {
+            if thread.fs_root == galfs::NO_OBJECT {
+                return Err(SysError::AccessDenied);
+            }
+            galfs::name_of_root(thread.fs_root, &mut name_buf)
+        }
+    })?;
+    let name_str = core::str::from_utf8(&name_buf[..name_len]).map_err(|_| SysError::BadValue)?;
+    galfs::set_password(name_str, password)
 }
 
 /// Deletes an empty actor. Refuses admin and roots still in use.
@@ -1852,12 +1942,11 @@ pub(crate) fn task_userdel(name: &str) -> Result<(), SysError> {
     Ok(())
 }
 
-/// Switches the caller's identity to actor `name`.
+/// Card-based identity switch: replace tokens with `ALL` on `name`'s root.
 ///
-/// Replaces the token table with a single ALL token on the target root —
-/// previous rights are dropped so `su dan` cannot keep creating under
-/// admin's tree. Allowed when the caller is currently admin, was born
-/// admin and is returning to admin, or already holds ALL on the target.
+/// Allowed for an admin session, a born-admin seat returning to admin, or
+/// a holder of `ALL` on the target root (access card). Password login is
+/// [`task_login`].
 pub(crate) fn task_su(name: &str) -> Result<(), SysError> {
     let slot = current_slot();
     if slot == 0 {
@@ -1885,6 +1974,33 @@ pub(crate) fn task_su(name: &str) -> Result<(), SysError> {
         caller.fs_tokens = [galfs::Token::empty(); galfs::TOKEN_SLOTS];
         galfs::push_token(&mut caller.fs_tokens, target, galfs::RIGHT_ALL)?;
         Ok(())
+    })
+}
+
+/// Console bytes a task may emit per timer tick before further writes
+/// return a short success (0). Stops a tight loop from pinning COM1.
+const CONSOLE_BUDGET_PER_TICK: u32 = 512;
+
+/// Takes up to `want` bytes from the current task's console budget.
+pub(crate) fn console_take_budget(want: usize) -> usize {
+    let slot = current_slot();
+    if slot == 0 || want == 0 {
+        return want;
+    }
+    let tick = crate::arch::timer_ticks();
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let Some(thread) = threads.get_mut(slot - 1) else {
+            return want;
+        };
+        if thread.console_budget_tick != tick {
+            thread.console_budget_tick = tick;
+            thread.console_budget_used = 0;
+        }
+        let room = CONSOLE_BUDGET_PER_TICK.saturating_sub(thread.console_budget_used) as usize;
+        let n = want.min(room);
+        thread.console_budget_used = thread.console_budget_used.saturating_add(n as u32);
+        n
     })
 }
 

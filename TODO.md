@@ -1001,14 +1001,24 @@ Stop nested-shell loops and tighten spawn policy. Suite: 47 QEMU boots.
       instead of spinning "read: keyboard denied"
 - [x] Typing e2e: `shell_nested_spawn_refused_e2e`
 
-### Still open for a harder production seat
+## Milestone 42 — password auth + least privilege ✅
 
-- [ ] Auth beyond console-trust (passwords / sessions) — still seat = credential
-- [ ] Untrusted ramdisk binaries: children inherit the parent's galfs tokens
-- [ ] No disk encryption / integrity beyond GALF CRC on the table
-- [ ] `crash` remains a test seam in the shell
-- [ ] `linger`-style tasks can flood the console until killed by policy
-- [ ] Multi-user isolation across TTYs (every F-key shell is still admin)
+Passwords authenticate; tokens authorize. See `docs/AUTH.md`. Suite grows.
+
+- [x] **AUTH.md**: password login + access-card tokens (no disk encryption yet)
+- [x] **GALF v4**: actor salt+hash; default admin password `admin`
+- [x] **`login` / `passwd` / `useradd <name> <pass>`** syscalls + shell
+- [x] **F2–F12 guest** seats (no power); F1 stays admin at boot
+- [x] **Spawn**: utilities inherit tokens; bare programs get empty tokens
+- [x] **Console budget**: 512 bytes/tick short-write (bounds linger floods)
+- [x] **`crash` omitted from `help`** (test seam kept)
+- [x] Actor-root path `/eve@/` for granting login cards
+
+### Still open
+
+- [ ] Real KDF (replace interim CRC mix in `galexy_core::password`)
+- [ ] Disk encryption
+- [ ] Interactive password prompt (no echo) — today `login` takes inline args
 
 ## Known limitations / follow-ups
 

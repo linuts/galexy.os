@@ -87,19 +87,20 @@ pub fn spawn_program_bsp(name: &str, bytes: &[u8]) -> ProgramRegion {
     spawn_shell_on(name, bytes, 0)
 }
 
-/// Pins a launcher shell named `name` to the BSP on console `tty`.
-/// Every shell starts as admin; add actors with `useradd` and switch with `su`.
+/// Pins a shell named `name` to the BSP on console `tty`.
+///
+/// F1 starts logged in as admin with power. F2–F12 start as guest
+/// (login with a password, or accept an access card via `grant` + `su`).
 pub fn spawn_shell_on(name: &str, bytes: &[u8], tty: u8) -> ProgramRegion {
-    spawn_program_placed(
-        name,
-        bytes,
-        Some(0),
-        true,
-        Grants::launcher(),
-        &[],
-        tty,
-        crate::sched::galfs::admin_cred(),
-    )
+    let (grants, fs) = if tty == 0 {
+        (
+            Grants::launcher(),
+            crate::sched::galfs::admin_cred(),
+        )
+    } else {
+        (Grants::session(), crate::sched::galfs::guest_cred())
+    };
+    spawn_program_placed(name, bytes, Some(0), true, grants, &[], tty, fs)
 }
 
 #[allow(clippy::too_many_arguments)]
