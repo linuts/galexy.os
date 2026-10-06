@@ -986,6 +986,7 @@ Default seat is `admin` only. Suite: 46 QEMU boots.
       `ls` needing an extra Enter). Bare launches (`hello`, `linger`) do not
 - [x] **TTY cursor**: console writes save the focused TTY cursor so the
       input line stays visible after status-bar / focus churn
+- [x] **Prompt**: `user@galexy>` / `user@galexy:/path> ` (whoami each draw)
 - [x] Tests/docs: `test-users`, `test-galfs`, `test-rm`, `test-galfs-disk`
 
 ## Known limitations / follow-ups
