@@ -1,0 +1,40 @@
+[package]
+name = "util"
+version = "0.1.0"
+edition = "2021"
+description = "Shell utilities as separate ring-3 programs."
+
+[[bin]]
+name = "echo"
+path = "src/bin/echo.rs"
+
+[[bin]]
+name = "cat"
+path = "src/bin/cat.rs"
+
+[[bin]]
+name = "touch"
+path = "src/bin/touch.rs"
+
+[[bin]]
+name = "mkdir"
+path = "src/bin/mkdir.rs"
+
+[[bin]]
+name = "rm"
+path = "src/bin/rm.rs"
+
+[[bin]]
+name = "ls"
+path = "src/bin/ls.rs"
+
+[[bin]]
+name = "linger"
+path = "src/bin/linger.rs"
+
+[dependencies]
+galexy-rt = { path = "../galexy-rt" }
+galexy-abi = { path = "../../galexy-abi" }
+
+[build-dependencies]
+galexy-abi = { path = "../../galexy-abi" }

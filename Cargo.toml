@@ -8,6 +8,7 @@ members = [
     "crates/userspace/galexy-rt",
     "crates/userspace/hello",
     "crates/userspace/shell",
+    "crates/userspace/util",
 ]
 default-members = ["crates/runner"]
 

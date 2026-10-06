@@ -11,6 +11,7 @@
 #![deny(missing_docs)]
 
 use core::arch::asm;
+use core::cell::UnsafeCell;
 use core::panic::PanicInfo;
 
 use galexy_abi::{Cap, CapRights, Syscall, SyscallResult};
@@ -132,7 +133,7 @@ pub fn keyboard_cap() -> Cap {
     galexy_abi::reserved::keyboard(CapRights::READ)
 }
 
-/// The loader capability (EXEC). [`spawn`] waits until the program exits.
+/// The loader capability (EXEC). [`spawn`] returns once the program is running.
 pub fn loader_cap() -> Cap {
     galexy_abi::reserved::loader(CapRights::EXEC)
 }
@@ -183,15 +184,80 @@ pub fn reboot() -> SyscallResult {
     )
 }
 
-/// Starts the ramdisk program `name` and returns after it exits.
+/// Starts the ramdisk program `name` and returns once it is running.
+///
+/// The child receives no argument and only the console grant.
 pub fn spawn(name: &[u8]) -> SyscallResult {
+    spawn_with(name, &[], 0)
+}
+
+/// Starts `name` with `arg` and `grants` ([`galexy_abi::SPAWN_GRANT_QUERY`] or zero).
+///
+/// Returns once the program is loaded. The child keeps running. `r8`, `r9`,
+/// and `r10` are set explicitly so a leftover register is not an argument.
+pub fn spawn_with(name: &[u8], arg: &[u8], grants: u64) -> SyscallResult {
+    let value: u64;
+    let ok: u64;
     let cap = loader_cap();
-    syscall(
-        Syscall::Spawn as u64,
-        cap.bits(),
-        name.as_ptr() as u64,
-        name.len() as u64,
-    )
+    // SAFETY: same syscall entry as [`syscall`]. r8/r9/r10 are the spawn
+    // argument and grant bits; rcx/r11 are clobbered by the instruction.
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") Syscall::Spawn as u64 => value,
+            inlateout("rdx") name.len() as u64 => ok,
+            in("rdi") cap.bits(),
+            in("rsi") name.as_ptr() as u64,
+            in("r8") arg.as_ptr() as u64,
+            in("r9") arg.len() as u64,
+            in("r10") grants,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    SyscallResult { ok: ok != 0, value }
+}
+
+struct StartupArg {
+    buf: UnsafeCell<[u8; 256]>,
+    len: UnsafeCell<usize>,
+}
+
+// One task owns this image. `_start` writes it before `main`.
+unsafe impl Sync for StartupArg {}
+
+static STARTUP_ARG: StartupArg = StartupArg {
+    buf: UnsafeCell::new([0; 256]),
+    len: UnsafeCell::new(0),
+};
+
+/// Copies the kernel-placed argument into this program's own buffer.
+///
+/// # Safety
+///
+/// Called once from `_start`, before any other use of [`arg`]. `ptr` is
+/// the address the loader passed in `rdi`, and `len` is `rsi`.
+pub unsafe fn init_arg(ptr: *const u8, len: usize) {
+    let n = len.min(256);
+    // SAFETY: the loader mapped `ptr` for `len` bytes above the initial
+    // stack pointer, and this runs before `main`.
+    unsafe {
+        if n > 0 && !ptr.is_null() {
+            core::ptr::copy_nonoverlapping(ptr, STARTUP_ARG.buf.get().cast::<u8>(), n);
+        }
+        *STARTUP_ARG.len.get() = n;
+    }
+}
+
+/// The argument the launcher passed, or an empty slice.
+pub fn arg() -> &'static [u8] {
+    // SAFETY: `_start` finishes the copy before `main` reads it. This task
+    // does not write the buffer again.
+    unsafe {
+        let n = *STARTUP_ARG.len.get();
+        core::slice::from_raw_parts(STARTUP_ARG.buf.get().cast::<u8>(), n)
+    }
 }
 
 /// Gives up the rest of the scheduling quantum.
@@ -216,7 +282,9 @@ pub fn exit(code: u64) -> ! {
 macro_rules! entry {
     ($main:path) => {
         #[unsafe(no_mangle)]
-        pub extern "C" fn _start() -> ! {
+        pub unsafe extern "C" fn _start(arg: *const u8, arg_len: usize) -> ! {
+            // SAFETY: the loader set rdi/rsi to the argument, or to zeros.
+            unsafe { $crate::init_arg(arg, arg_len) };
             let main: fn() -> i32 = $main;
             $crate::exit(main() as u64)
         }

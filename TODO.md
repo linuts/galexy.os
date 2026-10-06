@@ -845,6 +845,26 @@ and power. Suite: 39 QEMU boot tests, all `-smp 2`.
       `shell::exec("hello")` drives the same kernel-shell path
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
+## Milestone 32 — Shell supervisor ✅
+
+A utility runs as its own task. `spawn` returns once that task is
+loaded, so the prompt comes back while it runs. A shell fault loads a
+new shell; other tasks keep running. Suite: 39 QEMU boot tests, all
+`-smp 2`.
+
+- [x] **`spawn` returns at load**: the caller is parked only until the
+      main loop has loaded the ELF. The child's exit wakes nobody.
+      `r8`/`r9` are an argument of at most 256 bytes. `r10` bit 0 adds
+      the query grant. The child always has the console. Keyboard, the
+      loader, and power stay with the shell
+- [x] **Utilities**: `echo`, `cat`, `touch`, `mkdir`, `rm`, and `ls` are
+      ramdisk programs. The shell still owns the current directory and
+      composes the path. `cd` and the power and status commands stay in
+      the shell
+- [x] A shell fault loads `shell` again. The BIOS typing test starts
+      `linger`, types `crash`, sees the new prompt, and still sees `beat`
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
+
 ## Known limitations / follow-ups
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17

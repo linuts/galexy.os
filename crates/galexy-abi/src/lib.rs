@@ -204,6 +204,12 @@ pub const POWER_SHUTDOWN: u64 = 0;
 /// `power` operand: reset the machine.
 pub const POWER_REBOOT: u64 = 1;
 
+/// `spawn` grant bit (`r10`): also give the new task the query caps.
+///
+/// The child always receives the console. Any other bit is rejected.
+/// Keyboard, the loader, and power stay with the shell.
+pub const SPAWN_GRANT_QUERY: u64 = 1;
+
 /// Lowest capability index a per-task file open may return. `0` is null,
 /// [`reserved::CONSOLE_INDEX`] is the console, [`reserved::SELF_INDEX`] is
 /// the calling task. File indexes are per-task (not a global fd table):
@@ -272,14 +278,16 @@ pub enum Syscall {
     /// Reserved caps (console, self, keyboard, loader, stats, tasks,
     /// threads) are not files and fail `BadCap`.
     Close,
-    /// `spawn(cap, name, len)` — start a ramdisk program and wait until it
-    /// exits.
+    /// `spawn(cap, name, len)` — start a ramdisk program.
     ///
     /// Args: `RDI = loader cap bits`, `RSI = user address of the name`,
-    /// `RDX = byte count`. Returns: `SyscallResult` (rax = 0) after the
-    /// program has exited. Requires CapRights::EXEC on the loader cap.
-    /// The load itself runs on the kernel's page table (main-loop drain);
-    /// the caller is parked until then.
+    /// `RDX = byte count`. Optional: `R8 = user address of an argument`,
+    /// `R9 = argument byte count` (at most 256; zero means none),
+    /// `R10 = grant bits` ([`SPAWN_GRANT_QUERY`] or zero). Returns:
+    /// `SyscallResult` (rax = 0) once the program is loaded and running.
+    /// Requires CapRights::EXEC on the loader cap. The load itself runs
+    /// on the kernel's page table (main-loop drain); the caller is parked
+    /// only until that load finishes. The child keeps running.
     Spawn,
     /// `power(cap, op)` — shut down or reset the machine.
     ///

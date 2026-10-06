@@ -174,6 +174,13 @@ first real program landed in Milestone 13:
   A fabricated reserved index without that grant is `AccessDenied`.
   A non-ELF ramdisk name is `Unsupported`. The typing test types
   `hello`).
+- Shell supervisor ✅ (Milestone 32: `spawn` returns once the ELF is
+  loaded, and the child keeps running. `r8`/`r9` carry one argument.
+  `r10` bit 0 adds the query grant; keyboard, the loader, and power
+  stay with the shell. `echo`, `cat`, `touch`, `mkdir`, `rm`, and `ls`
+  are ramdisk programs. If the shell faults, the main loop loads it
+  again and other tasks keep running. The BIOS typing test starts
+  `linger`, types `crash`, and still sees `beat`).
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.

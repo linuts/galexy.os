@@ -5,7 +5,8 @@
 //!
 //! Register/return contract (the arch shim guarantees this):
 //! - args arrive in the frame: `a0 = frame.rdi`, `a1 = frame.rsi`,
-//!   `a2 = frame.rdx`
+//!   `a2 = frame.rdx`. `spawn` also reads `r8`/`r9` (argument) and `r10`
+//!   (grant bits).
 //! - the result is stamped back into the frame: `RAX = value`,
 //!   `RDX = 1 (ok) / 0 (err)` — the register form of
 //!   `galexy_abi::SyscallResult`.
@@ -75,7 +76,7 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             Outcome::Resume
         }
         n if n == Syscall::Spawn as u64 => {
-            let result = syscall_spawn(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx);
+            let result = syscall_spawn(frame);
             let park = result.ok;
             stamp(frame, result);
             if park {
@@ -520,7 +521,10 @@ fn syscall_read_keyboard(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     SyscallResult::ok(filled as u64)
 }
 
-fn syscall_spawn(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+fn syscall_spawn(frame: &Context) -> SyscallResult {
+    let cap = Cap::from_bits(frame.rdi);
+    let addr = frame.rsi;
+    let len = frame.rdx;
     if cap.index() != galexy_abi::reserved::LOADER_INDEX {
         return SyscallResult::err(SysError::BadCap);
     }
@@ -533,7 +537,17 @@ fn syscall_spawn(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if len == 0 || len > MAX_NAME {
         return SyscallResult::err(SysError::BadValue);
     }
+    if frame.r10 & !galexy_abi::SPAWN_GRANT_QUERY != 0 {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    let arg_len = frame.r9;
+    if arg_len > crate::sched::ARG_MAX as u64 {
+        return SyscallResult::err(SysError::BadValue);
+    }
     if user_buffer(addr, len, false).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    if arg_len > 0 && user_buffer(frame.r8, arg_len, false).is_err() {
         return SyscallResult::err(SysError::BadBuffer);
     }
     let mut raw = [0u8; MAX_NAME as usize];
@@ -545,6 +559,17 @@ fn syscall_spawn(cap: Cap, addr: u64, len: u64) -> SyscallResult {
             len as usize,
         );
     }
+    let mut arg = [0u8; crate::sched::ARG_MAX];
+    if arg_len > 0 {
+        // SAFETY: `user_buffer` accepted every byte of the argument.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                VirtAddr::new(frame.r8).as_ptr::<u8>(),
+                arg.as_mut_ptr(),
+                arg_len as usize,
+            );
+        }
+    }
     let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
     if !file_name_ok(name) {
         return SyscallResult::err(SysError::BadValue);
@@ -555,7 +580,8 @@ fn syscall_spawn(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if !crate::sched::loader::looks_like_elf(bytes) {
         return SyscallResult::err(SysError::Unsupported);
     }
-    match crate::sched::task_spawn(name) {
+    let query = frame.r10 & galexy_abi::SPAWN_GRANT_QUERY != 0;
+    match crate::sched::task_spawn(name, &arg[..arg_len as usize], query) {
         Ok(()) => SyscallResult::ok(0),
         Err(err) => SyscallResult::err(err),
     }

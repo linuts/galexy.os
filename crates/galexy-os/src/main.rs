@@ -61,7 +61,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
         // A queued launch loads on this loop (kernel page table). The
         // in-kernel editor only consumes keys when no ring-3 shell owns them.
+        // A faulted shell is loaded again; other tasks keep running.
         sched::drain_spawn();
+        if user_shell {
+            sched::ensure_shell();
+        }
         if !user_shell {
             shell::poll();
         }

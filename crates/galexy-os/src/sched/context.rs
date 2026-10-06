@@ -226,6 +226,7 @@ pub unsafe fn init_stack(stack_top: u64, entry: extern "C" fn(), cs: u64, ss: u6
             stack_top - 512, // RSP: scratch space below the frame
             trampoline as *const () as u64,
             entry as *const () as u64,
+            0,
             cs,
             ss,
         )
@@ -246,10 +247,21 @@ pub unsafe fn init_stack(stack_top: u64, entry: extern "C" fn(), cs: u64, ss: u6
 ///
 /// Same contract as [`init_stack`]; additionally `cs`/`ss` must be the
 /// RPL-3 user selectors, `rip`/`user_rsp` must be mapped user addresses.
-pub unsafe fn init_user_frame(write_top: u64, user_rsp: u64, rip: u64, cs: u64, ss: u64) -> u64 {
+pub unsafe fn init_user_frame(
+    write_top: u64,
+    user_rsp: u64,
+    rip: u64,
+    rdi: u64,
+    rsi: u64,
+    cs: u64,
+    ss: u64,
+) -> u64 {
     // SAFETY: contract above.
-    unsafe { init_frame_stack(write_top, user_rsp, rip, 0, cs, ss) }
+    unsafe { init_frame_stack(write_top, user_rsp, rip, rdi, rsi, cs, ss) }
 }
+
+/// Bytes [`init_frame_stack`] writes at the top of a fresh stack (20 pushes).
+pub const FABRICATED_FRAME_BYTES: u64 = 20 * 8;
 
 /// Shared frame fabricator (both rings; identical frame shape).
 ///
@@ -263,6 +275,7 @@ unsafe fn init_frame_stack(
     user_rsp: u64,
     rip: u64,
     rdi: u64,
+    rsi: u64,
     cs: u64,
     ss: u64,
 ) -> u64 {
@@ -292,8 +305,8 @@ unsafe fn init_frame_stack(
     push(0); // rbx
     push(0); // rcx
     push(0); // rdx
-    push(0); // rsi
-    push(rdi); // rdi = first arg for the trampoline
+    push(rsi); // rsi = second arg (user argument length, or 0)
+    push(rdi); // rdi = first arg for the trampoline, or the argument pointer
     push(0); // rbp
     push(0); // r8
     push(0); // r9
@@ -304,6 +317,11 @@ unsafe fn init_frame_stack(
     push(0); // r14
     push(0); // r15
 
+    debug_assert_eq!(
+        write_top - sp as u64,
+        FABRICATED_FRAME_BYTES,
+        "fabricated frame size drifted from FABRICATED_FRAME_BYTES"
+    );
     sp as u64
 }
 

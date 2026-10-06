@@ -9,3 +9,4 @@ tar = "0.4"
 galexy-os = { path = "../galexy-os", artifact = "bin", target = "x86_64-unknown-none" }
 hello = { path = "../userspace/hello", artifact = "bin", target = "x86_64-unknown-none" }
 shell = { path = "../userspace/shell", artifact = "bin", target = "x86_64-unknown-none" }
+util = { path = "../userspace/util", artifact = "bin", target = "x86_64-unknown-none" }

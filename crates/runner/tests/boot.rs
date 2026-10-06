@@ -549,6 +549,35 @@ const RUN_HELLO_KEYS: &[(&str, &str)] = &[
     ("ret", HELLO_TEXT),
 ];
 
+/// `hello`, then `linger`, then `crash`. The prompt returns while `linger`
+/// is still running. `crash` kills the shell; the next `x` is echoed by the
+/// shell the kernel loaded again, and `beat` is still arriving.
+const SUPERVISOR_KEYS: &[(&str, &str)] = &[
+    ("h", "h"),
+    ("e", "e"),
+    ("l", "l"),
+    ("l", "l"),
+    ("o", "o"),
+    ("ret", HELLO_TEXT),
+    ("l", "l"),
+    ("i", "i"),
+    ("n", "n"),
+    ("g", "g"),
+    ("e", "e"),
+    ("r", "r"),
+    ("ret", "up\n"),
+    ("c", "c"),
+    ("r", "r"),
+    ("a", "a"),
+    ("s", "s"),
+    ("h", "h"),
+    ("ret", "killing the task"),
+    // `x` is echoed by the new shell. Sync on the prompt: a bare `x` also
+    // matches the `0x` in the loader's log line.
+    ("x", "galexy> "),
+    ("y", "beat\n"),
+];
+
 /// `stats`, then `threads`, then `tasks`. Each Enter syncs on a line only
 /// the query `read` produces (the banner's "frames free" is screen-only).
 const QUERY_KEYS: &[(&str, &str)] = &[
@@ -578,9 +607,9 @@ const QUERY_KEYS: &[(&str, &str)] = &[
 ];
 
 /// `cat`, redirection, `mkdir` / `cd` / `ls`. Enter syncs on text that
-/// appears only after the command runs. A redirected `echo` and `mkdir`
-/// print nothing but the next prompt, and the typed line is already
-/// behind the per-key cursor.
+/// appears only after the command runs. A redirected `echo`, `mkdir`, and
+/// a successful `rm` print nothing of their own; the prompt is back as
+/// soon as the program is loaded, so those wait for the task's exit line.
 const UTIL_KEYS: &[(&str, &str)] = &[
     ("c", "c"),
     ("a", "a"),
@@ -619,7 +648,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("o", "o"),
     ("t", "t"),
     ("e", "e"),
-    ("ret", "galexy> "),
+    ("ret", "[sched] task 'echo' exited"),
     ("c", "c"),
     ("a", "a"),
     ("t", "t"),
@@ -646,7 +675,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("o", "o"),
     ("t", "t"),
     ("e", "e"),
-    ("ret", "galexy> "),
+    ("ret", "[sched] task 'echo' exited"),
     ("c", "c"),
     ("a", "a"),
     ("t", "t"),
@@ -665,7 +694,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("b", "b"),
     ("o", "o"),
     ("x", "x"),
-    ("ret", "galexy> "),
+    ("ret", "[sched] task 'mkdir' exited"),
     ("c", "c"),
     ("d", "d"),
     ("spc", " "),
@@ -690,7 +719,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("e", "e"),
     ("a", "a"),
     ("f", "f"),
-    ("ret", "galexy:/box> "),
+    ("ret", "[sched] task 'echo' exited"),
     ("l", "l"),
     ("s", "s"),
     ("ret", "leaf\n"),
@@ -750,7 +779,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("o", "o"),
     ("t", "t"),
     ("e", "e"),
-    ("ret", "galexy> "),
+    ("ret", "[sched] task 'rm' exited"),
     ("c", "c"),
     ("a", "a"),
     ("t", "t"),
@@ -781,7 +810,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("e", "e"),
     ("a", "a"),
     ("f", "f"),
-    ("ret", "galexy:/box> "),
+    ("ret", "[sched] task 'rm' exited"),
     ("c", "c"),
     ("d", "d"),
     ("spc", " "),
@@ -794,7 +823,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("b", "b"),
     ("o", "o"),
     ("x", "x"),
-    ("ret", "galexy> "),
+    ("ret", "[sched] task 'rm' exited"),
 ];
 
 /// The ring-3 shell's query caps: typed `stats` / `threads` / `tasks` /
@@ -899,20 +928,30 @@ fn shell_run_hello_typing_e2e() {
     // never overflow the i8042 queue between keys.
     let serial = boot_and_type(
         &image("galexy-os"),
-        RUN_HELLO_KEYS,
+        SUPERVISOR_KEYS,
         "[boot] main loop ready",
-        "exited (syscall)",
+        "beat\n",
         Duration::from_millis(30),
-        Duration::from_secs(60),
+        Duration::from_secs(90),
     );
     assert!(
         serial.contains(HELLO_TEXT),
         "typed `hello` never produced user output; serial:\n{serial}"
     );
-    // The task's full lifecycle ran under the real rotation + reaper.
     assert!(
         serial.contains("exited (syscall)"),
         "user task exit marker missing after typed run; serial:\n{serial}"
+    );
+    let fault_at = serial
+        .find("[pf] ring-3 task fault")
+        .expect("typed `crash` never faulted the shell");
+    let after_fault = &serial[fault_at..];
+    let prompt_at = after_fault.find("galexy> ").unwrap_or_else(|| {
+        panic!("a new shell prompt never appeared after the fault; serial:\n{serial}")
+    });
+    assert!(
+        after_fault[prompt_at..].contains("beat\n"),
+        "linger stopped printing after the shell restarted; serial:\n{serial}"
     );
 }
 

@@ -236,6 +236,17 @@ impl Grants {
         }
     }
 
+    /// Console, plus the query caps (`ls`, `rm`).
+    pub(crate) const fn console_query() -> Self {
+        Self {
+            console: true,
+            keyboard: false,
+            loader: false,
+            query: true,
+            power: false,
+        }
+    }
+
     /// The interactive shell: console, keyboard, loader, queries, power.
     pub(crate) const fn launcher() -> Self {
         Self {
@@ -884,6 +895,8 @@ pub fn spawn_user_task(name: &str, build: impl FnOnce(UserRegion) -> Vec<u8>) ->
                 fab_vaddr.as_u64(),
                 stack_top - 512, // user RSP (user-space address!)
                 region.as_u64(),
+                0,
+                0,
                 cs,
                 ss,
             )
@@ -1030,26 +1043,37 @@ pub fn is_name_running(name: &str) -> bool {
 
 // (main_ticks moved into the per-CPU table above.)
 
-/// One queued `spawn`. The syscall path only copies the name (it runs
-/// IF=0); the main loop loads the ELF on the kernel page table.
+/// Argument bytes copied onto a new task's stack. Matches the syscall cap.
+pub(crate) const ARG_MAX: usize = 256;
+
+/// One queued `spawn`. The syscall path only copies the name and the
+/// argument (it runs IF=0); the main loop loads the ELF on the kernel
+/// page table, then wakes the caller. The child keeps running.
 struct PendingSpawn {
     name: [u8; 64],
     len: u8,
+    arg: [u8; ARG_MAX],
+    arg_len: u16,
+    query: bool,
     armed: bool,
 }
 
 static PENDING_SPAWN: Mutex<PendingSpawn> = Mutex::new(PendingSpawn {
     name: [0; 64],
     len: 0,
+    arg: [0; ARG_MAX],
+    arg_len: 0,
+    query: false,
     armed: false,
 });
 
-/// Queues `name` and parks the current task until that program exits.
+/// Queues `name` and parks the current task until the load finishes.
 ///
-/// The caller must already be a running user task. Lock order: this takes
-/// `PENDING_SPAWN`, then `THREADS`.
-pub(crate) fn task_spawn(name: &str) -> Result<(), SysError> {
-    if name.len() > 64 {
+/// `arg` is handed to the child. `query` adds the query grant on top of
+/// the console. The caller must already be a running user task. Lock
+/// order: this takes `PENDING_SPAWN`, then `THREADS`.
+pub(crate) fn task_spawn(name: &str, arg: &[u8], query: bool) -> Result<(), SysError> {
+    if name.len() > 64 || arg.len() > ARG_MAX {
         return Err(SysError::BadValue);
     }
     let slot = current_slot();
@@ -1068,6 +1092,9 @@ pub(crate) fn task_spawn(name: &str) -> Result<(), SysError> {
         }
         pending.name[..name.len()].copy_from_slice(name.as_bytes());
         pending.len = name.len() as u8;
+        pending.arg[..arg.len()].copy_from_slice(arg);
+        pending.arg_len = arg.len() as u16;
+        pending.query = query;
         pending.armed = true;
         thread.wait_for[..name.len()].copy_from_slice(name.as_bytes());
         thread
@@ -1081,31 +1108,65 @@ pub(crate) fn task_spawn(name: &str) -> Result<(), SysError> {
 /// Loads a queued program, if the shell has asked for one.
 ///
 /// Runs from the main loop: that context is the kernel page table, which
-/// `spawn_program` clones. The requesting task is already `WAITING`.
+/// `spawn_program` clones. The requesting task is already `WAITING`, and
+/// this wakes it once the child is running (or the name is gone).
 pub fn drain_spawn() {
-    let name = interrupts::without_interrupts(|| {
+    let queued = interrupts::without_interrupts(|| {
         let mut pending = PENDING_SPAWN.lock();
         if !pending.armed {
             return None;
         }
         let len = pending.len as usize;
-        let mut raw = [0u8; 64];
-        raw[..len].copy_from_slice(&pending.name[..len]);
+        let mut name = [0u8; 64];
+        name[..len].copy_from_slice(&pending.name[..len]);
+        let arg_len = pending.arg_len as usize;
+        let mut arg = [0u8; ARG_MAX];
+        arg[..arg_len].copy_from_slice(&pending.arg[..arg_len]);
+        let query = pending.query;
         pending.armed = false;
-        let text = core::str::from_utf8(&raw[..len]).unwrap_or("");
-        Some(alloc::string::String::from(text))
+        Some((len, name, arg_len, arg, query))
     });
-    let Some(name) = name else {
+    let Some((len, name_raw, arg_len, arg, query)) = queued else {
         return;
     };
-    if let Some(bytes) = ramdisk::find(&name) {
-        loader::spawn_program(&name, bytes);
+    let name = core::str::from_utf8(&name_raw[..len]).unwrap_or("");
+    let grants = if query {
+        Grants::console_query()
+    } else {
+        Grants::console()
+    };
+    if let Some(bytes) = ramdisk::find(name) {
+        loader::spawn_launched(name, bytes, grants, &arg[..arg_len]);
     } else {
         serial_println!("[sched] spawn '{}' missing at drain; waking waiter", name);
-        interrupts::without_interrupts(|| {
-            let threads = THREADS.lock();
-            wake_waiters(&threads, &name);
-        });
+    }
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        wake_waiters(&threads, name);
+    });
+}
+
+/// True when a task named `shell` is running or parked on a load.
+pub fn shell_is_live() -> bool {
+    interrupts::without_interrupts(|| {
+        THREADS.lock().iter().any(|thread| {
+            let state = thread.state.load(Ordering::Acquire);
+            thread.name() == "shell" && (state == STATE_RUNNING || state == STATE_WAITING)
+        })
+    })
+}
+
+/// Loads the interactive shell again when the previous one has exited.
+///
+/// Other tasks are left alone. The new shell starts at `/` with the
+/// launcher grants. A missing ramdisk entry does nothing.
+pub fn ensure_shell() {
+    if shell_is_live() {
+        return;
+    }
+    if let Some(bytes) = ramdisk::find("shell") {
+        serial_println!("[sched] shell is gone; loading it again");
+        loader::spawn_program_bsp("shell", bytes);
     }
 }
 
@@ -1654,7 +1715,6 @@ pub unsafe fn syscall_handoff(
             t.state.store(STATE_EXITED, Ordering::Release);
             let name = core::str::from_utf8(&raw[..n]).unwrap_or("");
             serial_println!("[sched] task '{}' exited ({})", name, reason);
-            wake_waiters(&threads, name);
         }
 
         // Advance the rotation: first eligible slot strictly after the

@@ -82,7 +82,7 @@ contract between them.
    loader=0x8001, stats=0x8002, tasks=0x8003, threads=0x8004,
    power=0x8005, files=0x8006 in the high reserved band, above any file slot),
    syscall numbers (exit=0, yield=1, write=2, cap_info=3, open=4, read=5,
-   close=6, spawn=7, power=8, create=9), error codes (BadCap=1, AccessDenied=2, BadBuffer=3,
+   close=6, spawn=7, power=8, create=9, remove=10), error codes (BadCap=1, AccessDenied=2, BadBuffer=3,
    Unsupported=4, BadValue=5, NotFound=6, NoResource=7) — are permanent.
    New syscalls APPEND;
    renumbering/renaming = ABI major bump. NO file descriptors at this ABI
@@ -505,21 +505,31 @@ buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing
 queued). `read` on the stats, tasks, threads, and files caps copies a fresh text
 snapshot (no cursor; the syscall renders into a stack buffer so it does
 not allocate). The files snapshot is the ramdisk's regular names, then each scratch
-path (`box/`, `box/leaf`), one per line. The ring-3 shell's `ls`
-shows the current directory only. The shell keeps that path. A program
-name on its own is a launch: `spawn` on the loader cap (EXEC) parks
-the caller (`STATE_WAITING`) and queues that name. The new task is
-granted the console only. The shell itself, loaded at boot, also holds
-the keyboard, the loader, the query caps, and power. Presenting a
-reserved index is not enough; the task must have been granted it.
-A ramdisk entry that is not an ELF is `Unsupported`. The main loop,
-which is on the kernel page
+path (`box/`, `box/leaf`), one per line. The shell keeps the current
+directory. `echo`, `cat`, `touch`, `mkdir`, `rm`, and `ls` are ramdisk
+programs: the shell composes the path and `spawn`s them. `ls` and `rm`
+also receive the query grant, so they can read the files snapshot.
+`cd` stays in the shell, because that path lives there. A program name
+on its own is a launch: `spawn` on the loader cap (EXEC) parks the
+caller (`STATE_WAITING`) only until the main loop has loaded the ELF.
+The prompt then returns and the child keeps running. `r8`/`r9` are an
+optional argument, at most 256 bytes, copied onto the child's stack
+(`rdi` is the address, `rsi` the length). `r10` bit 0
+(`SPAWN_GRANT_QUERY`) adds the query grant. Any other bit is
+`BadValue`. The child always receives the console. Keyboard, the
+loader, and power stay with the shell. The shell itself, loaded at
+boot, holds the keyboard, the loader, the query caps, and power.
+Presenting a reserved index is not enough; the task must have been
+granted it. A ramdisk entry that is not an ELF is `Unsupported`. The
+main loop, which is on the kernel page
 table, loads the ELF. `FreshL4` copies the kernel root cached at init,
 so the new table does not inherit another task's user mappings. The
 load stays on the main loop because the loader allocates and a syscall
 runs with interrupts off.
-The waiter is marked runnable when that program exits, including a
-ring-3 page fault. `power` on the power cap (POWER right) shuts the
+The waiter is marked runnable when that load finishes. The child's exit
+does not wake anyone. If no task named `shell` is running or waiting,
+the main loop loads it again with the launcher grants. Other tasks keep
+running. The new shell starts at `/`. `power` on the power cap (POWER right) shuts the
 machine down (`op` 0, ACPI S5) or resets it (`op` 1). It does not
 return when the platform honors it; a return is Unsupported and the
 shell says the machine stayed up. Console `write` accepts backspace
@@ -574,10 +584,11 @@ lone name that is an ELF is started; anything else reports
 `<line>: command not found`); Backspace erases. The name is looked up
 in the ramdisk and handed to the loader (dispatch body factored into
 `shell::exec(line)` so boot tests drive the SAME path typing does).
-Foreground semantics: the typed line closes with a newline, the program
-spawns, and the prompt is NOT reclaimed until the program exits
-(`sched::is_name_running` polled by `poll`) — the program's output always
-lands on its own line, never on an input line.
+Foreground semantics for this in-kernel editor: the typed line closes
+with a newline, the program spawns, and the prompt is NOT reclaimed
+until the program exits (`sched::is_name_running` polled by `poll`) —
+the program's output always lands on its own line, never on an input
+line. The ring-3 shell returns its prompt when the load finishes.
 The status bar (`render_status_bar`) redraws the bottom line
 in-place once per second (uptime + per-thread tick counts + frames free)
 with cursor save/restore — the "quiet OS" demo: everything observable as

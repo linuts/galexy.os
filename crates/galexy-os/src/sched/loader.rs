@@ -49,7 +49,20 @@ pub fn looks_like_elf(bytes: &[u8]) -> bool {
 /// task: kernel stack via TSS.RSP0, CR3 own tree, tombstone + tree-walk
 /// reaping. Owner CPU round-robins.
 pub fn spawn_program(name: &str, bytes: &[u8]) -> ProgramRegion {
-    spawn_program_placed(name, bytes, None, false, Grants::console())
+    spawn_program_placed(name, bytes, None, false, Grants::console(), &[])
+}
+
+/// Like [`spawn_program`], with an explicit grant set and a startup argument.
+///
+/// The argument is placed above the child's initial stack pointer. `rdi`
+/// is its user address and `rsi` is the length. An empty slice passes zeros.
+pub(crate) fn spawn_launched(
+    name: &str,
+    bytes: &[u8],
+    grants: Grants,
+    arg: &[u8],
+) -> ProgramRegion {
+    spawn_program_placed(name, bytes, None, false, grants, arg)
 }
 
 /// Like [`spawn_program`], pinned to the BSP, and idle CPUs do not steal it.
@@ -58,7 +71,7 @@ pub fn spawn_program(name: &str, bytes: &[u8]) -> ProgramRegion {
 /// both have a single consumer, and that consumer is the BSP. It receives
 /// the launcher grant (console, keyboard, loader, queries, power).
 pub fn spawn_program_bsp(name: &str, bytes: &[u8]) -> ProgramRegion {
-    spawn_program_placed(name, bytes, Some(0), true, Grants::launcher())
+    spawn_program_placed(name, bytes, Some(0), true, Grants::launcher(), &[])
 }
 
 fn spawn_program_placed(
@@ -67,6 +80,7 @@ fn spawn_program_placed(
     owner: Option<u8>,
     no_steal: bool,
     grants: Grants,
+    arg: &[u8],
 ) -> ProgramRegion {
     let elf = ElfFile::new(bytes).expect("spawn_program: invalid ELF");
     // Only static executables: relocatable/DYN would need relocation work.
@@ -167,12 +181,15 @@ fn spawn_program_placed(
         let stack_top = (stack_base + (USER_STACK_PAGES * 4096) as u64).as_u64() & !0xF;
         debug_assert!(stack_top.is_multiple_of(4096));
         let fab_vaddr = mm::frame_virt(stack_frames[USER_STACK_PAGES - 1].start_address()) + 4096;
+        let (arg_user, arg_len) = place_arg(fab_vaddr.as_u64(), stack_top, arg);
         let (cs, ss) = context::user_cs_ss();
         let ctx = unsafe {
             context::init_user_frame(
                 fab_vaddr.as_u64(),
                 stack_top - 512, // user RSP (user-space address!)
                 entry.as_u64(),
+                arg_user,
+                arg_len,
                 cs,
                 ss,
             )
@@ -208,6 +225,31 @@ fn spawn_program_placed(
             scratch_phys: scratch_frame.start_address(),
         }
     })
+}
+
+/// Copies `arg` into the gap above the child's initial stack pointer and
+/// below the fabricated context frame. Returns `(user address, length)`.
+///
+/// Stack growth moves away from this gap, so `_start` can copy the bytes
+/// before `main`. An empty argument returns `(0, 0)`.
+fn place_arg(fab_top: u64, stack_top: u64, arg: &[u8]) -> (u64, u64) {
+    let n = arg.len().min(crate::sched::ARG_MAX);
+    if n == 0 {
+        return (0, 0);
+    }
+    let arg_user = stack_top - context::FABRICATED_FRAME_BYTES - crate::sched::ARG_MAX as u64;
+    debug_assert!(
+        arg_user >= stack_top - 512,
+        "argument overlaps the user stack"
+    );
+    let dst = (fab_top - (stack_top - arg_user)) as *mut u8;
+    // SAFETY: `dst` is the phys-map image of the fresh stack page, in the
+    // gap the fabricated frame does not occupy. The page is exclusively owned.
+    unsafe {
+        core::ptr::write_bytes(dst, 0, crate::sched::ARG_MAX);
+        core::ptr::copy_nonoverlapping(arg.as_ptr(), dst, n);
+    }
+    (arg_user, n as u64)
 }
 
 /// Maps one PT_LOAD segment: frames per 4 KiB page covering

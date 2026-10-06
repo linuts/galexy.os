@@ -28,10 +28,12 @@ through a capability and starts a userland program when you type its name
       handler, mailbox pool); every boot test runs at `-smp 2`
 - [x] PS/2 keyboard input with scancode translation
 - [x] Shell: a ring-3 program — line editing (Backspace), commands
-      (`help`, `ls`, `echo`, `cat`, `touch`, `mkdir`, `cd`, `rm`, `stats`,
-      `tasks`, `threads`, `about`, `clear`, `shutdown`, `reboot`),
-      and a program name on its own starts that program. `command not found`
-      for unknown lines.
+      (`help`, `cd`, `stats`, `tasks`, `threads`, `about`, `clear`,
+      `shutdown`, `reboot`). `echo`, `cat`, `touch`, `mkdir`, `rm`, and
+      `ls` are separate programs, and a program name on its own starts
+      that program. The prompt returns once the program is loaded. A
+      shell fault loads the shell again; other tasks keep running.
+      `command not found` for unknown lines.
       The kernel keeps the live status bar
 - [x] Physical frame allocator over the bootloader memory map
 - [x] Paging: map/unmap pages with TLB flushes, page-fault reporting (CR2),
@@ -58,7 +60,8 @@ through a capability and starts a userland program when you type its name
       `reboot`) are reserved caps
 - [x] Shell with commands (`help`, `ls`, `stats`, `threads`, `shutdown`,
       `reboot`, ...) + live status bar ("quiet OS" demo) — typing a
-      ramdisk program name starts it; console output = screen + serial
+      ramdisk program name starts it and the prompt returns while it
+      runs; a shell fault loads the shell again; console output = screen + serial
 - [x] Test harness: host unit tests + per-kernel QEMU integration tests
 - [x] Programs beyond blobs: `galexy-rt` runtime (`entry!`, syscall
       wrappers, user panic handler), kernel ELF loader (static ET_EXEC,
