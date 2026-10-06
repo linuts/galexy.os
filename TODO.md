@@ -758,18 +758,23 @@ Suite: 35 QEMU boot tests, all `-smp 2`.
       and a thread named `keeper` is still listed
 - [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
-## Milestone 27 — Scratch files
+## Milestone 27 — Scratch files ✅
 
-Planned, not started. The tar stays immutable. `open` keeps granting
-READ on an archive entry. `write` today requires the console cap.
+The tar stays immutable. `open` still grants READ on an archive entry.
+**`create` adds a name in a fixed table and returns a cap that can be
+written.** Suite: 36 QEMU boot tests, all `-smp 2`.
 
-- [ ] Append a `create` syscall. One fixed table: fixed name length,
-      fixed byte buffer, no heap on the syscall path. The cap it
-      returns has READ and WRITE
-- [ ] `write` on that cap copies into the buffer. A tar name is
-      `Unsupported`. A full table is `NoResource`
-- [ ] A boot test creates a file, writes bytes, reads them back, and
-      checks that `banner.txt` is still the archive copy
+- [x] **`create` = 9**: eight files, 64-byte names, 256-byte buffers.
+      No heap on the syscall path. The cap has READ and WRITE. `close`
+      drops the task's handle; the bytes stay until reboot
+- [x] **`write`** on that cap appends into the buffer (a read still
+      starts at the beginning). A tar name, or a second `create` of
+      the same scratch name, is `Unsupported`. A full scratch table
+      or a full per-task file table is `NoResource`
+- [x] **`bin/test-scratch`**: create, write, read back, `banner.txt`
+      stays the archive copy, and the ninth scratch file is
+      `NoResource`
+- [x] Docs synced (TODO/DESIGN/ROADMAP/README).
 
 ## Milestone 28 — Clone the kernel page table
 
@@ -832,11 +837,10 @@ table. `rm`, pipes, `mv`, `cp`, globs, and a real disk stay out.
 - [ ] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
       ESC). A blinking cursor is still future screen work
-- [ ] File caps are ramdisk reads only: no write or seek. `ls` is a
-      flat name snapshot, not a directory tree. Writable names are
-      Milestone 27; `echo`, `cat`, `touch`, redirection, then
-      `mkdir` / `cd` are Milestone 29. `spawn` still clones whichever
-      page table is in CR3 (Milestone 28)
+- [ ] Scratch files have no seek, and `ls` is still the ramdisk
+      snapshot. `echo`, `cat`, `touch`, redirection, then `mkdir` /
+      `cd` are Milestone 29. `spawn` still clones whichever page
+      table is in CR3 (Milestone 28)
 - [x] ~~`run` leaks the task name, and freed slots panic the table at
       64~~ — CLOSED by Milestone 26 (name copied into the slot; a
       `Freed` record is reused once no CPU is current on it)

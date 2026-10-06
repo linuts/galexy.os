@@ -287,11 +287,20 @@ pub enum Syscall {
     /// [`POWER_REBOOT`]). Does not return when the platform honors it.
     /// Requires CapRights::POWER. A return means the machine stayed up.
     Power,
+    /// `create(name, len)` — create a scratch file and return a cap for it.
+    ///
+    /// Args: `RDI = user address of the name`, `RSI = byte count`.
+    /// Returns: `SyscallResult` (rax = new `Cap` bits, READ and WRITE).
+    /// The bytes live in a fixed kernel table, not the ramdisk. A name
+    /// that already exists in the archive or the scratch table is
+    /// `Unsupported`. A full scratch table, or a full per-task file
+    /// table, is `NoResource`.
+    Create,
 }
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (fixing the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 9] = [
+pub const SYSCALLS: [Syscall; 10] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -301,6 +310,7 @@ pub const SYSCALLS: [Syscall; 9] = [
     Syscall::Close,
     Syscall::Spawn,
     Syscall::Power,
+    Syscall::Create,
 ];
 
 /// Maximum syscall number (upper bound for a u64 dispatch table).
@@ -362,7 +372,7 @@ pub enum SysError {
     /// `open` found no ramdisk file with that exact name.
     NotFound = 6,
     /// A fixed kernel slot this call needs is already taken (the task's
-    /// file table, or the single queued program spawn).
+    /// file table, the scratch-file table, or the single queued spawn).
     NoResource = 7,
 }
 

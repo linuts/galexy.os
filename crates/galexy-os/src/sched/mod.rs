@@ -160,16 +160,68 @@ const STACK_CANARY: u64 = 0x0CA7_AB1E_500D_F00D;
 /// a heap grow there would broadcast a shootdown that targets must ack).
 const MAX_OPEN_FILES: usize = 8;
 
-/// One open ramdisk file. The bytes live in the bootloader's ramdisk for
-/// the kernel's whole life; only the cursor is per-open.
+/// Where an open file's bytes live. The per-task slot only keeps the cursor.
+#[derive(Clone, Copy)]
+enum FileBody {
+    /// Immutable archive bytes. The slice lives in the ramdisk.
+    Archive(&'static [u8]),
+    /// Index into [`SCRATCH`]. The bytes are writable.
+    Scratch(u8),
+}
+
+/// One open file. Archive bytes live in the bootloader's ramdisk; scratch
+/// bytes live in the global table. Only the cursor is per-open.
 #[derive(Clone, Copy)]
 struct OpenFile {
-    bytes: &'static [u8],
+    body: FileBody,
     offset: usize,
     /// Authoritative rights. The handle's upper half is a snapshot; a call
     /// is allowed only for the intersection of the two.
     rights: CapRights,
 }
+
+/// Scratch files the kernel will hold. A slot stays taken until reboot
+/// (`close` drops the task's cap, not the bytes).
+const SCRATCH_SLOTS: usize = 8;
+/// Bytes one scratch file can hold. A longer `write` copies what fits.
+const SCRATCH_BYTES: usize = 256;
+
+/// One scratch file. Fixed name, fixed buffer: `create` never allocates.
+#[derive(Clone, Copy)]
+struct ScratchFile {
+    used: bool,
+    name: [u8; NAME_CAP],
+    name_len: u8,
+    data: [u8; SCRATCH_BYTES],
+    len: u16,
+}
+
+impl ScratchFile {
+    const fn empty() -> Self {
+        Self {
+            used: false,
+            name: [0; NAME_CAP],
+            name_len: 0,
+            data: [0; SCRATCH_BYTES],
+            len: 0,
+        }
+    }
+
+    fn name_is(&self, name: &str) -> bool {
+        let n = self.name_len as usize;
+        self.used && n == name.len() && &self.name[..n] == name.as_bytes()
+    }
+}
+
+struct ScratchTable {
+    files: [ScratchFile; SCRATCH_SLOTS],
+}
+
+/// Global scratch files. Taken only while [`THREADS`] is already held
+/// (lock order: `THREADS`, then this).
+static SCRATCH: Mutex<ScratchTable> = Mutex::new(ScratchTable {
+    files: [ScratchFile::empty(); SCRATCH_SLOTS],
+});
 
 struct Thread {
     /// Display name. Copied at spawn so the caller's buffer can go away.
@@ -1009,7 +1061,7 @@ pub(crate) fn task_open(name: &str) -> Result<Cap, SysError> {
         };
         let rights = CapRights::READ;
         thread.files[index] = Some(OpenFile {
-            bytes,
+            body: FileBody::Archive(bytes),
             offset: 0,
             rights,
         });
@@ -1040,11 +1092,109 @@ pub(crate) fn task_read(cap: Cap, dst: &mut [u8]) -> Result<usize, SysError> {
             return Ok(0);
         }
         let start = file.offset;
-        let available = file.bytes.len().saturating_sub(start);
-        let n = dst.len().min(available);
-        dst[..n].copy_from_slice(&file.bytes[start..start + n]);
+        let n = match file.body {
+            FileBody::Archive(bytes) => {
+                let available = bytes.len().saturating_sub(start);
+                let n = dst.len().min(available);
+                dst[..n].copy_from_slice(&bytes[start..start + n]);
+                n
+            }
+            FileBody::Scratch(index) => {
+                let scratch = SCRATCH.lock();
+                let stored = &scratch.files[index as usize];
+                let available = (stored.len as usize).saturating_sub(start);
+                let n = dst.len().min(available);
+                dst[..n].copy_from_slice(&stored.data[start..start + n]);
+                n
+            }
+        };
         file.offset = start + n;
         Ok(n)
+    })
+}
+
+/// Appends `src` to a scratch file. An archive open is `Unsupported`.
+///
+/// The read cursor stays put, so a later `read` still starts at the
+/// beginning. A write that does not fit is short: the count is the bytes
+/// copied, and `0` means the buffer is already full.
+pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
+    let index = file_slot(cap)?;
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
+        let FileBody::Scratch(scratch_index) = file.body else {
+            return Err(SysError::Unsupported);
+        };
+        let effective = file.rights.intersection(cap.rights());
+        if !effective.contains(CapRights::WRITE) {
+            return Err(SysError::AccessDenied);
+        }
+        if src.is_empty() {
+            return Ok(0);
+        }
+        let mut scratch = SCRATCH.lock();
+        let stored = &mut scratch.files[scratch_index as usize];
+        let start = stored.len as usize;
+        let n = src.len().min(SCRATCH_BYTES.saturating_sub(start));
+        stored.data[start..start + n].copy_from_slice(&src[..n]);
+        stored.len = (start + n) as u16;
+        Ok(n)
+    })
+}
+
+/// Creates a scratch file for the current user task and returns a cap
+/// with READ and WRITE.
+///
+/// A ramdisk name, or a name already in the scratch table, is
+/// `Unsupported`. The scratch table and the task's file table are both
+/// fixed; either being full is `NoResource`.
+pub(crate) fn task_create(name: &str) -> Result<Cap, SysError> {
+    if crate::sched::ramdisk::find(name).is_some() {
+        return Err(SysError::Unsupported);
+    }
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        let Some(index) = thread.files.iter().position(|slot| slot.is_none()) else {
+            return Err(SysError::NoResource);
+        };
+        let mut scratch = SCRATCH.lock();
+        if scratch.files.iter().any(|file| file.name_is(name)) {
+            return Err(SysError::Unsupported);
+        }
+        let Some(scratch_index) = scratch.files.iter().position(|file| !file.used) else {
+            return Err(SysError::NoResource);
+        };
+        let stored = &mut scratch.files[scratch_index];
+        stored.used = true;
+        stored.name = [0; NAME_CAP];
+        stored.name[..name.len()].copy_from_slice(name.as_bytes());
+        stored.name_len = name.len() as u8;
+        stored.data = [0; SCRATCH_BYTES];
+        stored.len = 0;
+        let rights = CapRights::READ.union(CapRights::WRITE);
+        thread.files[index] = Some(OpenFile {
+            body: FileBody::Scratch(scratch_index as u8),
+            offset: 0,
+            rights,
+        });
+        Ok(Cap::new(
+            galexy_abi::FILE_CAP_BASE + index as u64,
+            rights,
+        ))
     })
 }
 

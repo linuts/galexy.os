@@ -410,6 +410,20 @@ fn userfault_test_passes() {
 }
 
 #[test]
+fn scratch_test_passes() {
+    let (code, serial) = boot(&image("test-scratch"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-scratch should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-scratch] passed"),
+        "test-scratch success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn open_test_passes() {
     let (code, serial) = boot(&image("test-open"));
     assert_eq!(

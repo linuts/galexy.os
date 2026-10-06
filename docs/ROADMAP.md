@@ -146,6 +146,11 @@ first real program landed in Milestone 13:
   are reserved caps. `read` returns a fresh text snapshot, rendered
   without allocating on the IF=0 syscall path. The ring-3 shell types
   all three; `bin` coverage is the QMP typing test).
+- Scratch files ✅ (Milestone 27: `create`=9. Eight fixed slots, a
+  64-byte name and a 256-byte buffer each, no heap on the syscall
+  path. The cap is READ|WRITE; `write` appends. A tar name is
+  `Unsupported`, a full table is `NoResource`. `bin/test-scratch`
+  writes, reads back, and still sees the archive `banner.txt`).
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.

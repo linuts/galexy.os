@@ -88,6 +88,10 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, syscall_power(Cap::from_bits(frame.rdi), frame.rsi));
             Outcome::Resume
         }
+        n if n == Syscall::Create as u64 => {
+            stamp(frame, syscall_create(frame.rdi, frame.rsi));
+            Outcome::Resume
+        }
         // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));
@@ -110,9 +114,8 @@ fn syscall_cap_info(cap: Cap) -> SyscallResult {
 }
 
 fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
-    // Capability authority kernel-side: only the console, only WRITE.
     if cap.index() != galexy_abi::reserved::CONSOLE_INDEX {
-        return SyscallResult::err(SysError::BadCap);
+        return syscall_write_file(cap, addr, len);
     }
     if !cap.rights().contains(CapRights::WRITE) {
         return SyscallResult::err(SysError::AccessDenied);
@@ -166,6 +169,58 @@ fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     // interactively and observable headless.
     crate::drivers::console::out_str(text);
     SyscallResult::ok(len)
+}
+
+/// Copies `src` onto a scratch-file cap. Any bytes are legal; the console
+/// charset does not apply. An archive open is `Unsupported`.
+fn syscall_write_file(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+    if len > MAX_WRITE {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if len > 0 && user_buffer(addr, len, false).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut staged = [0u8; MAX_WRITE as usize];
+    if len > 0 {
+        // SAFETY: `user_buffer` accepted every byte of [addr, addr+len).
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                VirtAddr::new(addr).as_ptr::<u8>(),
+                staged.as_mut_ptr(),
+                len as usize,
+            );
+        }
+    }
+    match crate::sched::task_write(cap, &staged[..len as usize]) {
+        Ok(n) => SyscallResult::ok(n as u64),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_create(addr: u64, len: u64) -> SyscallResult {
+    if len == 0 || len > MAX_NAME {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if user_buffer(addr, len, false).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut raw = [0u8; MAX_NAME as usize];
+    // SAFETY: `user_buffer` accepted every byte of [addr, addr+len).
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            VirtAddr::new(addr).as_ptr::<u8>(),
+            raw.as_mut_ptr(),
+            len as usize,
+        );
+    }
+    let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
+    if !file_name_ok(name) {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    match crate::sched::task_create(name) {
+        Ok(cap) => SyscallResult::ok(cap.bits()),
+        Err(err) => SyscallResult::err(err),
+    }
 }
 
 fn syscall_open(addr: u64, len: u64) -> SyscallResult {

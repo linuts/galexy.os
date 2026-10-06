@@ -52,6 +52,18 @@ pub fn write_console(bytes: &[u8]) -> SyscallResult {
     )
 }
 
+/// Creates a scratch file. On success, `value` is a READ and WRITE capability.
+///
+/// The name is not a ramdisk entry. The bytes live in a fixed kernel table.
+pub fn create(name: &[u8]) -> SyscallResult {
+    syscall(
+        Syscall::Create as u64,
+        name.as_ptr() as u64,
+        name.len() as u64,
+        0,
+    )
+}
+
 /// Opens a ramdisk file by exact name (`banner.txt`, `hello`).
 ///
 /// On success, `value` is the new capability's bits (READ right).

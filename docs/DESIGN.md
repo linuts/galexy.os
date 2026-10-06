@@ -82,7 +82,7 @@ contract between them.
    loader=0x8001, stats=0x8002, tasks=0x8003, threads=0x8004,
    power=0x8005, files=0x8006 in the high reserved band, above any file slot),
    syscall numbers (exit=0, yield=1, write=2, cap_info=3, open=4, read=5,
-   close=6, spawn=7, power=8), error codes (BadCap=1, AccessDenied=2, BadBuffer=3,
+   close=6, spawn=7, power=8, create=9), error codes (BadCap=1, AccessDenied=2, BadBuffer=3,
    Unsupported=4, BadValue=5, NotFound=6, NoResource=7) — are permanent.
    New syscalls APPEND;
    renumbering/renaming = ABI major bump. NO file descriptors at this ABI
@@ -477,9 +477,16 @@ screen + COM1, which is what makes userland output observable headless);
 `cap_info` echoes handles (dispatch proving ground). `open`/`read`/`close`
 are ramdisk files as capabilities (Milestone 20): each user task has a
 fixed table of 8 opens (no allocation on the IF=0 syscall path), indexes
-from `FILE_CAP_BASE` (3), authoritative READ grant intersected with the
-handle snapshot. `open(name)` is an exact ramdisk lookup; `read` copies
-the next bytes (short-read at 1 KiB, 0 at EOF); `close` drops the slot.
+from `FILE_CAP_BASE` (3), authoritative grant intersected with the
+handle snapshot. `open(name)` is an exact ramdisk lookup and grants
+READ; `read` copies the next bytes (short-read at 1 KiB, 0 at EOF);
+`close` drops the slot. `create(name)` (syscall 9) puts a new name in
+a fixed global table (8 files, 64-byte names, 256-byte buffers, no
+heap on the syscall path) and returns READ|WRITE. `write` on that cap
+appends; the read cursor stays at the start. A ramdisk name, or a
+name already in the scratch table, is `Unsupported`. A full scratch
+table is `NoResource`. `close` drops the task's cap; the scratch bytes
+stay until reboot. `write` on an archive open is `Unsupported`.
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing

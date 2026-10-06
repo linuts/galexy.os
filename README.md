@@ -40,7 +40,7 @@ through a capability and launches userland programs by name (`run hello`).
       heap), freed slots are reused in place, stack canary surfaces overflows
 - [x] User space: ring-3 tasks in the same rotation, SYSCALL/SYSRET
       (`exit`, `yield`, `write`, `cap_info`, `open`, `read`, `close`,
-      `spawn`, `power`),
+      `spawn`, `power`, `create`),
       capability authority
       kernel-side, per-task kernel stacks via TSS.RSP0 — and REAL
       isolation: per-task address spaces (FreshL4), CR3 swapped by the
@@ -49,7 +49,8 @@ through a capability and launches userland programs by name (`run hello`).
 - [x] `galexy-abi`: the syscall ABI — numbered syscalls + capability model
       (no fds; capabilities day one) — frozen and host-tested before any
       ring-3 code exists. `open`/`read`/`close` turn ramdisk files into
-      per-task capabilities; the keyboard, the loader, and the query caps
+      per-task capabilities; `create` adds a scratch file the task can
+      write; the keyboard, the loader, and the query caps
       (`stats`, `tasks`, `threads`, `ls`) and the power cap (`shutdown`,
       `reboot`) are reserved caps
 - [x] Shell with commands (`help`, `ls`, `stats`, `threads`, `run <program>`,
@@ -175,7 +176,7 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
    thing a scheduler ever has to swap.
 4. **Test what can be tested.** Host unit tests for the pure primitives
    (`galexy-core`, `galexy-abi`), plus one bootable kernel binary per
-   integration test — 35 QEMU boots (all at `-smp 2`) assert exit codes and
+   integration test — 36 QEMU boots (all at `-smp 2`) assert exit codes and
    serial output on every run.
 5. **Ownership beats locks for per-CPU state.** Rotation cursors, TSS.RSP0,
    syscall scratch and the LAPIC registers are touched by exactly one CPU
