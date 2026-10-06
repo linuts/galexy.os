@@ -219,8 +219,8 @@ first real program landed in Milestone 13:
   identity; galfs tokens remain access cards. GALF v4 stores salt+hash;
   F1 boots as admin, F2–F12 as guest; `login`/`passwd`/`useradd` with
   password; `/eve@/` login cards; bare spawn clears tokens; console
-  write budget per tick. See `docs/AUTH.md`. Disk encryption deferred.
-  Suite: 48 QEMU boots).
+  write budget per tick.   See `docs/AUTH.md`. Disk encryption deferred.
+  Suite: 47 QEMU boots).
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.
