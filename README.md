@@ -149,9 +149,10 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
 ├── scripts/                         # headless boot-test tooling
 ├── docs/
 │   ├── STYLE.md                     # conventions (secrets, GALF, IF=0)
-│   ├── ROADMAP.md                   # where this is going (Phase 5 = review)
+│   ├── ROADMAP.md                   # Phase 5 review; Phase 6 process/init
 │   ├── DESIGN.md                    # how the pieces fit
-│   └── AUTH.md                      # passwords + token access cards
+│   ├── AUTH.md                      # passwords + token access cards
+│   └── PROCESS.md                   # process Caps, init, seats (plan)
 │                                    #   (THREAT.md / FS.md planned M57)
 ├── crates/
 │   ├── galexy-abi/                  # THE syscall ABI: numbers, capability

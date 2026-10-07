@@ -1,8 +1,9 @@
 # STYLE — galexy.os conventions
 
 Rules for how code in this repo is written. Reviewers (and future me) should
-enforce these. Auth/token and galfs rules below are binding once
-Milestones 43+ land; until then treat them as the target.
+enforce these. Auth/token, galfs, and process/init rules below are binding
+once the matching milestones land (43+ / 47 / 53–55); until then treat
+them as the target.
 
 ## Rust idioms
 
@@ -68,6 +69,50 @@ Milestones 43+ land; until then treat them as the target.
 - Ramdisk `SPAWN_WAIT` utilities inherit the caller's cards — treat those
   ELFs as privileged. New utils need a one-line trust note in the PR.
 
+## Process model and init
+
+Clean-slate rules for Milestones **47** and **53–55**. Full plan:
+`docs/PROCESS.md`. Galexy is a capability OS — do **not** make global
+integers the process API just because Unix did in 1970. Do not grow a
+POSIX layer beside these rules.
+
+- **Spawn, not fork.** New tasks are created by `spawn` (load ELF + args
+  + attenuated caps/tokens). No `fork`/`clone` that duplicates an address
+  space. Attenuation happens at spawn time, not after.
+- **Process Cap is the identity.** `spawn` returns a **Cap** to the child
+  (rights: wait / kill / transfer / inspect — exact bits in abi). Wait,
+  kill, and supervise take that Cap. Holding the Cap *is* authority —
+  same story as files and galfs tokens. No `kill(pid)` / `wait(pid)` that
+  anyone can aim at a guessed number.
+- **Debug ids are not handles.** A monotonic debug id (KOID-style) may
+  appear in `tasks` listings and serial logs. It is **never** an
+  authorization key and must not gain an `open_process(id)` ambient
+  syscall. Scheduler slots may recycle; slots are not identities either.
+- **Names are labels.** Task names are for humans and listings. Do not
+  keep a permanent wait-by-name ABI once Cap-wait ships (migrate
+  `SPAWN_WAIT` in the same milestone window).
+- **Hierarchy is Cap transfer.** The kernel tracks a parent task. On
+  parent exit, wait/control Caps for children move to **init** (or init
+  receives equivalent rights). Exit status stays until a Cap-holder
+  reaps it (zombie); unbounded zombies are a bug.
+- **Init is userspace.** Init is the first ring-3 program and the
+  orphan root — distinguished by role, not by magic “PID 1” in the ABI.
+  Policy (seats, restart, shutdown order) lives in init; the kernel
+  supplies mechanism: create init, transfer orphans, refuse kill of
+  init’s process without a kernel path, panic if init exits.
+- **Seats over ambient root.** Login TTYs and services are children of
+  init (Caps init retains or delegates), each with their own session —
+  not permanent kernel-injected admin shells.
+- **Signals stay small.** Directed stop/fault via a process Cap (and
+  later a **job/group Cap**). No full POSIX signal set unless a
+  milestone checkbox says so.
+- **Jobs / sessions (Milestone 55)** are capability-addressed groupings
+  for TTY foreground and Ctrl-C — design the Cap rights before wiring
+  the key, not a `setpgid` flag dump.
+- **ABI changes** for process Caps / wait / kill ship in `galexy-abi` +
+  DESIGN + `galexy-rt` + shell/init in the **same PR**, marked
+  experimental until Milestone 51/55 freezes them.
+
 ## Secrets and passwords
 
 - **Never log, serial-mirror, or `write_console` cleartext passwords.**
@@ -131,7 +176,7 @@ Milestones 43+ land; until then treat them as the target.
 
 - When behavior changes, update in this order: code → doc comment →
   `TODO.md` checkbox → `README.md` feature list → relevant deep doc
-  (`DESIGN.md`, `AUTH.md`, later `FS.md` / `THREAT.md`).
+  (`DESIGN.md`, `AUTH.md`, `PROCESS.md`, later `FS.md` / `THREAT.md`).
 - `ROADMAP.md` only for direction shifts or new phases.
 - `TODO.md` checkboxes are only checked after the item is *verified
   working* (e.g. seen in QEMU), never when "written".
