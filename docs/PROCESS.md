@@ -51,7 +51,7 @@ Exact names freeze in `galexy-abi` with Milestone 47. Intent:
 | `PROC_WAIT` | Block until exit; receive exit status; reap zombie |
 | `PROC_KILL` | Stop / fault-kill the task (signals-lite) |
 | `PROC_TRANSFER` | `give` / move this Cap to another task |
-| `PROC_INSPECT` | Read debug id, name, state (for supervisors) |
+| `PROC_INSPECT` | Read debug id, name, state (`read` on self / child Cap) |
 
 Rights attenuate on transfer. Dropping the last wait Cap without a
 reaper is a bug path — orphans must land at init with wait rights.

@@ -161,6 +161,9 @@ fn reserved_caps_have_permanent_indexes() {
     let self_cap = reserved::self_cap();
     assert_eq!(self_cap.index(), 2);
     assert!(self_cap.rights().contains(CapRights::READ));
+    assert!(self_cap.rights().contains(CapRights::PROC_INSPECT));
+    assert!(!self_cap.rights().contains(CapRights::PROC_KILL));
+    assert!(!self_cap.rights().contains(CapRights::PROC_WAIT));
 }
 
 #[test]

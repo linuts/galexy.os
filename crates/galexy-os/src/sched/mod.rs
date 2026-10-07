@@ -1112,19 +1112,142 @@ pub fn thread_tick_total() -> u64 {
     })
 }
 
-/// Calls `each` with every RUNNING thread's name and tick count.
+/// Calls `each` with every RUNNING thread's debug id, name, and tick count.
 ///
 /// The name is borrowed from the slot and is only valid inside `each`.
 /// No allocation: the syscall path renders query text into a stack buffer
 /// and must not grow the heap (a grow there broadcasts a shootdown).
-pub(crate) fn for_running_threads(mut each: impl FnMut(&str, u64)) {
+pub(crate) fn for_running_threads(mut each: impl FnMut(u64, &str, u64)) {
     interrupts::without_interrupts(|| {
         for thread in THREADS.lock().iter() {
             if thread.state.load(Ordering::Relaxed) == STATE_RUNNING {
-                each(thread.name(), thread.ticks.load(Ordering::Relaxed));
+                each(
+                    thread.debug_id,
+                    thread.name(),
+                    thread.ticks.load(Ordering::Relaxed),
+                );
             }
         }
     });
+}
+
+/// Calls `each` for every non-freed user task: debug id, name, state label.
+pub(crate) fn for_user_tasks(mut each: impl FnMut(u64, &str, &str)) {
+    interrupts::without_interrupts(|| {
+        for thread in THREADS.lock().iter() {
+            if !thread.is_user {
+                continue;
+            }
+            let state = match thread.state.load(Ordering::Relaxed) {
+                STATE_RUNNING => "running",
+                STATE_WAITING => "waiting",
+                STATE_EXITED => "exited",
+                _ => continue,
+            };
+            each(thread.debug_id, thread.name(), state);
+        }
+    });
+}
+
+/// Writes the current task's inspect line into `dst` (`id=… name=… state=…\n`).
+pub(crate) fn task_self_inspect(dst: &mut [u8]) -> Result<usize, SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user {
+            return Err(SysError::BadCap);
+        }
+        let state = match thread.state.load(Ordering::Relaxed) {
+            STATE_RUNNING => "running",
+            STATE_WAITING => "waiting",
+            STATE_EXITED => "exited",
+            _ => "unknown",
+        };
+        Ok(format_inspect_line(
+            dst,
+            thread.debug_id,
+            thread.name(),
+            state,
+        ))
+    })
+}
+
+/// Inspect a child named by a process Cap (`PROC_INSPECT`).
+pub(crate) fn task_proc_inspect(cap: Cap, dst: &mut [u8]) -> Result<usize, SysError> {
+    if !cap.rights().contains(CapRights::PROC_INSPECT) {
+        return Err(SysError::AccessDenied);
+    }
+    let pi = proc_slot(cap)?;
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let handle = threads
+            .get(slot - 1)
+            .ok_or(SysError::BadCap)?
+            .procs[pi]
+            .ok_or(SysError::BadCap)?;
+        if !handle.rights.contains(CapRights::PROC_INSPECT) {
+            return Err(SysError::AccessDenied);
+        }
+        let ci = handle.child_slot as usize;
+        if ci == 0 || ci > threads.len() {
+            return Err(SysError::BadCap);
+        }
+        let child = &threads[ci - 1];
+        if child.cap_gen.load(Ordering::Acquire) != handle.gen {
+            return Err(SysError::BadCap);
+        }
+        let state = match child.state.load(Ordering::Acquire) {
+            STATE_RUNNING => "running",
+            STATE_WAITING => "waiting",
+            STATE_EXITED => "exited",
+            STATE_FREED => "freed",
+            _ => "unknown",
+        };
+        Ok(format_inspect_line(
+            dst,
+            child.debug_id,
+            child.name(),
+            state,
+        ))
+    })
+}
+
+/// `id=<n> name=<label> state=<s>\n` into `dst`; returns bytes written.
+fn format_inspect_line(dst: &mut [u8], id: u64, name: &str, state: &str) -> usize {
+    let mut n = 0usize;
+    let mut push = |bytes: &[u8]| {
+        let take = bytes.len().min(dst.len().saturating_sub(n));
+        dst[n..n + take].copy_from_slice(&bytes[..take]);
+        n += take;
+    };
+    push(b"id=");
+    let mut tmp = [0u8; 20];
+    let mut i = tmp.len();
+    let mut v = id;
+    if v == 0 {
+        push(b"0");
+    } else {
+        while v > 0 {
+            i -= 1;
+            tmp[i] = b'0' + (v % 10) as u8;
+            v /= 10;
+        }
+        push(&tmp[i..]);
+    }
+    push(b" name=");
+    push(name.as_bytes());
+    push(b" state=");
+    push(state.as_bytes());
+    push(b"\n");
+    n
 }
 
 /// `(name, ticks)` for every RUNNING thread. The name is copied so the

@@ -864,13 +864,15 @@ Attenuation on `grant`/`give` applies the same intersection rule as file
 Caps. Dropping the last wait Cap without a reaper is a bug path — orphans
 must land at init with wait rights once Milestone 53 lands.
 
-**Landed (spawn Cap slice).** `spawn` returns a process Cap
+**Landed (spawn Cap + self/inspect).** `spawn` returns a process Cap
 (`PROC_CAP_BASE`…); `wait(cap)` / `kill(cap)` are syscalls. Shell
 utilities use `SPAWN_INHERIT` + Cap-wait; bare launches drop the Cap so
 zombies can reap. `SPAWN_WAIT` remains a park-until-exit convenience
 (Cap still installed). Wait is by Cap/slot generation, not by name.
-`SELF_INDEX` grows toward a self Cap next; `getpid` is not the primary
-API. Args remain a single blob until argv/env layout freezes in abi.
+`SELF_INDEX` is an inspect Cap (`read` → `id=… name=… state=…`);
+`getpid` is not the API. `tasks` / `threads` listings show debug ids;
+shell `echo $?` prints the last Cap-wait exit status. Args remain a
+single blob until argv/env layout freezes in abi.
 
 **ABI stability.** Process Cap wait/kill stay **experimental** until
 Phase 6 freezes init and seat supervision. Numbers for `PROC_*` bits are

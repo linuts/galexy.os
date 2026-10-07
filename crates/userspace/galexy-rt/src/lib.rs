@@ -21,6 +21,11 @@ pub fn console_cap() -> Cap {
     galexy_abi::reserved::console(CapRights::WRITE)
 }
 
+/// The self capability (inspect). [`read`] returns `id=… name=… state=…`.
+pub fn self_cap() -> Cap {
+    galexy_abi::reserved::self_cap()
+}
+
 /// One syscall: number + 3 args, register-form result back.
 pub fn syscall(number: u64, a0: u64, a1: u64, a2: u64) -> SyscallResult {
     let value: u64;
