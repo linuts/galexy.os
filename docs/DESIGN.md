@@ -545,32 +545,41 @@ READ cap and a WRITE cap into a 16-byte user buffer for an anonymous
 pipe (8 pipes × 256-byte rings). `give(cap, task, len)` (syscall 14)
 moves an open file or pipe end to another live user task and returns
 the target's new Cap bits. `seek(cap, offset, whence)` (syscall 15)
-sets the read cursor on an archive or galfs open (`SEEK_SET` /
-`SEEK_CUR` / `SEEK_END`); a pipe is `Unsupported`. `cp` and `mv` are
-ramdisk programs (mv copies then removes). `user(addr, len, op)`
-(syscall 16) manages actors: `USER_WHOAMI` / `USER_USERS` write names
-into a buffer; `USER_ADD` creates an actor plus empty Desktop;
-`USER_DEL` removes an empty actor (never `admin`, never one a live task
-still uses); `USER_SU` replaces the caller's tokens with ALL on the
-target (so a switched seat cannot keep writing the previous actor's
-tree). Add/del require the caller's root to be `admin`. A seat born as
-admin may `su admin` to return. The shell exposes `whoami`, `users`,
-`useradd`, `userdel`, and `su` (and resets cwd on `su`). Boot formats
-one immortal actor, `admin`, with Desktop. When the primary IDE slave
-is present, `galfs::init` loads the newest valid GALF **v8** sealed slot
-(dual 288-sector images: wrapped volume key + ChaCha20-HMAC payload of
+sets the **read** cursor on an archive or galfs open (`SEEK_SET` /
+`SEEK_CUR` / `SEEK_END`); a pipe is `Unsupported`. galfs `write` stays
+**append-only** (seek does not move the write point). `cp` and `mv` are
+ramdisk programs; `mv` prefers `rename` (syscall 17) and falls back to
+copy+remove. `user(addr, len, op)` (syscall 16) manages actors:
+`USER_WHOAMI` / `USER_USERS` write names into a buffer; `USER_ADD`
+creates an actor plus empty Desktop; `USER_DEL` removes an empty actor
+(never `admin`, never one a live task still uses); `USER_SU` replaces
+the caller's tokens with ALL on the target (so a switched seat cannot
+keep writing the previous actor's tree). Add/del require the caller's
+root to be `admin`. A seat born as admin may `su admin` to return.
+`rename(old, new)` (syscall 17) moves a galfs dirent (REMOVE on source,
+CREATE on dest parent; no byte copy). `truncate(cap, size)` (syscall 18)
+sets a galfs file length (WRITE; shrink frees blocks, grow zero-fills).
+`stat(path, buf)` (syscall 19) writes a [`STAT_LEN`] record (kind, size,
+owner, held token rights; needs LIST). Directory listing remains the
+`FILES` snapshot — `open` on a directory is `Unsupported`. The shell
+exposes `whoami`, `users`, `useradd`, `userdel`, `su`, `truncate`, and
+`stat` (and resets cwd on `su`). Boot formats one immortal actor,
+`admin`, with Desktop. When the primary IDE slave is present,
+`galfs::init` loads the newest valid GALF **v8** sealed slot (dual
+288-sector images: wrapped volume key + ChaCha20-HMAC payload of
 actors/objects/bitmap/blocks, generation + ciphertext CRC + structural
 checks) or formats that admin tree under a fresh volume key;
-create/remove/append/useradd/userdel sync to the inactive slot and flush
-the cache. `userdel` also refuses open caps on that actor and clears
-tokens that named its objects. Without a slave the table stays RAM-only.
-Empty files allocate no blocks; append grows through direct pointers;
-remove frees blocks back to the bitmap. `cargo run` attaches a
-persistent `galfs.img`. `bin/test-galfs-disk` proves a multi-block file
-survives two QEMU boots and that a corrupt newest slot still recovers.
-`test-scratch` / `test-rm` fill objects to `NoResource`; `test-blocks`
-fills the block pool and reuses after remove. Shell utilities
-use `SPAWN_WAIT` so the prompt returns after `ls` / `mkdir` exit.
+create/remove/append/rename/truncate/useradd/userdel sync to the
+inactive slot and flush the cache. `userdel` also refuses open caps on
+that actor and clears tokens that named its objects. Without a slave
+the table stays RAM-only. Empty files allocate no blocks; append grows
+through direct pointers; remove frees blocks back to the bitmap.
+`cargo run` attaches a persistent `galfs.img`. `bin/test-galfs-disk`
+proves a multi-block file survives two QEMU boots and that a corrupt
+newest slot still recovers. `test-scratch` / `test-rm` fill objects to
+`NoResource`; `test-blocks` fills the block pool; `test-ops` covers
+rename/truncate/stat. Shell utilities use `SPAWN_WAIT` so the prompt
+returns after `ls` / `mkdir` exit.
 Auth is password for identity (PBKDF2-HMAC-SHA256 in `galexy-crypto`,
 CSPRNG salts) plus galfs tokens for authorization (see `docs/AUTH.md`).
 galfs trees, paths, and sealed GALF layout: `docs/GALFS.md`. Process
