@@ -1,0 +1,14 @@
+[package]
+name = "gxc"
+version = "0.1.0"
+edition = "2021"
+description = "Galexy mini Rust-subset compiler (gxr) — host tool. Not rustc."
+publish = false
+
+[[bin]]
+name = "gxc"
+path = "src/main.rs"
+
+[lib]
+name = "gxc"
+path = "src/lib.rs"

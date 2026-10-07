@@ -1,0 +1,9 @@
+// hello.gxr — frozen gxr v0 example (Milestone 59).
+// Rust subset for Galexy — not rustc-compatible.
+#![no_std]
+#![no_main]
+
+fn main() -> i32 {
+    write_console(b"Hello from gxc!\n");
+    0
+}

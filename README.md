@@ -111,7 +111,7 @@ crates/
   galexy-crypto/  PBKDF2-HMAC-SHA256 password KDF (host-tested)
   galexy-os/      kernel (lib + main + test bins)
   userspace/      galexy-rt, shell, util, hello
-  gxc/            (planned) mini Rust-subset compiler — COMPILER.md
+  gxc/            mini Rust-subset compiler (gxr) — COMPILER.md
   runner/         image build, `cargo run`, QEMU boot tests
 ```
 
