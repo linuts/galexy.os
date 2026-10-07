@@ -279,9 +279,10 @@ static ADMIN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16
 
 /// On-disk image: dual slots of header + actors + objects.
 ///
-/// Each slot is [`DISK_SECTORS`] long. Slot 0 starts at LBA 0; slot 1 at
-/// LBA [`DISK_SECTORS`]. A sync writes the inactive slot with gen+1 and a
-/// CRC, then flushes — a crash mid-write leaves the previous slot intact.
+/// Each slot is [`DISK_SECTORS`] long. Slot 0 starts at [`disk_lba_base`];
+/// slot 1 at base + [`DISK_SECTORS`]. A sync writes the inactive slot with
+/// gen+1 and a CRC, then flushes — a crash mid-write leaves the previous
+/// slot intact.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
 /// Bumped for single-indirect file blocks (Milestone 45). Older images are
 /// refused; format recreates admin under a wrapped volume key.
@@ -289,6 +290,9 @@ pub const DISK_VERSION: u16 = 11;
 /// Sectors per dual-slot image (must cover header + sealed payload).
 pub const DISK_SECTORS: usize = 288;
 pub const DISK_SLOT_COUNT: usize = 2;
+/// Common first-partition LBA (1 MiB). Tests call [`set_disk_lba_base`]
+/// with this so GALF need not sit at absolute LBA 0.
+pub const DISK_PART_LBA: u32 = 2048;
 /// Clear header + wrap fields + data tag (see `encode_table`).
 const DISK_HEADER: usize = 128;
 /// used(1) + name_len(1) + name(32) + root(2) + salt(8) + hash(16)
@@ -317,7 +321,7 @@ const PAYLOAD_LEN: usize = ACTOR_ON_DISK * ACTOR_SLOTS
 const _: () = assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * block::SECTOR);
 const _: () = assert!(BLOCK_SLOTS % 8 == 0);
 const _: () = assert!(FILE_BYTES <= u16::MAX as usize);
-/// Sectors both dual slots need at LBA 0 (capacity gate).
+/// Sectors both dual slots need past the LBA base (capacity gate).
 const DISK_MIN_SECTORS: u64 = (DISK_SECTORS * DISK_SLOT_COUNT) as u64;
 /// Default password for the immortal admin account at format.
 pub const ADMIN_DEFAULT_PASSWORD: &str = "admin";
@@ -327,8 +331,24 @@ pub const VOLUME_PASSPHRASE: &[u8] = b"galfs";
 
 static DISK_BUF: Mutex<[[u8; block::SECTOR]; DISK_SECTORS]> =
     Mutex::new([[0u8; block::SECTOR]; DISK_SECTORS]);
+/// First LBA of slot 0 (partition offset). Default 0; set before [`init`].
+static LBA_BASE: AtomicU32 = AtomicU32::new(0);
 /// Unwrapped volume key while the disk is mounted. `None` when locked / RAM-only.
 static VOLUME_KEY: Mutex<Option<[u8; KEY_LEN]>> = Mutex::new(None);
+
+/// Sets the absolute LBA of GALF slot 0. Call before [`init`].
+pub fn set_disk_lba_base(lba: u32) {
+    LBA_BASE.store(lba, Ordering::Release);
+}
+
+/// Absolute LBA of GALF slot 0 (0 unless [`set_disk_lba_base`] ran).
+pub fn disk_lba_base() -> u32 {
+    LBA_BASE.load(Ordering::Acquire)
+}
+
+fn slot_lba(slot: u32) -> u32 {
+    disk_lba_base().saturating_add(slot.saturating_mul(DISK_SECTORS as u32))
+}
 
 /// The block device galfs uses for durable slots.
 ///
@@ -342,10 +362,14 @@ fn disk() -> &'static dyn BlockDevice {
     }
 }
 
-/// True when the device is present and large enough for both GALF slots.
+/// True when the device is present and large enough for base + both slots.
 fn disk_usable() -> bool {
     let d = disk();
-    d.present() && d.capacity_sectors() >= DISK_MIN_SECTORS
+    if !d.present() {
+        return false;
+    }
+    let need = u64::from(disk_lba_base()) + DISK_MIN_SECTORS;
+    d.capacity_sectors() >= need
 }
 
 /// Addressable sector count from IDENTIFY (`0` if absent / unknown).
@@ -363,10 +387,12 @@ pub fn init() {
         return;
     }
     if disk().present() && !disk_usable() {
+        let need = u64::from(disk_lba_base()) + DISK_MIN_SECTORS;
         crate::serial_println!(
-            "[galfs] disk too small ({} sectors; need {}); RAM-only",
+            "[galfs] disk too small ({} sectors; need {} at LBA {}); RAM-only",
             disk().capacity_sectors(),
-            DISK_MIN_SECTORS,
+            need,
+            disk_lba_base(),
         );
     } else if disk_usable() {
         match load_from_disk() {
@@ -416,7 +442,10 @@ fn format_fresh() {
     *VOLUME_KEY.lock() = Some(vk);
     wipe_bytes(&mut vk);
     if sync_to_disk() {
-        crate::serial_println!("[galfs] formatted sealed disk");
+        crate::serial_println!(
+            "[galfs] formatted sealed disk (LBA base {})",
+            disk_lba_base()
+        );
     } else if !disk_usable() {
         crate::serial_println!("[galfs] RAM-only (no usable block device)");
     }
@@ -475,7 +504,7 @@ fn sync_to_disk() -> bool {
     }
     let next_gen = ACTIVE_GEN.load(Ordering::Relaxed).wrapping_add(1);
     let next_slot = 1 - ACTIVE_SLOT.load(Ordering::Relaxed);
-    let lba = (next_slot as usize * DISK_SECTORS) as u32;
+    let lba = slot_lba(next_slot);
     let mut buf = DISK_BUF.lock();
     {
         let table = TABLE.lock();
@@ -514,7 +543,7 @@ fn load_from_disk() -> DiskLoad {
     let mut best = LOAD_BEST.lock();
     let mut cand = LOAD_CAND.lock();
     for slot in 0..DISK_SLOT_COUNT as u32 {
-        let lba = (slot as usize * DISK_SECTORS) as u32;
+        let lba = slot_lba(slot);
         if disk().read_sectors(lba, &mut *buf).is_err() {
             continue;
         }

@@ -159,9 +159,13 @@ When the primary IDE slave is present, the table is durable. Without a
 slave it stays RAM-only.
 
 ```text
-slot 0 @ LBA 0
-slot 1 @ LBA DISK_SECTORS
+slot 0 @ LBA disk_lba_base()          (default 0; tests may use 2048)
+slot 1 @ LBA disk_lba_base() + DISK_SECTORS
 ```
+
+Call `set_disk_lba_base` before `galfs::init` when the volume should not
+own absolute LBA 0 (e.g. after a protective MBR / GPT). Capacity must
+cover `base + 2 × DISK_SECTORS`.
 
 | Property | Behavior |
 | --- | --- |
@@ -348,7 +352,8 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 - **Landed:** `virtio-blk` legacy PCI (`drivers/virtio_blk`); galfs
   prefers it when present; `cargo run` attaches virtio-blk-pci by
   default (`GALEXY_GALFS_IDE=1` for IDE slave); `galfs_disk_persists_virtio_blk`
-- Optional: partition offset (GALF not required at LBA 0)
+- **Landed:** partition LBA offset (`set_disk_lba_base` /
+  `DISK_PART_LBA`); `bin/test-galfs-part`
 
 ## Explicit non-goals
 

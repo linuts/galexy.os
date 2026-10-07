@@ -191,6 +191,7 @@ pub fn boot_with_galfs_cache(
         CorruptMode::None,
         cache,
         GalfsBackend::IdeSlave,
+        GALFS_IMG_BYTES,
     )
 }
 
@@ -204,8 +205,26 @@ pub fn boot_with_galfs_virtio(
         CorruptMode::None,
         GalfsDiskCache::Writethrough,
         GalfsBackend::VirtioPci,
+        GALFS_IMG_BYTES,
     )
 }
+
+/// Like [`boot_with_galfs`], but the guest places GALF at LBA 2048
+/// (`DISK_PART_LBA`). Image is 2 MiB so base + dual slots fit.
+pub fn boot_with_galfs_part(
+    image: &Image,
+) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
+    boot_with_galfs_inner(
+        image,
+        CorruptMode::None,
+        GalfsDiskCache::Writethrough,
+        GalfsBackend::IdeSlave,
+        GALFS_IMG_BYTES_PARTED,
+    )
+}
+
+/// Byte offset of GALF slot 0 when using [`boot_with_galfs_part`].
+pub const GALFS_PART_BYTE_OFF: usize = 2048 * 512;
 
 /// Like [`boot_with_galfs`], but after the write boot the host destroys the
 /// newest GALF slot's AEAD tag so the verify boot must recover from the older
@@ -218,6 +237,7 @@ pub fn boot_with_galfs_recover(
         CorruptMode::Newest,
         GalfsDiskCache::Writethrough,
         GalfsBackend::IdeSlave,
+        GALFS_IMG_BYTES,
     )
 }
 
@@ -231,6 +251,7 @@ pub fn boot_with_galfs_torn(
         CorruptMode::TornNewest,
         GalfsDiskCache::Writethrough,
         GalfsBackend::IdeSlave,
+        GALFS_IMG_BYTES,
     )
 }
 
@@ -247,7 +268,7 @@ pub fn boot_with_galfs_both_corrupt(
             .expect("clock")
             .as_nanos()
     ));
-    std::fs::write(&galfs_path, vec![0u8; 1024 * 1024]).expect("create galfs.img");
+    std::fs::write(&galfs_path, vec![0u8; GALFS_IMG_BYTES]).expect("create galfs.img");
     let cache = GalfsDiskCache::Writethrough;
     let backend = GalfsBackend::IdeSlave;
     let (code1, serial1) =
@@ -267,11 +288,17 @@ enum CorruptMode {
     TornNewest,
 }
 
+/// 1 MiB — covers dual slots at LBA 0.
+const GALFS_IMG_BYTES: usize = 1024 * 1024;
+/// 2 MiB — covers LBA 2048 partition offset + dual slots.
+const GALFS_IMG_BYTES_PARTED: usize = 2 * 1024 * 1024;
+
 fn boot_with_galfs_inner(
     image: &Image,
     corrupt: CorruptMode,
     cache: GalfsDiskCache,
     backend: GalfsBackend,
+    img_bytes: usize,
 ) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
     let galfs_path = std::env::temp_dir().join(format!(
         "galexy-galfs-{}-{}.img",
@@ -281,8 +308,7 @@ fn boot_with_galfs_inner(
             .expect("clock")
             .as_nanos()
     ));
-    // 1 MiB zeroed data disk — covers both 288-sector GALF slots.
-    std::fs::write(&galfs_path, vec![0u8; 1024 * 1024]).expect("create galfs.img");
+    std::fs::write(&galfs_path, vec![0u8; img_bytes]).expect("create galfs.img");
 
     let (code1, serial1) =
         boot_once_with_galfs(&image.bios, &galfs_path, &image.name, cache, backend);
