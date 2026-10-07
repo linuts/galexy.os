@@ -152,6 +152,14 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, syscall_sync());
             Outcome::Resume
         }
+        n if n == Syscall::Share as u64 => {
+            stamp(frame, syscall_share(frame));
+            Outcome::Resume
+        }
+        n if n == Syscall::Unshare as u64 => {
+            stamp(frame, syscall_unshare(frame));
+            Outcome::Resume
+        }
         // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));
@@ -492,6 +500,66 @@ fn syscall_revoke(frame: &Context) -> SyscallResult {
         return SyscallResult::err(SysError::BadValue);
     }
     match crate::sched::task_revoke(path, rights as u8, task) {
+        Ok(()) => SyscallResult::ok(0),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_share(frame: &Context) -> SyscallResult {
+    syscall_share_op(frame, true)
+}
+
+fn syscall_unshare(frame: &Context) -> SyscallResult {
+    syscall_share_op(frame, false)
+}
+
+fn syscall_share_op(frame: &Context, add: bool) -> SyscallResult {
+    let path_addr = frame.rdi;
+    let path_len = frame.rsi;
+    let rights = frame.rdx;
+    let user_addr = frame.r8;
+    let user_len = frame.r9;
+    if path_len == 0 || path_len > MAX_NAME {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if user_len == 0 || user_len > MAX_NAME {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if rights == 0 || rights & !galexy_abi::TOKEN_ALL != 0 {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if user_buffer(path_addr, path_len, false).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    if user_buffer(user_addr, user_len, false).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut path_raw = [0u8; MAX_NAME as usize];
+    let mut user_raw = [0u8; MAX_NAME as usize];
+    // SAFETY: `user_buffer` accepted every byte of both ranges.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            VirtAddr::new(path_addr).as_ptr::<u8>(),
+            path_raw.as_mut_ptr(),
+            path_len as usize,
+        );
+        core::ptr::copy_nonoverlapping(
+            VirtAddr::new(user_addr).as_ptr::<u8>(),
+            user_raw.as_mut_ptr(),
+            user_len as usize,
+        );
+    }
+    let path = core::str::from_utf8(&path_raw[..path_len as usize]).unwrap_or("");
+    let user = core::str::from_utf8(&user_raw[..user_len as usize]).unwrap_or("");
+    if !path_ok(path) || !file_name_ok(user) {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    let result = if add {
+        crate::sched::task_share(path, rights as u8, user)
+    } else {
+        crate::sched::task_unshare(path, rights as u8, user)
+    };
+    match result {
         Ok(()) => SyscallResult::ok(0),
         Err(err) => SyscallResult::err(err),
     }

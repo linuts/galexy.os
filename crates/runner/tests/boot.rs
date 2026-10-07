@@ -495,6 +495,20 @@ fn quota_test_passes() {
 }
 
 #[test]
+fn shares_test_passes() {
+    let (code, serial) = boot(&image("test-shares"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-shares should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-shares] passed"),
+        "test-shares success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn galfs_disk_persists_across_reboot() {
     let (code1, serial1, img, code2, serial2) = boot_with_galfs(&image("test-galfs-disk"));
     assert_eq!(

@@ -1263,20 +1263,21 @@ Multi-user usage beyond one admin and ad-hoc grants.
       `bin/test-quota`
 - [x] **Token table UX**: shell `tokens` + `USER_TOKENS` lists the
       current task's cards (path + rights letters)
-- [ ] **Grant to actor vs task**: optional durable “home share” recorded
-      on the filesystem (re-applied at login) vs today's live-task-only
-      grants — decide and document
-- [ ] **Revoke on userdel**: already clears tokens; extend to durable
-      shares and open caps (audit)
+- [x] **Grant to actor vs task**: live `grant`/`revoke` stay task-scoped;
+      durable home shares are GALF v10 (`Share`/`Unshare` syscalls, shell
+      `share`/`unshare`, 32 share slots, re-applied in `install_session`);
+      `bin/test-shares`
+- [x] **Revoke on userdel**: clears durable shares naming the deleted
+      actor or its removed objects (open-cap refuse already landed)
 - [ ] **Path canonicalization**: reject `.` / `..` remains; add tests for
       overlong components, max depth, embedded NUL, unicode policy
       (byte names only — document)
 - [ ] Sharing e2e: eve grants read to dan's live shell; logout clears
-      live cards; durable share (if any) survives
+      live cards; durable share survives reboot (disk harness)
 - [ ] **Confused-deputy tests**: task with LIST-only cannot grant WRITE;
-      cannot grant on a path it cannot resolve
-- [ ] **Token slot exhaustion**: full table → `NoResource`; revoke frees
-      a slot; document max tokens per task
+      cannot grant on a path it cannot resolve (same bar for `share`)
+- [ ] **Token / share slot exhaustion**: full table → `NoResource`;
+      revoke/unshare frees a slot; document maxima
 
 ## Milestone 46 — Storage stack
 

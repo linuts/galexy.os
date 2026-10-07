@@ -19,11 +19,12 @@ pub const DISK_SECTORS: usize = 288;
 pub const DISK_SLOT_COUNT: usize = 2;
 /// On-disk magic.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-/// Current sealed layout (quotas on actors).
-pub const DISK_VERSION: u16 = 9;
+/// Current sealed layout (quotas + durable home shares).
+pub const DISK_VERSION: u16 = 10;
 
 pub const OBJECT_SLOTS: usize = 128;
 pub const ACTOR_SLOTS: usize = 32;
+pub const SHARE_SLOTS: usize = 32;
 pub const BLOCK_SIZE: usize = 512;
 pub const DIRECT_BLOCKS: usize = 8;
 pub const FILE_BYTES: usize = BLOCK_SIZE * DIRECT_BLOCKS;
@@ -36,8 +37,11 @@ pub const DISK_HEADER: usize = 128;
 /// used + name_len + name + root + salt + hash + max_objects + max_bytes.
 pub const ACTOR_ON_DISK: usize = 66;
 pub const OBJECT_ON_DISK: usize = 8 + NAME_CAP + DIRECT_BLOCKS * 2;
+/// used + rights + grantee + pad + object.
+pub const SHARE_ON_DISK: usize = 6;
 pub const PAYLOAD_LEN: usize = ACTOR_ON_DISK * ACTOR_SLOTS
     + OBJECT_ON_DISK * OBJECT_SLOTS
+    + SHARE_ON_DISK * SHARE_SLOTS
     + BITMAP_BYTES
     + BLOCK_SLOTS * BLOCK_SIZE;
 
@@ -73,6 +77,7 @@ pub enum Issue {
     BlockMissing { block: u16 },
     FileTooLarge { object: u16 },
     DirHasLength { object: u16 },
+    BadShare { share: u16 },
 }
 
 impl Issue {
@@ -93,6 +98,7 @@ impl Issue {
             Issue::BlockMissing { .. } => "block_missing",
             Issue::FileTooLarge { .. } => "file_too_large",
             Issue::DirHasLength { .. } => "dir_has_length",
+            Issue::BadShare { .. } => "bad_share",
         }
     }
 }
@@ -154,10 +160,31 @@ impl Object {
     }
 }
 
+/// Durable home share: object + rights re-applied at grantee's login.
+#[derive(Clone, Copy)]
+pub struct Share {
+    pub used: bool,
+    pub rights: u8,
+    pub grantee: u8,
+    pub object: u16,
+}
+
+impl Share {
+    pub const fn empty() -> Self {
+        Self {
+            used: false,
+            rights: 0,
+            grantee: 0,
+            object: NO_PARENT,
+        }
+    }
+}
+
 /// Decrypted in-memory GALF table (large — host should heap-allocate).
 pub struct Table {
     pub actors: [Actor; ACTOR_SLOTS],
     pub objects: [Object; OBJECT_SLOTS],
+    pub shares: [Share; SHARE_SLOTS],
     pub blocks: [[u8; BLOCK_SIZE]; BLOCK_SLOTS],
     pub bitmap: [u8; BITMAP_BYTES],
 }
@@ -167,6 +194,7 @@ impl Table {
         Self {
             actors: [Actor::empty(); ACTOR_SLOTS],
             objects: [Object::empty(); OBJECT_SLOTS],
+            shares: [Share::empty(); SHARE_SLOTS],
             blocks: [[0u8; BLOCK_SIZE]; BLOCK_SLOTS],
             bitmap: [0u8; BITMAP_BYTES],
         }
@@ -388,6 +416,14 @@ pub fn decode_slot(flat: &mut [u8], passphrase: &[u8], table: &mut Table) -> Opt
         }
         off += OBJECT_ON_DISK;
     }
+    for share in &mut table.shares {
+        *share = Share::empty();
+        share.used = flat[off] != 0;
+        share.rights = flat[off + 1];
+        share.grantee = flat[off + 2];
+        share.object = u16::from_le_bytes([flat[off + 4], flat[off + 5]]);
+        off += SHARE_ON_DISK;
+    }
     table.bitmap.copy_from_slice(&flat[off..off + BITMAP_BYTES]);
     off += BITMAP_BYTES;
     for block in &mut table.blocks {
@@ -424,6 +460,20 @@ fn collect_issues(table: &Table, report: &mut Report) {
     }
     if !saw_admin {
         report.push(Issue::MissingAdmin);
+    }
+
+    for (si, share) in table.shares.iter().enumerate() {
+        if !share.used {
+            continue;
+        }
+        if share.rights == 0
+            || share.grantee as usize >= ACTOR_SLOTS
+            || !table.actors[share.grantee as usize].used
+            || share.object as usize >= OBJECT_SLOTS
+            || table.objects[share.object as usize].kind == KIND_EMPTY
+        {
+            report.push(Issue::BadShare { share: si as u16 });
+        }
     }
 
     let mut seen = [false; BLOCK_SLOTS];
@@ -558,6 +608,8 @@ mod tests {
     fn layout_constants_fit_slot() {
         assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * SECTOR);
         assert_eq!(ACTOR_ON_DISK, 66);
-        assert_eq!(DISK_VERSION, 9);
+        assert_eq!(SHARE_ON_DISK, 6);
+        assert_eq!(SHARE_SLOTS, 32);
+        assert_eq!(DISK_VERSION, 10);
     }
 }

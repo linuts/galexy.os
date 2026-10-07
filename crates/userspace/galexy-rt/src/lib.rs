@@ -127,6 +127,50 @@ pub fn revoke(path: &[u8], rights: u64, task: &[u8]) -> SyscallResult {
     SyscallResult { ok: ok != 0, value }
 }
 
+/// Durable home share for actor `user` (re-applied at login).
+pub fn share(path: &[u8], rights: u64, user: &[u8]) -> SyscallResult {
+    let value: u64;
+    let ok: u64;
+    // SAFETY: same register layout as [`grant`]; target is an actor name.
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") Syscall::Share as u64 => value,
+            inlateout("rdx") rights => ok,
+            in("rdi") path.as_ptr() as u64,
+            in("rsi") path.len() as u64,
+            in("r8") user.as_ptr() as u64,
+            in("r9") user.len() as u64,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    SyscallResult { ok: ok != 0, value }
+}
+
+/// Clear durable share rights for actor `user`.
+pub fn unshare(path: &[u8], rights: u64, user: &[u8]) -> SyscallResult {
+    let value: u64;
+    let ok: u64;
+    // SAFETY: same entry as [`share`].
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") Syscall::Unshare as u64 => value,
+            inlateout("rdx") rights => ok,
+            in("rdi") path.as_ptr() as u64,
+            in("rsi") path.len() as u64,
+            in("r8") user.as_ptr() as u64,
+            in("r9") user.len() as u64,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    SyscallResult { ok: ok != 0, value }
+}
+
 /// Creates a pipe. On success, `out` receives `[read_cap, write_cap]` bits.
 pub fn pipe(out: &mut [u64; 2]) -> SyscallResult {
     syscall(Syscall::Pipe as u64, out.as_mut_ptr() as u64, 0, 0)
