@@ -656,6 +656,8 @@ pub enum SysError {
     /// file table, the object table, the single queued spawn, or a live
     /// task that already uses the requested spawn name).
     NoResource = 7,
+    /// A blocking wait (sleep / keyboard / pipe) was cancelled by kill.
+    Interrupted = 8,
 }
 
 impl SysError {
@@ -669,6 +671,7 @@ impl SysError {
             5 => SysError::BadValue,
             6 => SysError::NotFound,
             7 => SysError::NoResource,
+            8 => SysError::Interrupted,
             _ => SysError::Unsupported,
         }
     }

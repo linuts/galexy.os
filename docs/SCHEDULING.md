@@ -10,7 +10,7 @@ runs, when it sleeps, and how it blocks.
 | Placement | Pin-at-spawn + idle steal | Which CPU owns this slot? |
 | Dispatch | Per-CPU RR rotation + preempt quantum | Who runs next? |
 | Time | Monotonic `timer_ticks` + LAPIC one-shot | When does the timer fire? |
-| Wait | Park / wake (child wait today; general later) | Why is this slot not runnable? |
+| Wait | Park / wake (child, sleep, keyboard, pipe) | Why is this slot not runnable? |
 
 This document is the plan. Checkboxes live in `TODO.md` (Phase 7 —
 Milestones **56–58**). Style rules: `docs/STYLE.md` → Scheduling.
@@ -37,7 +37,7 @@ We do **not** claim POSIX time or priority APIs.
 | Slot | Index in the global `THREADS` table; tombstones, never compacted |
 | Pin / owner | CPU whose rotation may run the slot |
 | Runnable | Eligible for the owner's scan (not waiting, not tombstoned) |
-| Waiting | Parked until an event (child load/exit today; sleep/I/O in Phase 7) |
+| Waiting | Parked until an event (child load/exit, sleep, keyboard, pipe) |
 | Quantum | One-shot LAPIC window while the CPU is busy (~`online()` ms) |
 | Idle stretch | One-shot until the next whole second (status bar / uptime) |
 | Steal cooldown | ~100 ticks after a steal before another idle CPU may take it |
@@ -69,11 +69,19 @@ system is the preemptive thread/user-task rotation.
 - Spawn waiter: park until child load (and optionally exit via
   `SPAWN_WAIT`).
 - Cap-wait: park until the Cap'd child exits.
-- Cap-kill wakes waiters with a defined exit status.
+- Cap-kill wakes Cap-waiters with exit status `137`; a kill of a
+  sleep / keyboard / pipe waiter clears the park with
+  `SysError::Interrupted` before the slot goes `EXITED`.
 - **`sleep(ms)`** (Milestone 56): park until monotonic `timer_ticks`
   reaches a deadline; no Cap. Idle LAPIC arm is
   `min(next second, next sleeper)`. Busy IRQ path still re-arms a
-  preempt quantum. Keyboard/pipe block is Milestone 57.
+  preempt quantum.
+- **Keyboard / pipe block** (Milestone 57): empty keyboard `read` and
+  empty/full pipe `read`/`write` park in the same `WAITING` state;
+  keyboard IRQ and peer pipe activity (or close → EOF / Closed) wake
+  and complete the syscall into the waiter's buffer. Archive and galfs
+  file I/O stay non-blocking (short read / short write) — no silent
+  spin.
 
 ## Time model
 
@@ -110,12 +118,12 @@ waiter    → park until Cap event (already shipped)
 - Program-next-deadline arming (sleepers can beat the 1 s idle stretch)
 - Reviewer time-model paragraph frozen here (M43 draft may land early)
 
-### Milestone 57 — Block & wake
+### Milestone 57 — Block & wake ✅
 
 - Unified “not runnable until event” state shared by sleep, Cap-wait, I/O
 - Blocking keyboard `read` and pipe read/write
-- No silent busy-spin in demos; kill/Ctrl-C paths unblock with a defined
-  error
+- No silent busy-spin in demos; kill of a parked sleep/I/O waiter
+  stamps `Interrupted` then EXITED (Cap-wait sees `137`)
 - Supplies wake primitives Phase 6 init supervision will prefer over
   name-polling
 

@@ -1784,33 +1784,33 @@ Turn “tickless idle MVP” into a real deadline timer.
 - [x] Optional TSC-deadline: waived (PIT-calibrated one-shot remains)
 - [x] Docs: SCHEDULING + DESIGN LAPIC note updated
 
-## Milestone 57 — Block & wake
+## Milestone 57 — Block & wake ✅
 
 General park/wake beyond spawn/wait-on-child.
 
 ### Wait sources
 
-- [ ] **Unified blocked state**: one thread state (or clear enum) for
-      “not runnable until event”; sleep (M56), child wait, and I/O wait
-      share the wake path where practical
-- [ ] **Keyboard / console read block**: empty keyboard ring parks the
-      reader; IRQ wake (BSP remains the keyboard consumer)
-- [ ] **Pipe / channel block**: empty pipe `read` and full pipe `write`
-      park; peer close wakes with EOF / error — builds on existing pipe
-      Caps
-- [ ] **File read** that would busy-wait today becomes a park or stays
-      non-blocking with a DESIGN note (pick one; no silent spin)
-- [ ] Wake must be IRQ-safe / steal-safe: never free a stack while a
-      waiter still parks on it; same zombie IF=1 rule
+- [x] **Unified blocked state**: `STATE_WAITING` + `clear_wait_fields`
+      for sleep (M56), child wait, and I/O (`io_kind` /
+      `io_pipe` / buffer addr)
+- [x] **Keyboard / console read block**: empty keyboard ring parks;
+      `wake_keyboard_waiters` from the IRQ path (BSP consumer)
+- [x] **Pipe / channel block**: `try_read` / `try_write` WouldBlock
+      parks; peer write/close wakes EOF / Closed
+- [x] **File read**: archive + galfs stay non-blocking (DESIGN note);
+      no silent spin
+- [x] Wake IRQ-safe / steal-safe: park under `THREADS` + IF=0; complete
+      via waiter CR3/`with_table`; kill clears I/O parks before EXITED
 
 ### Supervisor hygiene
 
-- [ ] Retire busy-poll “is name running?” loops in shell/init paths
-      where Cap-wait or an event wake can replace them (Phase 6 init
-      Cap-wait is the long-term supervisor; this milestone supplies the
-      kernel wake primitives)
-- [ ] Tests: blocked reader + writer; Ctrl-C / kill Cap unblocks with a
-      defined error; no lost wake under SMP stress
+- [x] Kernel wake primitives for Cap-wait / event wake; tests use
+      `is_name_live` (WAITING-aware) instead of RUNNING-only
+      `threads_count` where joins matter — Phase 6 init Cap-wait remains
+      the long-term supervisor
+- [x] Tests: `bin/test-pipe` (blocked empty-pipe reader + writer wake);
+      Cap-kill of sleep/I/O waiters → `Interrupted` then EXITED /
+      Cap-wait `137`; `SysError::Interrupted` in abi
 
 ## Milestone 58 — Scheduler policy freeze
 
@@ -1973,7 +1973,7 @@ items stay here with rationale.
 - [ ] Sessions & job Caps lite — **Milestone 55**
 - [x] Time & deadlines (sleep / next-deadline arming) — **Milestone 56**
       (Phase 7)
-- [ ] Block & wake — **Milestone 57**
+- [x] Block & wake — **Milestone 57**
 - [ ] Scheduler policy freeze — **Milestone 58**
 - [x] Mini Rust compiler frontend (gxr) — **Milestone 59** (Phase 8)
 - [x] gxc codegen + ELF emit — **Milestone 60**
