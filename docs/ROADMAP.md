@@ -243,8 +243,9 @@ checklist). Style: `docs/STYLE.md`.
    ring-3 DS/ES reload, forge battery, soft frame reserve, enriched
    `stats` sysinfo). Init itself is Phase 6.
 6. **48 Memory, safety & concurrency** — user-map W^X + ELF W|X
-   refuse (`test-wx`); stack wipe; tickless-idle LAPIC one-shots;
-   scrub + lock-order freeze remain
+   refuse (`test-wx`); stack wipe; tickless-idle LAPIC one-shots (MVP;
+   sleep queues / next-deadline arming → Phase 7 / M56); scrub +
+   lock-order freeze remain
 7. **49 Console, audit & UX** — cursor, overflow, auth/grant audit log
 8. **50 Shell for real demos** — pipes, glob, line editing
 9. **51 Docs, tests, CI & soak** — THREAT/FS, negative suite, review-smoke,
@@ -271,6 +272,30 @@ Style: `docs/STYLE.md` → Process model and init.
 
 Non-goals for this phase: systemd/dbus, full POSIX signals/job control,
 ambient PID/`waitpid` namespace, socket activation, cgroups.
+
+## Phase 7 — Scheduling complete
+
+Goal: finish the **runtime** side of scheduling so the kernel is not
+“preempt + RR + tickless idle MVP” forever — timed sleep, general
+block/wake, and a frozen policy. Phase 2 shipped cooperative +
+preemptive + lock discipline; M18–19 shipped per-CPU rotation and
+steal; M43/M48 shipped deadline one-shot idle. Process Caps / init
+(Phase 6) are the *process* story; this phase is the *time and wait*
+story. Concrete checkboxes: `TODO.md` Milestones **56–58**.
+
+1. **56 Time & deadlines** — `sleep` (monotonic), sleep queues, arm the
+   LAPIC to the next real deadline (min of preempt quantum, next sleep
+   wake, next-second status tick); time model documented for reviewers
+2. **57 Block & wake** — general park/wake beyond spawn/wait-on-child;
+   blocking reads (keyboard/pipe/file) wake the waiter; no busy-poll
+   supervisors in the common path
+3. **58 Policy freeze** — document and freeze RR + pin-at-spawn +
+   idle-steal + quantum/steal-cooldown; state non-goals (no CFS, no
+   POSIX nice/priorities unless a later phase explicitly adds them)
+
+Non-goals for this phase: full POSIX `nanosleep`/`clock_*` surface,
+multi-priority scheduling classes, realtime guarantees, tickless *busy*
+(only idle stretches today; busy stays quantum-paced).
 
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left

@@ -316,7 +316,9 @@ Init order: GDT/TSS (per-CPU slot 0) → per-CPU GS substrate → ACPI (MADT)
   1 kHz periodic): busy CPUs re-arm a preempt quantum (`online()` ms
   share-split); idle CPUs sleep until the next whole second (status bar /
   uptime) or an earlier device IRQ. `timer_ticks` advances by the armed
-  duration so uptime stays honest under tickless idle.
+  duration so uptime stays honest under tickless idle. Sleep queues and
+  program-next-deadline arming (min of quantum / sleeper / next second)
+  are Phase 7 — Milestones 56–58 in `TODO.md` / `ROADMAP.md`.
 
 ### arch/ioapic — "external interrupt routing" (arch/)
 
