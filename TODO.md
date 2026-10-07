@@ -1271,9 +1271,9 @@ Multi-user usage beyond one admin and ad-hoc grants.
       `bin/test-shares`
 - [x] **Revoke on userdel**: clears durable shares naming the deleted
       actor or its removed objects (open-cap refuse already landed)
-- [ ] **Path canonicalization**: reject `.` / `..` remains; add tests for
-      overlong components, max depth, embedded NUL, unicode policy
-      (byte names only — document)
+- [x] **Path canonicalization**: reject `.` / `..`; overlong components,
+      max depth, embedded NUL, non-ASCII, empty/double separators;
+      byte names only (`bin/test-paths`; documented in `GALFS.md`)
 - [ ] Sharing e2e: eve grants read to dan's live shell; logout clears
       live cards; durable share survives reboot (disk harness)
 - [x] **Confused-deputy tests**: LIST-only cannot `share` WRITE; cannot
