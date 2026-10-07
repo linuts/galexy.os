@@ -219,8 +219,37 @@ first real program landed in Milestone 13:
   identity; galfs tokens remain access cards. GALF v4 stores salt+hash;
   F1 boots as admin, F2–F12 as guest; `login`/`passwd`/`useradd` with
   password; `/eve@/` login cards; bare spawn clears tokens; console
-  write budget per tick.   See `docs/AUTH.md`. Disk encryption deferred.
+  write budget per tick. See `docs/AUTH.md`. Disk encryption deferred.
   Suite: 47 QEMU boots).
+
+## Phase 5 — Review readiness (systems-engineer bar)
+
+Goal: auth that survives a stolen disk image, a filesystem usable beyond
+demos, and kernel edges a reviewer will poke. Concrete checkboxes live in
+`TODO.md` Milestones 43–60. Dependency-aware order:
+
+1. **Auth crypto & sessions** (43–46) — CSPRNG + real KDF + random salts;
+   no-echo password prompts; logout / lockout / force admin change;
+   remove production `crash`; guest without loader; narrow admin
+   operator bypass; spawn token attenuation.
+2. **Sealed GALF** (47) — volume key + AEAD over dual slots; boot unlock;
+   stolen-`galfs.img` threat addressed.
+3. **galfs for real usage** (48–51) — block/extent store and capacity;
+   rename / truncate / stat; sync + fsck + crash injection; quotas and
+   card UX (list tokens, durable shares decision).
+4. **Storage stack** (52) — `BlockDevice` abstraction; virtio-blk or
+   primary IDE; flush discipline; capacity reporting.
+5. **Kernel / ABI review items** (53–56) — user segment reload; exit
+   status; PCID/GLOBAL or waive with numbers; demand-paging policy;
+   console cursor + keyboard overflow; auth/grant audit log.
+6. **Docs, hardening, shell, RC** (57–60) — `THREAT.md` + `FS.md` + ABI
+   table; negative tests + ramdisk measurement; pipelines/glob; release
+   candidate gates (`login_required`, KDF, encryption on when disk
+   present, tag `review-rc1`).
+
+Standing rule unchanged: each milestone leaves the suite green; prefer
+explicit waivers in the threat/FS docs over half-landed features.
+
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.

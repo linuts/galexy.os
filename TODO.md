@@ -3,6 +3,11 @@
 Tracking document for concrete work items. Big-picture direction lives in
 `docs/ROADMAP.md`. Check items off as they land and are verified.
 
+Shipped through Milestone 42 (password auth). **Next focus:** Phase —
+Review readiness (Milestones 43–60) — auth hardening, galfs for real
+usage, kernel/ABI edges, docs, and an RC checklist for systems-engineer
+review.
+
 ## Milestone 1 — Boot skeleton ✅
 
 - [x] Workspace + pinned nightly toolchain
@@ -1014,13 +1019,339 @@ Passwords authenticate; tokens authorize. See `docs/AUTH.md`. Suite grows.
 - [x] **`crash` omitted from `help`** (test seam kept)
 - [x] Actor-root path `/eve@/` for granting login cards
 
-### Still open
+Open follow-ups moved into Milestones 43–47 (auth/crypto) and later.
 
-- [ ] Real KDF (replace interim CRC mix in `galexy_core::password`)
-- [ ] Disk encryption
-- [ ] Interactive password prompt (no echo) — today `login` takes inline args
+## Phase — Review readiness (systems-engineer bar)
+
+Milestones below prep galexy.os for an external systems review: auth that
+survives a stolen disk image, a filesystem usable beyond demos, and kernel
+edges that a reviewer will poke. Order is dependency-aware; each milestone
+must leave the suite green.
+
+---
+
+## Milestone 43 — Password crypto (KDF + random salts)
+
+Replace demo hashing before any other auth work depends on the on-disk shape.
+
+- [ ] **CSPRNG**: boot entropy source (RDRAND/RDSEED with a documented
+      fallback; mix timer/ATA jitter only as secondary). Expose
+      `galexy_core::random` (or kernel `rand`) used by salts and later
+      encryption nonces — no password-derived salts
+- [ ] **Random salts**: `useradd` / `passwd` / format fill 8+ byte salts
+      from the CSPRNG; delete `salt_from_seed` for production paths
+      (tests may keep a deterministic helper behind `#[cfg(test)]`)
+- [ ] **Real KDF**: Argon2id or scrypt (pick one; document parameters:
+      memory, iterations, parallelism) replacing the CRC mix in
+      `galexy_core::password`. Keep salt+hash field widths or bump GALF
+      with an explicit version + migration
+- [ ] **Constant-time verify** retained; add host unit tests for wrong
+      password, truncated password, and salt uniqueness across two users
+      with the same password
+- [ ] **Docs**: `AUTH.md` + `DESIGN.md` name the KDF and parameters;
+      interim CRC called out as retired
+- [ ] Suite: `test-users` + format/load path still green on GALF bump
+
+## Milestone 44 — Interactive secrets (no-echo prompts)
+
+Passwords must not appear in the shell line, COM1 mirror, or argv.
+
+- [ ] **Shell secret read**: line editor mode that echoes `*` or nothing;
+      Backspace works; buffer never passed to `write_console` as cleartext
+- [ ] **`login` / `passwd` / `useradd`**: interactive prompts when args
+      omitted (`login eve` → `Password:`). Inline `login eve secret`
+      remains for tests only, or is removed once typing e2e covers prompts
+- [ ] **Kernel**: optional — accept password via a one-shot scratch buffer
+      syscall if keeping secrets out of the command string is cleaner;
+      document the chosen shape in `galexy-abi`
+- [ ] **Serial policy**: decide whether secret mode suppresses COM1 echo
+      for that line (prefer yes on the visible TTY path)
+- [ ] Typing e2e: guest on F2 logs in without the password appearing in
+      the captured serial transcript
+
+## Milestone 45 — Session hygiene
+
+Make seats behave like accounts, not permanent admin shells.
+
+- [ ] **Force admin password change**: after format, `admin`/`admin` is
+      marked must-change; `login`/`passwd` required before other commands
+      (except `passwd` / `help` / `whoami`). Or require a boot-time
+      `passwd` on first interactive F1 session
+- [ ] **`logout`**: clear tokens, `fs_root = none`, drop power if held,
+      return to guest grants; reset cwd; shell prompt → `guest@galexy>`
+- [ ] **Login lockout**: after N failures per actor (and/or per TTY),
+      refuse further attempts for a cool-down; count visible via `stats`
+      or serial audit line
+- [ ] **Remove `crash` from production shells**: `cfg` / build feature so
+      release images omit the seam; keep it only on test kernels that the
+      supervisor e2e uses
+- [ ] **F1 policy switch**: config or boot flag — `auto_admin` (today)
+      vs `login_required` on every seat including F1 (review default:
+      `login_required` for multi-user demos)
+- [ ] Tests: logout → guest cannot open prior Desktop; lockout trips;
+      must-change blocks `touch` until `passwd`
+
+## Milestone 46 — Least-privilege seats & spawn
+
+Tighten who can run code and what cards they carry.
+
+- [ ] **Guest without loader**: F2–F12 session grants = console +
+      keyboard + queries only until `login` (no `spawn` / no power).
+      After login, restore loader (and not power unless admin)
+- [ ] **Narrow admin operator bypass**: remove blanket `token_allows`
+      success for admin root. Keep admin-only for `useradd` / `userdel` /
+      `passwd <other>`; foreign trees require an explicit card (or a new
+      `USER_IMPERSONATE` that installs ALL on a named root and is audited)
+- [ ] **Spawn rights attenuation**: `SPAWN_WAIT` utilities inherit a
+      *filterable* token set (default: parent's tokens; optional mask in
+      `r10` or a follow-up ABI). Bare spawn stays empty-token
+- [ ] **Ramdisk trust note**: document that every SPAWN_WAIT binary is
+      trusted code with the caller's cards; Milestone 58 signs/measures
+- [ ] **Login cards**: document semantics; add optional one-shot revoke
+      on first `su` with a card (flag on the token or grant path)
+- [ ] Update `test-galfs`: admin listing foreign trees without a card
+      must fail again once bypass is removed
+- [ ] Docs: `AUTH.md` operator model rewritten to match
+
+## Milestone 47 — Sealed GALF (disk encryption)
+
+Protect the ATA image at rest (password hashes and file bytes).
+
+- [ ] **Threat model paragraph** in `AUTH.md`: stolen `galfs.img` /
+      disk; cold boot out of scope initially
+- [ ] **Wrapping**: derive a volume key from the boot unlock secret
+      (admin password or separate disk passphrase) via the Milestone 43
+      KDF; store a wrapped key + nonce in the GALF header
+- [ ] **Payload encryption**: AEAD (e.g. ChaCha20-Poly1305 or AES-GCM)
+      over each slot blob; CRC may remain as a cheap pre-check or fold
+      into the AEAD tag
+- [ ] **Boot unlock**: prompt on F1 (or runner flag for tests) before
+      mounting; wrong passphrase → refuse mutate, optional RAM-only
+      fallback for bring-up
+- [ ] **Test**: `test-galfs-disk` with a passphrase; raw image bytes do
+      not contain plaintext file contents or unsalted password material
+- [ ] Explicit non-goal until later: per-file keys, secure erase, TPM seal
+
+## Milestone 48 — galfs capacity & on-disk layout
+
+Demo limits (16 actors / 64 objects / 512-byte files) are not real usage.
+
+- [ ] **Sizing plan** in `DESIGN.md`: target actors, objects, max file
+      size, max depth — pick numbers that still avoid heap on the IF=0
+      syscall path (or document a deferred-work queue for mutate)
+- [ ] **GALF version bump**: header fields for table sizes; migrate or
+      refuse old images cleanly
+- [ ] **Block/extent store**: replace inline 512-byte buffers with a
+      block allocator on the disk image (fixed block size, extent list or
+      single-indirect). Empty files cost one inode, not a full buffer
+- [ ] **Larger files**: multi-block read/write with seek; append stays
+      correct across block boundaries
+- [ ] **More opens**: raise per-task file table above 8, or justify 8 in
+      DESIGN as intentional
+- [ ] **Stress test**: fill actors/objects/blocks to `NoResource`;
+      recover; delete; reuse slots without leaking blocks
+- [ ] Suite growth: capacity + fragmentation smoke under QEMU
+
+## Milestone 49 — galfs operations for real usage
+
+Fill semantic gaps reviewers expect from a small FS.
+
+- [ ] **`rename` / `mv` in-FS**: syscall or galfs op that moves a dirent
+      without read/copy/remove (same-actor and cross-directory); update
+      shell `mv` to prefer it when both paths are galfs
+- [ ] **`truncate` / set-size**: shrink or grow a file; free trailing
+      blocks; `create` replace flag stays
+- [ ] **`stat`-shaped query**: size, kind (file/dir), owner actor name,
+      rights the caller holds — via a small syscall or a `read` on a
+      path query cap. Shell `ls -l` or `stat` util
+- [ ] **Directory read**: either allow `open` on directories returning a
+      LIST cap stream, or keep snapshot-only and document it; pick one
+      and test it
+- [ ] **Write cursor**: `seek` affects write offset (today append-only
+      write ignores cursor) — or document append-only as permanent and
+      add `pwrite`-style flags
+- [ ] **Empty-dir rules / non-empty `userdel`**: recursive delete policy
+      documented (refuse vs `rm -r` util with REMOVE on the tree)
+- [ ] Tests for each new op; update `DESIGN.md` syscall table
+
+## Milestone 50 — galfs durability, sync, and recovery
+
+Dual-slot CRC is a start; make failure modes explicit and operable.
+
+- [ ] **Sync policy**: document when slots flip (every mutate vs
+      batched); add `sync` syscall or `fsync` on a cap for explicit flush
+- [ ] **Dirty / generation UI**: serial line at boot naming which slot
+      won and why; counter of recoveries
+- [ ] **`fsck`-equivalent**: host tool and/or `bin/test-galfs-fsck` that
+      walks a GALF image, reports orphans, bad parent links, leaked
+      blocks, and optionally repairs into a new slot
+- [ ] **Crash injection**: runner helper that kills QEMU mid-mutate;
+      assert the next boot picks a consistent slot (extend corrupt-slot
+      tests)
+- [ ] **Read-only mount**: if both slots fail checks, boot with galfs
+      unavailable (not silent RAM format) when a disk was expected
+- [ ] ATA errors: surface `Unsupported` / logged I/O error instead of
+      panicking where possible
+
+## Milestone 51 — galfs sharing, quotas, and cards
+
+Multi-user usage beyond one admin and ad-hoc grants.
+
+- [ ] **Per-actor quotas**: max objects and/or bytes; `NoResource` when
+      exceeded; admin can raise limits
+- [ ] **Token table UX**: `tokens` shell command (or query cap) lists
+      the current task's cards (path + rights)
+- [ ] **Grant to actor vs task**: optional durable “home share” recorded
+      on the filesystem (re-applied at login) vs today's live-task-only
+      grants — decide and document
+- [ ] **Revoke on userdel**: already clears tokens; extend to durable
+      shares and open caps (audit)
+- [ ] **Path canonicalization**: reject `.` / `..` remains; add tests for
+      overlong components, max depth, embedded NUL, unicode policy
+      (byte names only — document)
+- [ ] Sharing e2e: eve grants read to dan's live shell; logout clears
+      live cards; durable share (if any) survives
+
+## Milestone 52 — Storage stack (beyond IDE PIO slave)
+
+Reviewers will ask how storage grows past QEMU's secondary IDE.
+
+- [ ] **Device abstraction**: `BlockDevice` trait (read/write sectors,
+      flush) with ATA PIO as the first impl
+- [ ] **Primary IDE / virtio-blk**: at least one path that works with
+      common QEMU flags without a hand-rolled `-drive` slave only
+- [ ] **Identify / capacity**: expose disk size to galfs so the image
+      cannot silently truncate
+- [ ] **Flush discipline**: FLUSH CACHE (or virtio barrier) on every
+      slot commit; test with `cache=writeback` and `cache=none`
+- [ ] **Optional**: simple partition offset (GALF not required at LBA 0)
+- [ ] Docs: how `cargo run` attaches storage; CI matrix for disk backends
+
+## Milestone 53 — User ABI & process model hygiene
+
+Kernel edges visible the moment someone ports a non-toy program.
+
+- [ ] **Ring-3 segment reload**: SYSCALL return restores user DS/ES (and
+      documents FS/GS policy); today kernel bootstrap selectors remain
+- [ ] **Args & env**: spawn already passes one argument blob — define
+      argv/env layout (or explicitly freeze “single arg blob” in ABI)
+- [ ] **Exit status**: surface child exit code to a waiting parent
+      (`SPAWN_WAIT`); shell `echo $?` or equivalent
+- [ ] **Signals-lite or kill**: admin/owner can stop a runaway task by
+      name (beyond fault-kill); ties to supervisor story
+- [ ] **More query caps or `sysinfo`**: uptime, free frames, galfs
+      usage — for operators during review demos
+- [ ] ABI doc section: stable vs experimental syscalls
+
+## Milestone 54 — Memory, paging, and SMP review items
+
+Close or formally waive the known memory-model nits.
+
+- [ ] **PCID / GLOBAL kernel pages**: design note; implement if churn
+      measurements warrant, else waive with numbers from the suite
+- [ ] **Demand paging policy**: page faults for user heap/stack growth
+      vs today's fixed maps — either a small MVP or a written non-goal
+- [ ] **Heap policy**: initial size, growth cap, OOM behavior visible to
+      userland (kill vs error)
+- [ ] **FSGSBASE fallback**: document `-cpu` requirements; panic message
+      names the feature; optional soft path remains out of scope but
+      stated
+- [ ] **BSP-only devices**: reaffirm keyboard/framebuffer single-consumer
+      in DESIGN; add a one-page “Concurrency model for reviewers”
+- [ ] **Guard / canary audit**: confirm user stack guard + kstack canary
+      still fire in dedicated tests
+
+## Milestone 55 — Console, keyboard, and TTY polish
+
+Human-facing paths reviewers will exercise for an hour.
+
+- [ ] **Blinking text cursor** on the active TTY
+- [ ] **Keyboard overflow**: count drops; optional serial warning;
+      document bound
+- [ ] **CSI / control policy**: list supported sequences; reject set
+      stays intentional
+- [ ] **Per-TTY scrollback** bound documented (cell grid size)
+- [ ] **Password star-prompt** integration with Milestone 44
+- [ ] Manual script: “reviewer demo” — create user, grant card, dual TTY
+
+## Milestone 56 — Audit, logging, and diagnostics
+
+If it is not logged, it did not happen in a review.
+
+- [ ] **Auth audit lines** (serial): login ok/fail, logout, passwd,
+      useradd/userdel, su, lockout — no password material
+- [ ] **Token audit**: grant/revoke with actor, path, rights, target task
+- [ ] **Panic / fault reports**: keep task-kill path; ensure serial
+      breadcrumbs include task name + rip
+- [ ] **`dmesg`-lite**: ring buffer of recent kernel lines readable from
+      a query cap or `dmesg` util (even if it only mirrors serial)
+- [ ] **Debug vs release**: feature flags for verbose sched steal/reap
+      logs
+
+## Milestone 57 — Threat model & documentation pack
+
+Paperwork a systems engineer expects before reading code.
+
+- [ ] **`docs/THREAT.md`**: assets (disk, console, ramdisk ELFs, caps);
+      adversaries (stolen disk, malicious user program, malicious second
+      seat); trusts (physical F1, ramdisk publisher); non-goals
+- [ ] **`docs/FS.md`**: galfs layout, versions, sync, recovery, quotas,
+      path grammar — split out of the long DESIGN syscall essay
+- [ ] **`AUTH.md` refresh**: end-state after Milestones 43–47
+- [ ] **Reviewer README section**: how to build, run BIOS/UEFI, attach
+      disk, default accounts, where logs go
+- [ ] **ABI stability table**: syscall numbers + struct layouts marked
+      stable / unstable
+- [ ] **Known limitations** pruned: every remaining bullet either has a
+      milestone id or an explicit waive
+
+## Milestone 58 — Hardening tests & supply chain
+
+Evidence, not assertions.
+
+- [ ] **Negative suite**: path fuzz (host); grant/revoke confused-deputy
+      cases; guest spawn denied; bare spawn cannot write galfs
+- [ ] **Ramdisk measurement**: hash of the packed tar at build time;
+      kernel checks optional allowlist before `SPAWN_WAIT` inherit
+      (or document “trusted ramdisk” as a hard requirement)
+- [ ] **Feature-gated test seams**: `crash`, verbose panics, etc.
+- [ ] **CI matrix doc**: BIOS, UEFI (`OVMF_FD`), `-smp 2`, with/without
+      galfs disk, cache modes
+- [ ] **Coverage list**: which milestones each `bin/test-*` guards
+
+## Milestone 59 — Process model: pipes, jobs, and shell production
+
+Shell is the demo UI; make it less surprising under load.
+
+- [ ] **Pipeline wiring**: `echo hi | cat` via existing pipe/give syscalls
+- [ ] **Background / foreground**: optional; at least document that all
+      bare launches share the console
+- [ ] **Glob** (userspace): `*` expansion against the files snapshot
+- [ ] **Line editing**: history (even one previous line), Ctrl-C
+      semantics (kill foreground child if any)
+- [ ] **Prompt / cwd correctness** across login, logout, su, failed cd
+- [ ] Typing e2e for pipeline + glob smoke
+
+## Milestone 60 — Release candidate gates
+
+The “ready for review” checklist — not a feature dump.
+
+- [ ] All milestones 43–59 either ✅ or explicitly waived in THREAT/FS
+      docs with rationale
+- [ ] Full suite green BIOS+UEFI; disk persist + corrupt recover + auth
+      e2e + galfs capacity smoke
+- [ ] Default build: no `crash`, `login_required`, KDF live, encryption
+      on if disk present
+- [ ] Fresh format walkthrough in README (admin password set at first
+      boot; guest on F2; grant demo)
+- [ ] Tag `review-rc1` (or note in ROADMAP) with a short changelog
+- [ ] Freeze window: ABI changes require DESIGN + abi crate bump in the
+      same PR
 
 ## Known limitations / follow-ups
+
+Open bullets below are tracked by milestone id where planned. Waived
+items stay here with rationale.
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17
       (APIC family: LAPIC timer + I/O APIC keyboard route on every boot
@@ -1039,30 +1370,35 @@ Passwords authenticate; tokens authorize. See `docs/AUTH.md`. Suite grows.
             placement; only idle CPUs migrate
       - [ ] `-cpu max` asserts FSGSBASE on real hardware too; a fallback
             (e.g. per-CPU paging via a shared struct + disables) would be
-            needed on pre-FSGSBASE CPUs — out of scope deliberately
+            needed on pre-FSGSBASE CPUs — **waive for review** unless
+            real hardware without FSGSBASE is a goal (see Milestone 54)
       - [ ] Everything still single-consumer by DESIGN stays that way:
             cooperative tasks + shell + framebuffer + keyboard all live
-            on the BSP (one display, one input queue — documented in
-            DESIGN "Concurrency model")
+            on the BSP (one display, one input queue — Milestone 54
+            reaffirms this for reviewers)
 - [ ] SYSCALL leaves DS/ES/FS/GS as kernel bootstrap selectors when the
-      task resumes in ring 3 — user code must not do segment-based
-      addressing; proper user segment reload is future segment work
+      task resumes in ring 3 — **Milestone 53**
 - [ ] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
-      ESC). A blinking cursor is still future screen work
+      ESC). Blinking cursor + CSI policy — **Milestone 55**
 - [x] ~~There is no glob or disk-backed store yet~~ — disk-backed store
-      CLOSED by Milestone 38; glob still future
+      CLOSED by Milestone 38; glob — **Milestone 59**
 - [x] ~~`run` leaks the task name, and freed slots panic the table at
       64~~ — CLOSED by Milestone 26 (name copied into the slot; a
       `Freed` record is reused once no CPU is current on it)
 - [x] ~~Status bar can overwrite the typing line when the screen is full~~
       — CLOSED by Milestone 24 (text scrolls above the status row)
 - [ ] Framebuffer is used as the bootloader mapped it (deliberate — BootInfo
-      exposes no physical framebuffer address; revisit with isolation work)
-- [ ] Screen: text-mode cursor (blinking). Tab stops and the CSI subset
-      landed in Milestone 24
-- [ ] Keyboard queue overflow silently drops keys — fine for now, revisit
+      exposes no physical framebuffer address) — **waive** unless isolation
+      work needs a physical FB remap
+- [ ] Screen: text-mode cursor (blinking) — **Milestone 55**
+- [ ] Keyboard queue overflow silently drops keys — **Milestone 55**
 - [ ] Cooperative-scheduler nits: `run()` sweep fairness mid-sweep;
-      TaskCtx's 8 fixed u64 slots (boxed state enum when tasks get richer)
+      TaskCtx's 8 fixed u64 slots — **waive for review** (document in
+      Milestone 54 concurrency note) unless a bug shows up
 - [ ] TLB efficiency: every CR3 swap is a full flush (no PCID/GLOBAL
-      kernel pages) — fine at this scale, revisit if task churn grows
+      kernel pages) — **Milestone 54** (implement or waive with numbers)
+- [ ] Auth crypto / no-echo / encryption / guest loader — **Milestones
+      43–47**
+- [ ] galfs capacity, ops, durability, quotas — **Milestones 48–51**
+- [ ] Block device abstraction beyond IDE PIO slave — **Milestone 52**
