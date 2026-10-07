@@ -147,7 +147,6 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
 ├── rust-toolchain.toml              # pinned nightly + components/targets
 ├── scripts/                         # headless boot-test tooling
 ├── docs/
-│   ├── STYLE.md                     # code style & conventions
 │   ├── STYLE.md                     # conventions (secrets, GALF, IF=0)
 │   ├── ROADMAP.md                   # where this is going (Phase 5 = review)
 │   ├── DESIGN.md                    # how the pieces fit
