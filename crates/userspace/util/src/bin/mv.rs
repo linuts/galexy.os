@@ -1,10 +1,12 @@
-//! mv — move a galfs file (copy then remove).
+//! mv — move a galfs path (rename, with copy fallback).
 
 #![no_std]
 #![no_main]
 
 use galexy_abi::{Cap, SysError};
-use galexy_rt::{arg, close, create_replace, entry, open, read, remove, write, write_console};
+use galexy_rt::{
+    arg, close, create_replace, entry, open, read, remove, rename, write, write_console,
+};
 
 entry!(main);
 
@@ -20,6 +22,13 @@ fn main() -> i32 {
         write_console(b"mv: usage: mv <src> <dst>\n");
         return 1;
     }
+
+    let moved = rename(src, dst);
+    if moved.ok {
+        return 0;
+    }
+
+    // Fall back to copy+remove for cases rename refuses (e.g. odd paths).
     let opened = open(src);
     if !opened.ok {
         write_console(b"mv: cannot open source\n");

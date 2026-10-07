@@ -415,11 +415,34 @@ pub enum Syscall {
     /// access (see `docs/AUTH.md`). Deleting admin, a non-empty tree, or
     /// an actor a live task still uses is `Unsupported` / `NotFound`.
     User,
+    /// `rename(old, old_len, new, new_len)` — move a galfs dirent.
+    ///
+    /// Args: `RDI`/`RSI` = old path, `RDX`/`R8` = new path. Returns
+    /// `SyscallResult` (rax = 0). Needs REMOVE on the source and CREATE
+    /// on the destination parent. Same-actor or cross-directory; actor
+    /// roots and ramdisk names are `Unsupported`. An existing destination
+    /// is `Unsupported`. Moving a directory under itself is `BadValue`.
+    Rename,
+    /// `truncate(cap, size)` — set a galfs file's length.
+    ///
+    /// Args: `RDI = file cap bits`, `RSI = new size` (bytes). Returns
+    /// `SyscallResult` (rax = 0). Requires WRITE. Shrinks free trailing
+    /// blocks; grows with zeroed blocks up to the per-file max. Past-max
+    /// or a non-galfs cap is `BadValue` / `Unsupported`. A full block
+    /// pool is `NoResource`.
+    Truncate,
+    /// `stat(path, len, buf, buf_len)` — galfs metadata into a buffer.
+    ///
+    /// Args: `RDI`/`RSI` = path, `RDX` = user buffer address,
+    /// `R8 = buffer length` (must be ≥ [`STAT_LEN`]). Returns
+    /// `SyscallResult` (rax = [`STAT_LEN`]). Needs LIST on the object (or
+    /// an ancestor). Layout: see [`STAT_LEN`] / `STAT_*` constants.
+    Stat,
 }
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
-/// there is no ABI versioning story (fixing the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 17] = [
+/// there is no ABI versioning story (lifting the cap is version-1 work).
+pub const SYSCALLS: [Syscall; 20] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -437,7 +460,26 @@ pub const SYSCALLS: [Syscall; 17] = [
     Syscall::Give,
     Syscall::Seek,
     Syscall::User,
+    Syscall::Rename,
+    Syscall::Truncate,
+    Syscall::Stat,
 ];
+
+/// `stat` kind: regular file.
+pub const STAT_FILE: u8 = 1;
+/// `stat` kind: directory.
+pub const STAT_DIR: u8 = 2;
+/// Bytes written by [`Syscall::Stat`].
+///
+/// Layout (little-endian):
+/// - `0`: kind ([`STAT_FILE`] / [`STAT_DIR`])
+/// - `1`: token rights the caller holds (`TOKEN_*` mask)
+/// - `2..4`: reserved
+/// - `4..8`: size (`u32`) — file length; `0` for directories
+/// - `8`: owner name length
+/// - `9..41`: owner name bytes (padded)
+/// - `41..48`: reserved
+pub const STAT_LEN: usize = 48;
 
 /// Maximum syscall number (upper bound for a u64 dispatch table).
 pub const MAX_SYSCALL: u64 = SYSCALLS.len() as u64 - 1;

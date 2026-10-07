@@ -1431,6 +1431,233 @@ pub fn blocks_used() -> usize {
         .sum()
 }
 
+/// Moves a dirent as admin. Test helper.
+pub fn rename_as_admin(old: &str, new: &str) -> Result<(), SysError> {
+    let cred = admin_cred();
+    rename(cred.root, &cred.tokens, old, new)?;
+    sync();
+    Ok(())
+}
+
+/// Sets a file's length. Test helper (object index).
+pub fn truncate_file(index: u16, new_len: usize) -> Result<(), SysError> {
+    truncate(index, new_len)?;
+    sync();
+    Ok(())
+}
+
+/// Stats a path as admin into `out`. Test helper.
+pub fn stat_as_admin(name: &str, out: &mut [u8]) -> Result<usize, SysError> {
+    let cred = admin_cred();
+    stat(cred.root, &cred.tokens, name, out)
+}
+
+/// Moves a dirent from `old` to `new` without copying file bytes.
+pub(crate) fn rename(
+    root: u16,
+    tokens: &[Token; TOKEN_SLOTS],
+    old: &str,
+    new: &str,
+) -> Result<(), SysError> {
+    let old_parsed = parse_path(old)?;
+    let new_parsed = parse_path(new)?;
+    if old_parsed.n == 0 || new_parsed.n == 0 {
+        return Err(SysError::Unsupported);
+    }
+    let cred = cred_from_tokens(root, tokens);
+    let mut table = TABLE.lock();
+    let (old_parent, found) = lookup(&table, &cred, &old_parsed)?;
+    let src = found as u16;
+    if !token_allows(&table, &cred, src, RIGHT_REMOVE) {
+        return Err(SysError::AccessDenied);
+    }
+    if table.objects[found].parent == NO_PARENT {
+        return Err(SysError::Unsupported);
+    }
+    let kind = table.objects[found].kind;
+    // Trailing slash is allowed only for directories; bare names work for both.
+    if (old_parsed.dir || new_parsed.dir) && kind != KIND_DIR {
+        return Err(SysError::BadValue);
+    }
+
+    let new_start = start_root(&table, &cred, &new_parsed)?;
+    let new_parent = walk_parents(&table, new_start, &new_parsed)?;
+    if !token_allows(&table, &cred, new_parent, RIGHT_CREATE) {
+        return Err(SysError::AccessDenied);
+    }
+    let new_last = new_parsed.comps[new_parsed.n - 1];
+    if find_child(&table, new_parent, new_last).is_some() {
+        // Same path rename is a no-op.
+        if new_parent == old_parent && table.objects[found].name_is(new_last) {
+            return Ok(());
+        }
+        return Err(SysError::Unsupported);
+    }
+    if kind == KIND_DIR && (new_parent == src || is_descendant(&table, src, new_parent)) {
+        return Err(SysError::BadValue);
+    }
+
+    let new_actor = table.objects[new_parent as usize].actor;
+    place_name(&mut table.objects[found], new_last);
+    table.objects[found].parent = new_parent;
+    if table.objects[found].actor != new_actor {
+        reassign_actor_subtree(&mut table, src, new_actor);
+    }
+    Ok(())
+}
+
+fn is_descendant(table: &Table, ancestor: u16, node: u16) -> bool {
+    let mut cur = node;
+    for _ in 0..OBJECT_SLOTS {
+        if cur == ancestor {
+            return true;
+        }
+        let p = table.objects[cur as usize].parent;
+        if p == NO_PARENT {
+            return false;
+        }
+        cur = p;
+    }
+    false
+}
+
+fn reassign_actor_subtree(table: &mut Table, root: u16, actor: u8) {
+    for i in 0..OBJECT_SLOTS {
+        if table.objects[i].kind == KIND_EMPTY {
+            continue;
+        }
+        if covers_object(table, root, i as u16) {
+            table.objects[i].actor = actor;
+        }
+    }
+}
+
+/// Sets a file's length, allocating or freeing direct blocks as needed.
+pub(crate) fn truncate(index: u16, new_len: usize) -> Result<(), SysError> {
+    if new_len > FILE_BYTES {
+        return Err(SysError::BadValue);
+    }
+    let mut table = TABLE.lock();
+    let i = index as usize;
+    if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
+        return Err(SysError::BadCap);
+    }
+    let old = table.objects[i].len as usize;
+    if new_len == old {
+        return Ok(());
+    }
+    if new_len < old {
+        let keep = if new_len == 0 {
+            0
+        } else {
+            (new_len + BLOCK_SIZE - 1) / BLOCK_SIZE
+        };
+        for slot in keep..DIRECT_BLOCKS {
+            let b = table.objects[i].blocks[slot];
+            if b != NO_BLOCK {
+                free_block(&mut table, b);
+                table.objects[i].blocks[slot] = NO_BLOCK;
+            }
+        }
+        if new_len > 0 {
+            let slot = (new_len - 1) / BLOCK_SIZE;
+            let off = new_len % BLOCK_SIZE;
+            if off != 0 {
+                let b = table.objects[i].blocks[slot] as usize;
+                table.blocks[b][off..].fill(0);
+            }
+        }
+        table.objects[i].len = new_len as u16;
+        return Ok(());
+    }
+
+    // Grow with zero-fill; roll back on pool exhaustion.
+    let saved_blocks = table.objects[i].blocks;
+    let mut pos = old;
+    while pos < new_len {
+        let slot = pos / BLOCK_SIZE;
+        if table.objects[i].blocks[slot] == NO_BLOCK {
+            let Some(b) = alloc_block(&mut table) else {
+                // Roll back newly allocated blocks.
+                for s in 0..DIRECT_BLOCKS {
+                    let b = table.objects[i].blocks[s];
+                    if b != saved_blocks[s] && b != NO_BLOCK {
+                        free_block(&mut table, b);
+                    }
+                }
+                table.objects[i].blocks = saved_blocks;
+                table.objects[i].len = old as u16;
+                return Err(SysError::NoResource);
+            };
+            table.objects[i].blocks[slot] = b;
+        }
+        let bi = table.objects[i].blocks[slot] as usize;
+        let off = pos % BLOCK_SIZE;
+        let n = (BLOCK_SIZE - off).min(new_len - pos);
+        if pos >= old {
+            table.blocks[bi][off..off + n].fill(0);
+        }
+        pos += n;
+    }
+    table.objects[i].len = new_len as u16;
+    Ok(())
+}
+
+/// Fills `out` (must be [`galexy_abi::STAT_LEN`]) with path metadata.
+pub(crate) fn stat(
+    root: u16,
+    tokens: &[Token; TOKEN_SLOTS],
+    name: &str,
+    out: &mut [u8],
+) -> Result<usize, SysError> {
+    use galexy_abi::{STAT_DIR, STAT_FILE, STAT_LEN};
+    if out.len() < STAT_LEN {
+        return Err(SysError::BadBuffer);
+    }
+    let parsed = parse_path(name)?;
+    let cred = cred_from_tokens(root, tokens);
+    let table = TABLE.lock();
+    let (_parent, found) = lookup(&table, &cred, &parsed)?;
+    let index = found as u16;
+    if !token_allows(&table, &cred, index, RIGHT_LIST) {
+        return Err(SysError::AccessDenied);
+    }
+    let obj = &table.objects[found];
+    let kind = match obj.kind {
+        KIND_FILE => STAT_FILE,
+        KIND_DIR => STAT_DIR,
+        _ => return Err(SysError::NotFound),
+    };
+    let rights = held_rights(&table, &cred, index);
+    let size = if obj.kind == KIND_FILE {
+        obj.len as u32
+    } else {
+        0
+    };
+    let actor = &table.actors[obj.actor as usize];
+    let owner_len = actor.name_len.min(32);
+    out[..STAT_LEN].fill(0);
+    out[0] = kind;
+    out[1] = rights;
+    out[4..8].copy_from_slice(&size.to_le_bytes());
+    out[8] = owner_len;
+    out[9..9 + owner_len as usize].copy_from_slice(&actor.name[..owner_len as usize]);
+    Ok(STAT_LEN)
+}
+
+fn held_rights(table: &Table, cred: &FsCred, object: u16) -> u8 {
+    if is_admin_root(cred.root) {
+        return RIGHT_ALL;
+    }
+    let mut rights = 0u8;
+    for token in &cred.tokens {
+        if token.is_live() && covers_object(table, token.object, object) {
+            rights |= token.rights;
+        }
+    }
+    rights
+}
+
 fn path_bytes(table: &Table, index: usize, viewer_root: u16, out: &mut [u8]) -> Option<usize> {
     let mut chain = [0usize; MAX_DEPTH];
     let mut depth = 0usize;

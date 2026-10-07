@@ -127,6 +127,27 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, syscall_user(frame));
             Outcome::Resume
         }
+        n if n == Syscall::Rename as u64 => {
+            stamp(
+                frame,
+                syscall_rename(frame.rdi, frame.rsi, frame.rdx, frame.r8),
+            );
+            Outcome::Resume
+        }
+        n if n == Syscall::Truncate as u64 => {
+            stamp(
+                frame,
+                syscall_truncate(Cap::from_bits(frame.rdi), frame.rsi),
+            );
+            Outcome::Resume
+        }
+        n if n == Syscall::Stat as u64 => {
+            stamp(
+                frame,
+                syscall_stat(frame.rdi, frame.rsi, frame.rdx, frame.r8),
+            );
+            Outcome::Resume
+        }
         // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));
@@ -289,6 +310,84 @@ fn syscall_remove(addr: u64, len: u64) -> SyscallResult {
     }
     match crate::sched::task_remove(name) {
         Ok(()) => SyscallResult::ok(0),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn copy_user_path(addr: u64, len: u64) -> Result<[u8; MAX_NAME as usize], SysError> {
+    if len == 0 || len > MAX_NAME {
+        return Err(SysError::BadValue);
+    }
+    if user_buffer(addr, len, false).is_err() {
+        return Err(SysError::BadBuffer);
+    }
+    let mut raw = [0u8; MAX_NAME as usize];
+    // SAFETY: `user_buffer` accepted every byte of [addr, addr+len).
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            VirtAddr::new(addr).as_ptr::<u8>(),
+            raw.as_mut_ptr(),
+            len as usize,
+        );
+    }
+    Ok(raw)
+}
+
+fn syscall_rename(old_addr: u64, old_len: u64, new_addr: u64, new_len: u64) -> SyscallResult {
+    let old_raw = match copy_user_path(old_addr, old_len) {
+        Ok(r) => r,
+        Err(e) => return SyscallResult::err(e),
+    };
+    let new_raw = match copy_user_path(new_addr, new_len) {
+        Ok(r) => r,
+        Err(e) => return SyscallResult::err(e),
+    };
+    let old = core::str::from_utf8(&old_raw[..old_len as usize]).unwrap_or("");
+    let new = core::str::from_utf8(&new_raw[..new_len as usize]).unwrap_or("");
+    if !path_ok(old) || !path_ok(new) {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    match crate::sched::task_rename(old, new) {
+        Ok(()) => SyscallResult::ok(0),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_truncate(cap: Cap, size: u64) -> SyscallResult {
+    match crate::sched::task_truncate(cap, size) {
+        Ok(()) => SyscallResult::ok(0),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_stat(path_addr: u64, path_len: u64, buf_addr: u64, buf_len: u64) -> SyscallResult {
+    let raw = match copy_user_path(path_addr, path_len) {
+        Ok(r) => r,
+        Err(e) => return SyscallResult::err(e),
+    };
+    let name = core::str::from_utf8(&raw[..path_len as usize]).unwrap_or("");
+    if !path_ok(name) {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if buf_len < galexy_abi::STAT_LEN as u64 {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    if user_buffer(buf_addr, galexy_abi::STAT_LEN as u64, true).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut staged = [0u8; galexy_abi::STAT_LEN];
+    match crate::sched::task_stat(name, &mut staged) {
+        Ok(n) => {
+            // SAFETY: `user_buffer` accepted the destination.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    staged.as_ptr(),
+                    VirtAddr::new(buf_addr).as_mut_ptr::<u8>(),
+                    n,
+                );
+            }
+            SyscallResult::ok(n as u64)
+        }
         Err(err) => SyscallResult::err(err),
     }
 }
