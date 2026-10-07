@@ -1274,8 +1274,10 @@ Multi-user usage beyond one admin and ad-hoc grants.
 - [x] **Path canonicalization**: reject `.` / `..`; overlong components,
       max depth, embedded NUL, non-ASCII, empty/double separators;
       byte names only (`bin/test-paths`; documented in `GALFS.md`)
-- [ ] Sharing e2e: eve grants read to dan's live shell; logout clears
-      live cards; durable share survives reboot (disk harness)
+- [x] Sharing e2e (durable): `bin/test-share-disk` + `boot_with_galfs`
+      records a share, reboots, `apply_shares` reinstalls the card; host
+      fsck sees a used share slot (live grant/logout still covered by
+      `test-galfs` / session clear)
 - [x] **Confused-deputy tests**: LIST-only cannot `share` WRITE; cannot
       share a path without a covering card; missing path `NotFound`
       (`bin/test-cards`; same `resolve_and_check` bar as `grant`)

@@ -293,10 +293,15 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 - Byte charset; reject `.` / `..`, overlong, depth > 8, NUL, non-ASCII
 - `bin/test-paths`
 
+### Durable share disk e2e (landed)
+
+- `bin/test-share-disk` + runner `boot_with_galfs`: share survives reboot
+- Host decode sees a used share slot; plaintext file marker absent
+
 ### Remaining (Milestone 45)
 
 - Double-indirect / lengths beyond u16
-- Optional fsck repair into a new slot; durable-share disk e2e harness
+- Optional fsck repair into a new slot
 - Crash / torn-write injection
 
 ### Target storage stack (Milestone 46)
