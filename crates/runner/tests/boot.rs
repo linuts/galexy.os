@@ -706,8 +706,8 @@ fn galfs_disk_recovers_from_torn_write() {
         }
         let off = best_off.expect("GALF slot");
         let cut = off + galexy_galf::DISK_HEADER + galexy_galf::SECTOR / 2;
-        let end = off + galexy_galf::DISK_SECTORS * galexy_galf::SECTOR;
-        torn[cut..end.min(torn.len())].fill(0);
+        let end = (off + galexy_galf::DISK_SECTORS * galexy_galf::SECTOR).min(torn.len());
+        torn[cut..end].fill(0);
     }
     let report = galexy_galf::check_image(
         &torn,
