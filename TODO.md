@@ -1630,6 +1630,8 @@ The “ready for review” checklist — not a feature dump.
       followed (short bullet list in the PR template or REVIEWER.md)
 - [ ] Phase 6 process/init milestones listed in ROADMAP (not required to
       tag `review-rc1`, but design notes from M47 must not contradict them)
+- [x] Phase 7 scheduling-complete milestones listed in ROADMAP (56–58;
+      implementation not required for `review-rc1`)
 
 ---
 
