@@ -26,12 +26,17 @@ const _: () = assert!(HASH_LEN == galexy_crypto::HASH_LEN);
 use crate::drivers::ata;
 
 /// Objects the kernel will hold (files, directories, and actor roots).
-/// Raised in Milestone 45 (GALF v7); block/extent store is the next step.
 pub const OBJECT_SLOTS: usize = 128;
 /// Actors (users) the table can name.
 pub const ACTOR_SLOTS: usize = 32;
-/// Bytes one file can hold (inline until the block store lands).
-pub const FILE_BYTES: usize = 512;
+/// Fixed data block size (one ATA sector).
+pub const BLOCK_SIZE: usize = 512;
+/// Direct block pointers per file (no indirect yet).
+pub const DIRECT_BLOCKS: usize = 8;
+/// Bytes one file can hold (`BLOCK_SIZE * DIRECT_BLOCKS`).
+pub const FILE_BYTES: usize = BLOCK_SIZE * DIRECT_BLOCKS;
+/// Shared block pool capacity (Milestone 45 / GALF v8).
+pub const BLOCK_SLOTS: usize = 256;
 /// Tokens one task may hold.
 pub const TOKEN_SLOTS: usize = 8;
 /// Path components after the optional owner.
@@ -49,6 +54,9 @@ pub(crate) const KIND_DIR: u8 = 2;
 const NO_PARENT: u16 = 0xffff;
 /// No object / empty token.
 pub const NO_OBJECT: u16 = 0xffff;
+/// Unused direct-block pointer.
+const NO_BLOCK: u16 = 0xffff;
+const BITMAP_BYTES: usize = BLOCK_SLOTS / 8;
 
 pub const RIGHT_READ: u8 = 1;
 pub const RIGHT_WRITE: u8 = 2;
@@ -151,7 +159,8 @@ pub(crate) struct Object {
     actor: u8,
     name: [u8; NAME_CAP],
     name_len: u8,
-    pub(crate) data: [u8; FILE_BYTES],
+    /// Direct block indexes into [`Table::blocks`] (`NO_BLOCK` if unused).
+    blocks: [u16; DIRECT_BLOCKS],
     pub(crate) len: u16,
 }
 
@@ -163,7 +172,7 @@ impl Object {
             actor: 0,
             name: [0; NAME_CAP],
             name_len: 0,
-            data: [0; FILE_BYTES],
+            blocks: [NO_BLOCK; DIRECT_BLOCKS],
             len: 0,
         }
     }
@@ -177,21 +186,23 @@ impl Object {
 struct Table {
     actors: [Actor; ACTOR_SLOTS],
     objects: [Object; OBJECT_SLOTS],
+    blocks: [[u8; BLOCK_SIZE]; BLOCK_SLOTS],
+    bitmap: [u8; BITMAP_BYTES],
 }
 
-static TABLE: Mutex<Table> = Mutex::new(Table {
-    actors: [Actor::empty(); ACTOR_SLOTS],
-    objects: [Object::empty(); OBJECT_SLOTS],
-});
-/// Scratch tables for disk load — must not live on the kernel stack (v7 ≈ 75 KiB each).
-static LOAD_BEST: Mutex<Table> = Mutex::new(Table {
-    actors: [Actor::empty(); ACTOR_SLOTS],
-    objects: [Object::empty(); OBJECT_SLOTS],
-});
-static LOAD_CAND: Mutex<Table> = Mutex::new(Table {
-    actors: [Actor::empty(); ACTOR_SLOTS],
-    objects: [Object::empty(); OBJECT_SLOTS],
-});
+const fn empty_table() -> Table {
+    Table {
+        actors: [Actor::empty(); ACTOR_SLOTS],
+        objects: [Object::empty(); OBJECT_SLOTS],
+        blocks: [[0u8; BLOCK_SIZE]; BLOCK_SLOTS],
+        bitmap: [0u8; BITMAP_BYTES],
+    }
+}
+
+static TABLE: Mutex<Table> = Mutex::new(empty_table());
+/// Scratch tables for disk load — must not live on the kernel stack.
+static LOAD_BEST: Mutex<Table> = Mutex::new(empty_table());
+static LOAD_CAND: Mutex<Table> = Mutex::new(empty_table());
 
 static BOOTED: AtomicBool = AtomicBool::new(false);
 /// True when the ATA slave accepted a load or format write.
@@ -213,19 +224,25 @@ static ADMIN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16
 /// LBA [`DISK_SECTORS`]. A sync writes the inactive slot with gen+1 and a
 /// CRC, then flushes — a crash mid-write leaves the previous slot intact.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-/// Bumped for larger actor/object tables (Milestone 45). v6 sealed images
-/// are refused; format recreates admin under a wrapped volume key.
-pub const DISK_VERSION: u16 = 7;
+/// Bumped for the block pool (Milestone 45). v7 inline-data images are
+/// refused; format recreates admin under a wrapped volume key.
+pub const DISK_VERSION: u16 = 8;
 /// Sectors per dual-slot image (must cover header + sealed payload).
-pub const DISK_SECTORS: usize = 160;
+pub const DISK_SECTORS: usize = 288;
 pub const DISK_SLOT_COUNT: usize = 2;
 /// Clear header + wrap fields + data tag (see `encode_table`).
 const DISK_HEADER: usize = 128;
 /// used(1) + name_len(1) + name(32) + root(2) + salt(8) + hash(16) = 60.
 const ACTOR_ON_DISK: usize = 60;
-const OBJECT_ON_DISK: usize = 8 + NAME_CAP + FILE_BYTES; // 584
-const PAYLOAD_LEN: usize = ACTOR_ON_DISK * ACTOR_SLOTS + OBJECT_ON_DISK * OBJECT_SLOTS;
+/// kind+actor+name_len+pad + parent+len + name + direct block indexes.
+const OBJECT_ON_DISK: usize = 8 + NAME_CAP + DIRECT_BLOCKS * 2; // 88
+const PAYLOAD_LEN: usize = ACTOR_ON_DISK * ACTOR_SLOTS
+    + OBJECT_ON_DISK * OBJECT_SLOTS
+    + BITMAP_BYTES
+    + BLOCK_SLOTS * BLOCK_SIZE;
 const _: () = assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * ata::SECTOR);
+const _: () = assert!(BLOCK_SLOTS % 8 == 0);
+const _: () = assert!(FILE_BYTES <= u16::MAX as usize);
 /// Default password for the immortal admin account at format.
 pub const ADMIN_DEFAULT_PASSWORD: &str = "admin";
 /// Bring-up volume passphrase (wraps the disk key). Interactive unlock is
@@ -376,6 +393,7 @@ fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; ata::SECTOR]
     flat[8..10].copy_from_slice(&(OBJECT_SLOTS as u16).to_le_bytes());
     flat[10..12].copy_from_slice(&(FILE_BYTES as u16).to_le_bytes());
     flat[12] = 1; // sealed
+    flat[14..16].copy_from_slice(&(BLOCK_SLOTS as u16).to_le_bytes());
     flat[16..24].copy_from_slice(&generation.to_le_bytes());
 
     let mut off = DISK_HEADER;
@@ -398,8 +416,17 @@ fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; ata::SECTOR]
         flat[off + 4..off + 6].copy_from_slice(&obj.parent.to_le_bytes());
         flat[off + 6..off + 8].copy_from_slice(&obj.len.to_le_bytes());
         flat[off + 8..off + 8 + NAME_CAP].copy_from_slice(&obj.name);
-        flat[off + 8 + NAME_CAP..off + 8 + NAME_CAP + FILE_BYTES].copy_from_slice(&obj.data);
+        let boff = off + 8 + NAME_CAP;
+        for (i, blk) in obj.blocks.iter().enumerate() {
+            flat[boff + i * 2..boff + i * 2 + 2].copy_from_slice(&blk.to_le_bytes());
+        }
         off += OBJECT_ON_DISK;
+    }
+    flat[off..off + BITMAP_BYTES].copy_from_slice(&table.bitmap);
+    off += BITMAP_BYTES;
+    for block in &table.blocks {
+        flat[off..off + BLOCK_SIZE].copy_from_slice(block);
+        off += BLOCK_SIZE;
     }
     debug_assert_eq!(off, DISK_HEADER + PAYLOAD_LEN);
     debug_assert!(off <= flat.len());
@@ -464,10 +491,12 @@ fn decode_table(
     let actors = u16::from_le_bytes([flat[6], flat[7]]) as usize;
     let objects = u16::from_le_bytes([flat[8], flat[9]]) as usize;
     let file_bytes = u16::from_le_bytes([flat[10], flat[11]]) as usize;
+    let block_slots = u16::from_le_bytes([flat[14], flat[15]]) as usize;
     if version != DISK_VERSION
         || actors != ACTOR_SLOTS
         || objects != OBJECT_SLOTS
         || file_bytes != FILE_BYTES
+        || block_slots != BLOCK_SLOTS
         || flat[12] & 1 == 0
     {
         return None;
@@ -536,14 +565,22 @@ fn decode_table(
         obj.len = u16::from_le_bytes([flat[off + 6], flat[off + 7]]);
         obj.name
             .copy_from_slice(&flat[off + 8..off + 8 + NAME_CAP]);
-        obj.data
-            .copy_from_slice(&flat[off + 8 + NAME_CAP..off + 8 + NAME_CAP + FILE_BYTES]);
+        let boff = off + 8 + NAME_CAP;
+        for (i, blk) in obj.blocks.iter_mut().enumerate() {
+            *blk = u16::from_le_bytes([flat[boff + i * 2], flat[boff + i * 2 + 1]]);
+        }
         if obj.len as usize > FILE_BYTES {
             let mut gone = vk;
             wipe_bytes(&mut gone);
             return None;
         }
         off += OBJECT_ON_DISK;
+    }
+    table.bitmap.copy_from_slice(&flat[off..off + BITMAP_BYTES]);
+    off += BITMAP_BYTES;
+    for block in &mut table.blocks {
+        block.copy_from_slice(&flat[off..off + BLOCK_SIZE]);
+        off += BLOCK_SIZE;
     }
     *VOLUME_KEY.lock() = Some(vk);
     Some(generation)
@@ -575,6 +612,7 @@ fn validate_table(table: &Table) -> bool {
     if !saw_admin {
         return false;
     }
+    let mut seen = [false; BLOCK_SLOTS];
     for (i, obj) in table.objects.iter().enumerate() {
         if obj.kind == KIND_EMPTY {
             continue;
@@ -590,29 +628,65 @@ fn validate_table(table: &Table) -> bool {
             if !table.actors.iter().any(|a| a.used && a.root == i as u16) {
                 return false;
             }
-            continue;
-        }
-        let parent = obj.parent as usize;
-        if parent >= OBJECT_SLOTS || parent == i {
-            return false;
-        }
-        if table.objects[parent].kind != KIND_DIR {
-            return false;
-        }
-        // Walk to root; refuse cycles.
-        let mut cur = obj.parent;
-        for _ in 0..OBJECT_SLOTS {
-            if cur == i as u16 {
+        } else {
+            let parent = obj.parent as usize;
+            if parent >= OBJECT_SLOTS || parent == i {
                 return false;
             }
-            let p = table.objects[cur as usize].parent;
-            if p == NO_PARENT {
-                break;
-            }
-            if p as usize >= OBJECT_SLOTS {
+            if table.objects[parent].kind != KIND_DIR {
                 return false;
             }
-            cur = p;
+            // Walk to root; refuse cycles.
+            let mut cur = obj.parent;
+            for _ in 0..OBJECT_SLOTS {
+                if cur == i as u16 {
+                    return false;
+                }
+                let p = table.objects[cur as usize].parent;
+                if p == NO_PARENT {
+                    break;
+                }
+                if p as usize >= OBJECT_SLOTS {
+                    return false;
+                }
+                cur = p;
+            }
+        }
+        if !validate_object_blocks(obj, &mut seen, &table.bitmap) {
+            return false;
+        }
+    }
+    for (i, used) in seen.iter().enumerate() {
+        let bit = (table.bitmap[i / 8] >> (i % 8)) & 1 != 0;
+        if bit != *used {
+            return false;
+        }
+    }
+    true
+}
+
+fn validate_object_blocks(obj: &Object, seen: &mut [bool; BLOCK_SLOTS], bitmap: &[u8]) -> bool {
+    let need = if obj.kind == KIND_FILE {
+        if obj.len as usize > FILE_BYTES {
+            return false;
+        }
+        (obj.len as usize + BLOCK_SIZE - 1) / BLOCK_SIZE
+    } else if obj.len != 0 {
+        return false;
+    } else {
+        0
+    };
+    for (i, &b) in obj.blocks.iter().enumerate() {
+        if i < need {
+            if b as usize >= BLOCK_SLOTS || seen[b as usize] {
+                return false;
+            }
+            if (bitmap[b as usize / 8] >> (b as usize % 8)) & 1 == 0 {
+                return false;
+            }
+            seen[b as usize] = true;
+        } else if b != NO_BLOCK {
+            return false;
         }
     }
     true
@@ -909,7 +983,7 @@ pub fn create_file_under(parent: u16, name: &str) -> Result<u16, SysError> {
     obj.parent = parent;
     obj.actor = actor;
     place_name(obj, name);
-    obj.data = [0; FILE_BYTES];
+    obj.blocks = [NO_BLOCK; DIRECT_BLOCKS];
     obj.len = 0;
     drop(table);
     sync();
@@ -1164,8 +1238,7 @@ pub(crate) fn create(
             if !token_allows(&table, &cred, index, RIGHT_WRITE) {
                 return Err(SysError::AccessDenied);
             }
-            table.objects[found].data = [0; FILE_BYTES];
-            table.objects[found].len = 0;
+            free_file_blocks(&mut table, found);
             return Ok(Some(index));
         }
         return Err(SysError::Unsupported);
@@ -1179,7 +1252,7 @@ pub(crate) fn create(
     obj.parent = parent;
     obj.actor = actor;
     place_name(obj, last);
-    obj.data = [0; FILE_BYTES];
+    obj.blocks = [NO_BLOCK; DIRECT_BLOCKS];
     obj.len = 0;
     if parsed.dir {
         Ok(None)
@@ -1216,11 +1289,14 @@ pub(crate) fn remove(
     if table.objects[found].parent == NO_PARENT {
         return Err(SysError::Unsupported);
     }
+    if kind == KIND_FILE {
+        free_file_blocks(&mut table, found);
+    }
     table.objects[found] = Object::empty();
     Ok(index)
 }
 
-/// Reads file bytes under the global lock.
+/// File length under the global lock.
 pub(crate) fn with_file<R>(index: u16, f: impl FnOnce(&Object) -> R) -> Option<R> {
     let table = TABLE.lock();
     let i = index as usize;
@@ -1230,25 +1306,97 @@ pub(crate) fn with_file<R>(index: u16, f: impl FnOnce(&Object) -> R) -> Option<R
     Some(f(&table.objects[i]))
 }
 
-/// Writes file bytes under the global lock.
-pub(crate) fn with_file_mut<R>(index: u16, f: impl FnOnce(&mut Object) -> R) -> Option<R> {
+fn alloc_block(table: &mut Table) -> Option<u16> {
+    for i in 0..BLOCK_SLOTS {
+        let mask = 1u8 << (i % 8);
+        if table.bitmap[i / 8] & mask == 0 {
+            table.bitmap[i / 8] |= mask;
+            table.blocks[i] = [0; BLOCK_SIZE];
+            return Some(i as u16);
+        }
+    }
+    None
+}
+
+fn free_block(table: &mut Table, block: u16) {
+    let i = block as usize;
+    if block == NO_BLOCK || i >= BLOCK_SLOTS {
+        return;
+    }
+    table.bitmap[i / 8] &= !(1u8 << (i % 8));
+    table.blocks[i] = [0; BLOCK_SIZE];
+}
+
+fn free_file_blocks(table: &mut Table, index: usize) {
+    let blocks = table.objects[index].blocks;
+    for b in blocks {
+        if b != NO_BLOCK {
+            free_block(table, b);
+        }
+    }
+    table.objects[index].blocks = [NO_BLOCK; DIRECT_BLOCKS];
+    table.objects[index].len = 0;
+}
+
+/// Appends `src` to a file. Returns the byte count written (short on full
+/// file or exhausted block pool).
+pub(crate) fn append(index: u16, src: &[u8]) -> Option<usize> {
     let mut table = TABLE.lock();
     let i = index as usize;
     if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
         return None;
     }
-    Some(f(&mut table.objects[i]))
+    let mut written = 0usize;
+    while written < src.len() {
+        let pos = table.objects[i].len as usize;
+        if pos >= FILE_BYTES {
+            break;
+        }
+        let slot = pos / BLOCK_SIZE;
+        let off = pos % BLOCK_SIZE;
+        if table.objects[i].blocks[slot] == NO_BLOCK {
+            let Some(b) = alloc_block(&mut table) else {
+                break;
+            };
+            table.objects[i].blocks[slot] = b;
+        }
+        let bi = table.objects[i].blocks[slot] as usize;
+        let room = (BLOCK_SIZE - off)
+            .min(src.len() - written)
+            .min(FILE_BYTES - pos);
+        table.blocks[bi][off..off + room].copy_from_slice(&src[written..written + room]);
+        table.objects[i].len = (pos + room) as u16;
+        written += room;
+    }
+    Some(written)
 }
 
-/// Appends `src` to a file. Returns the byte count written.
-pub(crate) fn append(index: u16, src: &[u8]) -> Option<usize> {
-    with_file_mut(index, |stored| {
-        let start = stored.len as usize;
-        let n = src.len().min(FILE_BYTES.saturating_sub(start));
-        stored.data[start..start + n].copy_from_slice(&src[..n]);
-        stored.len = (start + n) as u16;
-        n
-    })
+/// Copies `dst.len()` bytes from file offset `start`.
+pub(crate) fn read_at(index: u16, start: usize, dst: &mut [u8]) -> Option<usize> {
+    let table = TABLE.lock();
+    let i = index as usize;
+    if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
+        return None;
+    }
+    let len = table.objects[i].len as usize;
+    if start >= len || dst.is_empty() {
+        return Some(0);
+    }
+    let mut copied = 0usize;
+    let want = dst.len().min(len - start);
+    while copied < want {
+        let pos = start + copied;
+        let slot = pos / BLOCK_SIZE;
+        let off = pos % BLOCK_SIZE;
+        let b = table.objects[i].blocks[slot];
+        if b == NO_BLOCK || b as usize >= BLOCK_SLOTS {
+            return None;
+        }
+        let n = (BLOCK_SIZE - off).min(want - copied);
+        dst[copied..copied + n].copy_from_slice(&table.blocks[b as usize][off..off + n]);
+        copied += n;
+    }
+    Some(copied)
 }
 
 /// Appends bytes to a file by object index. Test helper.
@@ -1260,13 +1408,27 @@ pub fn append_file(index: u16, src: &[u8]) -> Option<usize> {
     Some(n)
 }
 
+/// Removes a path as admin. Test helper.
+pub fn remove_as_admin(name: &str) -> Result<(), SysError> {
+    let cred = admin_cred();
+    remove(cred.root, &cred.tokens, name)?;
+    sync();
+    Ok(())
+}
+
 /// Copies file bytes into `out`. Returns the length, or `None` if missing.
 pub fn read_file_bytes(index: u16, out: &mut [u8]) -> Option<usize> {
-    with_file(index, |stored| {
-        let n = (stored.len as usize).min(out.len());
-        out[..n].copy_from_slice(&stored.data[..n]);
-        n
-    })
+    read_at(index, 0, out)
+}
+
+/// How many blocks are currently allocated in the pool (test helper).
+pub fn blocks_used() -> usize {
+    let table = TABLE.lock();
+    table
+        .bitmap
+        .iter()
+        .map(|b| b.count_ones() as usize)
+        .sum()
 }
 
 fn path_bytes(table: &Table, index: usize, viewer_root: u16, out: &mut [u8]) -> Option<usize> {

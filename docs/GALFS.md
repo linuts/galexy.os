@@ -108,22 +108,23 @@ child’s files (`PROCESS.md`).
 
 ## Table limits (today)
 
-Milestone **45** (GALF **v7**) raised actor/object slots. File bytes stay
-inline until the block/extent store lands later in the same milestone.
+Milestone **45** / GALF **v8**: actor/object tables plus a shared block
+pool. Empty files cost an inode only; bytes live in direct blocks.
 
 | Resource | Cap |
 | --- | --- |
 | Actors | 32 |
 | Objects (files + dirs + roots) | 128 |
-| File payload | 512 bytes (inline) |
+| Block size | 512 bytes |
+| Direct blocks per file | 8 (max file 4 KiB) |
+| Block pool | 256 blocks |
 | Tokens per task | 8 |
 | Path depth | 8 components |
 | Name length | 64 (object) / 32 (actor) |
-| Sectors per dual-slot image | 160 |
+| Sectors per dual-slot image | 288 |
 
-The IF=0 syscall path must not heap-allocate over this table. Further
-growth (block store, larger files) either keeps that invariant or
-documents a deferred-work path.
+The IF=0 syscall path must not heap-allocate over this table. Indirect
+blocks / larger files are the next raise.
 
 ## On-disk: GALF slots
 
@@ -142,7 +143,7 @@ slot 1 @ LBA DISK_SECTORS
 | Crash | Mid-write leaves the previous slot intact |
 | Version | Layout bump **refuses** old images (no silent reinterpret) |
 
-### Sealed slots (Milestone 44 → v6; capacity bump → v7)
+### Sealed slots (v6 AEAD → v7 tables → v8 block pool)
 
 **Threat (v1):** stolen `galfs.img` must not yield file bytes or password
 hashes offline. Cold-boot RAM and a live compromised kernel are out of
@@ -150,15 +151,14 @@ scope initially.
 
 1. Format creates a random **volume key**.
 2. KEK = PBKDF2(volume passphrase); wrap the volume key (ChaCha20-HMAC).
-3. Encrypt the actor/object payload under the volume key.
+3. Encrypt the actor/object/**bitmap/block** payload under the volume key.
 4. AAD binds magic + version + generation (slot splice rejected).
 5. CRC of ciphertext is a cheap reject before AEAD open.
 
 Bring-up unlock uses a fixed volume passphrase (`galfs` today).
 Interactive unlock is a follow-up. Details: `AUTH.md` → Sealed GALF.
 
-v7 refuses older images (including sealed v6); delete `galfs.img` or let
-format recreate.
+v8 refuses older images; delete `galfs.img` or let format recreate.
 
 ## Boot and format
 
@@ -170,9 +170,10 @@ format recreate.
 4. `userdel` refuses `admin`, non-empty trees, and roots still in use;
    clears tokens that named that actor’s objects.
 
-`bin/test-galfs` exercises tokens in RAM. `bin/test-galfs-disk` proves
-persist + dual-slot recover; the host asserts plaintext markers are
-absent from the raw image.
+`bin/test-galfs` exercises tokens in RAM. `bin/test-blocks` fills the
+block pool and reuses after remove. `bin/test-galfs-disk` proves
+multi-block persist + dual-slot recover; the host asserts plaintext
+markers are absent from the raw image.
 
 ## Auth interaction
 
@@ -188,18 +189,18 @@ absent from the raw image.
 
 ### Today (through review readiness)
 
-- GALF **v7**: 32 actors / 128 objects; 512-byte inline files
-- Sealed dual-slot image (160 sectors/slot) on the IDE slave
-- Object-table fill stress (`test-scratch` / `test-rm`) hits `NoResource`
+- GALF **v8**: 32 actors / 128 objects; 256×512 block pool; 8 directs/file
+- Sealed dual-slot image (288 sectors/slot) on the IDE slave
+- Object + block fill stress; remove reuses blocks without leaks
 - Shell: `ls` / `cat` / `echo` / `touch` / `mkdir` / `rm` / `cp` / `mv`
   / `grant` / `revoke` via utilities + syscalls
 - Admin operator bypass still broad (narrow in Milestone 43 leftovers)
 
-### Remaining capacity (Milestone 45)
+### Remaining (Milestone 45)
 
-- Block/extent store for larger files (keep IF=0 or defer mutate)
-- Endian-safe on-disk structs; shared defs with host fsck
-- Actor + block fill stress; reuse without leaking blocks
+- Indirect blocks / larger than 4 KiB; endian-safe shared fsck defs
+- rename / truncate / stat and the rest of the ops checklist
+- Actor quotas, durable shares, sync/fsck polish
 
 ### Target storage stack (Milestone 46)
 
@@ -220,7 +221,7 @@ absent from the raw image.
 | Milestone | Delivers |
 | --- | --- |
 | **44** | Sealed GALF (volume key + AEAD); threat model; no plaintext in image |
-| **45** | Capacity & layout (v7 tables landed; block store + fsck defs next) |
+| **45** | Capacity & block store (v8); ops/fsck/quotas remain |
 | **46** | Storage stack polish for demos / review |
 
 Until 45 lands, demo limits above are the shipped contract. New code

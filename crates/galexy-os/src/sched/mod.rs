@@ -1402,13 +1402,9 @@ pub(crate) fn task_read(cap: Cap, dst: &mut [u8]) -> Result<usize, SysError> {
                 dst[..n].copy_from_slice(&bytes[start..start + n]);
                 n
             }
-            FileBody::Galfs(obj) => galfs::with_file(obj, |stored| {
-                let available = (stored.len as usize).saturating_sub(start);
-                let n = dst.len().min(available);
-                dst[..n].copy_from_slice(&stored.data[start..start + n]);
-                n
-            })
-            .ok_or(SysError::BadCap)?,
+            FileBody::Galfs(obj) => {
+                galfs::read_at(obj, start, dst).ok_or(SysError::BadCap)?
+            }
             FileBody::Pipe { id, end } => {
                 if end != pipe::PipeEnd::Read {
                     return Err(SysError::AccessDenied);
