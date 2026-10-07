@@ -354,6 +354,17 @@ struct Thread {
     /// Absolute `timer_ticks` deadline for [`Syscall::Sleep`]. `0` means
     /// this wait is not a sleep (spawn/Cap-wait/I/O).
     sleep_deadline: AtomicU64,
+    /// I/O wait kind while `STATE_WAITING` (Milestone 57): `0` none,
+    /// `1` keyboard, `2` pipe read, `3` pipe write.
+    io_kind: AtomicU8,
+    /// Pipe id when `io_kind` is pipe read/write.
+    io_pipe: AtomicU8,
+    /// User buffer address for a parked I/O syscall.
+    io_addr: AtomicU64,
+    /// User buffer length for a parked I/O syscall.
+    io_len: AtomicU32,
+    /// Cap bits for the parked I/O syscall (file/keyboard).
+    io_cap: AtomicU64,
     /// Exit status stamped on [`STATE_EXITED`] (read by Cap-wait).
     exit_code: AtomicU64,
     /// Bumped when the slot is reaped/reused so old process Caps fail.
@@ -770,6 +781,11 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
             wait_child_slot: AtomicU8::new(0),
             wait_for_exit: AtomicBool::new(false),
             sleep_deadline: AtomicU64::new(0),
+            io_kind: AtomicU8::new(0),
+            io_pipe: AtomicU8::new(0),
+            io_addr: AtomicU64::new(0),
+            io_len: AtomicU32::new(0),
+            io_cap: AtomicU64::new(0),
             exit_code: AtomicU64::new(0),
             cap_gen: AtomicU32::new(1),
             debug_id: NEXT_DEBUG_ID.fetch_add(1, Ordering::Relaxed),
@@ -825,6 +841,11 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             wait_child_slot: AtomicU8::new(0),
             wait_for_exit: AtomicBool::new(false),
             sleep_deadline: AtomicU64::new(0),
+            io_kind: AtomicU8::new(0),
+            io_pipe: AtomicU8::new(0),
+            io_addr: AtomicU64::new(0),
+            io_len: AtomicU32::new(0),
+            io_cap: AtomicU64::new(0),
             exit_code: AtomicU64::new(0),
             cap_gen: AtomicU32::new(1),
             debug_id: NEXT_DEBUG_ID.fetch_add(1, Ordering::Relaxed),
@@ -1076,6 +1097,11 @@ pub(crate) fn spawn_user_with_grants(
             wait_child_slot: AtomicU8::new(0),
             wait_for_exit: AtomicBool::new(false),
             sleep_deadline: AtomicU64::new(0),
+            io_kind: AtomicU8::new(0),
+            io_pipe: AtomicU8::new(0),
+            io_addr: AtomicU64::new(0),
+            io_len: AtomicU32::new(0),
+            io_cap: AtomicU64::new(0),
             exit_code: AtomicU64::new(0),
             cap_gen: AtomicU32::new(1),
             debug_id: NEXT_DEBUG_ID.fetch_add(1, Ordering::Relaxed),
@@ -1654,10 +1680,8 @@ fn wake_spawn_waiter(threads: &mut [Thread], waiter_slot: u8, result: SyscallRes
     if thread.state.load(Ordering::Acquire) != STATE_WAITING {
         return;
     }
+    clear_wait_fields(thread);
     stamp_waiter_frame(thread, result);
-    thread.wait_child_slot.store(0, Ordering::Relaxed);
-    thread.wait_for_exit.store(false, Ordering::Relaxed);
-    thread.sleep_deadline.store(0, Ordering::Relaxed);
     thread.state.store(STATE_RUNNING, Ordering::Release);
 }
 
@@ -1688,10 +1712,8 @@ fn wake_exit_waiters(threads: &mut [Thread], child_slot: u8, exit_code: u64) {
         if thread.state.load(Ordering::Acquire) != STATE_WAITING {
             continue;
         }
+        clear_wait_fields(thread);
         stamp_waiter_frame(thread, SyscallResult::ok(exit_code));
-        thread.wait_child_slot.store(0, Ordering::Relaxed);
-        thread.wait_for_exit.store(false, Ordering::Relaxed);
-        thread.sleep_deadline.store(0, Ordering::Relaxed);
         thread.state.store(STATE_RUNNING, Ordering::Release);
         any = true;
     }
@@ -1785,6 +1807,27 @@ fn install_open(body: FileBody, rights: CapRights) -> Result<Cap, SysError> {
 /// handle snapshot, so a task cannot inflate READ onto a handle it stripped,
 /// and cannot use a WRITE-only forgery of a file index.
 pub(crate) fn task_read(cap: Cap, dst: &mut [u8]) -> Result<usize, SysError> {
+    match task_read_ex(cap, dst)? {
+        IoOp::Ready(n) => Ok(n),
+        IoOp::ParkPipe { .. } => Ok(0),
+    }
+}
+
+/// Blocking-aware file read (Milestone 57). Archive/galfs stay non-blocking.
+pub(crate) fn task_read_ex(cap: Cap, dst: &mut [u8]) -> Result<IoOp, SysError> {
+    task_read_inner(cap, dst)
+}
+
+/// Result of a file/pipe I/O attempt that may need to park.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum IoOp {
+    /// Completed with `n` bytes (EOF is `Ready(0)`).
+    Ready(usize),
+    /// Caller should park on this pipe end.
+    ParkPipe { id: u8, read: bool },
+}
+
+fn task_read_inner(cap: Cap, dst: &mut [u8]) -> Result<IoOp, SysError> {
     let index = file_slot(cap)?;
     let slot = current_slot();
     if slot == 0 {
@@ -1799,30 +1842,36 @@ pub(crate) fn task_read(cap: Cap, dst: &mut [u8]) -> Result<usize, SysError> {
             return Err(SysError::AccessDenied);
         }
         if dst.is_empty() {
-            return Ok(0);
+            return Ok(IoOp::Ready(0));
         }
         let start = file.offset;
-        let n = match file.body {
+        let op = match file.body {
             FileBody::Archive(bytes) => {
                 let available = bytes.len().saturating_sub(start);
                 let n = dst.len().min(available);
                 dst[..n].copy_from_slice(&bytes[start..start + n]);
-                n
+                IoOp::Ready(n)
             }
             FileBody::Galfs(obj) => {
-                galfs::read_at(obj, start, dst).ok_or(SysError::BadCap)?
+                IoOp::Ready(galfs::read_at(obj, start, dst).ok_or(SysError::BadCap)?)
             }
             FileBody::Pipe { id, end } => {
                 if end != pipe::PipeEnd::Read {
                     return Err(SysError::AccessDenied);
                 }
-                pipe::read(id, dst)?
+                match pipe::try_read(id, dst)? {
+                    pipe::ReadResult::Ready(n) => IoOp::Ready(n),
+                    pipe::ReadResult::Eof => IoOp::Ready(0),
+                    pipe::ReadResult::WouldBlock => IoOp::ParkPipe { id, read: true },
+                }
             }
         };
-        if !matches!(file.body, FileBody::Pipe { .. }) {
-            file.offset = start + n;
+        if let IoOp::Ready(n) = op {
+            if !matches!(file.body, FileBody::Pipe { .. }) {
+                file.offset = start + n;
+            }
         }
-        Ok(n)
+        Ok(op)
     })
 }
 
@@ -1832,12 +1881,20 @@ pub(crate) fn task_read(cap: Cap, dst: &mut [u8]) -> Result<usize, SysError> {
 /// beginning. A write that does not fit is short: the count is the bytes
 /// copied, and `0` means the buffer is already full.
 pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
+    match task_write_ex(cap, src)? {
+        IoOp::Ready(n) => Ok(n),
+        IoOp::ParkPipe { .. } => Ok(0),
+    }
+}
+
+/// Blocking-aware file write (Milestone 57). Full pipes return [`IoOp::ParkPipe`].
+pub(crate) fn task_write_ex(cap: Cap, src: &[u8]) -> Result<IoOp, SysError> {
     let index = file_slot(cap)?;
     let slot = current_slot();
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    let (n, galfs_wrote) = interrupts::without_interrupts(|| {
+    let (op, galfs_wrote, wake_pipe) = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
         let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
@@ -1846,18 +1903,24 @@ pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
             return Err(SysError::AccessDenied);
         }
         if src.is_empty() {
-            return Ok((0, false));
+            return Ok((IoOp::Ready(0), false, None));
         }
         match file.body {
             FileBody::Galfs(obj) => {
                 let n = galfs::append(obj, src).ok_or(SysError::BadCap)?;
-                Ok((n, n > 0))
+                Ok((IoOp::Ready(n), n > 0, None))
             }
             FileBody::Pipe { id, end } => {
                 if end != pipe::PipeEnd::Write {
                     return Err(SysError::AccessDenied);
                 }
-                Ok((pipe::write(id, src)?, false))
+                match pipe::try_write(id, src)? {
+                    pipe::WriteResult::Ready(n) => Ok((IoOp::Ready(n), false, Some(id))),
+                    pipe::WriteResult::WouldBlock => {
+                        Ok((IoOp::ParkPipe { id, read: false }, false, None))
+                    }
+                    pipe::WriteResult::Closed => Err(SysError::Unsupported),
+                }
             }
             FileBody::Archive(_) => Err(SysError::Unsupported),
         }
@@ -1865,7 +1928,10 @@ pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
     if galfs_wrote {
         galfs::sync();
     }
-    Ok(n)
+    if let Some(id) = wake_pipe {
+        wake_pipe_waiters(id);
+    }
+    Ok(op)
 }
 
 /// Creates a galfs file or directory for the current user task.
@@ -2072,17 +2138,25 @@ pub(crate) fn task_close(cap: Cap) -> Result<(), SysError> {
         });
     }
     let index = file_slot(cap)?;
-    interrupts::without_interrupts(|| {
+    let wake_id = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
         let Some(file) = thread.files[index].take() else {
             return Err(SysError::BadCap);
         };
-        if let FileBody::Pipe { id, end } = file.body {
-            pipe::close_end(id, end);
-        }
-        Ok(())
-    })
+        Ok(match file.body {
+            FileBody::Pipe { id, end } => {
+                pipe::close_end(id, end);
+                Some(id)
+            }
+            _ => None,
+        })
+    })?;
+    // Wake outside THREADS — `wake_pipe_waiters` takes the same lock.
+    if let Some(id) = wake_id {
+        wake_pipe_waiters(id);
+    }
+    Ok(())
 }
 
 /// Exit status stamped when a task is stopped by [`task_kill`].
@@ -2186,6 +2260,12 @@ pub(crate) fn task_kill(cap: Cap) -> Result<(), SysError> {
         }
         if state != STATE_RUNNING && state != STATE_WAITING {
             return Err(SysError::BadCap);
+        }
+        // Milestone 57: cancel sleep / I/O parks with Interrupted so a
+        // kill of a blocked task never leaves a waiter stranded; Cap-wait
+        // still observes EXIT_KILLED below.
+        if state == STATE_WAITING {
+            interrupt_io_waiter(&mut threads, ci - 1);
         }
         threads[ci - 1]
             .exit_code
@@ -3296,12 +3376,348 @@ fn wake_due_sleepers(threads: &mut [Thread], now: u64) {
         if deadline == 0 || now < deadline {
             continue;
         }
+        clear_wait_fields(thread);
         stamp_waiter_frame(thread, SyscallResult::ok(0));
-        thread.sleep_deadline.store(0, Ordering::Relaxed);
-        thread.wait_child_slot.store(0, Ordering::Relaxed);
-        thread.wait_for_exit.store(false, Ordering::Relaxed);
         thread.state.store(STATE_RUNNING, Ordering::Release);
     }
+}
+
+const IO_NONE: u8 = 0;
+const IO_KEYBOARD: u8 = 1;
+const IO_PIPE_READ: u8 = 2;
+const IO_PIPE_WRITE: u8 = 3;
+
+fn clear_wait_fields(thread: &Thread) {
+    thread.wait_child_slot.store(0, Ordering::Relaxed);
+    thread.wait_for_exit.store(false, Ordering::Relaxed);
+    thread.sleep_deadline.store(0, Ordering::Relaxed);
+    thread.io_kind.store(IO_NONE, Ordering::Relaxed);
+    thread.io_pipe.store(0, Ordering::Relaxed);
+    thread.io_addr.store(0, Ordering::Relaxed);
+    thread.io_len.store(0, Ordering::Relaxed);
+    thread.io_cap.store(0, Ordering::Relaxed);
+}
+
+fn park_io(
+    threads: &mut [Thread],
+    slot: usize,
+    kind: u8,
+    pipe_id: u8,
+    addr: u64,
+    len: u32,
+    cap_bits: u64,
+) {
+    let thread = &mut threads[slot - 1];
+    thread.wait_child_slot.store(0, Ordering::Relaxed);
+    thread.wait_for_exit.store(false, Ordering::Relaxed);
+    thread.sleep_deadline.store(0, Ordering::Relaxed);
+    thread.io_kind.store(kind, Ordering::Release);
+    thread.io_pipe.store(pipe_id, Ordering::Relaxed);
+    thread.io_addr.store(addr, Ordering::Relaxed);
+    thread.io_len.store(len, Ordering::Relaxed);
+    thread.io_cap.store(cap_bits, Ordering::Relaxed);
+    thread.state.store(STATE_WAITING, Ordering::Release);
+}
+
+/// Wake keyboard readers parked on `tty` (Milestone 57). Completes the
+/// pending read into their user buffer when keys are available.
+pub fn wake_keyboard_waiters(tty: u8) {
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        for i in 0..threads.len() {
+            if threads[i].state.load(Ordering::Acquire) != STATE_WAITING {
+                continue;
+            }
+            if threads[i].io_kind.load(Ordering::Acquire) != IO_KEYBOARD {
+                continue;
+            }
+            if threads[i].tty != tty {
+                continue;
+            }
+            let addr = threads[i].io_addr.load(Ordering::Acquire);
+            let len = threads[i].io_len.load(Ordering::Acquire) as usize;
+            if len == 0 || addr == 0 {
+                clear_wait_fields(&threads[i]);
+                stamp_waiter_frame(&threads[i], SyscallResult::ok(0));
+                threads[i].state.store(STATE_RUNNING, Ordering::Release);
+                continue;
+            }
+            // Fill from the keyboard queue while the waiter is still parked
+            // (its CR3 is not current — copy via phys map / user walk of
+            // the waiter's tree). Use the same staging path as the syscall:
+            // temporarily enter the waiter's CR3 is heavy; instead re-stamp
+            // "retry" by rewinding is avoided — we fill via with_table.
+            let cr3 = threads[i].cr3.load(Ordering::Acquire);
+            let n = fill_keyboard_into_user(tty, cr3, addr, len);
+            if n == 0 {
+                // Still empty (spurious wake) — stay parked.
+                continue;
+            }
+            clear_wait_fields(&threads[i]);
+            stamp_waiter_frame(&threads[i], SyscallResult::ok(n as u64));
+            threads[i].state.store(STATE_RUNNING, Ordering::Release);
+        }
+    });
+}
+
+fn fill_keyboard_into_user(tty: u8, cr3: u64, addr: u64, len: usize) -> usize {
+    let mut staged = [0u8; 256];
+    let max = len.min(staged.len());
+    let mut filled = 0usize;
+    while filled < max {
+        let Some(c) = crate::drivers::keyboard::pop_key_tty(tty) else {
+            break;
+        };
+        let mut tmp = [0u8; 4];
+        let encoded = c.encode_utf8(&mut tmp);
+        if filled + encoded.len() > max {
+            crate::drivers::keyboard::unget_key_tty(tty, c);
+            break;
+        }
+        staged[filled..filled + encoded.len()].copy_from_slice(encoded.as_bytes());
+        filled += encoded.len();
+    }
+    if filled == 0 {
+        return 0;
+    }
+    // Copy into the waiter's address space via its page tables.
+    if cr3 == 0 {
+        return 0;
+    }
+    let root = PhysFrame::from_start_address(PhysAddr::new(cr3)).expect("waiter cr3");
+    // SAFETY: waiter FreshL4 root; not necessarily active.
+    let ok = unsafe {
+        crate::arch::mm::with_table(root, |mapper| {
+            copy_to_user_via(mapper, addr, &staged[..filled])
+        })
+    };
+    if ok {
+        filled
+    } else {
+        0
+    }
+}
+
+fn copy_to_user_via(
+    mapper: &mut x86_64::structures::paging::OffsetPageTable<'_>,
+    addr: u64,
+    src: &[u8],
+) -> bool {
+    use x86_64::structures::paging::{Page, Size4KiB};
+    let mut done = 0usize;
+    while done < src.len() {
+        let va = VirtAddr::new(addr + done as u64);
+        let page = Page::<Size4KiB>::containing_address(va);
+        let Ok(frame) = mapper.translate_page(page) else {
+            return false;
+        };
+        let off = (va.as_u64() as usize) & 0xFFF;
+        let room = (0x1000 - off).min(src.len() - done);
+        let dst = crate::arch::mm::frame_virt(frame.start_address()).as_mut_ptr::<u8>();
+        // SAFETY: frame backing a present user mapping; exclusive while waiter parks.
+        unsafe {
+            core::ptr::copy_nonoverlapping(src[done..].as_ptr(), dst.add(off), room);
+        }
+        done += room;
+    }
+    true
+}
+
+/// Wake pipe readers (data or EOF) / writers (space or closed).
+pub fn wake_pipe_waiters(id: u8) {
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        // Alternate reader/writer passes: a completed write frees data for
+        // readers, and a completed read frees space for writers.
+        for _ in 0..MAX_THREADS {
+            let mut readers = alloc::vec::Vec::new();
+            let mut writers = alloc::vec::Vec::new();
+            for (i, t) in threads.iter().enumerate() {
+                if t.state.load(Ordering::Acquire) != STATE_WAITING {
+                    continue;
+                }
+                if t.io_pipe.load(Ordering::Acquire) != id {
+                    continue;
+                }
+                match t.io_kind.load(Ordering::Acquire) {
+                    IO_PIPE_READ => readers.push(i),
+                    IO_PIPE_WRITE => writers.push(i),
+                    _ => {}
+                }
+            }
+            let before = readers.len() + writers.len();
+            if before == 0 {
+                break;
+            }
+            for i in readers {
+                complete_pipe_read(&mut threads, i);
+            }
+            for i in writers {
+                complete_pipe_write(&mut threads, i);
+            }
+            let mut still = 0usize;
+            for t in threads.iter() {
+                if t.state.load(Ordering::Acquire) != STATE_WAITING {
+                    continue;
+                }
+                if t.io_pipe.load(Ordering::Acquire) != id {
+                    continue;
+                }
+                let k = t.io_kind.load(Ordering::Acquire);
+                if k == IO_PIPE_READ || k == IO_PIPE_WRITE {
+                    still += 1;
+                }
+            }
+            if still >= before {
+                break; // no forward progress (still WouldBlock)
+            }
+        }
+    });
+}
+
+fn complete_pipe_read(threads: &mut [Thread], index: usize) {
+    let addr = threads[index].io_addr.load(Ordering::Acquire);
+    let len = threads[index].io_len.load(Ordering::Acquire) as usize;
+    let id = threads[index].io_pipe.load(Ordering::Acquire);
+    let cap_bits = threads[index].io_cap.load(Ordering::Acquire);
+    let cr3 = threads[index].cr3.load(Ordering::Acquire);
+    let mut staged = [0u8; 256];
+    let max = len.min(staged.len());
+    let result = match pipe::try_read(id, &mut staged[..max]) {
+        Ok(pipe::ReadResult::Ready(0)) => SyscallResult::ok(0),
+        Ok(pipe::ReadResult::Ready(n)) => {
+            let root = PhysFrame::from_start_address(PhysAddr::new(cr3)).expect("cr3");
+            let ok = unsafe {
+                crate::arch::mm::with_table(root, |mapper| {
+                    copy_to_user_via(mapper, addr, &staged[..n])
+                })
+            };
+            if ok {
+                SyscallResult::ok(n as u64)
+            } else {
+                SyscallResult::err(SysError::BadBuffer)
+            }
+        }
+        Ok(pipe::ReadResult::Eof) => SyscallResult::ok(0),
+        Ok(pipe::ReadResult::WouldBlock) => return, // stay parked
+        Err(e) => SyscallResult::err(e),
+    };
+    let _ = cap_bits;
+    clear_wait_fields(&threads[index]);
+    stamp_waiter_frame(&threads[index], result);
+    threads[index].state.store(STATE_RUNNING, Ordering::Release);
+}
+
+fn complete_pipe_write(threads: &mut [Thread], index: usize) {
+    let addr = threads[index].io_addr.load(Ordering::Acquire);
+    let len = threads[index].io_len.load(Ordering::Acquire) as usize;
+    let id = threads[index].io_pipe.load(Ordering::Acquire);
+    let cr3 = threads[index].cr3.load(Ordering::Acquire);
+    let mut staged = [0u8; 256];
+    let max = len.min(staged.len());
+    // Copy FROM user into staging.
+    let root = PhysFrame::from_start_address(PhysAddr::new(cr3)).expect("cr3");
+    let ok = unsafe {
+        crate::arch::mm::with_table(root, |mapper| copy_from_user_via(mapper, addr, &mut staged[..max]))
+    };
+    if !ok {
+        clear_wait_fields(&threads[index]);
+        stamp_waiter_frame(&threads[index], SyscallResult::err(SysError::BadBuffer));
+        threads[index].state.store(STATE_RUNNING, Ordering::Release);
+        return;
+    }
+    let result = match pipe::try_write(id, &staged[..max]) {
+        Ok(pipe::WriteResult::Ready(n)) => SyscallResult::ok(n as u64),
+        Ok(pipe::WriteResult::WouldBlock) => return,
+        Ok(pipe::WriteResult::Closed) => SyscallResult::err(SysError::Unsupported),
+        Err(e) => SyscallResult::err(e),
+    };
+    clear_wait_fields(&threads[index]);
+    stamp_waiter_frame(&threads[index], result);
+    threads[index].state.store(STATE_RUNNING, Ordering::Release);
+}
+
+fn copy_from_user_via(
+    mapper: &mut x86_64::structures::paging::OffsetPageTable<'_>,
+    addr: u64,
+    dst: &mut [u8],
+) -> bool {
+    use x86_64::structures::paging::{Page, Size4KiB};
+    let mut done = 0usize;
+    while done < dst.len() {
+        let va = VirtAddr::new(addr + done as u64);
+        let page = Page::<Size4KiB>::containing_address(va);
+        let Ok(frame) = mapper.translate_page(page) else {
+            return false;
+        };
+        let off = (va.as_u64() as usize) & 0xFFF;
+        let room = (0x1000 - off).min(dst.len() - done);
+        let src = crate::arch::mm::frame_virt(frame.start_address()).as_ptr::<u8>();
+        unsafe {
+            core::ptr::copy_nonoverlapping(src.add(off), dst[done..].as_mut_ptr(), room);
+        }
+        done += room;
+    }
+    true
+}
+
+/// Park the current task on an empty keyboard read. Caller must hand off.
+pub(crate) fn task_park_keyboard(cap_bits: u64, addr: u64, len: u32) -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        park_io(&mut threads, slot, IO_KEYBOARD, 0, addr, len, cap_bits);
+        Ok(())
+    })
+}
+
+/// Park on a pipe end. `read` selects reader vs writer wait.
+pub(crate) fn task_park_pipe(
+    pipe_id: u8,
+    read: bool,
+    cap_bits: u64,
+    addr: u64,
+    len: u32,
+) -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    let kind = if read { IO_PIPE_READ } else { IO_PIPE_WRITE };
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        park_io(&mut threads, slot, kind, pipe_id, addr, len, cap_bits);
+        Ok(())
+    })
+}
+
+/// Cancel I/O / sleep waits on a slot with [`SysError::Interrupted`].
+fn interrupt_io_waiter(threads: &mut [Thread], index: usize) {
+    if threads[index].state.load(Ordering::Acquire) != STATE_WAITING {
+        return;
+    }
+    let io = threads[index].io_kind.load(Ordering::Acquire);
+    let sleeping = threads[index].sleep_deadline.load(Ordering::Acquire) != 0;
+    if io == IO_NONE && !sleeping {
+        return; // Cap-wait / spawn — leave for exit wake
+    }
+    clear_wait_fields(&threads[index]);
+    stamp_waiter_frame(
+        &threads[index],
+        SyscallResult::err(SysError::Interrupted),
+    );
+    threads[index].state.store(STATE_RUNNING, Ordering::Release);
 }
 
 /// Milliseconds until the nearest sleep deadline, if any sleeper exists.

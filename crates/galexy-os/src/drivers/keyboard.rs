@@ -84,6 +84,8 @@ pub fn add_scancode(scancode: u8) {
                 let tty = (ACTIVE.load(Ordering::Relaxed) as usize).min(TTY_COUNT - 1);
                 // Overflow drops the key by design; not an error for the decoder.
                 let _ = KEY_QUEUES[tty].lock().push(c);
+                // Milestone 57: wake a reader parked on this TTY.
+                crate::sched::wake_keyboard_waiters(tty as u8);
             }
             Some(DecodedKey::RawKey(key)) => {
                 if let Some(tty) = tty_index(key) {

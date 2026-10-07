@@ -508,13 +508,13 @@ unsafe fn free_table_level(frame: PhysFrame<Size4KiB>, level: u8) -> usize {
 ///
 /// `root_frame` must head a complete, coherent L4 page-table tree not
 /// currently loaded in any CPU's CR3.
-pub unsafe fn with_table<F>(root_frame: PhysFrame<Size4KiB>, f: F)
+pub unsafe fn with_table<F, R>(root_frame: PhysFrame<Size4KiB>, f: F) -> R
 where
-    F: FnOnce(&mut OffsetPageTable<'static>),
+    F: FnOnce(&mut OffsetPageTable<'static>) -> R,
 {
     let phys = phys_offset();
     // SAFETY: caller contract — root_frame heads a coherent, non-active tree.
     let root = (phys + root_frame.start_address().as_u64()).as_mut_ptr::<PageTable>();
     let mut table = unsafe { OffsetPageTable::new(&mut *root, phys) };
-    x86_64::instructions::interrupts::without_interrupts(|| f(&mut table));
+    x86_64::instructions::interrupts::without_interrupts(|| f(&mut table))
 }

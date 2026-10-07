@@ -49,13 +49,20 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, SyscallResult::ok(0));
             Outcome::Handoff
         }
-        n if n == Syscall::Write as u64 => {
-            stamp(
-                frame,
-                syscall_write(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx),
-            );
-            Outcome::Resume
-        }
+        n if n == Syscall::Write as u64 => match syscall_write_ex(
+            Cap::from_bits(frame.rdi),
+            frame.rsi,
+            frame.rdx,
+        ) {
+            IoResult::Done(r) => {
+                stamp(frame, r);
+                Outcome::Resume
+            }
+            IoResult::Park => {
+                stamp(frame, SyscallResult::ok(0));
+                Outcome::Handoff
+            }
+        },
         n if n == Syscall::CapInfo as u64 => {
             stamp(frame, syscall_cap_info(Cap::from_bits(frame.rdi)));
             Outcome::Resume
@@ -64,13 +71,20 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, syscall_open(frame.rdi, frame.rsi));
             Outcome::Resume
         }
-        n if n == Syscall::Read as u64 => {
-            stamp(
-                frame,
-                syscall_read(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx),
-            );
-            Outcome::Resume
-        }
+        n if n == Syscall::Read as u64 => match syscall_read_ex(
+            Cap::from_bits(frame.rdi),
+            frame.rsi,
+            frame.rdx,
+        ) {
+            IoResult::Done(r) => {
+                stamp(frame, r);
+                Outcome::Resume
+            }
+            IoResult::Park => {
+                stamp(frame, SyscallResult::ok(0));
+                Outcome::Handoff
+            }
+        },
         n if n == Syscall::Close as u64 => {
             stamp(frame, syscall_close(Cap::from_bits(frame.rdi)));
             Outcome::Resume
@@ -211,10 +225,19 @@ fn syscall_cap_info(cap: Cap) -> SyscallResult {
     SyscallResult::ok(cap.bits())
 }
 
-fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+enum IoResult {
+    Done(SyscallResult),
+    Park,
+}
+
+fn syscall_write_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
     if cap.index() != galexy_abi::reserved::CONSOLE_INDEX {
-        return syscall_write_file(cap, addr, len);
+        return syscall_write_file_ex(cap, addr, len);
     }
+    IoResult::Done(syscall_write_console(cap, addr, len))
+}
+
+fn syscall_write_console(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if !crate::sched::task_granted(crate::sched::Grant::Console) {
         return SyscallResult::err(SysError::AccessDenied);
     }
@@ -276,14 +299,13 @@ fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     SyscallResult::ok(allowed as u64)
 }
 
-/// Copies `src` onto a scratch-file cap. Any bytes are legal; the console
-/// charset does not apply. An archive open is `Unsupported`.
-fn syscall_write_file(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+/// Copies `src` onto a file/pipe cap. Pipes may park when full (M57).
+fn syscall_write_file_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
     if len > MAX_WRITE {
-        return SyscallResult::err(SysError::BadValue);
+        return IoResult::Done(SyscallResult::err(SysError::BadValue));
     }
     if len > 0 && user_buffer(addr, len, false).is_err() {
-        return SyscallResult::err(SysError::BadBuffer);
+        return IoResult::Done(SyscallResult::err(SysError::BadBuffer));
     }
     let mut staged = [0u8; MAX_WRITE as usize];
     if len > 0 {
@@ -296,9 +318,18 @@ fn syscall_write_file(cap: Cap, addr: u64, len: u64) -> SyscallResult {
             );
         }
     }
-    match crate::sched::task_write(cap, &staged[..len as usize]) {
-        Ok(n) => SyscallResult::ok(n as u64),
-        Err(err) => SyscallResult::err(err),
+    match crate::sched::task_write_ex(cap, &staged[..len as usize]) {
+        Ok(crate::sched::IoOp::Ready(n)) => IoResult::Done(SyscallResult::ok(n as u64)),
+        Ok(crate::sched::IoOp::ParkPipe { id, read: false }) => {
+            match crate::sched::task_park_pipe(id, false, cap.bits(), addr, len as u32) {
+                Ok(()) => IoResult::Park,
+                Err(err) => IoResult::Done(SyscallResult::err(err)),
+            }
+        }
+        Ok(crate::sched::IoOp::ParkPipe { .. }) => {
+            IoResult::Done(SyscallResult::err(SysError::Unsupported))
+        }
+        Err(err) => IoResult::Done(SyscallResult::err(err)),
     }
 }
 
@@ -840,43 +871,53 @@ fn syscall_open(addr: u64, len: u64) -> SyscallResult {
     }
 }
 
-fn syscall_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+fn syscall_read_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
     if cap.index() == galexy_abi::reserved::KEYBOARD_INDEX {
-        return syscall_read_keyboard(cap, addr, len);
+        return syscall_read_keyboard_ex(cap, addr, len);
     }
     if let Some(kind) = query_kind(cap.index()) {
-        return syscall_read_query(cap, kind, addr, len);
+        return IoResult::Done(syscall_read_query(cap, kind, addr, len));
     }
     if cap.index() == galexy_abi::reserved::SELF_INDEX {
-        return syscall_read_self(cap, addr, len);
+        return IoResult::Done(syscall_read_self(cap, addr, len));
     }
     if (galexy_abi::PROC_CAP_BASE
         ..galexy_abi::PROC_CAP_BASE + galexy_abi::MAX_PROC_CAPS)
         .contains(&cap.index())
     {
-        return syscall_read_proc(cap, addr, len);
+        return IoResult::Done(syscall_read_proc(cap, addr, len));
     }
     // Short read: a request larger than the staging cap returns a prefix.
     let len = len.min(MAX_READ);
     if len > 0 && user_buffer(addr, len, true).is_err() {
-        return SyscallResult::err(SysError::BadBuffer);
+        return IoResult::Done(SyscallResult::err(SysError::BadBuffer));
     }
     let mut staged = [0u8; MAX_READ as usize];
-    let n = match crate::sched::task_read(cap, &mut staged[..len as usize]) {
-        Ok(n) => n,
-        Err(err) => return SyscallResult::err(err),
-    };
-    if n > 0 {
-        // SAFETY: the destination was accepted as present, user, writable.
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                staged.as_ptr(),
-                VirtAddr::new(addr).as_mut_ptr::<u8>(),
-                n,
-            );
+    match crate::sched::task_read_ex(cap, &mut staged[..len as usize]) {
+        Ok(crate::sched::IoOp::Ready(n)) => {
+            if n > 0 {
+                // SAFETY: the destination was accepted as present, user, writable.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        staged.as_ptr(),
+                        VirtAddr::new(addr).as_mut_ptr::<u8>(),
+                        n,
+                    );
+                }
+            }
+            IoResult::Done(SyscallResult::ok(n as u64))
         }
+        Ok(crate::sched::IoOp::ParkPipe { id, read: true }) => {
+            match crate::sched::task_park_pipe(id, true, cap.bits(), addr, len as u32) {
+                Ok(()) => IoResult::Park,
+                Err(err) => IoResult::Done(SyscallResult::err(err)),
+            }
+        }
+        Ok(crate::sched::IoOp::ParkPipe { .. }) => {
+            IoResult::Done(SyscallResult::err(SysError::Unsupported))
+        }
+        Err(err) => IoResult::Done(SyscallResult::err(err)),
     }
-    SyscallResult::ok(n as u64)
 }
 
 fn syscall_read_self(cap: Cap, addr: u64, len: u64) -> SyscallResult {
@@ -1108,19 +1149,19 @@ fn render_threads(out: &mut TextBuf<'_>) {
     out.push(b" ticks\n");
 }
 
-fn syscall_read_keyboard(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+fn syscall_read_keyboard_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
     if !crate::sched::task_granted(crate::sched::Grant::Keyboard) {
-        return SyscallResult::err(SysError::AccessDenied);
+        return IoResult::Done(SyscallResult::err(SysError::AccessDenied));
     }
     if !cap.rights().contains(CapRights::READ) {
-        return SyscallResult::err(SysError::AccessDenied);
+        return IoResult::Done(SyscallResult::err(SysError::AccessDenied));
     }
     let len = len.min(MAX_READ);
     if len == 0 {
-        return SyscallResult::ok(0);
+        return IoResult::Done(SyscallResult::ok(0));
     }
     if user_buffer(addr, len, true).is_err() {
-        return SyscallResult::err(SysError::BadBuffer);
+        return IoResult::Done(SyscallResult::err(SysError::BadBuffer));
     }
     let tty = crate::sched::current_tty();
     let mut staged = [0u8; MAX_READ as usize];
@@ -1138,17 +1179,22 @@ fn syscall_read_keyboard(cap: Cap, addr: u64, len: u64) -> SyscallResult {
         staged[filled..filled + encoded.len()].copy_from_slice(encoded.as_bytes());
         filled += encoded.len();
     }
-    if filled > 0 {
-        // SAFETY: the destination was accepted as present, user, writable.
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                staged.as_ptr(),
-                VirtAddr::new(addr).as_mut_ptr::<u8>(),
-                filled,
-            );
-        }
+    if filled == 0 {
+        // Block until a key arrives (Milestone 57).
+        return match crate::sched::task_park_keyboard(cap.bits(), addr, len as u32) {
+            Ok(()) => IoResult::Park,
+            Err(err) => IoResult::Done(SyscallResult::err(err)),
+        };
     }
-    SyscallResult::ok(filled as u64)
+    // SAFETY: the destination was accepted as present, user, writable.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            staged.as_ptr(),
+            VirtAddr::new(addr).as_mut_ptr::<u8>(),
+            filled,
+        );
+    }
+    IoResult::Done(SyscallResult::ok(filled as u64))
 }
 
 fn syscall_spawn(frame: &Context) -> SyscallResult {

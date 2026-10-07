@@ -1,4 +1,6 @@
 //! Integration test: anonymous pipes and `give` across tasks.
+//! Milestone 57: empty-pipe `read` parks until the producer writes
+//! (no yield spin once the read Cap is installed).
 
 #![no_std]
 #![no_main]

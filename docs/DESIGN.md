@@ -427,6 +427,15 @@ on one CPU is stale in every other TLB until invalidated.
 Runtime plan (time, block/wake, policy freeze): `docs/SCHEDULING.md`
 (Phase 7). Process Caps / init: `docs/PROCESS.md`.
 
+**Block / wake (Milestone 57).** `STATE_WAITING` covers spawn wait,
+Cap-wait, `sleep`, keyboard `read`, and pipe read/write. Parked I/O
+stores buffer addr/len on the thread; the keyboard IRQ and pipe peer
+activity complete the syscall via the waiter's page tables
+(`with_table` + phys-map copy). Archive and galfs `read`/`write` stay
+**non-blocking** (short counts) — they never park and never spin.
+Cap-kill of a sleep/I/O waiter stamps `SysError::Interrupted` then
+`EXITED` (Cap-waiters still see exit code `137`).
+
 Two models, layered:
 
 **Cooperative tasks** — round-robin over voluntarily-yielding state
