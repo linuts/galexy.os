@@ -2256,8 +2256,12 @@ pub(crate) fn task_pipe() -> Result<(Cap, Cap), SysError> {
     })
 }
 
-/// Moves an open file/pipe from the caller to `target`. Returns the new Cap.
+/// Moves an open file/pipe **or process Cap** from the caller to `target`.
+/// Returns the new Cap (rights attenuated for process Caps).
 pub(crate) fn task_give(cap: Cap, target: &str) -> Result<Cap, SysError> {
+    if proc_slot(cap).is_ok() {
+        return task_give_proc(cap, target);
+    }
     let index = file_slot(cap)?;
     let slot = current_slot();
     if slot == 0 {
@@ -2294,6 +2298,63 @@ pub(crate) fn task_give(cap: Cap, target: &str) -> Result<Cap, SysError> {
         let rights = file.rights;
         threads[ti].files[dest] = Some(file);
         Ok(Cap::new(galexy_abi::FILE_CAP_BASE + dest as u64, rights))
+    })
+}
+
+/// Moves a process Cap to `target`. Requires [`CapRights::PROC_TRANSFER`].
+fn task_give_proc(cap: Cap, target: &str) -> Result<Cap, SysError> {
+    if !cap.rights().contains(CapRights::PROC_TRANSFER) {
+        return Err(SysError::AccessDenied);
+    }
+    let pi = proc_slot(cap)?;
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let handle = {
+            let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+            if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
+                return Err(SysError::BadCap);
+            }
+            caller.procs[pi].ok_or(SysError::BadCap)?
+        };
+        if !handle.rights.contains(CapRights::PROC_TRANSFER) {
+            return Err(SysError::AccessDenied);
+        }
+        let ci = handle.child_slot as usize;
+        if ci == 0
+            || ci > threads.len()
+            || threads[ci - 1].cap_gen.load(Ordering::Acquire) != handle.gen
+        {
+            threads[slot - 1].procs[pi] = None;
+            return Err(SysError::BadCap);
+        }
+        // Attenuate: intersection of table rights and Cap word.
+        let rights = handle.rights.intersection(cap.rights());
+        if !rights.contains(CapRights::PROC_TRANSFER) {
+            return Err(SysError::AccessDenied);
+        }
+        let Some(ti) = threads.iter().position(|t| {
+            t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
+        }) else {
+            return Err(SysError::NotFound);
+        };
+        if ti == slot - 1 {
+            return Err(SysError::BadValue);
+        }
+        let Some(dest) = threads[ti].procs.iter().position(|s| s.is_none()) else {
+            return Err(SysError::NoResource);
+        };
+        // Take from caller only after the target has a free slot.
+        threads[slot - 1].procs[pi] = None;
+        threads[ti].procs[dest] = Some(ProcHandle {
+            child_slot: handle.child_slot,
+            gen: handle.gen,
+            rights,
+        });
+        Ok(Cap::new(PROC_CAP_BASE + dest as u64, rights))
     })
 }
 

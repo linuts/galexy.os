@@ -440,14 +440,16 @@ pub enum Syscall {
     /// (rax = 0). The read cap has READ; the write cap has WRITE. A full
     /// pipe table or file table is `NoResource`.
     Pipe,
-    /// `give(cap, task, task_len)` — move an open file/pipe cap to another
-    /// live user task.
+    /// `give(cap, task, task_len)` — move an open file/pipe **or process**
+    /// Cap to another live user task.
     ///
     /// Args: `RDI = cap bits`, `RSI = user address of the task name`,
     /// `RDX = name byte count`. Returns: `SyscallResult` (rax = the
-    /// target's new `Cap` bits). The caller's slot is cleared. Reserved
-    /// caps are `BadCap`. A missing task or a full target table is
-    /// `NotFound` / `NoResource`.
+    /// target's new `Cap` bits). The caller's slot is cleared. Rights are
+    /// attenuated to the intersection of the handle and the Cap word.
+    /// Process Caps require [`CapRights::PROC_TRANSFER`]. Reserved caps
+    /// are `BadCap`. A missing task or a full target table is `NotFound`
+    /// / `NoResource`.
     Give,
     /// `seek(cap, offset, whence)` — set the read cursor on an open file.
     ///

@@ -64,8 +64,11 @@ reaper is a bug path — orphans must land at init with wait rights.
 child = spawn(loader, name, args, flags)   → Cap (PROC_WAIT|… as granted)
 status = wait(child)                       → exit code; Cap becomes stale
 kill(child)                                → needs PROC_KILL
-give(peer, child)                          → needs PROC_TRANSFER
+give(peer, child)                          → needs PROC_TRANSFER (rights attenuate)
 ```
+
+`give` on a process Cap clears the caller's slot and installs an
+attenuated Cap on the peer (intersection of table rights and Cap word).
 
 | Before | Now (M47 spawn Cap) |
 | --- | --- |

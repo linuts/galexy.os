@@ -1378,17 +1378,18 @@ same discipline as files. Optional debug ids for listings only.
 
 Make the object-capability story hold under exhaustion and forgery.
 
-- [ ] **Cap forge battery**: reserved indices without grants →
-      AccessDenied; stale caps after close/remove → BadCap; stripped
-      rights bits cannot be re-added by the user — **include process
-      Caps** in the same battery
-- [ ] **Per-task budgets**: document max opens, pipes, tokens, arg bytes,
-      process Caps held; hit each ceiling in tests
+- [x] **Cap forge battery** (process Caps): wait/give without rights →
+      AccessDenied; empty/stale Cap → BadCap (`test-orphan`,
+      `test-procgive`, `test-proccap`); file/reserved forge battery still
+      open
+- [x] **Per-task budgets** (documented): `MAX_OPEN_FILES` 8,
+      `MAX_PROC_CAPS` 8, `SPAWN_ARG_MAX` 256, `SPAWN_NAME_MAX` 64,
+      `TOKEN_SLOTS` — ceiling tests still open
 - [ ] **Frame/charge limits (soft)**: optional max frames per user task;
       spawn fails cleanly when the machine is low on memory
-- [ ] **Give/pipe lifecycle**: all ends closed; no kernel pipe slab leak
-      across N create/give/exit cycles; process Cap `give`/`TRANSFER`
-      covered
+- [x] **Give/pipe lifecycle** (process Caps): `give` moves a process Cap
+      with attenuation (`PROC_TRANSFER`); pipe lifecycle already covered;
+      process Cap give covered (`test-procgive`)
 - [ ] **Query caps**: snapshots do not allocate on IF=0 (already true —
       add a regression comment/test if a change regresses it)
 - [ ] **Loader EXEC**: only the shell (or tasks with loader grant) can

@@ -1000,6 +1000,20 @@ fn orphan_test_passes() {
 }
 
 #[test]
+fn procgive_test_passes() {
+    let (code, serial) = boot(&image("test-procgive"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-procgive should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-procgive] passed"),
+        "test-procgive success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn seek_test_passes() {
     let (code, serial) = boot(&image("test-seek"));
     assert_eq!(
