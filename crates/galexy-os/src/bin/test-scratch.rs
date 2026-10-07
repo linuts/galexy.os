@@ -231,7 +231,8 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     mov_eax(&mut code, Syscall::Close as u32);
     code.extend_from_slice(&[0x0F, 0x05]);
 
-    // 125 two-char names (aa..) — fills 128 slots with admin+Desktop+note.
+    // 125 two-char names (Aa..) — fills 128 slots with admin+Desktop+note.
+    // Uppercase first letter avoids ramdisk names (`cp` / `ls` / `mv` / `rm`).
     emit_fill_loop(&mut code, 125, 0x88, 0x200);
 
     syscall_imm(
@@ -251,7 +252,7 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     code
 }
 
-/// Create `count` unique two-char names (`aa`…), counting successes into
+/// Create `count` unique two-char names (`Aa`…), counting successes into
 /// `[r15+fill_ok_off]`. Names are staged at `[r15+name_disp]`.
 fn emit_fill_loop(code: &mut alloc::vec::Vec<u8>, count: u64, fill_ok_off: i32, name_disp: i32) {
     code.extend_from_slice(&[0x4D, 0x31, 0xED]); // xor r13, r13
@@ -262,7 +263,7 @@ fn emit_fill_loop(code: &mut alloc::vec::Vec<u8>, count: u64, fill_ok_off: i32, 
     code.extend_from_slice(&[0x48, 0x31, 0xD2]); // xor rdx, rdx
     code.extend_from_slice(&[0xB9, 26, 0, 0, 0]); // mov ecx, 26
     code.extend_from_slice(&[0x48, 0xF7, 0xF1]); // div rcx
-    code.extend_from_slice(&[0x04, b'a']); // add al, 'a'
+    code.extend_from_slice(&[0x04, b'A']); // add al, 'A' (avoid ramdisk names)
     code.extend_from_slice(&[0x80, 0xC2, b'a']); // add dl, 'a'
     code.extend_from_slice(&[0x41, 0x88, 0x87]); // mov [r15+disp], al
     code.extend_from_slice(&name_disp.to_le_bytes());

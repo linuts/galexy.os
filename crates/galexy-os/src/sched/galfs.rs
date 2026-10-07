@@ -183,6 +183,15 @@ static TABLE: Mutex<Table> = Mutex::new(Table {
     actors: [Actor::empty(); ACTOR_SLOTS],
     objects: [Object::empty(); OBJECT_SLOTS],
 });
+/// Scratch tables for disk load — must not live on the kernel stack (v7 ≈ 75 KiB each).
+static LOAD_BEST: Mutex<Table> = Mutex::new(Table {
+    actors: [Actor::empty(); ACTOR_SLOTS],
+    objects: [Object::empty(); OBJECT_SLOTS],
+});
+static LOAD_CAND: Mutex<Table> = Mutex::new(Table {
+    actors: [Actor::empty(); ACTOR_SLOTS],
+    objects: [Object::empty(); OBJECT_SLOTS],
+});
 
 static BOOTED: AtomicBool = AtomicBool::new(false);
 /// True when the ATA slave accepted a load or format write.
@@ -303,43 +312,45 @@ fn sync_to_disk() -> bool {
 fn load_from_disk() -> bool {
     let mut best_gen = 0u64;
     let mut best_slot: Option<u32> = None;
-    let mut best_table = Table {
-        actors: [Actor::empty(); ACTOR_SLOTS],
-        objects: [Object::empty(); OBJECT_SLOTS],
-    };
     let mut buf = DISK_BUF.lock();
+    let mut best = LOAD_BEST.lock();
+    let mut cand = LOAD_CAND.lock();
     for slot in 0..DISK_SLOT_COUNT as u32 {
         let lba = (slot as usize * DISK_SECTORS) as u32;
         if ata::read_sectors(lba, &mut *buf).is_err() {
             continue;
         }
-        let mut candidate = Table {
-            actors: [Actor::empty(); ACTOR_SLOTS],
-            objects: [Object::empty(); OBJECT_SLOTS],
-        };
-        let Some(gen) = decode_table(&mut buf, &mut candidate) else {
+        let Some(gen) = decode_table(&mut buf, &mut cand) else {
             continue;
         };
-        if !validate_table(&candidate) {
+        if !validate_table(&cand) {
             crate::serial_println!("[galfs] slot {} failed validation", slot);
             continue;
         }
         if best_slot.is_none() || gen >= best_gen {
             best_gen = gen;
             best_slot = Some(slot);
-            best_table = candidate;
+            // Avoid `*best = *cand` — that materializes a Table on the stack.
+            copy_table(&*cand, &mut *best);
         }
     }
     let Some(slot) = best_slot else {
         return false;
     };
     let mut table = TABLE.lock();
-    *table = best_table;
+    copy_table(&*best, &mut *table);
     refresh_roots(&table);
     ACTIVE_SLOT.store(slot, Ordering::Release);
     ACTIVE_GEN.store(best_gen, Ordering::Release);
     DISK_LIVE.store(true, Ordering::Release);
     true
+}
+
+fn copy_table(src: &Table, dst: &mut Table) {
+    // SAFETY: distinct Mutex-owned tables; Table is plain data.
+    unsafe {
+        core::ptr::copy_nonoverlapping(src as *const Table, dst as *mut Table, 1);
+    }
 }
 
 fn refresh_roots(table: &Table) {
