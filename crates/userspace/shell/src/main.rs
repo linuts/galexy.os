@@ -19,7 +19,7 @@ use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
     arg, entry, files_cap, grant, keyboard_cap, read, reboot, revoke, shutdown, spawn_with,
     stats_cap, tasks_cap, threads_cap, user, user_login, user_logout, user_name, user_name_pass,
-    user_passwd, write_console, yield_now,
+    user_passwd, user_quota, user_setquota, write_console, yield_now,
 };
 
 entry!(main);
@@ -288,11 +288,12 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
     if line == b"help" {
         write_console(b"commands: help, ls, echo, cat, touch, mkdir, cd, rm,\n");
         write_console(b"cp, mv, truncate, stat, grant, revoke, whoami, users,\n");
-        write_console(b"useradd, userdel, login, logout, passwd, su,\n");
+        write_console(b"quota, useradd, userdel, login, logout, passwd, su,\n");
         write_console(b"stats, tasks, threads, about, clear\n");
         write_console(b"login [user] [pass] - omit pass for a masked Password: prompt\n");
         write_console(b"passwd [name] - masked Password: + Confirm: (no inline secret)\n");
         write_console(b"useradd <name> [pass] - omit pass for a masked Password: prompt\n");
+        write_console(b"quota [user] | quota set <user> <objects> <bytes>\n");
         write_console(b"logout returns to the login screen; Esc/Ctrl-C cancels a prompt\n");
         write_console(b"default admin/admin must passwd before other commands\n");
         write_console(b"grant/revoke: <rights> <path> <task>  (r w l c x a=all)\n");
@@ -380,6 +381,14 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
     }
     if line == b"users" {
         users_cmd(cwd);
+        return None;
+    }
+    if line == b"quota" {
+        quota_cmd(cwd, b"");
+        return None;
+    }
+    if let Some(rest) = arg_of(line, b"quota") {
+        quota_cmd(cwd, rest);
         return None;
     }
     if let Some(rest) = arg_of(line, b"useradd") {
@@ -730,6 +739,132 @@ fn whoami(cwd: &Cwd) {
     }
     let n = (got.value as usize).min(buf.len());
     write_console(&buf[..n]);
+    write_console(b"\n");
+    prompt(cwd);
+}
+
+fn parse_u32(s: &[u8]) -> Option<u32> {
+    if s.is_empty() {
+        return None;
+    }
+    let mut n = 0u32;
+    for &b in s {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        n = n.checked_mul(10)?.checked_add((b - b'0') as u32)?;
+    }
+    Some(n)
+}
+
+fn write_u32(n: u32) {
+    let mut buf = [0u8; 10];
+    let mut x = n;
+    let mut i = buf.len();
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (x % 10) as u8;
+        x /= 10;
+        if x == 0 {
+            break;
+        }
+    }
+    write_console(&buf[i..]);
+}
+
+fn quota_cmd(cwd: &Cwd, rest: &[u8]) {
+    let rest = trim(rest);
+    if rest.is_empty() {
+        show_quota(cwd, b"");
+        return;
+    }
+    if let Some(after) = arg_of(rest, b"set") {
+        let after = trim(after);
+        let Some(sp1) = after.iter().position(|b| *b == b' ') else {
+            write_console(b"usage: quota set <user> <objects> <bytes>\n");
+            prompt(cwd);
+            return;
+        };
+        let name = trim(&after[..sp1]);
+        let after = trim(&after[sp1 + 1..]);
+        let Some(sp2) = after.iter().position(|b| *b == b' ') else {
+            write_console(b"usage: quota set <user> <objects> <bytes>\n");
+            prompt(cwd);
+            return;
+        };
+        let objects = trim(&after[..sp2]);
+        let bytes = trim(&after[sp2 + 1..]);
+        let Some(max_o) = parse_u32(objects) else {
+            write_console(b"quota: bad object limit\n");
+            prompt(cwd);
+            return;
+        };
+        let Some(max_b) = parse_u32(bytes) else {
+            write_console(b"quota: bad byte limit\n");
+            prompt(cwd);
+            return;
+        };
+        if max_o == 0 || max_o > u16::MAX as u32 || name.is_empty() {
+            write_console(b"usage: quota set <user> <objects> <bytes>\n");
+            prompt(cwd);
+            return;
+        }
+        if !name
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'.' || *b == b'_' || *b == b'-')
+        {
+            write_console(b"quota: bad user name\n");
+            prompt(cwd);
+            return;
+        }
+        let got = user_setquota(name, max_o as u16, max_b);
+        if !got.ok {
+            write_console(b"quota set: ");
+            match SysError::from_code(got.value) {
+                SysError::AccessDenied => write_console(b"access denied\n"),
+                SysError::NotFound => write_console(b"not found\n"),
+                SysError::BadValue => write_console(b"bad value\n"),
+                _ => write_console(b"failed\n"),
+            };
+            prompt(cwd);
+            return;
+        }
+        show_quota(cwd, name);
+        return;
+    }
+    if rest.contains(&b' ') {
+        write_console(b"usage: quota [user] | quota set <user> <objects> <bytes>\n");
+        prompt(cwd);
+        return;
+    }
+    show_quota(cwd, rest);
+}
+
+fn show_quota(cwd: &Cwd, name: &[u8]) {
+    let mut buf = [0u8; galexy_abi::QUOTA_LEN];
+    let got = user_quota(&mut buf, name);
+    if !got.ok {
+        write_console(b"quota: ");
+        match SysError::from_code(got.value) {
+            SysError::AccessDenied => write_console(b"access denied\n"),
+            SysError::NotFound => write_console(b"not found\n"),
+            _ => write_console(b"failed\n"),
+        };
+        prompt(cwd);
+        return;
+    }
+    let used_o = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    let max_o = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
+    let used_b = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
+    let max_b = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
+    write_console(b"objects ");
+    write_u32(used_o);
+    write_console(b"/");
+    write_u32(max_o);
+    write_console(b"  bytes ");
+    write_u32(used_b);
+    write_console(b"/");
+    write_u32(max_b);
     write_console(b"\n");
     prompt(cwd);
 }

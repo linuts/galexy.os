@@ -1903,6 +1903,53 @@ pub(crate) fn task_users(out: &mut [u8]) -> Result<usize, SysError> {
     Ok(n)
 }
 
+/// Writes a [`galexy_abi::QUOTA_LEN`] record for `name` (None = caller's actor).
+pub(crate) fn task_quota(out: &mut [u8], name: Option<&str>) -> Result<usize, SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    let (used_o, max_o, used_b, max_b) = interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        if thread.fs_root == galfs::NO_OBJECT {
+            return Err(SysError::AccessDenied);
+        }
+        match name {
+            Some(n) if !n.is_empty() => galfs::actor_quota(n),
+            _ => galfs::root_quota(thread.fs_root),
+        }
+    })?;
+    galfs::format_quota_record(used_o, max_o, used_b, max_b, out)
+}
+
+/// Sets durable quotas for `name`. Caller must be admin.
+pub(crate) fn task_setquota(
+    name: &str,
+    max_objects: u16,
+    max_bytes: u32,
+) -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        if !admin_caller(thread.fs_root, &thread.fs_tokens) {
+            return Err(SysError::AccessDenied);
+        }
+        Ok(())
+    })?;
+    galfs::set_actor_quota(name, max_objects, max_bytes)
+}
+
 /// Creates an actor + Desktop with `password`. Caller must be admin.
 pub(crate) fn task_useradd(name: &str, password: &[u8]) -> Result<(), SysError> {
     let slot = current_slot();

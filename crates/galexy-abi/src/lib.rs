@@ -254,6 +254,16 @@ pub const USER_LOGIN: u64 = 5;
 pub const USER_PASSWD: u64 = 6;
 /// `user` op: clear the caller's session (logged out / pre-login seat).
 pub const USER_LOGOUT: u64 = 7;
+/// `user` op: write an actor's quota record into a buffer (see [`QUOTA_LEN`]).
+/// `RDI`/`RSI` are the buffer; `R8`/`R9` name the actor (empty = self).
+pub const USER_QUOTA: u64 = 8;
+/// `user` op: set an actor's object/byte limits (admin only).
+/// `RDI`/`RSI` name the actor; `R8 = max_objects`, `R9 = max_bytes`.
+pub const USER_SETQUOTA: u64 = 9;
+
+/// Bytes written by [`USER_QUOTA`]: four little-endian `u32` fields —
+/// objects_used, objects_max, bytes_used, bytes_max.
+pub const QUOTA_LEN: usize = 16;
 
 /// Lowest capability index a per-task file open may return. `0` is null,
 /// [`reserved::CONSOLE_INDEX`] is the console, [`reserved::SELF_INDEX`] is
@@ -409,11 +419,13 @@ pub enum Syscall {
     ///
     /// Args: `RDI`/`RSI` = name or buffer, `RDX` = op ([`USER_WHOAMI`],
     /// [`USER_USERS`], [`USER_ADD`], [`USER_DEL`], [`USER_SU`],
-    /// [`USER_LOGIN`], [`USER_PASSWD`], [`USER_LOGOUT`]). Login/add/passwd
-    /// also take a password in `R8`/`R9`. Whoami/users write into the
-    /// buffer. Passwords authenticate identity; tokens authorize object
-    /// access (see `docs/AUTH.md`). Deleting admin, a non-empty tree, or
-    /// an actor a live task still uses is `Unsupported` / `NotFound`.
+    /// [`USER_LOGIN`], [`USER_PASSWD`], [`USER_LOGOUT`], [`USER_QUOTA`],
+    /// [`USER_SETQUOTA`]). Login/add/passwd take a password in `R8`/`R9`;
+    /// quota get takes an optional actor name there; setquota takes
+    /// max_objects/max_bytes. Whoami/users/quota write into the buffer.
+    /// Passwords authenticate identity; tokens authorize object access
+    /// (see `docs/AUTH.md`). Deleting admin, a non-empty tree, or an
+    /// actor a live task still uses is `Unsupported` / `NotFound`.
     User,
     /// `rename(old, old_len, new, new_len)` — move a galfs dirent.
     ///

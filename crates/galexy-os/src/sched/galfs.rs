@@ -39,6 +39,10 @@ pub const FILE_BYTES: usize = BLOCK_SIZE * DIRECT_BLOCKS;
 pub const BLOCK_SLOTS: usize = 256;
 /// Tokens one task may hold.
 pub const TOKEN_SLOTS: usize = 8;
+/// Default object quota for a new non-admin actor (root + Desktop count).
+pub const DEFAULT_MAX_OBJECTS: u16 = 16;
+/// Default byte quota for a new non-admin actor (sum of file lengths).
+pub const DEFAULT_MAX_BYTES: u32 = 16 * 1024;
 /// Path components after the optional owner.
 pub const MAX_DEPTH: usize = 8;
 /// One path-component name.
@@ -118,6 +122,10 @@ struct Actor {
     root: u16,
     salt: [u8; SALT_LEN],
     pass_hash: [u8; HASH_LEN],
+    /// Max objects (files + dirs, including root) this actor may own.
+    max_objects: u16,
+    /// Max sum of file lengths (bytes) this actor may own.
+    max_bytes: u32,
 }
 
 impl Actor {
@@ -129,6 +137,8 @@ impl Actor {
             root: NO_OBJECT,
             salt: [0; SALT_LEN],
             pass_hash: [0; HASH_LEN],
+            max_objects: 0,
+            max_bytes: 0,
         }
     }
 
@@ -224,16 +234,17 @@ static ADMIN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16
 /// LBA [`DISK_SECTORS`]. A sync writes the inactive slot with gen+1 and a
 /// CRC, then flushes — a crash mid-write leaves the previous slot intact.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-/// Bumped for the block pool (Milestone 45). v7 inline-data images are
-/// refused; format recreates admin under a wrapped volume key.
-pub const DISK_VERSION: u16 = 8;
+/// Bumped for per-actor quotas (Milestone 45). v8 images are refused;
+/// format recreates admin under a wrapped volume key.
+pub const DISK_VERSION: u16 = 9;
 /// Sectors per dual-slot image (must cover header + sealed payload).
 pub const DISK_SECTORS: usize = 288;
 pub const DISK_SLOT_COUNT: usize = 2;
 /// Clear header + wrap fields + data tag (see `encode_table`).
 const DISK_HEADER: usize = 128;
-/// used(1) + name_len(1) + name(32) + root(2) + salt(8) + hash(16) = 60.
-const ACTOR_ON_DISK: usize = 60;
+/// used(1) + name_len(1) + name(32) + root(2) + salt(8) + hash(16)
+/// + max_objects(2) + max_bytes(4) = 66.
+const ACTOR_ON_DISK: usize = 66;
 /// kind+actor+name_len+pad + parent+len + name + direct block indexes.
 const OBJECT_ON_DISK: usize = 8 + NAME_CAP + DIRECT_BLOCKS * 2; // 88
 const PAYLOAD_LEN: usize = ACTOR_ON_DISK * ACTOR_SLOTS
@@ -407,6 +418,9 @@ fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; ata::SECTOR]
         flat[salt_off..salt_off + SALT_LEN].copy_from_slice(&actor.salt);
         flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN]
             .copy_from_slice(&actor.pass_hash);
+        let qoff = salt_off + SALT_LEN + HASH_LEN;
+        flat[qoff..qoff + 2].copy_from_slice(&actor.max_objects.to_le_bytes());
+        flat[qoff + 2..qoff + 6].copy_from_slice(&actor.max_bytes.to_le_bytes());
         off += ACTOR_ON_DISK;
     }
     for obj in &table.objects {
@@ -554,6 +568,14 @@ fn decode_table(
         actor
             .pass_hash
             .copy_from_slice(&flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN]);
+        let qoff = salt_off + SALT_LEN + HASH_LEN;
+        actor.max_objects = u16::from_le_bytes([flat[qoff], flat[qoff + 1]]);
+        actor.max_bytes = u32::from_le_bytes([
+            flat[qoff + 2],
+            flat[qoff + 3],
+            flat[qoff + 4],
+            flat[qoff + 5],
+        ]);
         off += ACTOR_ON_DISK;
     }
     for obj in &mut table.objects {
@@ -896,6 +918,61 @@ pub fn add_actor_named(name: &str, password: &[u8]) -> Result<u16, SysError> {
     add_actor(&mut table, name, password)
 }
 
+fn admin_quota_limits() -> (u16, u32) {
+    (
+        OBJECT_SLOTS as u16,
+        (BLOCK_SLOTS * BLOCK_SIZE) as u32,
+    )
+}
+
+fn actor_usage(table: &Table, ai: usize) -> (u32, u32) {
+    let mut objects = 0u32;
+    let mut bytes = 0u32;
+    for obj in &table.objects {
+        if obj.kind == KIND_EMPTY || obj.actor as usize != ai {
+            continue;
+        }
+        objects += 1;
+        if obj.kind == KIND_FILE {
+            bytes = bytes.saturating_add(obj.len as u32);
+        }
+    }
+    (objects, bytes)
+}
+
+fn can_add_object(table: &Table, ai: usize) -> bool {
+    if ai >= ACTOR_SLOTS || !table.actors[ai].used {
+        return false;
+    }
+    let (used, _) = actor_usage(table, ai);
+    used < table.actors[ai].max_objects as u32
+}
+
+fn can_add_bytes(table: &Table, ai: usize, extra: u32) -> bool {
+    if ai >= ACTOR_SLOTS || !table.actors[ai].used {
+        return false;
+    }
+    let (_, used) = actor_usage(table, ai);
+    used.saturating_add(extra) <= table.actors[ai].max_bytes
+}
+
+fn subtree_usage(table: &Table, root: u16) -> (u32, u32) {
+    let mut objects = 0u32;
+    let mut bytes = 0u32;
+    for i in 0..OBJECT_SLOTS {
+        if table.objects[i].kind == KIND_EMPTY {
+            continue;
+        }
+        if covers_object(table, root, i as u16) {
+            objects += 1;
+            if table.objects[i].kind == KIND_FILE {
+                bytes = bytes.saturating_add(table.objects[i].len as u32);
+            }
+        }
+    }
+    (objects, bytes)
+}
+
 fn add_actor(table: &mut Table, name: &str, password: &[u8]) -> Result<u16, SysError> {
     if !component_ok(name) || name.len() > ACTOR_NAME {
         return Err(SysError::BadValue);
@@ -909,12 +986,19 @@ fn add_actor(table: &mut Table, name: &str, password: &[u8]) -> Result<u16, SysE
     let Some(oi) = free_object(table) else {
         return Err(SysError::NoResource);
     };
+    let (max_objects, max_bytes) = if name == ADMIN_NAME {
+        admin_quota_limits()
+    } else {
+        (DEFAULT_MAX_OBJECTS, DEFAULT_MAX_BYTES)
+    };
     let actor = &mut table.actors[ai];
     actor.used = true;
     actor.name = [0; ACTOR_NAME];
     actor.name[..name.len()].copy_from_slice(name.as_bytes());
     actor.name_len = name.len() as u8;
     actor.root = oi as u16;
+    actor.max_objects = max_objects;
+    actor.max_bytes = max_bytes;
     actor.set_password(password);
     let obj = &mut table.objects[oi];
     *obj = Object::empty();
@@ -923,6 +1007,77 @@ fn add_actor(table: &mut Table, name: &str, password: &[u8]) -> Result<u16, SysE
     obj.actor = ai as u8;
     // Root has an empty name; paths start at its children.
     Ok(oi as u16)
+}
+
+/// Sets durable object/byte limits for actor `name`. Admin-only at the syscall layer.
+pub fn set_actor_quota(name: &str, max_objects: u16, max_bytes: u32) -> Result<(), SysError> {
+    if max_objects == 0 {
+        return Err(SysError::BadValue);
+    }
+    let mut table = TABLE.lock();
+    let Some(actor) = table.actors.iter_mut().find(|a| a.used && a.name_is(name)) else {
+        return Err(SysError::NotFound);
+    };
+    actor.max_objects = max_objects;
+    actor.max_bytes = max_bytes;
+    drop(table);
+    sync();
+    Ok(())
+}
+
+/// Returns `(objects_used, objects_max, bytes_used, bytes_max)` for `name`.
+pub fn actor_quota(name: &str) -> Result<(u32, u32, u32, u32), SysError> {
+    let table = TABLE.lock();
+    let Some(ai) = table.actors.iter().position(|a| a.used && a.name_is(name)) else {
+        return Err(SysError::NotFound);
+    };
+    let (used_o, used_b) = actor_usage(&table, ai);
+    let actor = &table.actors[ai];
+    Ok((
+        used_o,
+        actor.max_objects as u32,
+        used_b,
+        actor.max_bytes,
+    ))
+}
+
+/// Quota for the actor that owns `root`, or `NotFound` if unset.
+pub fn root_quota(root: u16) -> Result<(u32, u32, u32, u32), SysError> {
+    let table = TABLE.lock();
+    if root as usize >= OBJECT_SLOTS || table.objects[root as usize].kind != KIND_DIR {
+        return Err(SysError::NotFound);
+    }
+    let ai = table.objects[root as usize].actor as usize;
+    if ai >= ACTOR_SLOTS || !table.actors[ai].used {
+        return Err(SysError::NotFound);
+    }
+    let (used_o, used_b) = actor_usage(&table, ai);
+    let actor = &table.actors[ai];
+    Ok((
+        used_o,
+        actor.max_objects as u32,
+        used_b,
+        actor.max_bytes,
+    ))
+}
+
+/// Packs a quota record into `out` (at least [`galexy_abi::QUOTA_LEN`] bytes).
+pub fn format_quota_record(
+    used_objects: u32,
+    max_objects: u32,
+    used_bytes: u32,
+    max_bytes: u32,
+    out: &mut [u8],
+) -> Result<usize, SysError> {
+    use galexy_abi::QUOTA_LEN;
+    if out.len() < QUOTA_LEN {
+        return Err(SysError::BadBuffer);
+    }
+    out[0..4].copy_from_slice(&used_objects.to_le_bytes());
+    out[4..8].copy_from_slice(&max_objects.to_le_bytes());
+    out[8..12].copy_from_slice(&used_bytes.to_le_bytes());
+    out[12..16].copy_from_slice(&max_bytes.to_le_bytes());
+    Ok(QUOTA_LEN)
 }
 
 /// Looks up a direct child by name. Test helper.
@@ -950,14 +1105,17 @@ fn mkdir_locked(table: &mut Table, root: u16, name: &str) -> Result<u16, SysErro
     if find_child(table, root, name).is_some() {
         return Err(SysError::Unsupported);
     }
+    let actor = table.objects[root as usize].actor as usize;
+    if !can_add_object(table, actor) {
+        return Err(SysError::NoResource);
+    }
     let Some(oi) = free_object(table) else {
         return Err(SysError::NoResource);
     };
-    let actor = table.objects[root as usize].actor;
     let obj = &mut table.objects[oi];
     obj.kind = KIND_DIR;
     obj.parent = root;
-    obj.actor = actor;
+    obj.actor = actor as u8;
     place_name(obj, name);
     Ok(oi as u16)
 }
@@ -974,14 +1132,17 @@ pub fn create_file_under(parent: u16, name: &str) -> Result<u16, SysError> {
     if find_child(&table, parent, name).is_some() {
         return Err(SysError::Unsupported);
     }
+    let actor = table.objects[parent as usize].actor as usize;
+    if !can_add_object(&table, actor) {
+        return Err(SysError::NoResource);
+    }
     let Some(oi) = free_object(&table) else {
         return Err(SysError::NoResource);
     };
-    let actor = table.objects[parent as usize].actor;
     let obj = &mut table.objects[oi];
     obj.kind = KIND_FILE;
     obj.parent = parent;
-    obj.actor = actor;
+    obj.actor = actor as u8;
     place_name(obj, name);
     obj.blocks = [NO_BLOCK; DIRECT_BLOCKS];
     obj.len = 0;
@@ -1243,14 +1404,17 @@ pub(crate) fn create(
         }
         return Err(SysError::Unsupported);
     }
+    let actor = table.objects[parent as usize].actor as usize;
+    if !can_add_object(&table, actor) {
+        return Err(SysError::NoResource);
+    }
     let Some(oi) = free_object(&table) else {
         return Err(SysError::NoResource);
     };
-    let actor = table.objects[parent as usize].actor;
     let obj = &mut table.objects[oi];
     obj.kind = if parsed.dir { KIND_DIR } else { KIND_FILE };
     obj.parent = parent;
-    obj.actor = actor;
+    obj.actor = actor as u8;
     place_name(obj, last);
     obj.blocks = [NO_BLOCK; DIRECT_BLOCKS];
     obj.len = 0;
@@ -1339,17 +1503,21 @@ fn free_file_blocks(table: &mut Table, index: usize) {
 }
 
 /// Appends `src` to a file. Returns the byte count written (short on full
-/// file or exhausted block pool).
+/// file, exhausted block pool, or actor byte quota).
 pub(crate) fn append(index: u16, src: &[u8]) -> Option<usize> {
     let mut table = TABLE.lock();
     let i = index as usize;
     if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
         return None;
     }
+    let ai = table.objects[i].actor as usize;
     let mut written = 0usize;
     while written < src.len() {
         let pos = table.objects[i].len as usize;
         if pos >= FILE_BYTES {
+            break;
+        }
+        if !can_add_bytes(&table, ai, 1) {
             break;
         }
         let slot = pos / BLOCK_SIZE;
@@ -1361,9 +1529,15 @@ pub(crate) fn append(index: u16, src: &[u8]) -> Option<usize> {
             table.objects[i].blocks[slot] = b;
         }
         let bi = table.objects[i].blocks[slot] as usize;
-        let room = (BLOCK_SIZE - off)
+        let mut room = (BLOCK_SIZE - off)
             .min(src.len() - written)
             .min(FILE_BYTES - pos);
+        let (_, used) = actor_usage(&table, ai);
+        let headroom = table.actors[ai].max_bytes.saturating_sub(used) as usize;
+        if headroom == 0 {
+            break;
+        }
+        room = room.min(headroom);
         table.blocks[bi][off..off + room].copy_from_slice(&src[written..written + room]);
         table.objects[i].len = (pos + room) as u16;
         written += room;
@@ -1498,6 +1672,16 @@ pub(crate) fn rename(
     }
 
     let new_actor = table.objects[new_parent as usize].actor;
+    if table.objects[found].actor != new_actor {
+        let (need_o, need_b) = subtree_usage(&table, src);
+        let dest = new_actor as usize;
+        let (have_o, have_b) = actor_usage(&table, dest);
+        if have_o.saturating_add(need_o) > table.actors[dest].max_objects as u32
+            || have_b.saturating_add(need_b) > table.actors[dest].max_bytes
+        {
+            return Err(SysError::NoResource);
+        }
+    }
     place_name(&mut table.objects[found], new_last);
     table.objects[found].parent = new_parent;
     if table.objects[found].actor != new_actor {
@@ -1569,6 +1753,13 @@ pub(crate) fn truncate(index: u16, new_len: usize) -> Result<(), SysError> {
         }
         table.objects[i].len = new_len as u16;
         return Ok(());
+    }
+
+    // Grow with zero-fill; refuse when the actor byte quota would break.
+    let ai = table.objects[i].actor as usize;
+    let grow = (new_len - old) as u32;
+    if !can_add_bytes(&table, ai, grow) {
+        return Err(SysError::NoResource);
     }
 
     // Grow with zero-fill; roll back on pool exhaustion.

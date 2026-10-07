@@ -234,7 +234,7 @@ checklist). Style: `docs/STYLE.md`.
    (login-on-boot + `logout` already shipped with no guest account)
 2. **44 Sealed GALF** — volume key + AEAD; boot unlock
 3. **45 galfs for real usage** — extents/capacity, rename/truncate/stat,
-   sync/fsck, quotas & cards
+   quotas (sync/fsck & durable shares remain)
 4. **46 Storage stack** — BlockDevice; virtio or primary IDE; flush
 5. **47 Process, ABI & caps** — process-Cap foundation per
    `docs/PROCESS.md` (spawn returns a Cap; wait/kill by Cap; debug ids
