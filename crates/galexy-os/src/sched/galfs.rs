@@ -26,10 +26,11 @@ const _: () = assert!(HASH_LEN == galexy_crypto::HASH_LEN);
 use crate::drivers::ata;
 
 /// Objects the kernel will hold (files, directories, and actor roots).
-pub const OBJECT_SLOTS: usize = 64;
+/// Raised in Milestone 45 (GALF v7); block/extent store is the next step.
+pub const OBJECT_SLOTS: usize = 128;
 /// Actors (users) the table can name.
-const ACTOR_SLOTS: usize = 16;
-/// Bytes one file can hold.
+pub const ACTOR_SLOTS: usize = 32;
+/// Bytes one file can hold (inline until the block store lands).
 pub const FILE_BYTES: usize = 512;
 /// Tokens one task may hold.
 pub const TOKEN_SLOTS: usize = 8;
@@ -203,10 +204,11 @@ static ADMIN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16
 /// LBA [`DISK_SECTORS`]. A sync writes the inactive slot with gen+1 and a
 /// CRC, then flushes — a crash mid-write leaves the previous slot intact.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-/// Bumped for sealed slots (ChaCha20-HMAC volume AEAD). v5 plaintext
-/// images are refused; format recreates admin under a wrapped volume key.
-pub const DISK_VERSION: u16 = 6;
-pub const DISK_SECTORS: usize = 80;
+/// Bumped for larger actor/object tables (Milestone 45). v6 sealed images
+/// are refused; format recreates admin under a wrapped volume key.
+pub const DISK_VERSION: u16 = 7;
+/// Sectors per dual-slot image (must cover header + sealed payload).
+pub const DISK_SECTORS: usize = 160;
 pub const DISK_SLOT_COUNT: usize = 2;
 /// Clear header + wrap fields + data tag (see `encode_table`).
 const DISK_HEADER: usize = 128;
