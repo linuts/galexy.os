@@ -155,7 +155,7 @@ const NAME_CAP: usize = 64;
 
 /// Process Caps per task (matches [`galexy_abi::MAX_PROC_CAPS`]).
 const MAX_PROC_CAPS: usize = galexy_abi::MAX_PROC_CAPS as usize;
-const _: () = assert!(MAX_PROC_CAPS == 8);
+const _: () = assert!(MAX_PROC_CAPS == 16);
 
 /// One process Cap entry: child thread slot + generation + rights.
 #[derive(Clone, Copy)]
@@ -261,6 +261,18 @@ impl Grants {
         Self {
             console: true,
             keyboard: true,
+            loader: true,
+            query: true,
+            power: true,
+        }
+    }
+
+    /// Userspace init (Milestone 53): loader + console + query + power.
+    /// No keyboard — init does not prompt for passwords.
+    pub(crate) const fn init() -> Self {
+        Self {
+            console: true,
+            keyboard: false,
             loader: true,
             query: true,
             power: true,
@@ -373,6 +385,8 @@ struct Thread {
     debug_id: u64,
     /// 1-based parent slot; `0` = kernel-spawned root.
     parent_slot: u8,
+    /// Milestone 53: orphan-root / first ring-3 supervisor. At most one.
+    is_init: bool,
     /// Set when a Cap-wait (or `SPAWN_WAIT`) has collected the exit code.
     exit_waited: AtomicBool,
     /// Reserved services this task may call. Set at spawn, never grown.
@@ -665,16 +679,11 @@ pub fn reap() {
                     threads[i].name()
                 );
             }
-            // Orphans: children that named this slot as parent become
-            // kernel roots (`parent_slot = 0`). Caps on those children die
-            // with this task — Milestone 53 will transfer wait Caps to init
-            // instead of dropping them.
+            // Milestone 53: move wait/control Caps for live children to
+            // init; reparent. Without init, children become kernel roots
+            // and Caps die with this task (legacy test path).
             let dead_slot = (i + 1) as u8;
-            for j in 0..n {
-                if threads[j].parent_slot == dead_slot {
-                    threads[j].parent_slot = 0;
-                }
-            }
+            transfer_orphans_to_init(&mut threads, dead_slot, i);
             // File/process caps die with the task. Bump gen so foreign Caps fail.
             threads[i].files = [None; MAX_OPEN_FILES];
             threads[i].procs = [None; MAX_PROC_CAPS];
@@ -750,6 +759,8 @@ pub(crate) struct TaskInit<'a> {
     pub(crate) fs: galfs::FsCred,
     /// 1-based parent slot; `0` = kernel.
     pub(crate) parent_slot: u8,
+    /// Milestone 53 orphan root.
+    pub(crate) is_init: bool,
 }
 
 pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
@@ -790,6 +801,7 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
             cap_gen: AtomicU32::new(1),
             debug_id: NEXT_DEBUG_ID.fetch_add(1, Ordering::Relaxed),
             parent_slot: init.parent_slot,
+            is_init: init.is_init,
             exit_waited: AtomicBool::new(false),
             grants: init.grants,
             tty: init.tty,
@@ -850,6 +862,7 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             cap_gen: AtomicU32::new(1),
             debug_id: NEXT_DEBUG_ID.fetch_add(1, Ordering::Relaxed),
             parent_slot: 0,
+            is_init: false,
             exit_waited: AtomicBool::new(false),
             grants: Grants::none(),
             tty: 0,
@@ -1106,6 +1119,7 @@ pub(crate) fn spawn_user_with_grants(
             cap_gen: AtomicU32::new(1),
             debug_id: NEXT_DEBUG_ID.fetch_add(1, Ordering::Relaxed),
             parent_slot: 0,
+            is_init: false,
             exit_waited: AtomicBool::new(false),
             grants,
             tty: 0,
@@ -1643,6 +1657,90 @@ pub fn spawn_all_shells() {
     };
     for (tty, name) in SHELL_NAMES.iter().enumerate() {
         loader::spawn_shell_on(name, bytes, tty as u8);
+    }
+}
+
+/// True when a live init task exists (Cap-kill must return AccessDenied).
+pub fn init_unkillable() -> bool {
+    init_slot().is_some()
+}
+
+/// Live slot of userspace init, if any.
+pub fn init_slot() -> Option<u8> {
+    interrupts::without_interrupts(|| {
+        THREADS.lock().iter().enumerate().find_map(|(i, t)| {
+            if !t.is_init {
+                return None;
+            }
+            let state = t.state.load(Ordering::Acquire);
+            if state == STATE_RUNNING || state == STATE_WAITING {
+                Some((i + 1) as u8)
+            } else {
+                None
+            }
+        })
+    })
+}
+
+/// Loads ramdisk `init` once (Milestone 53). Returns false if missing.
+pub fn spawn_init() -> bool {
+    let Some(bytes) = ramdisk::find("init") else {
+        return false;
+    };
+    if init_slot().is_some() {
+        return true;
+    }
+    loader::spawn_init(bytes);
+    serial_println!("[sched] init loaded (orphan root)");
+    true
+}
+
+/// Moves process Caps from a reaped parent to init and reparents children.
+fn transfer_orphans_to_init(threads: &mut [Thread], dead_slot: u8, dead_index: usize) {
+    let init_slot = threads.iter().enumerate().find_map(|(i, t)| {
+        if t.is_init {
+            let state = t.state.load(Ordering::Acquire);
+            if state == STATE_RUNNING || state == STATE_WAITING {
+                return Some((i + 1) as u8);
+            }
+        }
+        None
+    });
+    let Some(init_slot) = init_slot else {
+        for t in threads.iter_mut() {
+            if t.parent_slot == dead_slot {
+                t.parent_slot = 0;
+            }
+        }
+        return;
+    };
+    let mut moved = alloc::vec::Vec::new();
+    for slot in threads[dead_index].procs.iter_mut() {
+        if let Some(handle) = slot.take() {
+            moved.push(handle);
+        }
+    }
+    let ii = init_slot as usize - 1;
+    for handle in moved {
+        let ci = handle.child_slot as usize;
+        if ci == 0 || ci > threads.len() {
+            continue;
+        }
+        if threads[ci - 1].cap_gen.load(Ordering::Acquire) != handle.gen {
+            continue;
+        }
+        let state = threads[ci - 1].state.load(Ordering::Acquire);
+        if state == STATE_FREED {
+            continue;
+        }
+        if let Some(empty) = threads[ii].procs.iter().position(|p| p.is_none()) {
+            threads[ii].procs[empty] = Some(handle);
+        }
+    }
+    for t in threads.iter_mut() {
+        if t.parent_slot == dead_slot {
+            t.parent_slot = init_slot;
+        }
     }
 }
 
@@ -2260,6 +2358,10 @@ pub(crate) fn task_kill(cap: Cap) -> Result<(), SysError> {
         }
         if state != STATE_RUNNING && state != STATE_WAITING {
             return Err(SysError::BadCap);
+        }
+        // Milestone 53: init is immortal to user kill.
+        if threads[ci - 1].is_init {
+            return Err(SysError::AccessDenied);
         }
         // Milestone 57: cancel sleep / I/O parks with Interrupted so a
         // kill of a blocked task never leaves a waiter stranded; Cap-wait
@@ -3047,6 +3149,9 @@ pub unsafe fn syscall_handoff(
             context::fx_save(t.fx as *mut u8);
         }
         if exit {
+            if threads[slot - 1].is_init {
+                panic!("init exited ({reason}) — no orphan root");
+            }
             let mut raw = [0u8; NAME_CAP];
             let n = threads[slot - 1].name_len as usize;
             raw[..n].copy_from_slice(&threads[slot - 1].name_bytes[..n]);

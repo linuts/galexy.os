@@ -59,6 +59,7 @@ pub fn spawn_program(name: &str, bytes: &[u8]) -> ProgramRegion {
         0,
         crate::sched::galfs::admin_cred(),
         0,
+        false,
     )
     .0
 }
@@ -87,6 +88,7 @@ pub(crate) fn spawn_launched(
         tty,
         fs,
         parent_slot,
+        false,
     )
     .1
 }
@@ -110,6 +112,23 @@ pub fn spawn_shell_on(name: &str, bytes: &[u8], tty: u8) -> ProgramRegion {
     spawn_shell_on_slot(name, bytes, tty).0
 }
 
+/// Loads userspace `init` (Milestone 53): BSP-pinned, no-steal, init grants.
+pub fn spawn_init(bytes: &[u8]) -> ProgramRegion {
+    spawn_program_placed(
+        "init",
+        bytes,
+        Some(0),
+        true,
+        Grants::init(),
+        &[],
+        0,
+        crate::sched::galfs::admin_cred(),
+        0,
+        true,
+    )
+    .0
+}
+
 fn spawn_shell_on_slot(name: &str, bytes: &[u8], tty: u8) -> (ProgramRegion, u8) {
     let tty_arg = [tty.wrapping_add(1)];
     spawn_program_placed(
@@ -122,6 +141,7 @@ fn spawn_shell_on_slot(name: &str, bytes: &[u8], tty: u8) -> (ProgramRegion, u8)
         tty,
         crate::sched::galfs::unauth_cred(),
         0,
+        false,
     )
 }
 
@@ -136,6 +156,7 @@ fn spawn_program_placed(
     tty: u8,
     fs: crate::sched::galfs::FsCred,
     parent_slot: u8,
+    is_init: bool,
 ) -> (ProgramRegion, u8) {
     let elf = ElfFile::new(bytes).expect("spawn_program: invalid ELF");
     // Only static executables: relocatable/DYN would need relocation work.
@@ -272,6 +293,7 @@ fn spawn_program_placed(
             tty,
             fs,
             parent_slot,
+            is_init,
         });
         serial_println!(
             "[loader] program '{}' ready (own tree cr3={:#x}, entry {:#x})",

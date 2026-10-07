@@ -10,6 +10,7 @@ members = [
     "crates/galfs-fsck",
     "crates/userspace/galexy-rt",
     "crates/userspace/hello",
+    "crates/userspace/init",
     "crates/userspace/shell",
     "crates/userspace/util",
     "crates/gxc",

@@ -276,6 +276,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "init"
+version = "0.1.0"
+dependencies = [
+ "galexy-abi",
+ "galexy-rt",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -425,6 +433,7 @@ dependencies = [
  "galexy-os",
  "gxc",
  "hello",
+ "init",
  "shell",
  "tar",
  "util",

@@ -1,0 +1,16 @@
+[package]
+name = "init"
+version = "0.1.0"
+edition = "2021"
+description = "Userspace init — orphan root and seat/service supervisor (Phase 6)."
+
+[[bin]]
+name = "init"
+path = "src/main.rs"
+
+[dependencies]
+galexy-rt = { path = "../galexy-rt" }
+galexy-abi = { path = "../../galexy-abi" }
+
+[build-dependencies]
+galexy-abi = { path = "../../galexy-abi" }
