@@ -477,19 +477,22 @@ lifecycle — private address space; the pin is the spawn's round-robin
 over the enabled CPUs (a ring-3 task can run and be reaped entirely on an
 AP: per-CPU TSS.RSP0, per-CPU kstack slot gs:[8], per-CPU STAR/LSTAR). `spawn_user_task` (kernel tree asserted) builds a `FreshL4` and maps
 the task's world INTO ITS OWN TREE via `with_table`: code page at a scanned
-top-free P4 entry (`< 256` — 512 GiB per task), user stack (4 pages,
-RW\|NX\|USER) at +1 GiB, an RW scratch page right above. All kernel-side
-staging (blob bytes, zeroing, the initial ring-3 frame) goes through the
-BACKING FRAMES (`frame_virt`) — the phys map is present in every tree, so
-the task tree never needs to be active to write it. `Thread.cr3` swaps in
-both switch paths (timer + syscall handoff), no-op when unchanged. The
-task's own kernel-mode stack (heap Vec) serves its ring 3→0 crossings via
-TSS.RSP0. Reaping = `free_user_tree(root, p4_index)`: one walk takes tables
-AND data frames; the accounting closes exactly (proven by
+top-free P4 entry (`< 256` — 512 GiB per task) mapped RX (never
+writable), user stack (4 pages, RW\|NX\|USER) at +1 GiB, an RW\|NX
+scratch page right above. ELF `PT_LOAD` that is both writable and
+executable is refused (W^X). All kernel-side staging (blob bytes,
+zeroing, the initial ring-3 frame) goes through the BACKING FRAMES
+(`frame_virt`) — the phys map is present in every tree, so the task tree
+never needs to be active to write it. `Thread.cr3` swaps in both switch
+paths (timer + syscall handoff), no-op when unchanged. The task's own
+kernel-mode stack (heap Vec) serves its ring 3→0 crossings via TSS.RSP0.
+Reaping = `free_user_tree(root, p4_index)`: one walk takes tables AND
+data frames; the accounting closes exactly (proven by
 `bin/test-treechurn.rs`). CRASH ISOLATION: one unmapped guard page below
 the stack; the page-fault vector runs a NAKED handler (timer-shaped
 prologue + error-code word ⇒ raw-offset reads, never resumed): ring-3
-faults tombstone + rotate, ring-0 faults report + park.
+faults tombstone + rotate, ring-0 faults report + park. Jumping to
+scratch proves NX (`bin/test-wx.rs`).
 
 **Ring-3 readiness** (structure only until userland): GDT carries DPL-3
 user code/data segments, appended consecutively (`user SS = user CS + 8`,
