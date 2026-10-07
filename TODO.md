@@ -1174,13 +1174,14 @@ Capacity, operations, durability, and multi-user sharing.
 
 ### galfs capacity & on-disk layout
 
-GALF **v8**: 32 actors / 128 objects / 256×512 block pool / 8 directs
-(4 KiB max file). Indirect blocks and ops checklist remain.
+GALF **v9**: 32 actors / 128 objects / 256×512 block pool / 8 directs
+(4 KiB max file) + per-actor quotas. Indirect blocks remain.
 
 - [x] **Sizing plan** in `DESIGN.md` / `GALFS.md`: 32 actors, 128 objects,
       256 blocks × 512, 8 directs/file, depth 8 — still no heap on IF=0
 - [x] **GALF version bump**: v8 header carries actor/object/block counts;
-      refuses older images (including sealed v7)
+      refuses older images (including sealed v7); **v9** adds per-actor
+      quota fields on each actor record
 - [x] **Block store (direct)**: shared pool + per-file direct pointers;
       empty files cost one inode; sealed payload includes bitmap+blocks
 - [x] **Larger files (to 4 KiB)**: multi-block append/read with seek
@@ -1252,8 +1253,11 @@ Dual-slot CRC is a start; make failure modes explicit and operable.
 
 Multi-user usage beyond one admin and ad-hoc grants.
 
-- [ ] **Per-actor quotas**: max objects and/or bytes; `NoResource` when
-      exceeded; admin can raise limits
+- [x] **Per-actor quotas**: max objects + max bytes on each actor (GALF
+      v9); defaults for new users; admin unlimited; `NoResource` on
+      create/append/truncate/cross-actor rename when exceeded;
+      `USER_QUOTA` / `USER_SETQUOTA`; shell `quota` / `quota set`;
+      `bin/test-quota`
 - [x] **Token table UX**: shell `tokens` + `USER_TOKENS` lists the
       current task's cards (path + rights letters)
 - [ ] **Grant to actor vs task**: optional durable “home share” recorded

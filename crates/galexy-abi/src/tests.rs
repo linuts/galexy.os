@@ -110,6 +110,9 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(USER_ADD, 2);
     assert_eq!(USER_DEL, 3);
     assert_eq!(USER_SU, 4);
+    assert_eq!(USER_QUOTA, 9);
+    assert_eq!(USER_SETQUOTA, 10);
+    assert_eq!(QUOTA_LEN, 16);
     let keyboard = reserved::keyboard(CapRights::READ);
     assert_eq!(keyboard.index(), reserved::KEYBOARD_INDEX);
     assert!(keyboard.rights().contains(CapRights::READ));

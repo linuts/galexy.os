@@ -557,7 +557,10 @@ fn syscall_user(frame: &Context) -> SyscallResult {
     let len = frame.rsi;
     let op = frame.rdx;
     match op {
-        galexy_abi::USER_WHOAMI | galexy_abi::USER_USERS | galexy_abi::USER_TOKENS => {
+        galexy_abi::USER_WHOAMI
+        | galexy_abi::USER_USERS
+        | galexy_abi::USER_TOKENS
+        | galexy_abi::USER_QUOTA => {
             if len == 0 || len > MAX_READ {
                 return SyscallResult::err(SysError::BadValue);
             }
@@ -569,8 +572,19 @@ fn syscall_user(frame: &Context) -> SyscallResult {
                 crate::sched::task_whoami(&mut staged[..len as usize])
             } else if op == galexy_abi::USER_USERS {
                 crate::sched::task_users(&mut staged[..len as usize])
-            } else {
+            } else if op == galexy_abi::USER_TOKENS {
                 crate::sched::task_tokens(&mut staged[..len as usize])
+            } else {
+                let mut name_raw = [0u8; MAX_NAME as usize];
+                let name = if frame.r9 == 0 {
+                    None
+                } else {
+                    let Some(n) = copy_user_str(frame.r8, frame.r9, &mut name_raw, true) else {
+                        return SyscallResult::err(SysError::BadValue);
+                    };
+                    Some(core::str::from_utf8(&name_raw[..n]).unwrap_or(""))
+                };
+                crate::sched::task_quota(&mut staged[..len as usize], name)
             };
             match result {
                 Ok(n) => {
@@ -584,6 +598,20 @@ fn syscall_user(frame: &Context) -> SyscallResult {
                     }
                     SyscallResult::ok(n as u64)
                 }
+                Err(err) => SyscallResult::err(err),
+            }
+        }
+        galexy_abi::USER_SETQUOTA => {
+            let mut raw = [0u8; MAX_NAME as usize];
+            let Some(n) = copy_user_str(addr, len, &mut raw, true) else {
+                return SyscallResult::err(SysError::BadValue);
+            };
+            let name = core::str::from_utf8(&raw[..n]).unwrap_or("");
+            if frame.r8 > u16::MAX as u64 || frame.r9 > u32::MAX as u64 {
+                return SyscallResult::err(SysError::BadValue);
+            }
+            match crate::sched::task_setquota(name, frame.r8 as u16, frame.r9 as u32) {
+                Ok(()) => SyscallResult::ok(0),
                 Err(err) => SyscallResult::err(err),
             }
         }

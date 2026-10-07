@@ -204,6 +204,51 @@ pub fn user_passwd(name: &[u8], password: &[u8]) -> SyscallResult {
     user_name_pass(name, password, galexy_abi::USER_PASSWD)
 }
 
+/// Reads an actor quota record into `buf` (at least [`galexy_abi::QUOTA_LEN`]).
+/// Empty `name` means the caller's actor.
+pub fn user_quota(buf: &mut [u8], name: &[u8]) -> SyscallResult {
+    let value: u64;
+    let ok: u64;
+    // SAFETY: user buffer + optional name; same entry as other `user` ops.
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") Syscall::User as u64 => value,
+            inlateout("rdx") galexy_abi::USER_QUOTA => ok,
+            in("rdi") buf.as_mut_ptr() as u64,
+            in("rsi") buf.len() as u64,
+            in("r8") name.as_ptr() as u64,
+            in("r9") name.len() as u64,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    SyscallResult { ok: ok != 0, value }
+}
+
+/// Admin: set object/byte limits for actor `name`.
+pub fn user_setquota(name: &[u8], max_objects: u16, max_bytes: u32) -> SyscallResult {
+    let value: u64;
+    let ok: u64;
+    // SAFETY: name is a user buffer; limits ride in r8/r9.
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") Syscall::User as u64 => value,
+            inlateout("rdx") galexy_abi::USER_SETQUOTA => ok,
+            in("rdi") name.as_ptr() as u64,
+            in("rsi") name.len() as u64,
+            in("r8") max_objects as u64,
+            in("r9") max_bytes as u64,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    SyscallResult { ok: ok != 0, value }
+}
+
 /// Like [`create`], and if the path is an existing scratch file its bytes
 /// are emptied first.
 pub fn create_replace(name: &[u8]) -> SyscallResult {

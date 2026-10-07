@@ -510,7 +510,7 @@ handle snapshot. `read` copies the next bytes of an open file
 path in a fixed galfs table (128 objects, 32 actors with one root each,
 64-byte component names, shared 256×512-byte block pool with 8 direct
 pointers per file / 4 KiB max, no heap on the syscall path — Milestone
-45 / GALF v8). A path ending in `/` is a directory and returns 0. A file returns
+45 / GALF v9). A path ending in `/` is a directory and returns 0. A file returns
 READ|WRITE. `RDX == 1` empties an existing file; any other value creates
 only when the name is new. Uniqueness is the parent plus the component.
 The first path component may be `owner@name` (`dan@Desktop`); without an
@@ -565,25 +565,30 @@ owner, held token rights; needs LIST). Directory listing remains the
 exposes `whoami`, `users`, `useradd`, `userdel`, `su`, `truncate`, and
 `stat` (and resets cwd on `su`). Boot formats one immortal actor,
 `admin`, with Desktop. When the primary IDE slave is present,
-`galfs::init` loads the newest valid GALF **v8** sealed slot (dual
+`galfs::init` loads the newest valid GALF **v9** sealed slot (dual
 288-sector images: wrapped volume key + ChaCha20-HMAC payload of
-actors/objects/bitmap/blocks, generation + ciphertext CRC + structural
-checks) or formats that admin tree under a fresh volume key;
-create/remove/append/rename/truncate/useradd/userdel sync to the
-inactive slot and flush the cache; `sync()` (syscall 20) is an explicit
-barrier (shell `sync`). `userdel` also refuses open caps on that actor
-and clears tokens that named its objects. Empty zeros format; both
-slots with GALF magic that fail checks leave galfs unavailable (no
-silent format). Without a slave the table stays RAM-only. Empty files
+actors/objects/bitmap/blocks + per-actor quotas, generation +
+ciphertext CRC + structural checks) or formats that admin tree under a
+fresh volume key; create/remove/append/rename/truncate/useradd/userdel
+sync to the inactive slot and flush the cache; `sync()` (syscall 20)
+is an explicit barrier (shell `sync`). Each actor has durable
+`max_objects` / `max_bytes` (defaults for new users; admin at table
+maxima); create/append/truncate-grow/cross-actor rename return
+`NoResource` when exceeded (`USER_QUOTA` / `USER_SETQUOTA`, shell
+`quota`). `userdel` also refuses open caps on that actor and clears
+tokens that named its objects. Empty zeros format; both slots with
+GALF magic that fail checks leave galfs unavailable (no silent
+format). Without a slave the table stays RAM-only. Empty files
 allocate no blocks; append grows through direct pointers; remove frees
 blocks back to the bitmap. `cargo run` attaches a persistent
 `galfs.img`. `bin/test-galfs-disk` proves multi-block persist and
 dual-slot recover; `test-galfs-corrupt` refuses format on a both-bad
-image; `test-fsck` runs live-table consistency after mutate.
-`test-scratch` / `test-rm` fill objects to `NoResource`; `test-blocks`
-fills the block pool; `test-ops` covers rename/truncate/stat. Shell
-`tokens` (`USER_TOKENS`) lists cards. Utilities use `SPAWN_WAIT` so the
-prompt returns after `ls` / `mkdir` exit.
+image; `test-fsck` runs live-table consistency after mutate;
+`test-quota` covers object/byte limits. `test-scratch` / `test-rm`
+fill objects to `NoResource`; `test-blocks` fills the block pool;
+`test-ops` covers rename/truncate/stat. Shell `tokens` /
+`USER_TOKENS` lists cards. Utilities use `SPAWN_WAIT` so the prompt
+returns after `ls` / `mkdir` exit.
 Auth is password for identity (PBKDF2-HMAC-SHA256 in `galexy-crypto`,
 CSPRNG salts) plus galfs tokens for authorization (see `docs/AUTH.md`).
 galfs trees, paths, and sealed GALF layout: `docs/GALFS.md`. Process

@@ -108,8 +108,9 @@ child’s files (`PROCESS.md`).
 
 ## Table limits (today)
 
-Milestone **45** / GALF **v8**: actor/object tables plus a shared block
-pool. Empty files cost an inode only; bytes live in direct blocks.
+Milestone **45** / GALF **v9**: actor/object tables plus a shared block
+pool and per-actor quotas. Empty files cost an inode only; bytes live in
+direct blocks.
 
 | Resource | Cap |
 | --- | --- |
@@ -118,6 +119,7 @@ pool. Empty files cost an inode only; bytes live in direct blocks.
 | Block size | 512 bytes |
 | Direct blocks per file | 8 (max file 4 KiB) |
 | Block pool | 256 blocks |
+| Default user quota | 16 objects / 16 KiB |
 | Tokens per task | 8 |
 | Path depth | 8 components |
 | Name length | 64 (object) / 32 (actor) |
@@ -143,7 +145,7 @@ slot 1 @ LBA DISK_SECTORS
 | Crash | Mid-write leaves the previous slot intact |
 | Version | Layout bump **refuses** old images (no silent reinterpret) |
 
-### Sealed slots (v6 AEAD → v7 tables → v8 block pool)
+### Sealed slots (v6 AEAD → v7 tables → v8 blocks → v9 quotas)
 
 **Threat (v1):** stolen `galfs.img` must not yield file bytes or password
 hashes offline. Cold-boot RAM and a live compromised kernel are out of
@@ -158,7 +160,7 @@ scope initially.
 Bring-up unlock uses a fixed volume passphrase (`galfs` today).
 Interactive unlock is a follow-up. Details: `AUTH.md` → Sealed GALF.
 
-v8 refuses older images; delete `galfs.img` or let format recreate.
+v9 refuses older images; delete `galfs.img` or let format recreate.
 
 ## Boot and format
 
@@ -200,11 +202,12 @@ cards (`USER_TOKENS`).
 
 ### Today (through review readiness)
 
-- GALF **v8**: 32 actors / 128 objects; 256×512 block pool; 8 directs/file
+- GALF **v9**: 32 actors / 128 objects; 256×512 block pool; 8 directs/file;
+  per-actor object + byte quotas (defaults for new users; admin at table max)
 - Sealed dual-slot image (288 sectors/slot) on the IDE slave
 - Object + block fill stress; remove reuses blocks without leaks
 - Shell: `ls` / `cat` / `echo` / `touch` / `mkdir` / `rm` / `cp` / `mv`
-  / `grant` / `revoke` via utilities + syscalls
+  / `grant` / `revoke` / `quota` / `tokens` / `sync` via utilities + syscalls
 - Admin operator bypass still broad (narrow in Milestone 43 leftovers)
 
 ### Ops (landed)
@@ -222,10 +225,17 @@ cards (`USER_TOKENS`).
 - Both-bad GALF magic → no silent format; volume stays unavailable
 - Live `validate_table` smoke (`test-fsck`); host offline fsck still open
 
+### Quotas (landed)
+
+- Each actor stores `max_objects` / `max_bytes` (durable on GALF v9)
+- New users: 16 objects / 16 KiB; admin: table + pool maxima
+- Enforced on create, append (short write), truncate grow, cross-actor rename
+- `USER_QUOTA` / `USER_SETQUOTA`; shell `quota` and `quota set`
+
 ### Remaining (Milestone 45)
 
 - Indirect blocks / larger than 4 KiB; endian-safe shared host-fsck defs
-- Actor quotas, durable shares
+- Durable shares
 
 ### Target storage stack (Milestone 46)
 
@@ -248,7 +258,7 @@ cards (`USER_TOKENS`).
 | Milestone | Delivers |
 | --- | --- |
 | **44** | Sealed GALF (volume key + AEAD); threat model; no plaintext in image |
-| **45** | Capacity, blocks, ops, sync/refuse-format; quotas / host fsck remain |
+| **45** | Capacity, blocks, ops, sync/refuse-format, quotas; host fsck / shares remain |
 | **46** | Storage stack polish for demos / review |
 
 Until 45 lands, demo limits above are the shipped contract. New code
