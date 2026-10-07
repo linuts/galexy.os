@@ -47,12 +47,14 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let before = arch::timer_ticks();
     let _region = sched::loader::spawn_program("nap", elf);
 
+    // `threads_count` is RUNNING-only; sleep parks as WAITING — wait until
+    // the name is no longer live (exited / reaped).
     let mut polls = 0u64;
     loop {
         x86_64::instructions::hlt();
         sched::arm_timer_for_load();
         sched::reap();
-        if sched::threads_count() == 0 {
+        if !sched::is_name_live("nap") {
             break;
         }
         polls += 1;
