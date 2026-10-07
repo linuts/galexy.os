@@ -639,25 +639,19 @@ fn runshell_test_passes() {
 /// syscall (mirrored to COM1 by the kernel).
 const HELLO_TEXT: &str = "Hello from a real Rust user program!";
 
-/// Every seat boots logged out; typing e2e starts with `login admin admin`.
+/// Login screen: username then masked password (`*` echo).
 const LOGIN_ADMIN_KEYS: &[(&str, &str)] = &[
-    ("l", "l"),
-    ("o", "o"),
-    ("g", "g"),
-    ("i", "i"),
-    ("n", "n"),
-    ("spc", " "),
     ("a", "a"),
     ("d", "d"),
     ("m", "m"),
     ("i", "i"),
     ("n", "n"),
-    ("spc", " "),
-    ("a", "a"),
-    ("d", "d"),
-    ("m", "m"),
-    ("i", "i"),
-    ("n", "n"),
+    ("ret", "Password: "),
+    ("a", "*"),
+    ("d", "*"),
+    ("m", "*"),
+    ("i", "*"),
+    ("n", "*"),
     ("ret", "admin@galexy> "),
 ];
 

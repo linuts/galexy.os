@@ -22,6 +22,9 @@
 #[cfg(test)]
 mod tests;
 
+/// Marketing / banner version string for the OS (shell login screen, about).
+pub const OS_VERSION: &str = "0.1.0";
+
 /* ---------------- capabilities ---------------- */
 
 /// An opaque capability handle. Ring 3 treats it as a black u64; the kernel

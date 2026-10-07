@@ -568,9 +568,10 @@ corrupt newest slot still recovers from the older copy. Shell utilities
 use `SPAWN_WAIT` so the prompt returns after `ls` / `mkdir` exit.
 Auth is password for identity plus galfs tokens for authorization
 (see `docs/AUTH.md`). Every F-key shell boots **logged out** (console +
-keyboard only); `login` installs a session and `logout` clears it. There
-is no guest account. Access cards + `su` still switch without a password
-when the caller holds ALL on the target root.
+keyboard only) on a login screen (`Galexy.OS v… (ttyN)`); password login
+installs a session and `logout` returns to that screen. There is no
+guest account. Access cards + `su` still switch without a password when
+the caller holds ALL on the target root.
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing
@@ -597,9 +598,10 @@ rejects a name that already has a live task (`NoResource`), so typing
 always receives the console, and it writes the console of the task that
 spawned it. Keyboard, the loader, and power stay with the shell once it
 is logged in. Boot starts one shell on each F-key, pinned to the BSP,
-logged out (pre-login grants, no tokens). `login` restores loader/query
-(and power for admin). F1's shell is named `shell`; the others are
-`shell2` through `shell12`. F1–F12 select which cell grid is painted.
+logged out (pre-login grants, no tokens, login banner with 1-based TTY).
+Password login restores loader/query (and power for admin). F1's shell
+is named `shell`; the others are `shell2` through `shell12`. F1–F12
+select which cell grid is painted.
 The keyboard interrupt only records that index; the main loop paints
 it. Keys go to the visible console. COM1 mirrors only that console.
 Presenting a reserved index is not enough; the task must have been

@@ -1090,9 +1090,9 @@ Passwords must not appear in the shell line, COM1 mirror, or argv.
 Make seats behave like accounts, not permanent admin shells.
 
 - [x] **Login on every boot seat**: F1–F12 start logged out (no guest
-      account); prompt `galexy>` until `login`
+      account); login screen `Galexy.OS v… (ttyN)` + masked password
 - [x] **`logout`**: clear tokens, `fs_root = none`, pre-login grants,
-      reset cwd; prompt `galexy>`
+      reset cwd; return to the login screen
 - [x] **Pre-login grants**: console + keyboard only (no loader / query /
       power) until `login`; admin login restores power
 - [ ] **Force admin password change**: after format, `admin`/`admin` is
