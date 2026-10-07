@@ -1,0 +1,13 @@
+[package]
+name = "galexy-galf"
+version = "0.1.0"
+edition = "2021"
+description = "Shared GALF layout, unlock, and structural checks (kernel + host fsck)"
+
+[lib]
+name = "galexy_galf"
+path = "src/lib.rs"
+
+[dependencies]
+galexy-core = { path = "../galexy-core" }
+galexy-crypto = { path = "../galexy-crypto" }

@@ -197,6 +197,14 @@ name = "galexy-crypto"
 version = "0.1.0"
 
 [[package]]
+name = "galexy-galf"
+version = "0.1.0"
+dependencies = [
+ "galexy-core",
+ "galexy-crypto",
+]
+
+[[package]]
 name = "galexy-os"
 version = "0.1.0"
 dependencies = [
@@ -204,6 +212,7 @@ dependencies = [
  "galexy-abi",
  "galexy-core",
  "galexy-crypto",
+ "galexy-galf",
  "linked_list_allocator",
  "noto-sans-mono-bitmap",
  "pc-keyboard",
@@ -219,6 +228,13 @@ name = "galexy-rt"
 version = "0.1.0"
 dependencies = [
  "galexy-abi",
+]
+
+[[package]]
+name = "galfs-fsck"
+version = "0.1.0"
+dependencies = [
+ "galexy-galf",
 ]
 
 [[package]]
@@ -398,6 +414,7 @@ name = "runner"
 version = "0.1.0"
 dependencies = [
  "bootloader",
+ "galexy-galf",
  "galexy-os",
  "hello",
  "shell",

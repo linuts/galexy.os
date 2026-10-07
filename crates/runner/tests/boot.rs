@@ -520,6 +520,22 @@ fn galfs_disk_persists_across_reboot() {
         serial2.contains("[test-galfs-disk] passed"),
         "verify marker missing; serial:\n{serial2}"
     );
+    // Host offline fsck must accept the sealed image the guest just wrote.
+    let mut slot_buf = vec![0u8; galexy_galf::DISK_SECTORS * galexy_galf::SECTOR];
+    let mut best = Box::new(galexy_galf::Table::empty());
+    let mut cand = Box::new(galexy_galf::Table::empty());
+    let report = galexy_galf::check_image(
+        &img,
+        galexy_galf::DEFAULT_VOLUME_PASSPHRASE,
+        &mut slot_buf,
+        &mut best,
+        &mut cand,
+    );
+    assert!(
+        report.ok,
+        "host galfs-fsck must pass a healthy image; issues: {:?}",
+        &report.issues[..report.issue_count]
+    );
 }
 
 #[test]
@@ -599,6 +615,23 @@ fn galfs_disk_refuses_format_when_both_slots_corrupt() {
             "slot {slot} tag should still be host-corrupted"
         );
     }
+    let mut slot_buf = vec![0u8; galexy_galf::DISK_SECTORS * galexy_galf::SECTOR];
+    let mut best = Box::new(galexy_galf::Table::empty());
+    let mut cand = Box::new(galexy_galf::Table::empty());
+    let report = galexy_galf::check_image(
+        &img_after,
+        galexy_galf::DEFAULT_VOLUME_PASSPHRASE,
+        &mut slot_buf,
+        &mut best,
+        &mut cand,
+    );
+    assert!(!report.ok);
+    assert_eq!(
+        report.issues[0],
+        galexy_galf::Issue::BothSlotsCorrupt,
+        "host fsck should see both-corrupt; issues: {:?}",
+        &report.issues[..report.issue_count]
+    );
 }
 
 #[test]

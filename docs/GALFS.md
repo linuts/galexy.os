@@ -223,7 +223,7 @@ cards (`USER_TOKENS`).
 - Every mutate syncs the inactive dual slot + flush; `sync` syscall barrier
 - Boot logs slot/gen; recovery from a bad sibling is explicit
 - Both-bad GALF magic → no silent format; volume stays unavailable
-- Live `validate_table` smoke (`test-fsck`); host offline fsck still open
+- Live `validate_table` smoke (`test-fsck`); host `galfs-fsck` / `galexy-galf`
 
 ### Quotas (landed)
 
@@ -232,10 +232,16 @@ cards (`USER_TOKENS`).
 - Enforced on create, append (short write), truncate grow, cross-actor rename
 - `USER_QUOTA` / `USER_SETQUOTA`; shell `quota` and `quota set`
 
+### Host fsck (landed)
+
+- `crates/galexy-galf`: layout constants, sealed unlock, structural issues
+- `crates/galfs-fsck`: CLI over `galfs.img` (bring-up passphrase `galfs`)
+- Runner asserts host check on a guest-written image and both-corrupt
+
 ### Remaining (Milestone 45)
 
-- Indirect blocks / larger than 4 KiB; endian-safe shared host-fsck defs
-- Durable shares
+- Indirect blocks / larger than 4 KiB
+- Durable shares; optional fsck repair into a new slot
 
 ### Target storage stack (Milestone 46)
 
@@ -258,7 +264,7 @@ cards (`USER_TOKENS`).
 | Milestone | Delivers |
 | --- | --- |
 | **44** | Sealed GALF (volume key + AEAD); threat model; no plaintext in image |
-| **45** | Capacity, blocks, ops, sync/refuse-format, quotas; host fsck / shares remain |
+| **45** | Capacity, blocks, ops, sync, quotas, host fsck; durable shares remain |
 | **46** | Storage stack polish for demos / review |
 
 Until 45 lands, demo limits above are the shipped contract. New code
