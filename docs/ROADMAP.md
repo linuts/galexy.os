@@ -284,9 +284,8 @@ steal; M43/M48 shipped deadline one-shot idle. Process Caps / init
 story. Plan: `docs/SCHEDULING.md`. Concrete checkboxes: `TODO.md`
 Milestones **56–58**. Style: `docs/STYLE.md` → Scheduling.
 
-1. **56 Time & deadlines** — `sleep` (monotonic), sleep queues, arm the
-   LAPIC to the next real deadline (min of preempt quantum, next sleep
-   wake, next-second status tick); time model documented for reviewers
+1. **56 Time & deadlines** ✅ — `sleep` (monotonic), sleep queues, idle
+   LAPIC arms `min(next second, next sleeper)`; busy IRQ stays quantum
 2. **57 Block & wake** — general park/wake beyond spawn/wait-on-child;
    blocking reads (keyboard/pipe/file) wake the waiter; no busy-poll
    supervisors in the common path

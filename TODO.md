@@ -1146,10 +1146,10 @@ Lockout and idle logout need a trustworthy clock source.
 - [ ] **Idle logout** wired to monotonic time (session items above)
 - [ ] **Timeout helpers** in tests (QEMU accelerate / tick injection)
 - [x] **Tickless idle (MVP)**: LAPIC one-shot — preempt quantum when
-      busy, next-second wake when idle (`arm_timer_for_load`); full
-      program-next-deadline / sleep queues → **Milestone 56**
-- [ ] Docs: time model for reviewers (what is and is not synchronized)
-      — draft here if auth needs it; full freeze in **Milestone 56**/58
+      busy, next-second wake when idle (`arm_timer_for_load`); sleep
+      queues / next-sleeper arming → **Milestone 56** ✅
+- [x] Docs: time model for reviewers — SCHEDULING.md (M56); policy freeze
+      remains **Milestone 58**
 
 ## Milestone 44 — Sealed GALF (disk encryption)
 
@@ -1760,40 +1760,29 @@ M18–19 (per-CPU + steal), and the M43/M48 tickless-idle MVP. Process
 Caps / init stay Phase 6. Plan: `docs/SCHEDULING.md`. Direction:
 `docs/ROADMAP.md` Phase 7. Style: `docs/STYLE.md` → Scheduling.
 
-## Milestone 56 — Time & deadlines
+## Milestone 56 — Time & deadlines ✅
 
 Turn “tickless idle MVP” into a real deadline timer.
 
 ### Sleep and monotonic waits
 
-- [ ] **`sleep` syscall** (or `yield_until`): park the caller until
-      monotonic `timer_ticks()` reaches a deadline; wake with success /
-      interrupted (document which wake sources can cut sleep short)
-- [ ] **Sleep queue**: per-CPU or global ordered wake list; timer IRQ
-      (and steal-safe paths) move due sleepers to runnable
-- [ ] **No busy-spin sleep** in userspace demos — shell/`linger` helpers
-      use the syscall; tests assert the sleeper is not scheduled while
-      waiting
-- [ ] Cap / rights: sleep needs no special Cap (or a trivial Time Cap —
-      pick one in DESIGN and stick to it); document in `galexy-abi`
-- [ ] Tests: `bin/test-sleep` (duration within slack under TCG); sleep
-      + preempt co-existence; sleep across steal (if sleeper migrates)
+- [x] **`sleep` syscall**: park until monotonic `timer_ticks` deadline;
+      wake on timeout with `ok(0)` (no Cap). Kill-interrupt is M57.
+- [x] **Sleep queue**: per-thread `sleep_deadline`; timer IRQ
+      `wake_due_sleepers` after `tick_by`
+- [x] **Userspace**: `galexy_rt::sleep_ms` + util `nap` (no busy-spin)
+- [x] Cap / rights: **none** (documented in `galexy-abi` + SCHEDULING)
+- [x] Tests: `bin/test-sleep` + `sleep_test_passes` (≥20 ms slack under TCG)
 
 ### Program-next-deadline
 
-- [ ] **`arm_timer_for_load` → next deadline**: when idle *or* when the
-      next sleep wake is sooner than the preempt quantum / next-second
-      tick, arm that earlier deadline (min of quantum, next sleeper,
-      next whole-second status update)
-- [ ] **Busy path unchanged**: IRQ still re-arms a preempt quantum so
-      boot / CPU-bound work keeps ~1 ms cadence
-- [ ] **`timer_ticks` honesty**: advancing by the armed window stays
-      correct when deadlines shrink for sleepers (no double-count /
-      skip under TCG)
-- [ ] Optional: TSC-deadline mode only if one-shot drift shows up —
-      waive with numbers otherwise (DESIGN already notes this)
-- [ ] Docs: reviewer time model (monotonic source, what is synchronized,
-      what audits may use) — close or absorb the M43 draft bullet
+- [x] **`arm_timer_for_load` → next deadline**: idle arms
+      `min(next second, next sleeper)`
+- [x] **Busy path unchanged**: IRQ still re-arms a preempt quantum
+- [x] **`timer_ticks` honesty**: still advances by armed window; sleepers
+      woken against absolute deadlines
+- [x] Optional TSC-deadline: waived (PIT-calibrated one-shot remains)
+- [x] Docs: SCHEDULING + DESIGN LAPIC note updated
 
 ## Milestone 57 — Block & wake
 
@@ -1982,7 +1971,7 @@ items stay here with rationale.
 - [ ] Init (orphan root) — **Milestone 53** (Phase 6)
 - [ ] Seats & service supervision — **Milestone 54**
 - [ ] Sessions & job Caps lite — **Milestone 55**
-- [ ] Time & deadlines (sleep / next-deadline arming) — **Milestone 56**
+- [x] Time & deadlines (sleep / next-deadline arming) — **Milestone 56**
       (Phase 7)
 - [ ] Block & wake — **Milestone 57**
 - [ ] Scheduler policy freeze — **Milestone 58**

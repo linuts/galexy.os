@@ -563,6 +563,13 @@ pub fn yield_now() -> SyscallResult {
     syscall(Syscall::Yield as u64, 0, 0, 0)
 }
 
+/// Park until monotonic time advances by about `ms` milliseconds.
+///
+/// No capability required. Clamped by the kernel to `1..=60_000`.
+pub fn sleep_ms(ms: u64) -> SyscallResult {
+    syscall(Syscall::Sleep as u64, ms, 0, 0)
+}
+
 /// Exits the calling task with `code` (never returns).
 pub fn exit(code: u64) -> ! {
     let _ = syscall(Syscall::Exit as u64, code, 0, 0);

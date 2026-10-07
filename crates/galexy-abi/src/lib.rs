@@ -528,6 +528,14 @@ pub enum Syscall {
     ///
     /// **Experimental** until Phase 6 freezes init / seat supervision.
     Kill,
+    /// `sleep(ms)` — park until monotonic `timer_ticks` advances by `ms`.
+    ///
+    /// Args: `RDI = milliseconds` (clamped to `1..=60_000`; `0` becomes
+    /// `1`). No capability required. Returns: `SyscallResult` (rax = 0)
+    /// when the deadline fires. No wall clock; see `docs/SCHEDULING.md`.
+    ///
+    /// **Experimental** until Milestone 58 freezes scheduler policy.
+    Sleep,
 }
 
 /// Maximum bytes in a spawn program **name** (label). Matches the kernel
@@ -538,7 +546,7 @@ pub const SPAWN_ARG_MAX: usize = 256;
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (lifting the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 25] = [
+pub const SYSCALLS: [Syscall; 26] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -564,7 +572,11 @@ pub const SYSCALLS: [Syscall; 25] = [
     Syscall::Unshare,
     Syscall::Wait,
     Syscall::Kill,
+    Syscall::Sleep,
 ];
+
+/// Maximum `sleep(ms)` argument (one minute). Longer waits loop in userspace.
+pub const SLEEP_MS_MAX: u64 = 60_000;
 
 /// `stat` kind: regular file.
 pub const STAT_FILE: u8 = 1;

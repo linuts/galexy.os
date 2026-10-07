@@ -316,10 +316,10 @@ Init order: GDT/TSS (per-CPU slot 0) → per-CPU GS substrate → ACPI (MADT)
   count). Timer delivery is **deadline one-shot** (not a free-running
   1 kHz periodic): busy CPUs re-arm a preempt quantum (`online()` ms
   share-split); idle CPUs sleep until the next whole second (status bar /
-  uptime) or an earlier device IRQ. `timer_ticks` advances by the armed
-  duration so uptime stays honest under tickless idle. Sleep queues and
-  program-next-deadline arming (min of quantum / sleeper / next second)
-  are Phase 7 — see `docs/SCHEDULING.md` (Milestones 56–58).
+  uptime), the next `sleep` deadline, or an earlier device IRQ.
+  `timer_ticks` advances by the armed duration so uptime stays honest
+  under tickless idle. `Syscall::Sleep` parks on a global sleep queue
+  woken from the timer path — see `docs/SCHEDULING.md` (Milestone 56).
 
 ### arch/ioapic — "external interrupt routing" (arch/)
 
