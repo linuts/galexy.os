@@ -29,6 +29,7 @@ crates/
 ├── userspace/           # ring-3 programs, one package per program
 │   ├── galexy-rt/       #   the runtime: entry!, syscall wrappers, panic handler
 │   └── hello/           #   the first real Rust user program
+├── gxc/                 # (planned) host mini Rust-subset compiler — docs/COMPILER.md
 └── runner/              # host tooling: builds BIOS+UEFI images, launches QEMU,
                          #   hosts the boot tests (tests/boot.rs)
 ```

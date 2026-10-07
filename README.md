@@ -13,6 +13,7 @@ galfs access cards), not global file descriptors or PIDs.
 | galfs trees, tokens, sealed disk | [`docs/GALFS.md`](docs/GALFS.md) |
 | Process Caps, init, seats (plan) | [`docs/PROCESS.md`](docs/PROCESS.md) |
 | Scheduler, time, block/wake (plan) | [`docs/SCHEDULING.md`](docs/SCHEDULING.md) |
+| Mini Rust compiler / gxc (plan) | [`docs/COMPILER.md`](docs/COMPILER.md) |
 | How the kernel is wired | [`docs/DESIGN.md`](docs/DESIGN.md) |
 | Coding rules | [`docs/STYLE.md`](docs/STYLE.md) |
 | What’s next | [`docs/ROADMAP.md`](docs/ROADMAP.md) · [`TODO.md`](TODO.md) |
@@ -102,7 +103,7 @@ find target -name "galexy-os-*.img"
 ## Repo map
 
 ```
-docs/           STYLE, ROADMAP, DESIGN, AUTH, GALFS, PROCESS, SCHEDULING
+docs/           STYLE, ROADMAP, DESIGN, AUTH, GALFS, PROCESS, SCHEDULING, COMPILER
 TODO.md         milestone checkboxes
 crates/
   galexy-abi/     syscall numbers, Cap model, errors (host-tested)
@@ -110,6 +111,7 @@ crates/
   galexy-crypto/  PBKDF2-HMAC-SHA256 password KDF (host-tested)
   galexy-os/      kernel (lib + main + test bins)
   userspace/      galexy-rt, shell, util, hello
+  gxc/            (planned) mini Rust-subset compiler — COMPILER.md
   runner/         image build, `cargo run`, QEMU boot tests
 ```
 
@@ -129,6 +131,8 @@ crates/
 - **Phase 5** — review readiness (auth hardening, sealed disk, galfs, solid
   kernel/shell edges) → `review-rc1`
 - **Phase 6** — userspace init, seats under init, job Caps
+- **Phase 7** — scheduling complete (sleep / block-wake / policy) — SCHEDULING.md
+- **Phase 8** — mini Rust-subset compiler (`gxc`) for hello — COMPILER.md
 
 Details: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -136,3 +140,6 @@ Details: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 - [Writing an OS in Rust](https://os.phil-opp.com/) — structural foundation
 - [bootloader](https://github.com/rust-osdev/bootloader) · [rust-osdev](https://github.com/rust-osdev)
+- [Cranelift](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift) ·
+  [rustc-lite](https://github.com/suhteevah/rustc-lite) — codegen / subset
+  ideas for `gxc` (see COMPILER.md)

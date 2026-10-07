@@ -298,6 +298,34 @@ Non-goals for this phase: full POSIX `nanosleep`/`clock_*` surface,
 multi-priority scheduling classes, realtime guarantees, tickless *busy*
 (only idle stretches today; busy stays quantum-paced).
 
+## Phase 8 — Mini Rust compiler (hello world)
+
+Goal: a **Galexy-owned** tiny Rust-subset compiler that emits a static
+ELF the existing loader will run — enough for hello through the console
+Cap. Host `rustc` keeps building real programs (`shell`, utils); `gxc`
+is the learning/self-host path. Plan: `docs/COMPILER.md`. Concrete
+checkboxes: `TODO.md` Milestones **59–61** (on-OS compile **62**).
+Style: `docs/STYLE.md` → Compiler. Orthogonal to Phase 7 — neither
+blocks the other's planning.
+
+Reuse before inventing: `galexy-abi` + `galexy-rt` + ELF loader + existing
+`hello` tests; Cranelift and/or `object`/`iced-x86` for codegen/ELF;
+study [rustc-lite](https://github.com/suhteevah/rustc-lite) (MIT/Apache)
+for a Cranelift-backed subset shape. Not mrustc, not full rustc-in-tree.
+
+1. **59 Language slice + frontend** — freeze gxr v0; `crates/gxc` lex /
+   parse / check with host unit tests
+2. **60 Codegen + ELF** — x64 (hand or Cranelift) + static ELF at
+   `USER_IMAGE_BASE`; syscall prelude matching `write` / `exit`
+3. **61 Hello via gxc** — `hello.gxr` → ramdisk ELF passes QEMU markers;
+   rustc-built `hello` stays green beside it
+4. **62 On-OS gxc** *(follow-on)* — ring-3 compile from galfs when the
+   host path is boring
+
+Non-goals for this phase: Rust/cargo parity, compiling the kernel or
+shell with `gxc`, LLVM/mrustc in-tree, kernel JIT.
+
+
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.

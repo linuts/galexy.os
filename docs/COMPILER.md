@@ -1,0 +1,186 @@
+# COMPILER — mini Rust for Galexy hello-world
+
+galexy.os already runs Rust user programs. Today they are built on the
+**host** with nightly `rustc` + `galexy-rt`, linked as static ELF64 at
+`USER_IMAGE_BASE`, and loaded by `sched/loader.rs`.
+
+This document plans a **small Galexy-owned compiler** — just enough to
+turn a tiny Rust-shaped program into a runnable hello ELF. It is **not**
+a plan to vendor or reimplement full `rustc`.
+
+| Layer | Mechanism | Answers |
+| --- | --- | --- |
+| Source | Tiny Rust subset (“gxr”) | What syntax is accepted? |
+| Frontend | Lex → parse → check (host tests first) | Is the program well-formed? |
+| Codegen | Hand x64 or Cranelift | What machine code? |
+| Object | Static ELF64 @ `USER_IMAGE_BASE` | Can the Galexy loader map it? |
+| Runtime | Syscall stubs matching `galexy-rt` | `write` + `exit` for hello |
+
+Checkboxes: `TODO.md` Phase 8 — Milestones **59–61** (on-OS compile is
+**62**, optional follow-on). Style: `docs/STYLE.md` → Compiler. ABI and
+loader contracts stay in `galexy-abi` / `DESIGN.md`.
+
+## Success for v1
+
+One source file, compiled by **our** tool on the host, runs under QEMU
+and prints a hello line through the console Cap — same path as today's
+`crates/userspace/hello`.
+
+```text
+gxc hello.gxr -o hello.elf
+# → static ET_EXEC, linked at USER_IMAGE_BASE, W^X PT_LOADs
+# → ramdisk / spawn / shell launch prints the line; exits 0
+```
+
+The host `rustc`-built `hello` remains the golden behavioral reference.
+Byte-identical output is **not** required.
+
+## Reuse first (do not rebuild the world)
+
+### Already in this repo (use as-is)
+
+| Asset | Why it speeds hello |
+| --- | --- |
+| `galexy-abi` | Syscall numbers, Cap words, `USER_IMAGE_BASE` |
+| `galexy-rt` | `_start` / `write_console` / `exit` register contract |
+| `sched/loader.rs` | Maps static non-PIE ELF; W^X; enters `e_entry` |
+| `crates/userspace/hello` | Minimal source + QEMU tests (`test-realprogram`, typing E2E) |
+| Ramdisk packing | Drop a new ELF next to `hello` without new kernel policy |
+
+The compiler's job for v1 is **codegen + ELF emit** into a shape that
+loader and runtime already understand. Do not invent a second ABI.
+
+### External work to study / borrow (license-aware)
+
+| Project | What to take | What not to take |
+| --- | --- | --- |
+| [Cranelift](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift) | Host-side x64 codegen without LLVM; later on-OS if `no_std` path is solid | Full Wasmtime / WASI stack |
+| [rustc-lite](https://github.com/suhteevah/rustc-lite) (ClaudioOS) | Shape of a tiny Cranelift-backed subset compiler; MIT/Apache-2.0 | Whole frontend as a black box — evaluate, then **vendor or reimplement** the slices we need with attribution |
+| [`object`](https://crates.io/crates/object) + [`iced-x86`](https://crates.io/crates/iced-x86) | ELF64 emit / instruction encode without binutils (pattern used by hobby compilers such as NCC-Rust) | PE/Mach-O backends we do not need |
+| Upstream Cranelift `no_std` work | Future on-OS compile (Milestone 62) | Blocking v1 on host |
+
+### Explicitly out of scope for v1
+
+| Project | Why not now |
+| --- | --- |
+| Full `rustc` / LLVM | Orders of magnitude too large; we already use host rustc for real programs |
+| [mrustc](https://github.com/thepowersgang/mrustc) | Bootstraps *full* rustc via C; wrong size for “hello on Galexy” |
+| `rustc_codegen_cranelift` as our product | Still needs full rustc frontend; useful later as a *host* build accelerator, not the Galexy compiler |
+
+Prefer **Apache-2.0 / MIT** dependencies. Any vendored slice gets a
+`THIRD_PARTY` note and stays behind a clear crate boundary
+(`crates/gxc/` or similar).
+
+## Language slice (gxr v0)
+
+Enough to express today's hello — nothing more until that works.
+
+```rust
+// hello.gxr — illustrative; exact sugar freezes in Milestone 59
+fn main() -> i32 {
+    write_console(b"Hello from gxc!\n");
+    0
+}
+```
+
+Accepted in v0 (checklist freezes in M59):
+
+- `fn` items, `main() -> i32`, integer literals, byte-string literals
+- Calls to a **fixed** runtime prelude (`write_console`, later `exit` only
+  via return-from-main)
+- `#![no_std]` / `#![no_main]` optional — `gxc` may inject entry
+
+Rejected until later milestones:
+
+- `std`, traits, generics, macros (beyond what `gxc` injects), `unsafe`,
+  floats, threads, `alloc`, modules, crates as dependencies
+- Linking arbitrary Rust crates (including full `galexy-rt` as rlib) —
+  v0 **inlines or ships a tiny object prelude** that performs the same
+  syscalls as `galexy-rt::{write_console,exit}`
+
+Claim carefully in docs: **“Rust subset for Galexy”**, not “Rust
+compatible.”
+
+## Pipeline
+
+```text
+.gxr source
+  → lex / parse / name-resolve (host unit tests)
+  → typed AST (i32, &[u8] byte strings, fn)
+  → IR (custom tiny IR *or* Cranelift CLIF)
+  → machine code (x86_64 SysV)
+  → ELF64 ET_EXEC @ USER_IMAGE_BASE (RX text, R rodata; no W|X)
+  → ramdisk / galfs → spawn
+```
+
+**Host-first:** `gxc` is a Linux host binary in the workspace. On-OS
+self-host (compile under Galexy) waits until the subset + ELF path is
+boring and galfs/shell can hold sources (Milestone 62).
+
+## Runtime contract (must match loader)
+
+Programs `gxc` emits must satisfy what `sched/loader.rs` already
+enforces:
+
+1. ELF64, static, non-PIE, image linked at `galexy_abi::USER_IMAGE_BASE`
+2. Every `PT_LOAD` is W^X (no writable+executable segment)
+3. Entry is `_start(arg: *const u8, arg_len: usize) -> !` SysV, or a
+   wrapper that ignores args and calls `main` then `exit`
+4. Console output: `syscall` Write with console Cap bits from
+   `galexy_abi::reserved::console(WRITE)`
+5. Termination: `syscall` Exit with status in the first arg
+
+Golden test: behavior matches `crates/userspace/hello` under the existing
+QEMU suite (serial line + exit 0). Prefer a **second** ramdisk name
+(`hello-gxc`) so rustc-built `hello` never regresses.
+
+## Milestone map
+
+| Milestone | Delivers |
+| --- | --- |
+| **59** | Language slice frozen; `gxc` crate; lex/parse/check + host tests |
+| **60** | Codegen + ELF emit at `USER_IMAGE_BASE`; prelude syscalls |
+| **61** | `hello.gxr` → ELF runs in QEMU (suite marker); docs claim subset only |
+| **62** *(follow-on)* | Port `gxc` (or a no_std core) to ring-3; compile from galfs |
+
+## Suggested crate layout (when coding starts)
+
+```text
+crates/
+  gxc/              # host binary + lib (parse/codegen/elf)
+  gxc-prelude/      # tiny asm/Rust blobs for write/exit (optional)
+docs/COMPILER.md    # this plan
+```
+
+Keep `gxc` out of the kernel. The kernel only loads ELFs it already
+trusts (ramdisk / later signed measure — Milestone 51).
+
+## Risks
+
+| Risk | Mitigation |
+| --- | --- |
+| Subset creep (“just one more Rust feature”) | Hello is the gate; new syntax needs a milestone checkbox |
+| Cranelift weight on-OS | Host Cranelift first; hand x64 for the 20-instruction hello if deps hurt |
+| ELF/linker subtleties | Reuse loader tests; emit minimal two-segment images |
+| License / provenance | Prefer MIT/Apache; document vendored files |
+| Confusion with host rustc programs | Separate binary name + COMPILER.md “subset” banner |
+
+## Explicit non-goals (v1)
+
+- Full Rust / edition parity / `cargo` clone
+- Compiling `shell`, `galexy-rt`, or the kernel with `gxc`
+- LLVM, GCC, or mrustc in the Galexy tree
+- JIT inside the kernel
+- Cross-compiling to non-x86_64
+- Claiming rustc compatibility
+
+## Related docs
+
+| Doc | Role |
+| --- | --- |
+| `DESIGN.md` | Loader, syscall register contract, crate DAG |
+| `PROCESS.md` | Process Caps (compiler does not change spawn policy) |
+| `SCHEDULING.md` | Runtime scheduling (orthogonal; parallel track) |
+| `STYLE.md` | Coding rules for `gxc` when it lands |
+| `ROADMAP.md` Phase 8 | Direction-level bullets |
+| `TODO.md` 59–62 | Checkboxes |
