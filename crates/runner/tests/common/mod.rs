@@ -115,22 +115,26 @@ fn qemu_command_with_galfs(img_path: &str, galfs_path: &PathBuf, serial_path: &P
 
 /// Boots `image` with a fresh empty galfs data disk, then again with the
 /// same data disk so the guest can prove the table survived. Returns
-/// `(first_exit, first_serial, second_exit, second_serial)`.
-pub fn boot_with_galfs(image: &Image) -> (Option<i32>, String, Option<i32>, String) {
+/// `(first_exit, first_serial, img_after_write, second_exit, second_serial)`.
+pub fn boot_with_galfs(
+    image: &Image,
+) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
     boot_with_galfs_inner(image, false)
 }
 
 /// Like [`boot_with_galfs`], but after the write boot the host destroys the
 /// newest GALF slot's magic so the verify boot must recover from the older
 /// dual-slot copy.
-pub fn boot_with_galfs_recover(image: &Image) -> (Option<i32>, String, Option<i32>, String) {
+pub fn boot_with_galfs_recover(
+    image: &Image,
+) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
     boot_with_galfs_inner(image, true)
 }
 
 fn boot_with_galfs_inner(
     image: &Image,
     corrupt_newest: bool,
-) -> (Option<i32>, String, Option<i32>, String) {
+) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
     let galfs_path = std::env::temp_dir().join(format!(
         "galexy-galfs-{}-{}.img",
         image.name.replace('-', "_"),
@@ -146,12 +150,13 @@ fn boot_with_galfs_inner(
     if let Ok(file) = std::fs::File::options().write(true).open(&galfs_path) {
         let _ = file.sync_all();
     }
+    let img_after_write = std::fs::read(&galfs_path).expect("read galfs.img after write");
     if corrupt_newest {
         corrupt_newest_galfs_slot(&galfs_path);
     }
     let (code2, serial2) = boot_once_with_galfs(&image.bios, &galfs_path, &image.name);
     let _ = std::fs::remove_file(&galfs_path);
-    (code1, serial1, code2, serial2)
+    (code1, serial1, img_after_write, code2, serial2)
 }
 
 /// Dual-slot layout must match `galfs::DISK_SECTORS` (80 × 512).

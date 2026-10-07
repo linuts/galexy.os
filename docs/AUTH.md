@@ -12,14 +12,31 @@ can be handed to another user or to an app without sharing a password.
 A password never grants rights on someone else’s tree by itself — after
 login you hold `RIGHT_ALL` on **your** root; everything else is granted.
 
-Disk encryption is out of scope for now (Milestone 44). Passwords use
-**PBKDF2-HMAC-SHA256** (`galexy-crypto`: 10 000 iterations) with an
-8-byte CSPRNG salt and a 16-byte digest per actor (GALF **v5**). Salts
-come from `arch::rand` (RDRAND, with a tick-mixed fallback). Empty
+Passwords use **PBKDF2-HMAC-SHA256** (`galexy-crypto`: 10 000
+iterations) with an 8-byte CSPRNG salt and a 16-byte digest per actor.
+Salts come from `arch::rand` (RDRAND, with a tick-mixed fallback). Empty
 passwords are rejected. Syscall staging buffers are wiped after login /
 useradd / passwd. Iteration count is capped for debug-QEMU boot budget;
 raise it (or switch to Argon2id on a dedicated KDF stack) once release
 profiles or fatter kstacks make that practical.
+
+### Sealed GALF (at-rest disk)
+
+**Threat model (v1):** an attacker who steals `galfs.img` / the ATA
+slave must not recover file bytes or password hashes offline. Cold-boot
+RAM extraction and a compromised live kernel are out of scope for now.
+
+GALF **v6** slots are sealed:
+
+1. Format creates a random 32-byte volume key.
+2. A KEK is derived from the volume passphrase (`galfs` for bring-up)
+   via PBKDF2; the volume key is wrapped with ChaCha20-HMAC-SHA256.
+3. Actor/object payload is encrypted under the volume key (same AEAD);
+   AAD binds magic + version + generation so slots cannot be spliced.
+4. Boot unlocks with the bring-up passphrase automatically today;
+   interactive unlock is a follow-up.
+
+v5 plaintext images are refused (format recreates admin).
 
 ## Pieces
 
@@ -142,15 +159,13 @@ within budget; a tight write loop cannot pin COM1.
 
 ## Explicit non-goals (for now)
 
-Tracked for review readiness in `TODO.md` Milestones 43–44 (auth +
-sealed disk). Until those land:
+Tracked for review readiness in `TODO.md` Milestones 43–44:
 
-- Disk encryption / sealed password store → Milestone 44
-- No-echo CLI prompts, lockout, idle logout, must-change admin →
-  remaining Milestone 43 items (KDF + CSPRNG salts shipped)
+- Interactive volume unlock (replace bring-up passphrase) → Milestone 44
+- Lockout, idle logout, kernel must-change → remaining Milestone 43
 - PAM-style modules, MFA, networked IdP (still out of scope for review)
 - Removing the `crash` test seam from production images → Milestone 43
   (kept for supervisor e2e; omitted from `help`)
 
-**Note:** GALF **v5** refuses v4 images (CRC password hashes). Delete
-`galfs.img` or let format recreate admin after upgrading.
+**Note:** GALF **v6** refuses v5 images. Delete `galfs.img` or let
+format recreate a sealed volume after upgrading.

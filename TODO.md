@@ -1148,22 +1148,24 @@ Lockout and idle logout need a trustworthy clock source.
 
 Protect the ATA image at rest (password hashes and file bytes).
 
-- [ ] **Threat model paragraph** in `AUTH.md`: stolen `galfs.img` /
+- [x] **Threat model paragraph** in `AUTH.md`: stolen `galfs.img` /
       disk; cold boot out of scope initially
-- [ ] **Wrapping**: derive a volume key from the boot unlock secret
-      (admin password or separate disk passphrase) via the Milestone 43 KDF; store a wrapped key + nonce in the GALF header
-- [ ] **Payload encryption**: AEAD (e.g. ChaCha20-Poly1305 or AES-GCM)
-      over each slot blob; CRC may remain as a cheap pre-check or fold
-      into the AEAD tag
-- [ ] **Boot unlock**: prompt on F1 (or runner flag for tests) before
-      mounting; wrong passphrase → refuse mutate, optional RAM-only
-      fallback for bring-up
-- [ ] **Test**: `test-galfs-disk` with a passphrase; raw image bytes do
-      not contain plaintext file contents or unsalted password material
+- [x] **Wrapping**: KEK = PBKDF2(volume passphrase); wrap a random
+      32-byte volume key (ChaCha20-HMAC) into the GALF **v6** header
+- [x] **Payload encryption**: ChaCha20-HMAC-SHA256 Encrypt-then-MAC over
+      the actor/object blob; CRC of ciphertext kept as a cheap pre-check
+- [x] **Header AAD**: magic + version + generation bind the wrap and
+      payload tags (slot splice rejected)
+- [x] **Boot unlock (bring-up)**: auto-unlock with `VOLUME_PASSPHRASE`
+      (`galfs`); sync refused while locked
+- [x] **Test**: `test-galfs-disk` round-trip; host asserts `persist-ok`
+      is absent from raw `galfs.img` bytes
+- [ ] **Interactive unlock**: prompt on F1 (or runner flag) before
+      mounting; wrong passphrase → refuse mutate / RAM-only fallback
 - [ ] **Key wipe**: volume key zeroed on logout/shutdown path where held
       in RAM; document residual cold-boot risk as accepted
-- [ ] **Header AAD**: AEAD associated data binds version + generation so
-      slots cannot be spliced across images
+- [ ] **Poly1305 follow-up**: swap HMAC tag for RFC 8439 Poly1305 without
+      resizing the v6 header (same key/nonce/tag widths)
 - [ ] Explicit non-goal until later: per-file keys, secure erase, TPM seal
 
 ## Milestone 45 — galfs for real usage

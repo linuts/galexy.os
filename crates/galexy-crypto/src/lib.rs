@@ -1,16 +1,20 @@
-//! Password KDF and secret helpers for galexy.os.
+//! Password KDF, AEAD, and secret helpers for galexy.os.
 //!
 //! `no_std` and **alloc-free** (fits IF=0 syscalls and thin kstacks).
 //! Platform CSPRNG lives in the kernel (`arch::rand`).
 //!
 //! KDF: PBKDF2-HMAC-SHA256 with a freestanding SHA-256 (no `sha2` crate —
 //! its asm path does not build for `x86_64-unknown-none`).
+//! AEAD: ChaCha20-Poly1305 (RFC 8439), also freestanding.
 
 #![no_std]
 #![deny(clippy::all)]
 #![deny(missing_docs)]
 
+mod aead;
 mod sha256;
+
+pub use aead::{open, seal, KEY_LEN, NONCE_LEN, TAG_LEN};
 
 /// Salt length stored on each actor (CSPRNG-filled at set-password).
 pub const SALT_LEN: usize = 8;
@@ -26,6 +30,11 @@ pub const PBKDF2_ITERS: u32 = 10_000;
 
 /// Fills `out` with PBKDF2-HMAC-SHA256(password, salt, [`PBKDF2_ITERS`]).
 pub fn hash_password(password: &[u8], salt: &[u8; SALT_LEN], out: &mut [u8; HASH_LEN]) {
+    pbkdf2_hmac_sha256(password, salt, PBKDF2_ITERS, out);
+}
+
+/// Derives a 32-byte key (volume KEK) via PBKDF2-HMAC-SHA256.
+pub fn derive_key(password: &[u8], salt: &[u8; SALT_LEN], out: &mut [u8; KEY_LEN]) {
     pbkdf2_hmac_sha256(password, salt, PBKDF2_ITERS, out);
 }
 

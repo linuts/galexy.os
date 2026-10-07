@@ -16,7 +16,9 @@ use spin::Mutex;
 
 use galexy_abi::SysError;
 use galexy_core::{crc32, HASH_LEN, SALT_LEN};
-use galexy_crypto::{hash_eq, hash_password, wipe_bytes};
+use galexy_crypto::{
+    derive_key, hash_eq, hash_password, open, seal, wipe_bytes, KEY_LEN, NONCE_LEN, TAG_LEN,
+};
 
 const _: () = assert!(SALT_LEN == galexy_crypto::SALT_LEN);
 const _: () = assert!(HASH_LEN == galexy_crypto::HASH_LEN);
@@ -201,20 +203,28 @@ static ADMIN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16
 /// LBA [`DISK_SECTORS`]. A sync writes the inactive slot with gen+1 and a
 /// CRC, then flushes — a crash mid-write leaves the previous slot intact.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-/// Bumped when password hashing moved to PBKDF2-HMAC-SHA256 (v5). v4 CRC
-/// hashes cannot verify; load refuses the image and format recreates admin.
-pub const DISK_VERSION: u16 = 5;
+/// Bumped for sealed slots (ChaCha20-HMAC volume AEAD). v5 plaintext
+/// images are refused; format recreates admin under a wrapped volume key.
+pub const DISK_VERSION: u16 = 6;
 pub const DISK_SECTORS: usize = 80;
 pub const DISK_SLOT_COUNT: usize = 2;
-const DISK_HEADER: usize = 32;
+/// Clear header + wrap fields + data tag (see `encode_table`).
+const DISK_HEADER: usize = 128;
 /// used(1) + name_len(1) + name(32) + root(2) + salt(8) + hash(16) = 60.
 const ACTOR_ON_DISK: usize = 60;
 const OBJECT_ON_DISK: usize = 8 + NAME_CAP + FILE_BYTES; // 584
+const PAYLOAD_LEN: usize = ACTOR_ON_DISK * ACTOR_SLOTS + OBJECT_ON_DISK * OBJECT_SLOTS;
+const _: () = assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * ata::SECTOR);
 /// Default password for the immortal admin account at format.
 pub const ADMIN_DEFAULT_PASSWORD: &str = "admin";
+/// Bring-up volume passphrase (wraps the disk key). Interactive unlock is
+/// a follow-up; tests and `cargo run` use this constant for now.
+pub const VOLUME_PASSPHRASE: &[u8] = b"galfs";
 
 static DISK_BUF: Mutex<[[u8; ata::SECTOR]; DISK_SECTORS]> =
     Mutex::new([[0u8; ata::SECTOR]; DISK_SECTORS]);
+/// Unwrapped volume key while the disk is mounted. `None` when locked / RAM-only.
+static VOLUME_KEY: Mutex<Option<[u8; KEY_LEN]>> = Mutex::new(None);
 
 /// Builds actor [`ADMIN_NAME`] with an empty Desktop, or loads the newest
 /// valid GALF slot from the ATA slave. Call once.
@@ -238,8 +248,13 @@ pub fn init() {
     drop(table);
     ACTIVE_SLOT.store(0, Ordering::Relaxed);
     ACTIVE_GEN.store(0, Ordering::Relaxed);
+    // Fresh volume key for a sealed format (bring-up passphrase).
+    let mut vk = [0u8; KEY_LEN];
+    crate::arch::rand::fill_bytes(&mut vk);
+    *VOLUME_KEY.lock() = Some(vk);
+    wipe_bytes(&mut vk);
     if sync_to_disk() {
-        crate::serial_println!("[galfs] formatted disk");
+        crate::serial_println!("[galfs] formatted sealed disk");
     }
 }
 
@@ -255,6 +270,10 @@ pub fn sync() {
 
 fn sync_to_disk() -> bool {
     if !ata::present() {
+        return false;
+    }
+    if VOLUME_KEY.lock().is_none() {
+        crate::serial_println!("[galfs] sync skipped: volume locked");
         return false;
     }
     let next_gen = ACTIVE_GEN.load(Ordering::Relaxed).wrapping_add(1);
@@ -296,7 +315,7 @@ fn load_from_disk() -> bool {
             actors: [Actor::empty(); ACTOR_SLOTS],
             objects: [Object::empty(); OBJECT_SLOTS],
         };
-        let Some(gen) = decode_table(&buf, &mut candidate) else {
+        let Some(gen) = decode_table(&mut buf, &mut candidate) else {
             continue;
         };
         if !validate_table(&candidate) {
@@ -333,6 +352,9 @@ fn refresh_roots(table: &Table) {
 }
 
 fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; ata::SECTOR]; DISK_SECTORS]) {
+    let vk = VOLUME_KEY
+        .lock()
+        .expect("galfs: encode requires unlocked volume");
     let flat = sectors_flat_mut(sectors);
     flat.fill(0);
     flat[0..4].copy_from_slice(&DISK_MAGIC);
@@ -340,9 +362,9 @@ fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; ata::SECTOR]
     flat[6..8].copy_from_slice(&(ACTOR_SLOTS as u16).to_le_bytes());
     flat[8..10].copy_from_slice(&(OBJECT_SLOTS as u16).to_le_bytes());
     flat[10..12].copy_from_slice(&(FILE_BYTES as u16).to_le_bytes());
-    // 12..16 reserved flags
+    flat[12] = 1; // sealed
     flat[16..24].copy_from_slice(&generation.to_le_bytes());
-    // 24..28 crc filled after payload
+
     let mut off = DISK_HEADER;
     for actor in &table.actors {
         flat[off] = u8::from(actor.used);
@@ -366,14 +388,62 @@ fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; ata::SECTOR]
         flat[off + 8 + NAME_CAP..off + 8 + NAME_CAP + FILE_BYTES].copy_from_slice(&obj.data);
         off += OBJECT_ON_DISK;
     }
+    debug_assert_eq!(off, DISK_HEADER + PAYLOAD_LEN);
     debug_assert!(off <= flat.len());
-    let sum = crc32(&flat[DISK_HEADER..]);
+
+    let aad = seal_aad(generation);
+
+    // Wrap volume key with KEK from the bring-up passphrase.
+    let mut kdf_salt = [0u8; SALT_LEN];
+    let mut wrap_nonce = [0u8; NONCE_LEN];
+    let mut data_nonce = [0u8; NONCE_LEN];
+    crate::arch::rand::fill_bytes(&mut kdf_salt);
+    crate::arch::rand::fill_bytes(&mut wrap_nonce);
+    crate::arch::rand::fill_bytes(&mut data_nonce);
+    let mut kek = [0u8; KEY_LEN];
+    derive_key(VOLUME_PASSPHRASE, &kdf_salt, &mut kek);
+    let mut wrapped = vk;
+    let mut wrap_tag = [0u8; TAG_LEN];
+    seal(&kek, &wrap_nonce, &aad, &mut wrapped, &mut wrap_tag);
+    wipe_bytes(&mut kek);
+
+    flat[32..40].copy_from_slice(&kdf_salt);
+    flat[40..52].copy_from_slice(&wrap_nonce);
+    flat[52..84].copy_from_slice(&wrapped);
+    flat[84..100].copy_from_slice(&wrap_tag);
+    wipe_bytes(&mut wrapped);
+
+    // Encrypt payload in place.
+    let mut data_tag = [0u8; TAG_LEN];
+    seal(
+        &vk,
+        &data_nonce,
+        &aad,
+        &mut flat[DISK_HEADER..DISK_HEADER + PAYLOAD_LEN],
+        &mut data_tag,
+    );
+    flat[100..112].copy_from_slice(&data_nonce);
+    flat[112..128].copy_from_slice(&data_tag);
+
+    let sum = crc32(&flat[DISK_HEADER..DISK_HEADER + PAYLOAD_LEN]);
     flat[24..28].copy_from_slice(&sum.to_le_bytes());
 }
 
-/// Decodes a slot. Returns the generation when the image is well-formed.
-fn decode_table(sectors: &[[u8; ata::SECTOR]; DISK_SECTORS], table: &mut Table) -> Option<u64> {
-    let flat = sectors_flat(sectors);
+fn seal_aad(generation: u64) -> [u8; 14] {
+    let mut aad = [0u8; 14];
+    aad[0..4].copy_from_slice(&DISK_MAGIC);
+    aad[4..6].copy_from_slice(&DISK_VERSION.to_le_bytes());
+    aad[6..14].copy_from_slice(&generation.to_le_bytes());
+    aad
+}
+
+/// Decodes a sealed slot. Returns the generation when unlock + AEAD succeed.
+/// Decrypts the payload in place in `sectors`.
+fn decode_table(
+    sectors: &mut [[u8; ata::SECTOR]; DISK_SECTORS],
+    table: &mut Table,
+) -> Option<u64> {
+    let flat = sectors_flat_mut(sectors);
     if flat[0..4] != DISK_MAGIC {
         return None;
     }
@@ -385,26 +455,60 @@ fn decode_table(sectors: &[[u8; ata::SECTOR]; DISK_SECTORS], table: &mut Table) 
         || actors != ACTOR_SLOTS
         || objects != OBJECT_SLOTS
         || file_bytes != FILE_BYTES
+        || flat[12] & 1 == 0
     {
         return None;
     }
     let generation = u64::from_le_bytes(flat[16..24].try_into().ok()?);
     let expect = u32::from_le_bytes(flat[24..28].try_into().ok()?);
-    if crc32(&flat[DISK_HEADER..]) != expect {
+    if crc32(&flat[DISK_HEADER..DISK_HEADER + PAYLOAD_LEN]) != expect {
         return None;
     }
+
+    let aad = seal_aad(generation);
+    let kdf_salt: [u8; SALT_LEN] = flat[32..40].try_into().ok()?;
+    let wrap_nonce: [u8; NONCE_LEN] = flat[40..52].try_into().ok()?;
+    let mut wrapped: [u8; KEY_LEN] = flat[52..84].try_into().ok()?;
+    let wrap_tag: [u8; TAG_LEN] = flat[84..100].try_into().ok()?;
+    let data_nonce: [u8; NONCE_LEN] = flat[100..112].try_into().ok()?;
+    let data_tag: [u8; TAG_LEN] = flat[112..128].try_into().ok()?;
+
+    let mut kek = [0u8; KEY_LEN];
+    derive_key(VOLUME_PASSPHRASE, &kdf_salt, &mut kek);
+    if !open(&kek, &wrap_nonce, &aad, &mut wrapped, &wrap_tag) {
+        wipe_bytes(&mut kek);
+        wipe_bytes(&mut wrapped);
+        return None;
+    }
+    wipe_bytes(&mut kek);
+    let vk = wrapped;
+
+    if !open(
+        &vk,
+        &data_nonce,
+        &aad,
+        &mut flat[DISK_HEADER..DISK_HEADER + PAYLOAD_LEN],
+        &data_tag,
+    ) {
+        let mut gone = vk;
+        wipe_bytes(&mut gone);
+        return None;
+    }
+
     let mut off = DISK_HEADER;
     for actor in &mut table.actors {
         *actor = Actor::empty();
         actor.used = flat[off] != 0;
         actor.name_len = flat[off + 1].min(ACTOR_NAME as u8);
-        actor.name.copy_from_slice(&flat[off + 2..off + 2 + ACTOR_NAME]);
+        actor.name
+            .copy_from_slice(&flat[off + 2..off + 2 + ACTOR_NAME]);
         actor.root = u16::from_le_bytes([
             flat[off + 2 + ACTOR_NAME],
             flat[off + 3 + ACTOR_NAME],
         ]);
         let salt_off = off + 4 + ACTOR_NAME;
-        actor.salt.copy_from_slice(&flat[salt_off..salt_off + SALT_LEN]);
+        actor.salt
+            .copy_from_slice(&flat[salt_off..salt_off + SALT_LEN]);
         actor
             .pass_hash
             .copy_from_slice(&flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN]);
@@ -417,14 +521,18 @@ fn decode_table(sectors: &[[u8; ata::SECTOR]; DISK_SECTORS], table: &mut Table) 
         obj.name_len = flat[off + 2].min(NAME_CAP as u8);
         obj.parent = u16::from_le_bytes([flat[off + 4], flat[off + 5]]);
         obj.len = u16::from_le_bytes([flat[off + 6], flat[off + 7]]);
-        obj.name.copy_from_slice(&flat[off + 8..off + 8 + NAME_CAP]);
+        obj.name
+            .copy_from_slice(&flat[off + 8..off + 8 + NAME_CAP]);
         obj.data
             .copy_from_slice(&flat[off + 8 + NAME_CAP..off + 8 + NAME_CAP + FILE_BYTES]);
         if obj.len as usize > FILE_BYTES {
+            let mut gone = vk;
+            wipe_bytes(&mut gone);
             return None;
         }
         off += OBJECT_ON_DISK;
     }
+    *VOLUME_KEY.lock() = Some(vk);
     Some(generation)
 }
 
@@ -495,16 +603,6 @@ fn validate_table(table: &Table) -> bool {
         }
     }
     true
-}
-
-fn sectors_flat(sectors: &[[u8; ata::SECTOR]; DISK_SECTORS]) -> &[u8] {
-    // SAFETY: `[[u8; SECTOR]; N]` is contiguous bytes with no padding.
-    unsafe {
-        core::slice::from_raw_parts(
-            sectors.as_ptr().cast::<u8>(),
-            DISK_SECTORS * ata::SECTOR,
-        )
-    }
 }
 
 fn sectors_flat_mut(sectors: &mut [[u8; ata::SECTOR]; DISK_SECTORS]) -> &mut [u8] {

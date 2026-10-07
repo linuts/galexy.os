@@ -454,7 +454,7 @@ fn galfs_test_passes() {
 
 #[test]
 fn galfs_disk_persists_across_reboot() {
-    let (code1, serial1, code2, serial2) = boot_with_galfs(&image("test-galfs-disk"));
+    let (code1, serial1, img, code2, serial2) = boot_with_galfs(&image("test-galfs-disk"));
     assert_eq!(
         code1,
         Some(QEMU_EXIT_SUCCESS),
@@ -463,6 +463,11 @@ fn galfs_disk_persists_across_reboot() {
     assert!(
         serial1.contains("[test-galfs-disk] wrote"),
         "write marker missing; serial:\n{serial1}"
+    );
+    assert!(
+        !img.windows(b"persist-ok".len())
+            .any(|w| w == b"persist-ok"),
+        "sealed galfs.img must not contain plaintext file bytes"
     );
     assert_eq!(
         code2,
@@ -477,7 +482,8 @@ fn galfs_disk_persists_across_reboot() {
 
 #[test]
 fn galfs_disk_recovers_from_corrupt_slot() {
-    let (code1, serial1, code2, serial2) = boot_with_galfs_recover(&image("test-galfs-disk"));
+    let (code1, serial1, _img, code2, serial2) =
+        boot_with_galfs_recover(&image("test-galfs-disk"));
     assert_eq!(
         code1,
         Some(QEMU_EXIT_SUCCESS),
