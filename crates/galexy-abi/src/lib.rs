@@ -187,7 +187,8 @@ pub mod reserved {
         Cap::new(LOADER_INDEX, rights)
     }
 
-    /// The stats capability. `read` copies the current frame and heap report.
+    /// The stats capability. `read` copies uptime, free frames, heap, and
+    /// galfs block usage (text snapshot).
     pub const fn stats(rights: super::CapRights) -> Cap {
         Cap::new(STATS_INDEX, rights)
     }

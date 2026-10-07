@@ -1725,8 +1725,16 @@ fn shell_query_typing_e2e() {
     );
     assert_passwords_masked(&serial);
     assert!(
+        serial.contains("uptime:"),
+        "typed `stats` never produced the uptime line; serial:\n{serial}"
+    );
+    assert!(
         serial.contains("frames free:"),
         "typed `stats` never produced the frame line; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("galfs:") && serial.contains("blocks"),
+        "typed `stats` never produced the galfs line; serial:\n{serial}"
     );
     assert!(
         serial.contains("thread-a:"),

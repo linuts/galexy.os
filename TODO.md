@@ -1366,8 +1366,10 @@ same discipline as files. Optional debug ids for listings only.
 - [x] **Ring-3 segment reload**: SYSCALL / timer / page-fault `iretq`
       tails reload DS/ES with user data (RPL 3); FS unused; GS stays
       the per-CPU base (`USER_DS_RPL3`, DESIGN note)
-- [ ] **More query caps or `sysinfo`**: uptime, free frames, galfs
-      usage, task list (debug ids only) — for review demos
+- [x] **More query caps or `sysinfo`**: `stats` reports uptime (~1 kHz
+      ticks), free frames, heap, and galfs blocks used/capacity; task
+      list remains on the `tasks` Cap (debug ids only) —
+      `shell_query_typing_e2e`
 - [x] ABI doc section: process Cap wait/kill/spawn marked
       **experimental** until Phase 6 freezes
 - [x] Tests: spawn → Cap-wait exit code; forging a Cap word fails;
@@ -1394,10 +1396,11 @@ Make the object-capability story hold under exhaustion and forgery.
 - [x] **Give/pipe lifecycle** (process Caps): `give` moves a process Cap
       with attenuation (`PROC_TRANSFER`); pipe lifecycle already covered;
       process Cap give covered (`test-procgive`)
-- [ ] **Query caps**: snapshots do not allocate on IF=0 (already true —
-      add a regression comment/test if a change regresses it)
-- [ ] **Loader EXEC**: only the shell (or tasks with loader grant) can
-      spawn; pre-login denial covered in Milestone 43 — cross-link tests here
+- [x] **Query caps**: snapshots use stack `TextBuf` only (IF=0) —
+      regression comment on `syscall_read_query` / `TextBuf`
+- [x] **Loader EXEC**: only tasks with the Loader grant can `spawn`
+      (`Grants::pre_login` has no loader — Milestone 43; forged/ungranted
+      loader Cap → AccessDenied in `test-capforge`)
 
 ## Milestone 48 — Memory, safety & concurrency
 

@@ -941,6 +941,8 @@ fn syscall_read_query(cap: Cap, kind: Query, addr: u64, len: u64) -> SyscallResu
     if user_buffer(addr, len, true).is_err() {
         return SyscallResult::err(SysError::BadBuffer);
     }
+    // Snapshot into a stack buffer only. SYSCALL entry clears IF (SFMASK),
+    // so this path must never allocate — `TextBuf` + fixed `staged` only.
     let mut staged = [0u8; MAX_READ as usize];
     let mut out = TextBuf {
         dst: &mut staged[..len as usize],
@@ -966,8 +968,8 @@ fn syscall_read_query(cap: Cap, kind: Query, addr: u64, len: u64) -> SyscallResu
     SyscallResult::ok(n as u64)
 }
 
-/// A stack buffer for query text. The syscall runs with interrupts off, so
-/// this must not allocate.
+/// Stack-only sink for query text (no heap). Regression: never replace with
+/// `String` / `Vec` — `read` on stats/tasks/threads/files runs with IF=0.
 struct TextBuf<'a> {
     dst: &'a mut [u8],
     n: usize,
@@ -1023,7 +1025,13 @@ impl TextBuf<'_> {
 
 fn render_stats(out: &mut TextBuf<'_>) {
     let (heap_start, heap_size) = crate::arch::mm::heap::stats();
-    out.push(b"frames free: ");
+    let ticks = crate::arch::timer_ticks();
+    out.push(b"uptime: ");
+    out.push_u64(ticks / 1000);
+    out.push(b".");
+    // Tenths of a second from the ~1 kHz tick (not wall-clock).
+    out.push_u64((ticks / 100) % 10);
+    out.push(b"s\nframes free: ");
     out.push_u64(crate::arch::mm::free_frames() as u64);
     out.push(b"\nheap: ");
     out.push_u64(crate::arch::mm::heap::used_bytes() as u64);
@@ -1033,7 +1041,11 @@ fn render_stats(out: &mut TextBuf<'_>) {
     out.push_u64(heap_size / 1024);
     out.push(b" KiB\nheap at ");
     out.push_hex(heap_start);
-    out.push(b"\n");
+    out.push(b"\ngalfs: ");
+    out.push_u64(crate::sched::galfs::blocks_used() as u64);
+    out.push(b" / ");
+    out.push_u64(crate::sched::galfs::BLOCK_SLOTS as u64);
+    out.push(b" blocks\n");
 }
 
 fn render_tasks(out: &mut TextBuf<'_>) {
