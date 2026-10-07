@@ -370,10 +370,12 @@ pub enum Syscall {
     /// `spawn(cap, name, len)` — start a ramdisk program.
     ///
     /// Args: `RDI = loader cap bits`, `RSI = user address of the name`,
-    /// `RDX = byte count`. Optional: `R8 = user address of an argument`,
-    /// `R9 = argument byte count` (at most 256; zero means none),
-    /// `R10 = grant bits` ([`SPAWN_GRANT_QUERY`], [`SPAWN_WAIT`],
-    /// [`SPAWN_INHERIT`], or a combination).
+    /// `RDX = byte count` (1..=64). The name is a **label**: ASCII
+    /// alphanumeric plus `.` `_` `-` (no `/`). Optional: `R8` = argument
+    /// blob address, `R9` = blob length (at most 256; **single arg blob**
+    /// — no argv/env vector until a later ABI bump), `R10` = grant bits
+    /// ([`SPAWN_GRANT_QUERY`], [`SPAWN_WAIT`], [`SPAWN_INHERIT`], or a
+    /// combination).
     /// Returns: `SyscallResult` — without [`SPAWN_WAIT`], `rax` is a
     /// process Cap ([`PROC_CAP_BASE`] + slot) with [`CapRights::PROC_PARENT`];
     /// with [`SPAWN_WAIT`], `rax` is the child's exit code (the Cap is still
@@ -381,6 +383,8 @@ pub enum Syscall {
     /// Requires CapRights::EXEC on the loader. Wait is by Cap/slot, not by
     /// name (Milestone 47). [`SPAWN_INHERIT`] copies the parent's galfs
     /// tokens onto the child (utilities); bare programs omit it.
+    ///
+    /// **Experimental** until Phase 6 freezes init / seat supervision.
     Spawn,
     /// `power(cap, op)` — shut down or reset the machine.
     ///
@@ -510,14 +514,24 @@ pub enum Syscall {
     ///
     /// Args: `RDI = process Cap bits`. Requires [`CapRights::PROC_WAIT`].
     /// Returns: `SyscallResult` (rax = exit code). The Cap becomes stale
-    /// after a successful wait. Experimental until Phase 6.
+    /// after a successful wait.
+    ///
+    /// **Experimental** until Phase 6 freezes init / seat supervision.
     Wait,
     /// `kill(cap)` — stop a task addressed by a process Cap.
     ///
     /// Args: `RDI = process Cap bits`. Requires [`CapRights::PROC_KILL`].
-    /// Returns: `SyscallResult` (rax = 0). Experimental until Phase 6.
+    /// Returns: `SyscallResult` (rax = 0).
+    ///
+    /// **Experimental** until Phase 6 freezes init / seat supervision.
     Kill,
 }
+
+/// Maximum bytes in a spawn program **name** (label). Matches the kernel
+/// name buffer; longer names are `BadValue`.
+pub const SPAWN_NAME_MAX: usize = 64;
+/// Maximum bytes in the single spawn **argument blob** (`r8`/`r9`).
+pub const SPAWN_ARG_MAX: usize = 256;
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (lifting the cap is version-1 work).

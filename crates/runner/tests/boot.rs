@@ -986,6 +986,20 @@ fn selfcap_test_passes() {
 }
 
 #[test]
+fn orphan_test_passes() {
+    let (code, serial) = boot(&image("test-orphan"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-orphan should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-orphan] passed"),
+        "test-orphan success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn seek_test_passes() {
     let (code, serial) = boot(&image("test-seek"));
     assert_eq!(

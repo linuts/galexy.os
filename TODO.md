@@ -1350,27 +1350,29 @@ same discipline as files. Optional debug ids for listings only.
 - [x] **Wait by Cap**: `wait(cap)` + shell Cap-wait via `SPAWN_INHERIT`;
       `SPAWN_WAIT` remains a convenience (Cap installed, park until exit);
       **no wait-by-name or wait-by-pid ABI** (STYLE)
-- [ ] **Wait/reap hygiene**: waiter exits first → child’s wait Cap
-      transfers to the new parent (eventually init); no dangling wait
-      edges; zombies until Cap-wait or Cap drop (orphan transfer open)
+- [x] **Wait/reap hygiene** (partial): parent reap reparents children to
+      kernel (`parent_slot = 0`); Caps die with the parent until Milestone
+      53 transfers wait Caps to init; zombies until Cap-wait or Cap drop
+      (`test-orphan`)
 - [x] **Kill by Cap (signals-lite)**: stop a runaway only if you hold
       `PROC_KILL` on that Cap — not a name or number (`test-proccap`)
 - [x] **Names as labels**: `tasks` / `threads` show debug id + name +
       state (or ticks); unique-live name may remain for UX but is not
       the wait key
-- [ ] **Name length / charset** for labels aligned with spawn checks;
-      documented in abi
-- [ ] **Args & env**: spawn already passes one argument blob — define
-      argv/env layout (or explicitly freeze “single arg blob” in ABI)
+- [x] **Name length / charset** for labels: `SPAWN_NAME_MAX` (64),
+      alphanumeric + `.` `_` `-`; documented on `Syscall::Spawn`
+- [x] **Args & env**: freeze **single arg blob** (`SPAWN_ARG_MAX` 256)
+      in abi until a later argv/env bump
 - [ ] **Ring-3 segment reload**: SYSCALL return restores user DS/ES (and
       documents FS/GS policy); today kernel bootstrap selectors remain
 - [ ] **More query caps or `sysinfo`**: uptime, free frames, galfs
       usage, task list (debug ids only) — for review demos
-- [ ] ABI doc section: stable vs experimental (process Cap wait/kill
-      marked experimental until Phase 6 freezes)
+- [x] ABI doc section: process Cap wait/kill/spawn marked
+      **experimental** until Phase 6 freezes
 - [x] Tests: spawn → Cap-wait exit code; forging a Cap word fails;
       kill + Cap-wait status 137 (`test-proccap`); stale Cap after
-      reap → BadCap (gen bump)
+      reap → BadCap (gen bump); wait without `PROC_WAIT` →
+      AccessDenied; orphan reparent (`test-orphan`)
 
 ### Capability & resource accounting
 
