@@ -119,7 +119,7 @@ fn qemu_command_with_galfs(img_path: &str, galfs_path: &PathBuf, serial_path: &P
 pub fn boot_with_galfs(
     image: &Image,
 ) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
-    boot_with_galfs_inner(image, false)
+    boot_with_galfs_inner(image, CorruptMode::None)
 }
 
 /// Like [`boot_with_galfs`], but after the write boot the host destroys the
@@ -128,12 +128,40 @@ pub fn boot_with_galfs(
 pub fn boot_with_galfs_recover(
     image: &Image,
 ) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
-    boot_with_galfs_inner(image, true)
+    boot_with_galfs_inner(image, CorruptMode::Newest)
+}
+
+/// Write boot with `writer`, then corrupt **both** slots and boot `reader`.
+pub fn boot_with_galfs_both_corrupt(
+    writer: &Image,
+    reader: &Image,
+) -> (Option<i32>, String, Vec<u8>, Option<i32>, String, Vec<u8>) {
+    let galfs_path = std::env::temp_dir().join(format!(
+        "galexy-galfs-both-{}-{}.img",
+        writer.name.replace('-', "_"),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::write(&galfs_path, vec![0u8; 1024 * 1024]).expect("create galfs.img");
+    let (code1, serial1) = boot_once_with_galfs(&writer.bios, &galfs_path, &writer.name);
+    let img_after_write = std::fs::read(&galfs_path).expect("read galfs.img after write");
+    corrupt_all_galfs_slots(&galfs_path);
+    let (code2, serial2) = boot_once_with_galfs(&reader.bios, &galfs_path, &reader.name);
+    let img_after = std::fs::read(&galfs_path).expect("read galfs.img after corrupt boot");
+    let _ = std::fs::remove_file(&galfs_path);
+    (code1, serial1, img_after_write, code2, serial2, img_after)
+}
+
+enum CorruptMode {
+    None,
+    Newest,
 }
 
 fn boot_with_galfs_inner(
     image: &Image,
-    corrupt_newest: bool,
+    corrupt: CorruptMode,
 ) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
     let galfs_path = std::env::temp_dir().join(format!(
         "galexy-galfs-{}-{}.img",
@@ -151,8 +179,9 @@ fn boot_with_galfs_inner(
         let _ = file.sync_all();
     }
     let img_after_write = std::fs::read(&galfs_path).expect("read galfs.img after write");
-    if corrupt_newest {
-        corrupt_newest_galfs_slot(&galfs_path);
+    match corrupt {
+        CorruptMode::None => {}
+        CorruptMode::Newest => corrupt_newest_galfs_slot(&galfs_path),
     }
     let (code2, serial2) = boot_once_with_galfs(&image.bios, &galfs_path, &image.name);
     let _ = std::fs::remove_file(&galfs_path);
@@ -163,13 +192,17 @@ fn boot_with_galfs_inner(
 const GALFS_SLOT_SECTORS: usize = 288;
 const GALFS_SECTOR: usize = 512;
 
+/// Keep `GALF` magic so the guest can tell a used volume from empty zeros;
+/// flip the AEAD data tag so decode/open fails (header offset 112).
+const GALFS_DATA_TAG_OFF: usize = 112;
+
 fn corrupt_newest_galfs_slot(path: &PathBuf) {
     let mut data = std::fs::read(path).expect("read galfs.img");
     let mut best_gen = 0u64;
     let mut best_off: Option<usize> = None;
     for slot in 0..2 {
         let off = slot * GALFS_SLOT_SECTORS * GALFS_SECTOR;
-        if data.len() < off + 28 || &data[off..off + 4] != b"GALF" {
+        if data.len() < off + GALFS_DATA_TAG_OFF + 1 || &data[off..off + 4] != b"GALF" {
             continue;
         }
         let gen = u64::from_le_bytes(data[off + 16..off + 24].try_into().unwrap());
@@ -179,8 +212,26 @@ fn corrupt_newest_galfs_slot(path: &PathBuf) {
         }
     }
     let off = best_off.expect("expected at least one GALF slot after write boot");
-    data[off] ^= 0xFF; // break magic; CRC/path will reject the slot
+    data[off + GALFS_DATA_TAG_OFF] ^= 0xFF;
     std::fs::write(path, &data).expect("write corrupted galfs.img");
+    if let Ok(file) = std::fs::File::options().write(true).open(path) {
+        let _ = file.sync_all();
+    }
+}
+
+fn corrupt_all_galfs_slots(path: &PathBuf) {
+    let mut data = std::fs::read(path).expect("read galfs.img");
+    let mut any = false;
+    for slot in 0..2 {
+        let off = slot * GALFS_SLOT_SECTORS * GALFS_SECTOR;
+        if data.len() < off + GALFS_DATA_TAG_OFF + 1 || &data[off..off + 4] != b"GALF" {
+            continue;
+        }
+        data[off + GALFS_DATA_TAG_OFF] ^= 0xFF;
+        any = true;
+    }
+    assert!(any, "expected GALF magic in at least one slot");
+    std::fs::write(path, &data).expect("write both-corrupt galfs.img");
     if let Ok(file) = std::fs::File::options().write(true).open(path) {
         let _ = file.sync_all();
     }

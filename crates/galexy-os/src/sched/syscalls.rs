@@ -148,6 +148,10 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             );
             Outcome::Resume
         }
+        n if n == Syscall::Sync as u64 => {
+            stamp(frame, syscall_sync());
+            Outcome::Resume
+        }
         // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));
@@ -392,6 +396,13 @@ fn syscall_stat(path_addr: u64, path_len: u64, buf_addr: u64, buf_len: u64) -> S
     }
 }
 
+fn syscall_sync() -> SyscallResult {
+    match crate::sched::task_sync() {
+        Ok(()) => SyscallResult::ok(0),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
 fn syscall_grant(frame: &Context) -> SyscallResult {
     let path_addr = frame.rdi;
     let path_len = frame.rsi;
@@ -546,7 +557,7 @@ fn syscall_user(frame: &Context) -> SyscallResult {
     let len = frame.rsi;
     let op = frame.rdx;
     match op {
-        galexy_abi::USER_WHOAMI | galexy_abi::USER_USERS => {
+        galexy_abi::USER_WHOAMI | galexy_abi::USER_USERS | galexy_abi::USER_TOKENS => {
             if len == 0 || len > MAX_READ {
                 return SyscallResult::err(SysError::BadValue);
             }
@@ -556,8 +567,10 @@ fn syscall_user(frame: &Context) -> SyscallResult {
             let mut staged = [0u8; MAX_READ as usize];
             let result = if op == galexy_abi::USER_WHOAMI {
                 crate::sched::task_whoami(&mut staged[..len as usize])
-            } else {
+            } else if op == galexy_abi::USER_USERS {
                 crate::sched::task_users(&mut staged[..len as usize])
+            } else {
+                crate::sched::task_tokens(&mut staged[..len as usize])
             };
             match result {
                 Ok(n) => {

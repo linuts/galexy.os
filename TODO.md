@@ -1223,18 +1223,24 @@ Fill semantic gaps reviewers expect from a small FS.
 
 Dual-slot CRC is a start; make failure modes explicit and operable.
 
-- [ ] **Sync policy**: document when slots flip (every mutate vs
-      batched); add `sync` syscall or `fsync` on a cap for explicit flush
-- [ ] **Dirty / generation UI**: serial line at boot naming which slot
-      won and why; counter of recoveries
-- [ ] **`fsck`-equivalent**: host tool and/or `bin/test-galfs-fsck` that
-      walks a GALF image, reports orphans, bad parent links, leaked
-      blocks, and optionally repairs into a new slot
+- [x] **Sync policy**: every successful mutate that changes the table
+      syncs the inactive slot + flush; `Syscall::Sync` is an explicit
+      barrier (shell `sync`); RAM-only is a successful no-op
+- [x] **Dirty / generation UI**: boot serial names loaded slot + gen;
+      `(recovered from bad sibling)` when a newer slot failed; recovery
+      counter in `galfs::recoveries()`
+- [x] **Live `fsck` smoke**: `bin/test-fsck` runs `validate_table` after
+      create / multi-block write / truncate / remove (host offline fsck
+      tool still open)
+- [ ] **Host `fsck` tool**: walk a GALF image on the host, report orphans /
+      bad parents / leaked blocks; optional repair into a new slot
+- [x] **Corrupt-slot recovery**: runner breaks the newest slot's AEAD tag;
+      verify boot recovers from the older sibling
 - [ ] **Crash injection**: runner helper that kills QEMU mid-mutate;
-      assert the next boot picks a consistent slot (extend corrupt-slot
-      tests)
-- [ ] **Read-only mount**: if both slots fail checks, boot with galfs
-      unavailable (not silent RAM format) when a disk was expected
+      assert the next boot picks a consistent slot
+- [x] **Refuse silent format**: both slots fail with GALF magic →
+      galfs unavailable (`DISK_CORRUPT`); no RAM invent of admin;
+      `bin/test-galfs-corrupt` + runner both-corrupt harness
 - [ ] ATA errors: surface `Unsupported` / logged I/O error instead of
       panicking where possible
 - [ ] **Torn-write test**: truncate image mid-sector (host) and prove
@@ -1248,8 +1254,8 @@ Multi-user usage beyond one admin and ad-hoc grants.
 
 - [ ] **Per-actor quotas**: max objects and/or bytes; `NoResource` when
       exceeded; admin can raise limits
-- [ ] **Token table UX**: `tokens` shell command (or query cap) lists
-      the current task's cards (path + rights)
+- [x] **Token table UX**: shell `tokens` + `USER_TOKENS` lists the
+      current task's cards (path + rights letters)
 - [ ] **Grant to actor vs task**: optional durable “home share” recorded
       on the filesystem (re-applied at login) vs today's live-task-only
       grants — decide and document

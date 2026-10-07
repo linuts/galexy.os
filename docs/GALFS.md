@@ -163,17 +163,28 @@ v8 refuses older images; delete `galfs.img` or let format recreate.
 ## Boot and format
 
 1. If ATA slave present → try load newest valid sealed slot.
-2. Else / both bad → format: immortal `admin` + `Desktop/`, default
-   password `admin`, new volume key, sync sealed image.
-3. Mutates (`create` / `remove` / `append` / `useradd` / `userdel` /
-   `passwd`, …) sync when disk-backed.
-4. `userdel` refuses `admin`, non-empty trees, and roots still in use;
+2. Empty zeros (no GALF magic) → format: immortal `admin` + `Desktop/`,
+   default password `admin`, new volume key, sync sealed image.
+3. Both slots carry GALF magic but fail decode/validate → **refuse
+   silent format**; galfs stays unavailable (`Unsupported` on sync /
+   mutates that need a mount). Serial: `disk corrupt; refusing silent
+   format`.
+4. Mutates (`create` / `remove` / `append` / `rename` / `truncate` /
+   `useradd` / `userdel` / `passwd`, …) sync the inactive slot + flush
+   when disk-backed. `Syscall::Sync` / shell `sync` is an extra barrier.
+5. `userdel` refuses `admin`, non-empty trees, and roots still in use;
    clears tokens that named that actor’s objects.
+
+Boot serial names the winning slot and generation; a bad newer sibling
+logs `(recovered from bad sibling)`.
 
 `bin/test-galfs` exercises tokens in RAM. `bin/test-blocks` fills the
 block pool and reuses after remove. `bin/test-galfs-disk` proves
 multi-block persist + dual-slot recover; the host asserts plaintext
-markers are absent from the raw image.
+markers are absent from the raw image. `bin/test-galfs-corrupt` boots
+a both-bad image and refuses format. `bin/test-fsck` checks the live
+table after write/truncate/remove. Shell `tokens` lists the task’s
+cards (`USER_TOKENS`).
 
 ## Auth interaction
 
@@ -204,10 +215,17 @@ markers are absent from the raw image.
 - No hard links, symlinks, or sparse holes (truncate grow zero-fills)
 - Names: ASCII alphanumeric plus `.` `_` `-`; `.` / `..` rejected
 
+### Durability (landed)
+
+- Every mutate syncs the inactive dual slot + flush; `sync` syscall barrier
+- Boot logs slot/gen; recovery from a bad sibling is explicit
+- Both-bad GALF magic → no silent format; volume stays unavailable
+- Live `validate_table` smoke (`test-fsck`); host offline fsck still open
+
 ### Remaining (Milestone 45)
 
-- Indirect blocks / larger than 4 KiB; endian-safe shared fsck defs
-- Actor quotas, durable shares, sync/fsck polish
+- Indirect blocks / larger than 4 KiB; endian-safe shared host-fsck defs
+- Actor quotas, durable shares
 
 ### Target storage stack (Milestone 46)
 
@@ -230,7 +248,7 @@ markers are absent from the raw image.
 | Milestone | Delivers |
 | --- | --- |
 | **44** | Sealed GALF (volume key + AEAD); threat model; no plaintext in image |
-| **45** | Capacity, block store, rename/truncate/stat; fsck/quotas remain |
+| **45** | Capacity, blocks, ops, sync/refuse-format; quotas / host fsck remain |
 | **46** | Storage stack polish for demos / review |
 
 Until 45 lands, demo limits above are the shipped contract. New code

@@ -18,8 +18,8 @@
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
     arg, entry, files_cap, grant, keyboard_cap, read, reboot, revoke, shutdown, spawn_with,
-    stats_cap, tasks_cap, threads_cap, user, user_login, user_logout, user_name, user_name_pass,
-    user_passwd, write_console, yield_now,
+    stats_cap, sync, tasks_cap, threads_cap, user, user_login, user_logout, user_name,
+    user_name_pass, user_passwd, write_console, yield_now,
 };
 
 entry!(main);
@@ -288,8 +288,8 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
     if line == b"help" {
         write_console(b"commands: help, ls, echo, cat, touch, mkdir, cd, rm,\n");
         write_console(b"cp, mv, truncate, stat, grant, revoke, whoami, users,\n");
-        write_console(b"useradd, userdel, login, logout, passwd, su,\n");
-        write_console(b"stats, tasks, threads, about, clear\n");
+        write_console(b"tokens, useradd, userdel, login, logout, passwd, su,\n");
+        write_console(b"sync, stats, tasks, threads, about, clear\n");
         write_console(b"login [user] [pass] - omit pass for a masked Password: prompt\n");
         write_console(b"passwd [name] - masked Password: + Confirm: (no inline secret)\n");
         write_console(b"useradd <name> [pass] - omit pass for a masked Password: prompt\n");
@@ -380,6 +380,14 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
     }
     if line == b"users" {
         users_cmd(cwd);
+        return None;
+    }
+    if line == b"tokens" {
+        tokens_cmd(cwd);
+        return None;
+    }
+    if line == b"sync" {
+        sync_cmd(cwd);
         return None;
     }
     if let Some(rest) = arg_of(line, b"useradd") {
@@ -745,6 +753,31 @@ fn users_cmd(cwd: &Cwd) {
     let n = (got.value as usize).min(buf.len());
     if n > 0 {
         write_console(&buf[..n]);
+    }
+    prompt(cwd);
+}
+
+fn tokens_cmd(cwd: &Cwd) {
+    let mut buf = [0u8; 512];
+    let got = user(&mut buf, galexy_abi::USER_TOKENS);
+    if !got.ok {
+        write_console(b"tokens: failed\n");
+        prompt(cwd);
+        return;
+    }
+    let n = (got.value as usize).min(buf.len());
+    if n == 0 {
+        write_console(b"(no tokens)\n");
+    } else {
+        write_console(&buf[..n]);
+    }
+    prompt(cwd);
+}
+
+fn sync_cmd(cwd: &Cwd) {
+    let got = sync();
+    if !got.ok {
+        write_console(b"sync: failed\n");
     }
     prompt(cwd);
 }

@@ -1903,6 +1903,34 @@ pub(crate) fn task_users(out: &mut [u8]) -> Result<usize, SysError> {
     Ok(n)
 }
 
+/// Writes the caller's galfs tokens into `out`.
+pub(crate) fn task_tokens(out: &mut [u8]) -> Result<usize, SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        if thread.fs_root == galfs::NO_OBJECT {
+            return Err(SysError::AccessDenied);
+        }
+        Ok(galfs::format_tokens(
+            thread.fs_root,
+            &thread.fs_tokens,
+            out,
+        ))
+    })
+}
+
+/// Explicit galfs flush (`Syscall::Sync`).
+pub(crate) fn task_sync() -> Result<(), SysError> {
+    galfs::sync_explicit()
+}
+
 /// Creates an actor + Desktop with `password`. Caller must be admin.
 pub(crate) fn task_useradd(name: &str, password: &[u8]) -> Result<(), SysError> {
     let slot = current_slot();

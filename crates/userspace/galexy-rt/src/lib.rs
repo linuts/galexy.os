@@ -241,6 +241,16 @@ pub fn truncate(cap: Cap, size: u64) -> SyscallResult {
     syscall(Syscall::Truncate as u64, cap.bits(), size, 0)
 }
 
+/// Flushes the galfs dual-slot image when disk-backed.
+pub fn sync() -> SyscallResult {
+    syscall(Syscall::Sync as u64, 0, 0, 0)
+}
+
+/// Lists the caller's galfs tokens into `buf`.
+pub fn user_tokens(buf: &mut [u8]) -> SyscallResult {
+    user(buf, galexy_abi::USER_TOKENS)
+}
+
 /// Writes galfs metadata for `path` into `buf` (at least [`galexy_abi::STAT_LEN`]).
 pub fn stat(path: &[u8], buf: &mut [u8]) -> SyscallResult {
     let value: u64;

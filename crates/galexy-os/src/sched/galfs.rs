@@ -207,10 +207,14 @@ static LOAD_CAND: Mutex<Table> = Mutex::new(empty_table());
 static BOOTED: AtomicBool = AtomicBool::new(false);
 /// True when the ATA slave accepted a load or format write.
 static DISK_LIVE: AtomicBool = AtomicBool::new(false);
+/// ATA slave present but both slots failed with GALF magic — refuse format.
+static DISK_CORRUPT: AtomicBool = AtomicBool::new(false);
 /// Slot (0 or 1) that holds the newest valid image; next sync writes the other.
 static ACTIVE_SLOT: AtomicU32 = AtomicU32::new(0);
 /// Generation of the active slot (next sync writes gen + 1).
 static ACTIVE_GEN: AtomicU64 = AtomicU64::new(0);
+/// Times this boot loaded an older slot because a newer one failed checks.
+static RECOVERIES: AtomicU64 = AtomicU64::new(0);
 
 /// Name of the immortal boot actor.
 pub const ADMIN_NAME: &str = "admin";
@@ -256,18 +260,46 @@ static VOLUME_KEY: Mutex<Option<[u8; KEY_LEN]>> = Mutex::new(None);
 
 /// Builds actor [`ADMIN_NAME`] with an empty Desktop, or loads the newest
 /// valid GALF slot from the ATA slave. Call once.
+///
+/// Sync policy: every successful mutate that changes the table calls
+/// [`sync`] (inactive slot + flush). [`sync_explicit`] is an extra barrier.
 pub fn init() {
     if BOOTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    if ata::present() && load_from_disk() {
-        crate::serial_println!(
-            "[galfs] loaded slot {} gen {}",
-            ACTIVE_SLOT.load(Ordering::Relaxed),
-            ACTIVE_GEN.load(Ordering::Relaxed),
-        );
-        return;
+    if ata::present() {
+        match load_from_disk() {
+            DiskLoad::Loaded { recovered } => {
+                let slot = ACTIVE_SLOT.load(Ordering::Relaxed);
+                let gen = ACTIVE_GEN.load(Ordering::Relaxed);
+                if recovered {
+                    RECOVERIES.fetch_add(1, Ordering::Relaxed);
+                    crate::serial_println!(
+                        "[galfs] loaded slot {} gen {} (recovered from bad sibling)",
+                        slot,
+                        gen,
+                    );
+                } else {
+                    crate::serial_println!("[galfs] loaded slot {} gen {}", slot, gen);
+                }
+                return;
+            }
+            DiskLoad::Corrupt => {
+                DISK_CORRUPT.store(true, Ordering::Release);
+                crate::serial_println!(
+                    "[galfs] disk corrupt; refusing silent format (galfs unavailable)"
+                );
+                return;
+            }
+            DiskLoad::Empty => {
+                // First boot on a zeroed image — format below.
+            }
+        }
     }
+    format_fresh();
+}
+
+fn format_fresh() {
     let mut table = TABLE.lock();
     let admin = add_actor(&mut table, ADMIN_NAME, ADMIN_DEFAULT_PASSWORD.as_bytes())
         .expect("galfs: admin");
@@ -276,6 +308,7 @@ pub fn init() {
     drop(table);
     ACTIVE_SLOT.store(0, Ordering::Relaxed);
     ACTIVE_GEN.store(0, Ordering::Relaxed);
+    DISK_CORRUPT.store(false, Ordering::Release);
     // Fresh volume key for a sealed format (bring-up passphrase).
     let mut vk = [0u8; KEY_LEN];
     crate::arch::rand::fill_bytes(&mut vk);
@@ -283,6 +316,8 @@ pub fn init() {
     wipe_bytes(&mut vk);
     if sync_to_disk() {
         crate::serial_println!("[galfs] formatted sealed disk");
+    } else if !ata::present() {
+        crate::serial_println!("[galfs] RAM-only (no ATA slave)");
     }
 }
 
@@ -291,13 +326,46 @@ pub fn disk_backed() -> bool {
     DISK_LIVE.load(Ordering::Acquire)
 }
 
+/// True when the ATA slave looked like GALF but no slot validated.
+pub fn disk_corrupt() -> bool {
+    DISK_CORRUPT.load(Ordering::Acquire)
+}
+
+/// Recovery events observed while loading (bad newer slot, older won).
+pub fn recoveries() -> u64 {
+    RECOVERIES.load(Ordering::Relaxed)
+}
+
+/// Active dual-slot index and generation after load/format.
+pub fn disk_slot_info() -> (u32, u64) {
+    (
+        ACTIVE_SLOT.load(Ordering::Relaxed),
+        ACTIVE_GEN.load(Ordering::Relaxed),
+    )
+}
+
 /// Writes the in-RAM table to the slave. No-op when no disk is attached.
 pub fn sync() {
     let _ = sync_to_disk();
 }
 
-fn sync_to_disk() -> bool {
+/// Explicit flush for [`Syscall::Sync`]. RAM-only succeeds; corrupt fails.
+pub fn sync_explicit() -> Result<(), SysError> {
+    if DISK_CORRUPT.load(Ordering::Acquire) {
+        return Err(SysError::Unsupported);
+    }
     if !ata::present() {
+        return Ok(());
+    }
+    if sync_to_disk() {
+        Ok(())
+    } else {
+        Err(SysError::Unsupported)
+    }
+}
+
+fn sync_to_disk() -> bool {
+    if !ata::present() || DISK_CORRUPT.load(Ordering::Acquire) {
         return false;
     }
     if VOLUME_KEY.lock().is_none() {
@@ -326,9 +394,17 @@ fn sync_to_disk() -> bool {
     true
 }
 
-fn load_from_disk() -> bool {
+enum DiskLoad {
+    Loaded { recovered: bool },
+    Empty,
+    Corrupt,
+}
+
+fn load_from_disk() -> DiskLoad {
     let mut best_gen = 0u64;
     let mut best_slot: Option<u32> = None;
+    let mut saw_magic = false;
+    let mut bad_with_magic = 0u32;
     let mut buf = DISK_BUF.lock();
     let mut best = LOAD_BEST.lock();
     let mut cand = LOAD_CAND.lock();
@@ -337,10 +413,19 @@ fn load_from_disk() -> bool {
         if ata::read_sectors(lba, &mut *buf).is_err() {
             continue;
         }
+        let magic = buf[0][0..4] == DISK_MAGIC;
+        if magic {
+            saw_magic = true;
+        }
         let Some(gen) = decode_table(&mut buf, &mut cand) else {
+            if magic {
+                bad_with_magic += 1;
+                crate::serial_println!("[galfs] slot {} rejected (decode)", slot);
+            }
             continue;
         };
         if !validate_table(&cand) {
+            bad_with_magic += 1;
             crate::serial_println!("[galfs] slot {} failed validation", slot);
             continue;
         }
@@ -352,7 +437,11 @@ fn load_from_disk() -> bool {
         }
     }
     let Some(slot) = best_slot else {
-        return false;
+        return if saw_magic {
+            DiskLoad::Corrupt
+        } else {
+            DiskLoad::Empty
+        };
     };
     let mut table = TABLE.lock();
     copy_table(&*best, &mut *table);
@@ -360,7 +449,15 @@ fn load_from_disk() -> bool {
     ACTIVE_SLOT.store(slot, Ordering::Release);
     ACTIVE_GEN.store(best_gen, Ordering::Release);
     DISK_LIVE.store(true, Ordering::Release);
-    true
+    DiskLoad::Loaded {
+        recovered: bad_with_magic > 0,
+    }
+}
+
+/// Structural + bitmap consistency check on the live table (fsck smoke).
+pub fn fsck_ok() -> bool {
+    let table = TABLE.lock();
+    validate_table(&table)
 }
 
 fn copy_table(src: &Table, dst: &mut Table) {
@@ -1733,6 +1830,57 @@ fn path_bytes(table: &Table, index: usize, viewer_root: u16, out: &mut [u8]) -> 
         len += 1;
     }
     Some(len)
+}
+
+/// Writes token lines `path rights\n` into `out`. Returns bytes written.
+pub fn format_tokens(root: u16, tokens: &[Token; TOKEN_SLOTS], out: &mut [u8]) -> usize {
+    let table = TABLE.lock();
+    let mut len = 0usize;
+    for token in tokens {
+        if !token.is_live() || token.object as usize >= OBJECT_SLOTS {
+            continue;
+        }
+        let mut path = [0u8; NAME_CAP];
+        let Some(pn) = path_bytes(&table, token.object as usize, root, &mut path) else {
+            continue;
+        };
+        // rights letters: r w l c x
+        let mut rights = [0u8; 5];
+        let mut rn = 0usize;
+        if token.rights & RIGHT_READ != 0 {
+            rights[rn] = b'r';
+            rn += 1;
+        }
+        if token.rights & RIGHT_WRITE != 0 {
+            rights[rn] = b'w';
+            rn += 1;
+        }
+        if token.rights & RIGHT_LIST != 0 {
+            rights[rn] = b'l';
+            rn += 1;
+        }
+        if token.rights & RIGHT_CREATE != 0 {
+            rights[rn] = b'c';
+            rn += 1;
+        }
+        if token.rights & RIGHT_REMOVE != 0 {
+            rights[rn] = b'x';
+            rn += 1;
+        }
+        let need = pn + 1 + rn + 1;
+        if len + need > out.len() {
+            break;
+        }
+        out[len..len + pn].copy_from_slice(&path[..pn]);
+        len += pn;
+        out[len] = b' ';
+        len += 1;
+        out[len..len + rn].copy_from_slice(&rights[..rn]);
+        len += rn;
+        out[len] = b'\n';
+        len += 1;
+    }
+    len
 }
 
 /// Calls `each` with every path the credentials may list.
