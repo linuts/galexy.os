@@ -48,6 +48,9 @@ fn spawn_seat(name: &[u8], tty: u8) -> u64 {
     if r.ok {
         r.value
     } else {
+        write_console(b"[init] seat spawn fail err=");
+        let d = b'0' + (r.value.min(9) as u8);
+        write_console(&[d, b'\n']);
         0
     }
 }
