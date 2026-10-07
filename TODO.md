@@ -1188,8 +1188,10 @@ single indirect (32 KiB max file) + per-actor quotas + durable shares.
       inode; sealed payload includes bitmap+blocks
 - [x] **Larger files (to 32 KiB)**: multi-block append/read/truncate across
       direct and indirect; `bin/test-indirect`; double-indirect still open
-- [ ] **More opens**: raise per-task file table above 8, or justify 8 in
-      DESIGN as intentional
+- [x] **More opens**: keep **8** per-task opens (`MAX_OPEN_FILES`) —
+      intentional for the IF=0 syscall path (no heap / shootdown on
+      `open`); documented in `DESIGN.md` / `GALFS.md` (raise later with
+      a non-blocking growth plan)
 - [x] **Stress test (objects + blocks)**: `test-scratch` / `test-rm` /
       `test-blocks` fill to exhaustion and reuse after remove
 - [x] **Free-block bitmap**: in-image bitmap; validate_table rejects
@@ -1252,8 +1254,9 @@ Dual-slot CRC is a start; make failure modes explicit and operable.
 - [x] **Torn-write test**: host zeros newest slot from mid-sector (keeps
       `GALF` magic); guest recovers from older sibling
       (`boot_with_galfs_torn` + `galfs_disk_recovers_from_torn_write`)
-- [ ] **Idempotent mutate**: repeating the same create/remove after a
-      recovered boot does not corrupt generation counters
+- [x] **Idempotent mutate**: `bin/test-galfs-idempotent` + recover harness —
+      duplicate create is `Unsupported`, remove+recreate+sync advances
+      gen, `fsck_ok` holds
 
 ### galfs sharing, quotas, and cards
 

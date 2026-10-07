@@ -672,6 +672,34 @@ fn galfs_disk_recovers_from_corrupt_slot() {
 }
 
 #[test]
+fn galfs_idempotent_after_recover() {
+    let (code1, serial1, _img, code2, serial2) =
+        boot_with_galfs_recover(&image("test-galfs-idempotent"));
+    assert_eq!(
+        code1,
+        Some(QEMU_EXIT_SUCCESS),
+        "write boot should succeed; serial:\n{serial1}"
+    );
+    assert!(
+        serial1.contains("[test-galfs-idempotent] wrote"),
+        "write marker missing; serial:\n{serial1}"
+    );
+    assert_eq!(
+        code2,
+        Some(QEMU_EXIT_SUCCESS),
+        "idempotent recover boot should succeed; serial:\n{serial2}"
+    );
+    assert!(
+        serial2.contains("[test-galfs-idempotent] passed"),
+        "pass marker missing; serial:\n{serial2}"
+    );
+    assert!(
+        serial2.contains("recovered from bad sibling"),
+        "recover boot should log recovery; serial:\n{serial2}"
+    );
+}
+
+#[test]
 fn galfs_disk_recovers_from_torn_write() {
     let (code1, serial1, img, code2, serial2) =
         boot_with_galfs_torn(&image("test-galfs-disk"));
