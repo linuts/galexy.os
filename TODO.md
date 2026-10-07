@@ -1249,8 +1249,9 @@ Dual-slot CRC is a start; make failure modes explicit and operable.
       `bin/test-galfs-corrupt` + runner both-corrupt harness
 - [ ] ATA errors: surface `Unsupported` / logged I/O error instead of
       panicking where possible
-- [ ] **Torn-write test**: truncate image mid-sector (host) and prove
-      recovery or clean refusal
+- [x] **Torn-write test**: host zeros newest slot from mid-sector (keeps
+      `GALF` magic); guest recovers from older sibling
+      (`boot_with_galfs_torn` + `galfs_disk_recovers_from_torn_write`)
 - [ ] **Idempotent mutate**: repeating the same create/remove after a
       recovered boot does not corrupt generation counters
 

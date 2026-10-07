@@ -81,7 +81,7 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 ```sh
 cargo test -p galexy-core    # host unit tests
 cargo test -p galexy-abi     # ABI / capability model
-cargo test -p runner --test boot   # full QEMU suite (~52 boots, -smp 2)
+cargo test -p runner --test boot   # full QEMU suite (~53 boots, -smp 2)
 ```
 
 UEFI cases need `OVMF_FD` if the default firmware path is absent. Test

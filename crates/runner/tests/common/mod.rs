@@ -123,12 +123,20 @@ pub fn boot_with_galfs(
 }
 
 /// Like [`boot_with_galfs`], but after the write boot the host destroys the
-/// newest GALF slot's magic so the verify boot must recover from the older
+/// newest GALF slot's AEAD tag so the verify boot must recover from the older
 /// dual-slot copy.
 pub fn boot_with_galfs_recover(
     image: &Image,
 ) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
     boot_with_galfs_inner(image, CorruptMode::Newest)
+}
+
+/// Like [`boot_with_galfs_recover`], but simulates a torn write: the newest
+/// slot keeps `GALF` magic while its payload is zeroed from mid-sector.
+pub fn boot_with_galfs_torn(
+    image: &Image,
+) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
+    boot_with_galfs_inner(image, CorruptMode::TornNewest)
 }
 
 /// Write boot with `writer`, then corrupt **both** slots and boot `reader`.
@@ -157,6 +165,7 @@ pub fn boot_with_galfs_both_corrupt(
 enum CorruptMode {
     None,
     Newest,
+    TornNewest,
 }
 
 fn boot_with_galfs_inner(
@@ -171,7 +180,7 @@ fn boot_with_galfs_inner(
             .expect("clock")
             .as_nanos()
     ));
-    // 1 MiB zeroed IDE slave — covers both 288-sector GALF v8 slots.
+    // 1 MiB zeroed IDE slave — covers both 288-sector GALF slots.
     std::fs::write(&galfs_path, vec![0u8; 1024 * 1024]).expect("create galfs.img");
 
     let (code1, serial1) = boot_once_with_galfs(&image.bios, &galfs_path, &image.name);
@@ -182,6 +191,7 @@ fn boot_with_galfs_inner(
     match corrupt {
         CorruptMode::None => {}
         CorruptMode::Newest => corrupt_newest_galfs_slot(&galfs_path),
+        CorruptMode::TornNewest => tear_newest_galfs_slot(&galfs_path),
     }
     let (code2, serial2) = boot_once_with_galfs(&image.bios, &galfs_path, &image.name);
     let _ = std::fs::remove_file(&galfs_path);
@@ -191,13 +201,14 @@ fn boot_with_galfs_inner(
 /// Dual-slot layout must match `galfs::DISK_SECTORS` (288 × 512).
 const GALFS_SLOT_SECTORS: usize = 288;
 const GALFS_SECTOR: usize = 512;
+/// Matches kernel / `galexy_galf::DISK_HEADER`.
+const GALFS_DISK_HEADER: usize = 128;
 
 /// Keep `GALF` magic so the guest can tell a used volume from empty zeros;
 /// flip the AEAD data tag so decode/open fails (header offset 112).
 const GALFS_DATA_TAG_OFF: usize = 112;
 
-fn corrupt_newest_galfs_slot(path: &PathBuf) {
-    let mut data = std::fs::read(path).expect("read galfs.img");
+fn newest_galfs_slot_off(data: &[u8]) -> usize {
     let mut best_gen = 0u64;
     let mut best_off: Option<usize> = None;
     for slot in 0..2 {
@@ -211,9 +222,31 @@ fn corrupt_newest_galfs_slot(path: &PathBuf) {
             best_off = Some(off);
         }
     }
-    let off = best_off.expect("expected at least one GALF slot after write boot");
+    best_off.expect("expected at least one GALF slot after write boot")
+}
+
+fn corrupt_newest_galfs_slot(path: &PathBuf) {
+    let mut data = std::fs::read(path).expect("read galfs.img");
+    let off = newest_galfs_slot_off(&data);
     data[off + GALFS_DATA_TAG_OFF] ^= 0xFF;
     std::fs::write(path, &data).expect("write corrupted galfs.img");
+    if let Ok(file) = std::fs::File::options().write(true).open(path) {
+        let _ = file.sync_all();
+    }
+}
+
+/// Simulate a crash mid-write: keep `GALF` magic + half a payload sector,
+/// zero the rest of the newest slot (older sibling stays intact).
+fn tear_newest_galfs_slot(path: &PathBuf) {
+    let mut data = std::fs::read(path).expect("read galfs.img");
+    let off = newest_galfs_slot_off(&data);
+    let slot_end = off + GALFS_SLOT_SECTORS * GALFS_SECTOR;
+    // Cut mid-sector in the first payload sector (header stays, CRC/AEAD fail).
+    let cut = off + GALFS_DISK_HEADER + (GALFS_SECTOR / 2);
+    assert!(cut < slot_end, "torn cut must land inside the slot");
+    let wipe_end = slot_end.min(data.len());
+    data[cut..wipe_end].fill(0);
+    std::fs::write(path, &data).expect("write torn galfs.img");
     if let Ok(file) = std::fs::File::options().write(true).open(path) {
         let _ = file.sync_all();
     }

@@ -5,7 +5,8 @@ mod common;
 
 use common::{
     boot, boot_and_type, boot_and_type_uefi, boot_liveness, boot_uefi, boot_with_galfs,
-    boot_with_galfs_both_corrupt, boot_with_galfs_recover, image, QEMU_EXIT_SUCCESS,
+    boot_with_galfs_both_corrupt, boot_with_galfs_recover, boot_with_galfs_torn, image,
+    QEMU_EXIT_SUCCESS,
 };
 use std::time::Duration;
 
@@ -667,6 +668,71 @@ fn galfs_disk_recovers_from_corrupt_slot() {
     assert!(
         serial2.contains("recovered from bad sibling"),
         "recover boot should log recovery; serial:\n{serial2}"
+    );
+}
+
+#[test]
+fn galfs_disk_recovers_from_torn_write() {
+    let (code1, serial1, img, code2, serial2) =
+        boot_with_galfs_torn(&image("test-galfs-disk"));
+    assert_eq!(
+        code1,
+        Some(QEMU_EXIT_SUCCESS),
+        "write boot should succeed; serial:\n{serial1}"
+    );
+    assert!(
+        serial1.contains("[test-galfs-disk] wrote"),
+        "write marker missing; serial:\n{serial1}"
+    );
+    // Host: torn newest slot fails; older sibling must still check clean.
+    let mut slot_buf = vec![0u8; galexy_galf::DISK_SECTORS * galexy_galf::SECTOR];
+    let mut best = Box::new(galexy_galf::Table::empty());
+    let mut cand = Box::new(galexy_galf::Table::empty());
+    // Tear a copy of the post-write image the same way the harness does.
+    let mut torn = img.clone();
+    {
+        let mut best_gen = 0u64;
+        let mut best_off = None;
+        for slot in 0..2usize {
+            let off = slot * galexy_galf::DISK_SECTORS * galexy_galf::SECTOR;
+            if torn.len() < off + 113 || &torn[off..off + 4] != b"GALF" {
+                continue;
+            }
+            let gen = u64::from_le_bytes(torn[off + 16..off + 24].try_into().unwrap());
+            if best_off.is_none() || gen >= best_gen {
+                best_gen = gen;
+                best_off = Some(off);
+            }
+        }
+        let off = best_off.expect("GALF slot");
+        let cut = off + galexy_galf::DISK_HEADER + galexy_galf::SECTOR / 2;
+        let end = (off + galexy_galf::DISK_SECTORS * galexy_galf::SECTOR).min(torn.len());
+        torn[cut..end].fill(0);
+    }
+    let report = galexy_galf::check_image(
+        &torn,
+        galexy_galf::DEFAULT_VOLUME_PASSPHRASE,
+        &mut slot_buf,
+        &mut best,
+        &mut cand,
+    );
+    assert!(
+        report.ok,
+        "host fsck must accept the older sibling after a torn newest; issues: {:?}",
+        &report.issues[..report.issue_count]
+    );
+    assert_eq!(
+        code2,
+        Some(QEMU_EXIT_SUCCESS),
+        "torn-write recover boot should succeed; serial:\n{serial2}"
+    );
+    assert!(
+        serial2.contains("[test-galfs-disk] passed"),
+        "recover marker missing; serial:\n{serial2}"
+    );
+    assert!(
+        serial2.contains("recovered from bad sibling"),
+        "torn-write boot should log recovery; serial:\n{serial2}"
     );
 }
 
