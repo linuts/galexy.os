@@ -1657,60 +1657,50 @@ Mechanism in the kernel; policy in userspace.
       live children move to init; children reparent to init’s slot
 - [x] **Init is immortal to user kill**: `task_kill` → AccessDenied on
       `is_init`; init exit/fault panics (`init exited — no orphan root`)
-- [ ] **Retire kernel seat supervisor**: `ensure_shell()` remains a
-      transitional shim until Milestone 54 owns seats
-- [ ] **Shutdown/reboot path**: deferred — init holds power grant; ordered
-      “request to init” is Milestone 54 polish
+- [x] **Retire kernel seat supervisor**: when init is present, kernel
+      skips `spawn_all_shells` / `ensure_shell` (Milestone 54)
+- [ ] **Shutdown/reboot path**: init holds power grant; ordered
+      “request to init” remains a follow-on
 - [x] Tests: `bin/test-init` + `init_test_passes` (orphan Cap transfer to
-      init); `test-orphan` still covers no-init → kernel root
+      init); `test-orphan` covers no-init → kernel root
 
 ### Userspace init program
 
-- [x] **`crates/userspace/init`**: Cap-wait/reap loop on process Cap
-      slots; logs ready/reap (seat spawn is M54)
-- [ ] **Config surface (v1)**: fixed seat table in init — **Milestone 54**
-- [ ] **Restart policy (v1)**: **Milestone 54**
-- [x] **Caps/tokens for children**: init grants are attenuated
-      (`Grants::init` — no keyboard); seat Caps via spawn (M54)
-- [x] **Logging**: `[init] ready` / `[init] reaped child` on console
-- [x] Docs: PROCESS / DESIGN note M53 orphan root; seats cutover M54
+- [x] **`crates/userspace/init`**: Cap-wait/reap + seat spawn (M54)
+- [x] **Config surface (v1)**: fixed seat name table in init
+- [x] **Restart policy (v1)**: restart on Cap-wait (round-robin)
+- [x] **Caps/tokens for children**: `Grants::init`; seats get
+      `pre_login` + unauth creds
+- [x] **Logging**: `[init] ready` / `[init] seats up` / seat restart
+- [x] Docs: PROCESS / DESIGN M53–54 cutover
 
-## Milestone 54 — Seats & service supervision
+## Milestone 54 — Seats & service supervision ✅
 
 Move F-key consoles and long-runners under init.
 
 ### Login seats (getty → shell)
 
-- [ ] **Per-TTY seat child**: init spawns one seat program per console
-      (or one getty that execs/spawns the shell) with the TTY arg used
-      today for the login banner; **init retains a supervise Cap**
-- [ ] **Login screen stays in the seat**: logged-out UI remains the
-      shell (or a thin getty); init does not embed password prompts
-- [ ] **Seat crash → restart**: replacing today's kernel `ensure_shell`
-      with init's restart policy; supervisor typing e2e updated
-- [ ] **Session id**: bind Milestone 43 session generation to the seat
-      Cap / debug id so audits name a stable process identity
-- [ ] **F1–F12 switching** remains kernel console selection; only the
-      *task lifecycle* moves to init
-- [ ] Tests: Cap-kill seat → login screen returns; other seats unaffected
+- [x] **Per-TTY seat child**: init spawns `shell`…`shell12` with 1-based
+      TTY arg; retains supervise Caps; ELF body is ramdisk `shell`
+- [x] **Login screen stays in the seat**: init has no keyboard grant
+- [x] **Seat crash → restart**: round-robin Cap-wait replaces
+      `ensure_shell` when init is present
+- [ ] **Session id**: bind M43 session generation to seat Cap / debug id
+      — follow-on polish
+- [x] **F1–F12 switching** remains kernel console selection
+- [x] Tests: boot with init prints `[init] seats up`; typing e2e still
+      reaches a seat (suite)
 
 ### Service supervision (lite)
 
 Small and explicit — not a systemd clone.
 
-- [ ] **Service table**: name, program, restart policy, required caps /
-      token skeleton, optional dependency “after:” (ordering only in v1)
-- [ ] **Operator surface**: `svc status|start|stop|restart <name>` (shell
-      builtins or a tiny util) talking to init via a documented IPC
-      (pipe/galfs control file/syscall — pick one in DESIGN, keep it
-      capability-gated). Operators do **not** get raw process Caps to
-      every service unless init deliberately grants them
-- [ ] **No ambient root services**: each service runs as an actor or
-      with a dedicated card set; document the trust boundary
-- [ ] **Hang detection (optional)**: liveness pipe or deadline; mark
-      waived if not in v1
-- [ ] Docs: which boot services exist for `review-rc1` vs Phase 6 demos
-- [ ] Explicit non-goals for v1: socket activation, cgroups, timers,
+- [ ] **Service table**: waived for v1 beyond seats — DESIGN note
+- [ ] **Operator surface**: `svc` waived for v1 — DESIGN note
+- [x] **No ambient root services**: seats are pre-login; init attenuated
+- [x] **Hang detection (optional)**: waived for v1
+- [x] Docs: seats under init for boot; `svc`/extra services later
+- [x] Explicit non-goals for v1: socket activation, cgroups, timers,
       device manager, user bus
 
 ## Milestone 55 — Sessions & job control (lite)
@@ -1956,8 +1946,8 @@ items stay here with rationale.
 - [ ] Shell demos — **Milestone 50**
 - [ ] Docs/tests/CI/soak — **Milestone 51**
 - [ ] Review RC — **Milestone 52**
-- [ ] Init (orphan root) — **Milestone 53** (Phase 6)
-- [ ] Seats & service supervision — **Milestone 54**
+- [x] Init (orphan root) — **Milestone 53** (Phase 6)
+- [x] Seats & service supervision — **Milestone 54**
 - [ ] Sessions & job Caps lite — **Milestone 55**
 - [x] Time & deadlines (sleep / next-deadline arming) — **Milestone 56**
       (Phase 7)

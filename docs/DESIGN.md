@@ -441,11 +441,14 @@ rules live in `docs/SCHEDULING.md` (Frozen policy + Sched lock / IRQ
 rules). Wiring stays here; do not fork a second policy table. Full
 kernel lock-order table remains Milestone 48.
 
-**Init / orphan root (Milestone 53).** When ramdisk `init` is present the
+**Init / seats (Milestones 53–54).** When ramdisk `init` is present the
 kernel loads it once (`Thread.is_init`, `Grants::init`). On parent reap,
 process Caps for live children move to init and `parent_slot` follows.
-Cap-kill of init is `AccessDenied`; init exit panics. Seats remain
-kernel-`ensure_shell` until Milestone 54.
+Cap-kill of init is `AccessDenied`; init exit panics. Init spawns
+`shell`…`shell12` (shared `shell` ELF, 1-based TTY arg, `pre_login`
+grants, BSP/no-steal); only init may spawn those reserved names. Kernel
+`ensure_shell` runs only when init is absent. Seat restart is round-robin
+Cap-wait in userspace init; `svc` / extra services are waived for v1.
 
 Two models, layered:
 

@@ -103,21 +103,21 @@ by a magic “PID 1” in the public ABI. Cap-kill of init is always
 
 ## Boot evolution
 
-### Today (Milestone 53)
+### Today (Milestones 53–54)
 
 1. Kernel loads **`init`** from the ramdisk when present (orphan root).
-2. Kernel still starts F1–F12 shells with pre-login grants
-   (`ensure_shell` shim — removed in Milestone 54).
-3. Login screen is in the shell; auth per `docs/AUTH.md`.
-4. Parent exit → Caps transfer to init; init Cap-waits/reaps.
+2. Init spawns F1–F12 seats (`shell`…`shell12`, pre-login grants);
+   kernel skips `spawn_all_shells` / `ensure_shell` when init is live.
+3. Login screen is in the seat; init has no keyboard grant.
+4. Parent exit → Caps transfer to init; seat exit → init Cap-wait restart
+   (round-robin v1).
+5. Without init on the ramdisk, the old kernel seat path remains.
 
-### Target (Milestone 54+)
+### Follow-on
 
-1. Kernel loads **`init`** only (no `spawn_all_shells`).
-2. Init spawns seat children (one per TTY), keeps supervise Caps.
-3. Seat shows the login screen; init does not prompt for passwords.
-4. Seat crash → init restart policy (replaces `ensure_shell`).
-5. Shutdown/reboot is ordered through init (flush, stop services, power).
+1. `svc` / non-seat service table (waived for v1 seats MVP).
+2. Shutdown/reboot ordered through init.
+3. Session/job Caps (Milestone 55).
 
 ## Init (Milestone 53)
 
