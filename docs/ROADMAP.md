@@ -286,12 +286,13 @@ Milestones **56–58**. Style: `docs/STYLE.md` → Scheduling.
 
 1. **56 Time & deadlines** ✅ — `sleep` (monotonic), sleep queues, idle
    LAPIC arms `min(next second, next sleeper)`; busy IRQ stays quantum
-2. **57 Block & wake** — general park/wake beyond spawn/wait-on-child;
-   blocking reads (keyboard/pipe/file) wake the waiter; no busy-poll
-   supervisors in the common path
-3. **58 Policy freeze** — document and freeze RR + pin-at-spawn +
-   idle-steal + quantum/steal-cooldown; state non-goals (no CFS, no
-   POSIX nice/priorities unless a later phase explicitly adds them)
+2. **57 Block & wake** ✅ — general park/wake beyond spawn/wait-on-child;
+   blocking keyboard/pipe wake the waiter; archive/galfs stay
+   non-blocking; Cap-kill clears parks with `Interrupted`
+3. **58 Policy freeze** ✅ — RR + pin-at-spawn + idle-steal + quantum /
+   steal-cooldown numbers cited from code; `Sleep` /
+   `Interrupted` stable; non-goals (no CFS, no POSIX nice) frozen in
+   `docs/SCHEDULING.md`
 
 Non-goals for this phase: full POSIX `nanosleep`/`clock_*` surface,
 multi-priority scheduling classes, realtime guarantees, tickless *busy*

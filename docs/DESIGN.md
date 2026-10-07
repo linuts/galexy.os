@@ -436,6 +436,11 @@ activity complete the syscall via the waiter's page tables
 Cap-kill of a sleep/I/O waiter stamps `SysError::Interrupted` then
 `EXITED` (Cap-waiters still see exit code `137`).
 
+**Policy freeze (Milestone 58).** Numbers, non-goals, and sched lock
+rules live in `docs/SCHEDULING.md` (Frozen policy + Sched lock / IRQ
+rules). Wiring stays here; do not fork a second policy table. Full
+kernel lock-order table remains Milestone 48.
+
 Two models, layered:
 
 **Cooperative tasks** — round-robin over voluntarily-yielding state

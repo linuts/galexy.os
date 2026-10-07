@@ -530,11 +530,12 @@ pub enum Syscall {
     Kill,
     /// `sleep(ms)` — park until monotonic `timer_ticks` advances by `ms`.
     ///
-    /// Args: `RDI = milliseconds` (clamped to `1..=60_000`; `0` becomes
-    /// `1`). No capability required. Returns: `SyscallResult` (rax = 0)
-    /// when the deadline fires. No wall clock; see `docs/SCHEDULING.md`.
+    /// Args: `RDI = milliseconds` (clamped to `1..=`[`SLEEP_MS_MAX`]; `0`
+    /// becomes `1`). No capability required. Returns: `SyscallResult`
+    /// (rax = 0) when the deadline fires. No wall clock; see
+    /// `docs/SCHEDULING.md`.
     ///
-    /// **Experimental** until Milestone 58 freezes scheduler policy.
+    /// **Stable** (Milestone 58 scheduler policy freeze).
     Sleep,
 }
 
@@ -657,6 +658,10 @@ pub enum SysError {
     /// task that already uses the requested spawn name).
     NoResource = 7,
     /// A blocking wait (sleep / keyboard / pipe) was cancelled by kill.
+    ///
+    /// **Stable** (Milestone 58). Cap-waiters of the killed task still see
+    /// exit status `137`; this code is stamped on the cancelled waiter's
+    /// syscall frame before the slot goes `EXITED`.
     Interrupted = 8,
 }
 
