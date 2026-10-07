@@ -67,20 +67,19 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     let scratch: *const Report = mm::frame_virt(region.scratch_phys).as_ptr();
     let mut elapsed = 0u64;
-    loop {
+    // Do not reap until the report is copied — parent exit frees scratch.
+    let report = loop {
         x86_64::instructions::hlt();
         sched::drain_spawn();
-        sched::reap();
         let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*scratch).done)) };
         if done == DONE {
-            break;
+            break unsafe { core::ptr::read_volatile(scratch) };
         }
         elapsed += 1;
         if elapsed > TICK_TIMEOUT {
             panic!("orphan-parent never finished spawn");
         }
-    }
-    let report = unsafe { core::ptr::read_volatile(scratch) };
+    };
     assert_eq!(report.spawn_ok, 1, "spawn linger must succeed");
 
     elapsed = 0;
@@ -88,7 +87,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         x86_64::instructions::hlt();
         sched::drain_spawn();
         sched::reap();
-        if !sched::is_name_running("orphan-parent") {
+        if !sched::is_name_running("orphan-parent") && !sched::is_name_live("orphan-parent") {
             break;
         }
         elapsed += 1;
