@@ -1044,27 +1044,19 @@ time for lockout/idle.
 
 Replace demo hashing before any other auth work depends on the on-disk shape.
 
-- [ ] **CSPRNG**: boot entropy source (RDRAND/RDSEED with a documented
-      fallback; mix timer/ATA jitter only as secondary). Expose
-      `galexy_core::random` (or kernel `rand`) used by salts and later
-      encryption nonces — no password-derived salts
-- [ ] **Random salts**: `useradd` / `passwd` / format fill 8+ byte salts
-      from the CSPRNG; delete `salt_from_seed` for production paths
-      (tests may keep a deterministic helper behind `#[cfg(test)]`)
-- [ ] **Real KDF**: Argon2id or scrypt (pick one; document parameters:
-      memory, iterations, parallelism) replacing the CRC mix in
-      `galexy_core::password`. Keep salt+hash field widths or bump GALF
-      with an explicit version + migration
-- [ ] **Constant-time verify** retained; add host unit tests for wrong
-      password, truncated password, and salt uniqueness across two users
-      with the same password
-- [ ] **Docs**: `AUTH.md` + `DESIGN.md` name the KDF and parameters;
-      interim CRC called out as retired
-- [ ] **Password policy (minimal)**: reject empty passwords; document max
-      length (ABI buffer); optional min length for interactive `passwd`
-- [ ] **Wipe**: zero password stack buffers after hash/verify; unit test
-      that a reused buffer does not retain prior secrets under Miri/host
-      sanitizers where practical
+- [x] **CSPRNG**: `arch::rand` — RDRAND with tick-mixed xorshift fallback
+      (documented). Used for salts; later AEAD nonces too
+- [x] **Random salts**: `useradd` / `passwd` / format fill 8-byte salts
+      from the CSPRNG; `salt_from_seed` test-only in `galexy-crypto`
+- [x] **Real KDF**: Argon2id in `galexy-crypto` (m=64 KiB, t=3, p=1);
+      GALF **v5** (same 8+16 on-disk widths; v4 images refused)
+- [x] **Constant-time verify** retained; host unit tests for wrong /
+      truncated password and distinct salts for the same password
+- [x] **Docs**: `AUTH.md` names Argon2id + parameters; CRC mix retired
+- [x] **Password policy (minimal)**: reject empty passwords; max 64
+      bytes (syscall staging); ASCII graphic + space
+- [x] **Wipe**: zero password staging buffers after login/useradd/passwd;
+      wipe derived-key scratch after verify; host wipe unit test
 - [ ] Suite: `test-users` + format/load path still green on GALF bump
 
 ### Interactive secrets (no-echo prompts)

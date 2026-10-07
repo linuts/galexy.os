@@ -12,9 +12,13 @@ can be handed to another user or to an app without sharing a password.
 A password never grants rights on someone else’s tree by itself — after
 login you hold `RIGHT_ALL` on **your** root; everything else is granted.
 
-Disk encryption is out of scope for now. The password hash is an interim
-iterated mix (see `galexy_core::password`); it will be replaced with a
-real KDF later without changing the syscall shape.
+Disk encryption is out of scope for now (Milestone 44). Passwords use
+**Argon2id** (`galexy-crypto`: m=64 KiB, t=3, p=1) with an 8-byte
+CSPRNG salt and a 16-byte digest per actor (GALF **v5**). Salts come from
+`arch::rand` (RDRAND, with a tick-mixed fallback). Empty passwords are
+rejected. Syscall staging buffers are wiped after login / useradd /
+passwd. User kernel stacks are 128 KiB so the KDF on the syscall path
+does not overflow.
 
 ## Pieces
 
@@ -129,8 +133,11 @@ Tracked for review readiness in `TODO.md` Milestones 43–44 (auth +
 sealed disk). Until those land:
 
 - Disk encryption / sealed password store → Milestone 44
-- Real KDF, random salts, no-echo prompts, lockout, idle logout →
-  Milestone 43
+- No-echo CLI prompts, lockout, idle logout, must-change admin →
+  remaining Milestone 43 items (KDF + CSPRNG salts shipped)
 - PAM-style modules, MFA, networked IdP (still out of scope for review)
 - Removing the `crash` test seam from production images → Milestone 43
   (kept for supervisor e2e; omitted from `help`)
+
+**Note:** GALF **v5** refuses v4 images (CRC password hashes). Delete
+`galfs.img` or let format recreate admin after upgrading.

@@ -556,7 +556,7 @@ tree). Add/del require the caller's root to be `admin`. A seat born as
 admin may `su admin` to return. The shell exposes `whoami`, `users`,
 `useradd`, `userdel`, and `su` (and resets cwd on `su`). Boot formats
 one immortal actor, `admin`, with Desktop. When the primary IDE slave
-is present, `galfs::init` loads the newest valid GALF v3 slot (dual
+is present, `galfs::init` loads the newest valid GALF **v5** slot (dual
 80-sector images with generation + CRC-32 + structural checks) or
 formats that admin tree; create/remove/append/useradd/userdel sync to
 the inactive slot and flush the cache. `userdel` also refuses open caps
@@ -566,14 +566,15 @@ the table stays RAM-only. The table holds 16 actors, 64 objects, and
 `bin/test-galfs-disk` proves a file survives two QEMU boots and that a
 corrupt newest slot still recovers from the older copy. Shell utilities
 use `SPAWN_WAIT` so the prompt returns after `ls` / `mkdir` exit.
-Auth is password for identity plus galfs tokens for authorization
-(see `docs/AUTH.md`). Process wait/kill/supervise use **process Caps**,
-not global PIDs (plan: `docs/PROCESS.md`; Milestone 47 + Phase 6).
-Every F-key shell boots **logged out** (console + keyboard only) on a
-login screen (`Galexy.OS v… (ttyN)`); password login installs a session
-and `logout` returns to that screen. There is no guest account. Access
-cards + `su` still switch without a password when the caller holds ALL
-on the target root.
+Auth is password for identity (Argon2id in `galexy-crypto`, CSPRNG salts)
+plus galfs tokens for authorization (see `docs/AUTH.md`). Process
+wait/kill/supervise use **process Caps**, not global PIDs (plan:
+`docs/PROCESS.md`; Milestone 47 + Phase 6). Every F-key shell boots
+**logged out** (console + keyboard only) on a login screen
+(`Galexy.OS v… (ttyN)`); password login installs a session and `logout`
+returns to that screen. There is no guest account. Access cards + `su`
+still switch without a password when the caller holds ALL on the target
+root.
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing

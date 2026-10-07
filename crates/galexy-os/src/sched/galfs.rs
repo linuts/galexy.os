@@ -15,7 +15,11 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 use galexy_abi::SysError;
-use galexy_core::{crc32, hash_eq, hash_password, salt_from_seed, HASH_LEN, SALT_LEN};
+use galexy_core::{crc32, HASH_LEN, SALT_LEN};
+use galexy_crypto::{hash_eq, hash_password, wipe_bytes};
+
+const _: () = assert!(SALT_LEN == galexy_crypto::SALT_LEN);
+const _: () = assert!(HASH_LEN == galexy_crypto::HASH_LEN);
 
 use crate::drivers::ata;
 
@@ -123,20 +127,16 @@ impl Actor {
     }
 
     fn set_password(&mut self, password: &[u8]) {
-        salt_from_seed(password, &mut self.salt);
-        // Mix the actor name into the salt so two users with the same
-        // password do not share a hash.
-        let n = self.name_len as usize;
-        for (i, b) in self.name[..n].iter().enumerate() {
-            self.salt[i % SALT_LEN] ^= *b;
-        }
+        crate::arch::rand::fill_bytes(&mut self.salt);
         hash_password(password, &self.salt, &mut self.pass_hash);
     }
 
     fn check_password(&self, password: &[u8]) -> bool {
         let mut got = [0u8; HASH_LEN];
         hash_password(password, &self.salt, &mut got);
-        hash_eq(&got, &self.pass_hash)
+        let ok = hash_eq(&got, &self.pass_hash);
+        wipe_bytes(&mut got);
+        ok
     }
 }
 
@@ -201,8 +201,9 @@ static ADMIN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16
 /// LBA [`DISK_SECTORS`]. A sync writes the inactive slot with gen+1 and a
 /// CRC, then flushes — a crash mid-write leaves the previous slot intact.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-/// Bumped when actor records gained password salt/hash (v4).
-pub const DISK_VERSION: u16 = 4;
+/// Bumped when password hashing moved to Argon2id (v5). v4 CRC hashes
+/// cannot verify; load refuses the image and format recreates admin.
+pub const DISK_VERSION: u16 = 5;
 pub const DISK_SECTORS: usize = 80;
 pub const DISK_SLOT_COUNT: usize = 2;
 const DISK_HEADER: usize = 32;
