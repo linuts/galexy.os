@@ -113,6 +113,10 @@ pub fn allocate_frame() -> Option<PhysFrame<Size4KiB>> {
 
 /// Returns a previously allocated frame to the allocator.
 ///
+/// Zeros the frame through the phys map before marking it free so user
+/// stack/scratch/code (and page-table) contents are not visible to the
+/// next owner (Milestone 48 stack wipe).
+///
 /// # Panics
 ///
 /// Panics on double-free and on frames outside the allocator's tracked range
@@ -130,6 +134,17 @@ pub fn deallocate_frame(frame: PhysFrame<Size4KiB>) {
         "deallocate_frame: frame was never allocatable (not Usable)"
     );
     assert!(used.test(index), "deallocate_frame: double free of frame");
+    // Wipe while still exclusively owned (bit still set).
+    // SAFETY: frame is allocator-owned and not mapped in any active CR3
+    // for the free_user_tree / heap-kstack paths that call here; phys map
+    // reaches every tracked frame.
+    unsafe {
+        core::ptr::write_bytes(
+            paging::frame_virt(frame.start_address()).as_mut_ptr::<u8>(),
+            0,
+            FRAME_SIZE,
+        );
+    }
     used.set(index, false);
     drop(usable);
     drop(used);
