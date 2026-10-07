@@ -56,6 +56,20 @@ impl CapRights {
     pub const EXEC: Self = CapRights(1 << 4);
     /// May shut the machine down or reset it.
     pub const POWER: Self = CapRights(1 << 5);
+    /// Wait for process exit and reap the zombie (process Caps).
+    ///
+    /// Distinct from [`Self::WAIT`] (IPC groundwork on non-process Caps).
+    pub const PROC_WAIT: Self = CapRights(1 << 6);
+    /// Stop / fault-kill the task (process Caps; signals-lite).
+    pub const PROC_KILL: Self = CapRights(1 << 7);
+    /// `give` / move this process Cap to another task.
+    pub const PROC_TRANSFER: Self = CapRights(1 << 8);
+    /// Read debug id, name, and state (process Caps; listings).
+    pub const PROC_INSPECT: Self = CapRights(1 << 9);
+    /// Rights a parent normally receives from `spawn` (Milestone 47).
+    pub const PROC_PARENT: Self = CapRights(
+        (1 << 6) | (1 << 7) | (1 << 8) | (1 << 9), // WAIT|KILL|TRANSFER|INSPECT
+    );
     /// The most rights a kernel-grade resource can hold.
     pub const ALL: Self = CapRights(0xFFFF);
 

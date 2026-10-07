@@ -79,6 +79,15 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(POWER_SHUTDOWN, 0);
     assert_eq!(POWER_REBOOT, 1);
     assert_eq!(CapRights::POWER.bits(), 1 << 5);
+    assert_eq!(CapRights::PROC_WAIT.bits(), 1 << 6);
+    assert_eq!(CapRights::PROC_KILL.bits(), 1 << 7);
+    assert_eq!(CapRights::PROC_TRANSFER.bits(), 1 << 8);
+    assert_eq!(CapRights::PROC_INSPECT.bits(), 1 << 9);
+    assert!(CapRights::PROC_PARENT.contains(CapRights::PROC_WAIT));
+    assert!(CapRights::PROC_PARENT.contains(CapRights::PROC_KILL));
+    assert!(CapRights::PROC_PARENT.contains(CapRights::PROC_TRANSFER));
+    assert!(CapRights::PROC_PARENT.contains(CapRights::PROC_INSPECT));
+    assert!(!CapRights::PROC_WAIT.contains(CapRights::WAIT));
     assert!(reserved::KEYBOARD_INDEX > FILE_CAP_BASE);
     assert!(matches!(SYSCALLS[4], Syscall::Open));
     assert!(matches!(SYSCALLS[5], Syscall::Read));
