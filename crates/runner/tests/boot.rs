@@ -530,6 +530,75 @@ fn galfs_disk_recovers_from_corrupt_slot() {
         serial2.contains("[test-galfs-disk] passed"),
         "recover marker missing; serial:\n{serial2}"
     );
+    assert!(
+        serial2.contains("recovered from bad sibling"),
+        "recover boot should log recovery; serial:\n{serial2}"
+    );
+}
+
+#[test]
+fn galfs_disk_refuses_format_when_both_slots_corrupt() {
+    let (code1, serial1, img, code2, serial2, img_after) =
+        boot_with_galfs_both_corrupt(&image("test-galfs-disk"), &image("test-galfs-corrupt"));
+    assert_eq!(
+        code1,
+        Some(QEMU_EXIT_SUCCESS),
+        "write boot should succeed; serial:\n{serial1}"
+    );
+    assert_eq!(
+        code2,
+        Some(QEMU_EXIT_SUCCESS),
+        "corrupt boot should succeed; serial:\n{serial2}"
+    );
+    assert!(
+        serial2.contains("[test-galfs-corrupt] passed"),
+        "corrupt marker missing; serial:\n{serial2}"
+    );
+    assert!(
+        serial2.contains("refusing silent format"),
+        "must refuse format; serial:\n{serial2}"
+    );
+    assert!(
+        !serial2.contains("formatted sealed disk"),
+        "must not format over a corrupt volume; serial:\n{serial2}"
+    );
+    // Host broke only the AEAD tag; refuse-format must leave gens + magic alone.
+    for slot in 0..2 {
+        let off = slot * 288 * 512;
+        assert!(
+            img_after.len() >= off + 113 && img.len() >= off + 113,
+            "galfs.img too short for slot {slot}"
+        );
+        assert_eq!(
+            &img_after[off..off + 4],
+            b"GALF",
+            "slot {slot} must keep GALF magic"
+        );
+        assert_eq!(
+            &img_after[off + 16..off + 24],
+            &img[off + 16..off + 24],
+            "slot {slot} generation must be unchanged (format would rewrite)"
+        );
+        assert_ne!(
+            img_after[off + 112],
+            img[off + 112],
+            "slot {slot} tag should still be host-corrupted"
+        );
+    }
+}
+
+#[test]
+fn fsck_test_passes() {
+    let (code, serial) = boot(&image("test-fsck"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-fsck should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-fsck] passed"),
+        "test-fsck success marker missing; serial:\n{serial}"
+    );
 }
 
 #[test]

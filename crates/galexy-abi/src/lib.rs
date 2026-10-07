@@ -254,6 +254,8 @@ pub const USER_LOGIN: u64 = 5;
 pub const USER_PASSWD: u64 = 6;
 /// `user` op: clear the caller's session (logged out / pre-login seat).
 pub const USER_LOGOUT: u64 = 7;
+/// `user` op: write the caller's galfs tokens (path + rights) into the buffer.
+pub const USER_TOKENS: u64 = 8;
 
 /// Lowest capability index a per-task file open may return. `0` is null,
 /// [`reserved::CONSOLE_INDEX`] is the console, [`reserved::SELF_INDEX`] is
@@ -438,11 +440,17 @@ pub enum Syscall {
     /// `SyscallResult` (rax = [`STAT_LEN`]). Needs LIST on the object (or
     /// an ancestor). Layout: see [`STAT_LEN`] / `STAT_*` constants.
     Stat,
+    /// `sync()` — flush the galfs dual-slot image when disk-backed.
+    ///
+    /// Args: none. Returns: `SyscallResult` (rax = 0). RAM-only is a
+    /// successful no-op. A present but corrupt/locked volume is
+    /// `Unsupported`. Mutates already sync; this is an explicit barrier.
+    Sync,
 }
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (lifting the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 20] = [
+pub const SYSCALLS: [Syscall; 21] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -463,6 +471,7 @@ pub const SYSCALLS: [Syscall; 20] = [
     Syscall::Rename,
     Syscall::Truncate,
     Syscall::Stat,
+    Syscall::Sync,
 ];
 
 /// `stat` kind: regular file.

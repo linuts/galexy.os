@@ -570,16 +570,20 @@ exposes `whoami`, `users`, `useradd`, `userdel`, `su`, `truncate`, and
 actors/objects/bitmap/blocks, generation + ciphertext CRC + structural
 checks) or formats that admin tree under a fresh volume key;
 create/remove/append/rename/truncate/useradd/userdel sync to the
-inactive slot and flush the cache. `userdel` also refuses open caps on
-that actor and clears tokens that named its objects. Without a slave
-the table stays RAM-only. Empty files allocate no blocks; append grows
-through direct pointers; remove frees blocks back to the bitmap.
-`cargo run` attaches a persistent `galfs.img`. `bin/test-galfs-disk`
-proves a multi-block file survives two QEMU boots and that a corrupt
-newest slot still recovers. `test-scratch` / `test-rm` fill objects to
-`NoResource`; `test-blocks` fills the block pool; `test-ops` covers
-rename/truncate/stat. Shell utilities use `SPAWN_WAIT` so the prompt
-returns after `ls` / `mkdir` exit.
+inactive slot and flush the cache; `sync()` (syscall 20) is an explicit
+barrier (shell `sync`). `userdel` also refuses open caps on that actor
+and clears tokens that named its objects. Empty zeros format; both
+slots with GALF magic that fail checks leave galfs unavailable (no
+silent format). Without a slave the table stays RAM-only. Empty files
+allocate no blocks; append grows through direct pointers; remove frees
+blocks back to the bitmap. `cargo run` attaches a persistent
+`galfs.img`. `bin/test-galfs-disk` proves multi-block persist and
+dual-slot recover; `test-galfs-corrupt` refuses format on a both-bad
+image; `test-fsck` runs live-table consistency after mutate.
+`test-scratch` / `test-rm` fill objects to `NoResource`; `test-blocks`
+fills the block pool; `test-ops` covers rename/truncate/stat. Shell
+`tokens` (`USER_TOKENS`) lists cards. Utilities use `SPAWN_WAIT` so the
+prompt returns after `ls` / `mkdir` exit.
 Auth is password for identity (PBKDF2-HMAC-SHA256 in `galexy-crypto`,
 CSPRNG salts) plus galfs tokens for authorization (see `docs/AUTH.md`).
 galfs trees, paths, and sealed GALF layout: `docs/GALFS.md`. Process
