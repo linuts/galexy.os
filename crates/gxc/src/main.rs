@@ -1,6 +1,4 @@
 //! `gxc` — host CLI for the Galexy Rust-subset compiler.
-//!
-//! Milestone 59 commands: `check`. Codegen lands in Milestone 60.
 
 use std::env;
 use std::fs;
@@ -15,36 +13,14 @@ fn main() -> ExitCode {
 
     let cmd = args.remove(0);
     match cmd.as_str() {
-        "check" => {
-            let Some(path) = args.first() else {
-                eprintln!("gxc check: missing <file.gxr>");
-                return ExitCode::from(2);
-            };
-            let src = match fs::read_to_string(path) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("gxc: read {path}: {e}");
-                    return ExitCode::from(1);
-                }
-            };
-            match gxc::compile_check(&src) {
-                Ok(prog) => {
-                    println!(
-                        "ok: {} statement(s), return {:?}; backend plan = {}",
-                        prog.body.len(),
-                        prog.ret,
-                        gxc::CODEGEN_BACKEND_PLAN
-                    );
-                    ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("gxc: {e}");
-                    ExitCode::from(1)
-                }
-            }
-        }
+        "check" => cmd_check(&args),
+        "build" => cmd_build(&args),
         "version" | "--version" | "-V" => {
-            println!("gxc {} (gxr v0 subset — not rustc)", env!("CARGO_PKG_VERSION"));
+            println!(
+                "gxc {} (gxr v0 subset — not rustc; backend {})",
+                env!("CARGO_PKG_VERSION"),
+                gxc::CODEGEN_BACKEND_PLAN
+            );
             ExitCode::SUCCESS
         }
         other => {
@@ -55,15 +31,108 @@ fn main() -> ExitCode {
     }
 }
 
+fn cmd_check(args: &[String]) -> ExitCode {
+    let Some(path) = args.first() else {
+        eprintln!("gxc check: missing <file.gxr>");
+        return ExitCode::from(2);
+    };
+    let src = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("gxc: read {path}: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    match gxc::compile_check(&src) {
+        Ok(prog) => {
+            println!(
+                "ok: {} statement(s), return {:?}; backend = {}",
+                prog.body.len(),
+                prog.ret,
+                gxc::CODEGEN_BACKEND_PLAN
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("gxc: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn cmd_build(args: &[String]) -> ExitCode {
+    let mut input = None;
+    let mut output = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-o" => {
+                i += 1;
+                let Some(path) = args.get(i) else {
+                    eprintln!("gxc build: -o needs a path");
+                    return ExitCode::from(2);
+                };
+                output = Some(path.clone());
+            }
+            s if s.starts_with('-') => {
+                eprintln!("gxc build: unknown flag `{s}`");
+                return ExitCode::from(2);
+            }
+            s => {
+                if input.is_some() {
+                    eprintln!("gxc build: unexpected argument `{s}`");
+                    return ExitCode::from(2);
+                }
+                input = Some(s.to_string());
+            }
+        }
+        i += 1;
+    }
+    let Some(input) = input else {
+        eprintln!("gxc build: missing <file.gxr>");
+        return ExitCode::from(2);
+    };
+    let output = output.unwrap_or_else(|| {
+        let stem = input.trim_end_matches(".gxr");
+        format!("{stem}.elf")
+    });
+    let src = match fs::read_to_string(&input) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("gxc: read {input}: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    match gxc::compile_elf(&src) {
+        Ok(bytes) => {
+            if let Err(e) = fs::write(&output, &bytes) {
+                eprintln!("gxc: write {output}: {e}");
+                return ExitCode::from(1);
+            }
+            println!(
+                "wrote {output} ({} bytes, backend {})",
+                bytes.len(),
+                gxc::CODEGEN_BACKEND_PLAN
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("gxc: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn print_help() {
     eprintln!(
         "\
 gxc — Galexy mini Rust-subset compiler (not rustc)
 
 Usage:
-  gxc check <file.gxr>   Lex, parse, and type-check (Milestone 59)
+  gxc check <file.gxr>           Lex, parse, and type-check
+  gxc build [-o out.elf] <file>  Emit static ELF64 @ USER_IMAGE_BASE
   gxc version
 
-See docs/COMPILER.md for the language slice and roadmap."
+See docs/COMPILER.md."
     );
 }

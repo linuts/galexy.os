@@ -1880,21 +1880,19 @@ Freeze what “hello-shaped Rust” means before codegen.
 - [x] Decision recorded: **hand-x64** for Milestone 60
       (`gxc::CODEGEN_BACKEND_PLAN`)
 
-## Milestone 60 — Codegen + ELF emit
+## Milestone 60 — Codegen + ELF emit ✅
 
 Produce something the loader already accepts.
 
-- [ ] **Prelude**: `_start` → `main` → `exit`; `write_console` via
-      `syscall` Write + console Cap bits from `galexy-abi` (inline or
-      tiny `gxc-prelude` object — not a full `galexy-rt` rlib link)
-- [ ] **Codegen**: x86_64 SysV for the v0 subset (Cranelift **or** hand
-      encoder; document the choice)
-- [ ] **ELF64 ET_EXEC** at `USER_IMAGE_BASE`, non-PIE, W^X `PT_LOAD`s
-      (RX text, R rodata); no external `ld` required if using `object`
-- [ ] **Host check**: `readelf`/`llvm-objdump` (or a small Rust probe)
-      asserts base, entry, no W|X
-- [ ] **Loader dry-run**: feed the ELF through the same validation the
-      kernel uses where practical (shared helper or `test-`-style boot)
+- [x] **Prelude**: flat `_start` sequences `write_console` syscalls then
+      `exit`; Cap bits from `galexy-abi` (no `galexy-rt` rlib)
+- [x] **Codegen**: hand-written x86_64 (`CODEGEN_BACKEND_PLAN =
+      "hand-x64"`)
+- [x] **ELF64 ET_EXEC** at `USER_IMAGE_BASE`, non-PIE, W^X `PT_LOAD`s
+      (R rodata + RX text); no external `ld`
+- [x] **Host check**: `gxc::elf::validate_elf` (magic, ET_EXEC, entry
+      window, no W|X) + unit tests
+- [x] **CLI**: `gxc build [-o out.elf] <file.gxr>`
 
 ## Milestone 61 — Hello via gxc
 

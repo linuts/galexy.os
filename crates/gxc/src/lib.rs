@@ -2,12 +2,15 @@
 //!
 //! **Rust subset for Galexy**, not rustc-compatible. See `docs/COMPILER.md`.
 //!
-//! Milestone 59: lex → parse → check. Codegen/ELF is Milestone 60.
+//! - Milestone 59: lex → parse → check
+//! - Milestone 60: hand-x64 codegen + static ELF64 @ `USER_IMAGE_BASE`
 
 #![deny(missing_docs)]
 
 pub mod ast;
 pub mod check;
+pub mod codegen;
+pub mod elf;
 pub mod error;
 pub mod lex;
 pub mod parse;
@@ -22,27 +25,23 @@ pub fn compile_check(src: &str) -> Result<Program> {
     check::check(program)
 }
 
-/// Codegen backend choice for Milestone 60 (recorded at M59 freeze).
-///
-/// Hello is ~a dozen instructions; **hand-written x86_64** keeps the
-/// dependency graph empty and the ELF shape obvious. Cranelift remains an
-/// option if the subset grows past what a small encoder can love.
+/// Full host compile: check → hand-x64 → ELF64 bytes.
+pub fn compile_elf(src: &str) -> Result<Vec<u8>> {
+    let program = compile_check(src)?;
+    let obj = codegen::codegen(&program);
+    elf::emit_elf(&obj)
+}
+
+/// Codegen backend: hand-written x86_64 (Milestone 60).
 pub const CODEGEN_BACKEND_PLAN: &str = "hand-x64";
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ast::{Expr, Stmt};
+    use galexy_abi::USER_IMAGE_BASE;
 
-    const HELLO: &str = r#"
-// hello.gxr — frozen gxr v0 example
-#![no_std]
-#![no_main]
-fn main() -> i32 {
-    write_console(b"Hello from gxc!\n");
-    0
-}
-"#;
+    const HELLO: &str = include_str!("../examples/hello.gxr");
 
     #[test]
     fn checks_hello() {
@@ -95,5 +94,13 @@ fn other() -> i32 { 0 }
     #[test]
     fn backend_plan_is_hand_x64() {
         assert_eq!(CODEGEN_BACKEND_PLAN, "hand-x64");
+    }
+
+    #[test]
+    fn compile_elf_hello_entry() {
+        let bytes = compile_elf(HELLO).unwrap();
+        let entry = u64::from_le_bytes(bytes[24..32].try_into().unwrap());
+        assert_eq!(entry, USER_IMAGE_BASE + 0x2000);
+        elf::validate_elf(&bytes).unwrap();
     }
 }
