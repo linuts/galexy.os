@@ -134,6 +134,15 @@ crates/
 - **Phase 7** — scheduling complete (sleep / block-wake / policy) — SCHEDULING.md
 - **Phase 8** — mini Rust-subset compiler (`gxc`) for hello — COMPILER.md
 
+Host-compile the gxr hello (not rustc):
+
+```sh
+cargo run -p gxc -- build -o hello-gxc.elf crates/gxc/examples/hello.gxr
+```
+
+The runner packs that ELF as ramdisk `hello-gxc` for QEMU
+(`test-hellogxc`). Details: [`docs/COMPILER.md`](docs/COMPILER.md).
+
 Details: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## References

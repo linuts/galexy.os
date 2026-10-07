@@ -1154,6 +1154,29 @@ fn realprogram_test_passes() {
     );
 }
 
+/// Milestone 61: ELF from host `gxc` (gxr subset) runs under the loader.
+#[test]
+fn hellogxc_test_passes() {
+    let (code, serial) = boot(&image("test-hellogxc"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-hellogxc should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-hellogxc] passed"),
+        "test-hellogxc success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[loader] program 'hello-gxc' ready"),
+        "loader spawn marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains(HELLO_GXC_TEXT),
+        "gxc hello console output missing from serial; serial:\n{serial}"
+    );
+}
+
 #[test]
 fn runshell_test_passes() {
     let (code, serial) = boot(&image("test-runshell"));
@@ -1181,6 +1204,9 @@ fn runshell_test_passes() {
 /// The exact text the real hello program prints through the console
 /// syscall (mirrored to COM1 by the kernel).
 const HELLO_TEXT: &str = "Hello from a real Rust user program!";
+
+/// Text from `crates/gxc/examples/hello.gxr` (Milestone 61).
+const HELLO_GXC_TEXT: &str = "Hello from gxc!";
 
 /// Login screen: username then masked password (`*` echo).
 const LOGIN_ADMIN_KEYS: &[(&str, &str)] = &[

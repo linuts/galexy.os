@@ -147,9 +147,9 @@ QEMU suite (serial line + exit 0). Prefer a **second** ramdisk name
 
 | Milestone | Delivers |
 | --- | --- |
-| **59** | Language slice frozen; `gxc` crate; lex/parse/check + host tests |
-| **60** | Codegen + ELF emit at `USER_IMAGE_BASE`; prelude syscalls |
-| **61** | `hello.gxr` → ELF runs in QEMU (suite marker); docs claim subset only |
+| **59** ✅ | Language slice frozen; `gxc` crate; lex/parse/check + host tests |
+| **60** ✅ | Codegen + ELF emit at `USER_IMAGE_BASE`; prelude syscalls |
+| **61** ✅ | `hello.gxr` → ramdisk `hello-gxc` + `test-hellogxc` in QEMU |
 | **62** *(follow-on)* | Port `gxc` (or a no_std core) to ring-3; compile from galfs |
 
 ## Suggested crate layout (when coding starts)
