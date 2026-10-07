@@ -58,20 +58,19 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     let scratch: *const Report = mm::frame_virt(region.scratch_phys).as_ptr();
     let mut elapsed = 0u64;
-    loop {
+    // Copy the report before reap — parent exit frees the scratch tree.
+    let report = loop {
         x86_64::instructions::hlt();
         sched::drain_spawn();
-        sched::reap();
         let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*scratch).done)) };
         if done == DONE {
-            break;
+            break unsafe { core::ptr::read_volatile(scratch) };
         }
         elapsed += 1;
         if elapsed > TICK_TIMEOUT {
             panic!("orphan-parent never finished spawn");
         }
-    }
-    let report = unsafe { core::ptr::read_volatile(scratch) };
+    };
     assert_eq!(report.spawn_ok, 1, "spawn linger must succeed");
     assert_eq!(report.deny_ok, 0, "wait without PROC_WAIT must fail");
     assert_eq!(
@@ -81,12 +80,15 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     );
 
     // Wait until the parent is reaped and linger is an orphan root.
+    // Without init (this test does not spawn it), parent_slot → 0.
+    // With init live, Cap transfer would reparent to init (see test-init).
+    let expect_parent = sched::init_slot().unwrap_or(0);
     elapsed = 0;
     loop {
         x86_64::instructions::hlt();
         sched::drain_spawn();
         sched::reap();
-        if !sched::is_name_running("orphan-parent") {
+        if !sched::is_name_running("orphan-parent") && !sched::is_name_live("orphan-parent") {
             break;
         }
         elapsed += 1;
@@ -104,19 +106,19 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
             "linger must keep running after parent exit"
         );
         if let Some(p) = sched::parent_slot_of("linger") {
-            if p == 0 {
+            if p == expect_parent {
                 break p;
             }
         }
         elapsed += 1;
         if elapsed > TICK_TIMEOUT {
             panic!(
-                "linger never reparented to kernel; parent={:?}",
+                "linger never reparented; parent={:?} expect={expect_parent}",
                 sched::parent_slot_of("linger")
             );
         }
     };
-    assert_eq!(parent, 0, "orphan parent_slot is kernel");
+    assert_eq!(parent, expect_parent, "orphan parent_slot");
 
     println!("[test-orphan] parent exit reparents children");
     serial_println!("[test-orphan] passed");
