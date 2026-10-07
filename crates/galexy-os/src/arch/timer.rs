@@ -31,11 +31,7 @@ pub fn init() {
 
 /// Called by the timer interrupt handler for every tick.
 pub fn tick() {
-    let n = TICKS.fetch_add(1, Ordering::Relaxed) + 1;
-    // One heartbeat per second on the debug channel, only.
-    if n.is_multiple_of(1000) {
-        crate::serial_println!("[timer] {}s up", n / 1000);
-    }
+    TICKS.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Number of timer ticks since boot (monotonic, ~1 kHz resolution).

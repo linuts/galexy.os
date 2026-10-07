@@ -1257,7 +1257,7 @@ fn with_login<'a>(keys: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
 }
 
 /// After each `Password:` / `Confirm:`, console echo must be `*` only.
-/// Kernel log lines (`[timer] …`) may interleave on COM1 and are ignored.
+/// Kernel log lines (`Ns: …`) may interleave on COM1 and are ignored.
 fn assert_passwords_masked(serial: &str) {
     for marker in ["Password: ", "Confirm: "] {
         let mut from = 0;
@@ -1270,7 +1270,7 @@ fn assert_passwords_masked(serial: &str) {
                 if line.is_empty() {
                     break;
                 }
-                if line.starts_with('[') {
+                if line.starts_with('[') || looks_like_uptime_log(line) {
                     continue;
                 }
                 if line.contains("galexy>")
@@ -1284,8 +1284,8 @@ fn assert_passwords_masked(serial: &str) {
                 for c in line.chars() {
                     if c == '*' {
                         saw_star = true;
-                    } else if c == '[' {
-                        // Same-line kernel log after stars: `*[timer] 2s up`.
+                    } else if c == '[' || c.is_ascii_digit() {
+                        // Same-line kernel log after stars: `*3s: [sched] …`.
                         break;
                     } else {
                         panic!(
@@ -1301,6 +1301,18 @@ fn assert_passwords_masked(serial: &str) {
             from = start;
         }
     }
+}
+
+fn looks_like_uptime_log(line: &str) -> bool {
+    let b = line.as_bytes();
+    let mut i = 0;
+    if i >= b.len() || !b[i].is_ascii_digit() {
+        return false;
+    }
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    b[i..].starts_with(b"s: ")
 }
 
 /// After boot login + passwd, CLI `login admin` with masked `testpass`.
@@ -2072,7 +2084,7 @@ fn uefi_image_boots_and_timer_ticks() {
     let mut last = String::new();
     for _ in 0..3 {
         last = boot_uefi(&image, Duration::from_secs(45));
-        if last.contains("[timer] 1s up") {
+        if last.contains("1s: ") {
             break;
         }
     }
@@ -2085,8 +2097,8 @@ fn uefi_image_boots_and_timer_ticks() {
         "UEFI memory bring-up marker missing; serial:\n{last}"
     );
     assert!(
-        last.contains("[timer] 1s up"),
-        "UEFI timer heartbeat missing (LAPIC timer must tick under OVMF); serial:\n{last}"
+        last.contains("1s: "),
+        "UEFI timer uptime prefix missing (LAPIC timer must tick under OVMF); serial:\n{last}"
     );
     assert!(
         last.contains("[acpi] madt ready"),
@@ -2109,8 +2121,8 @@ fn main_kernel_boots_and_timer_ticks() {
         "boot info marker missing; serial:\n{serial}"
     );
     assert!(
-        serial.contains("[timer] 1s up"),
-        "timer heartbeat missing; serial:\n{serial}"
+        serial.contains("1s: "),
+        "timer uptime prefix missing; serial:\n{serial}"
     );
     assert!(
         serial.contains("[loader] program 'shell' ready"),

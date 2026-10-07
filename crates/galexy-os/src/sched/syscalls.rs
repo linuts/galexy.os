@@ -240,12 +240,13 @@ fn syscall_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
         );
     }
     // Printable ASCII, newline, backspace (0x08), form feed (0x0c),
-    // tab (0x09), CR (0x0d), and ESC (0x1b, for CSI). Other controls
-    // stay BadValue.
+    // tab (0x09), CR (0x0d), ESC (0x1b, for CSI), and BEL (0x07 → beep).
+    // Other controls stay BadValue.
     let printable = staged[..len as usize].iter().all(|b| {
         b.is_ascii_graphic()
             || *b == b' '
             || *b == b'\n'
+            || *b == 0x07
             || *b == 0x08
             || *b == 0x09
             || *b == 0x0c

@@ -469,7 +469,8 @@ host tests, green per commit.
       future work
 - [x] **UEFI tests graduated** (`runner/tests/boot.rs`): the smoke test
       became `uefi_image_boots_and_timer_ticks` — asserts MADT + LAPIC +
-      `[timer] 1s up` under OVMF (3 retries for OVMF disk flakiness);
+      uptime-prefixed serial (`1s: …`) under OVMF (3 retries for OVMF
+      disk flakiness);
       NEW `shell_run_hello_typing_e2e_uefi` — the full typed `run
       hello` under OVMF via QMP. Harness fix en route: QMP reply reads
       must SKIP async event lines (RTC_CHANGE under OVMF interleaves
@@ -1475,8 +1476,10 @@ Human-facing paths reviewers will exercise for an hour.
 - [ ] **Blinking text cursor** on the active TTY
 - [ ] **Keyboard overflow**: count drops; optional serial warning;
       document bound
+- [x] **PC speaker BEL**: console `write` of `0x07` beeps (`arch::speaker`);
+      shell emits BEL on command-not-found
 - [ ] **CSI / control policy**: list supported sequences; reject set
-      stays intentional
+      stays intentional (BEL handled as beep, not a CSI)
 - [ ] **Per-TTY scrollback** bound documented (cell grid size)
 - [ ] **Password star-prompt** integration with Milestone 43 secret prompts
 - [ ] **Ctrl-C / Ctrl-D** semantics documented (line cancel vs EOF)

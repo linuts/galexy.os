@@ -68,9 +68,19 @@ macro_rules! serial_print {
 }
 
 /// Prints to the host console through COM1, with a newline.
+///
+/// Prefixed with monotonic uptime (`3s: …`) from the LAPIC/PIT tick
+/// counter so second-heartbeats are unnecessary and log lines stay
+/// ordered without a separate `[timer]` spam stream.
 #[macro_export]
 macro_rules! serial_println {
     () => ($crate::serial_print!("\n"));
-    ($fmt:expr) => ($crate::serial_print!(concat!($fmt, "\n")));
-    ($fmt:expr, $($arg:tt)*) => ($crate::serial_print!(concat!($fmt, "\n"), $($arg)*));
+    ($fmt:expr) => {{
+        let secs = $crate::arch::timer_ticks() / 1000;
+        $crate::serial_print!(concat!("{}s: ", $fmt, "\n"), secs);
+    }};
+    ($fmt:expr, $($arg:tt)*) => {{
+        let secs = $crate::arch::timer_ticks() / 1000;
+        $crate::serial_print!(concat!("{}s: ", $fmt, "\n"), secs, $($arg)*);
+    }};
 }

@@ -596,13 +596,13 @@ fn qmp_read_until(reader: &mut BufReader<UnixStream>, needle: &[u8], deadline: I
     }
 }
 
-/// Shell transcript with heartbeat lines and NUL padding removed.
+/// Shell transcript with kernel timestamp lines and NUL padding removed.
 ///
-/// The timer IRQ prints `[timer] Ns up` on COM1, sometimes in the middle
-/// of an echoed key, and the serial file can contain a run of NULs. Either
-/// one pulls a single-character cursor past the prompt. Indexes into this
-/// string stay stable as the log grows: only shell and boot text remain,
-/// in order.
+/// Kernel `serial_println!` prefixes lines with `Ns: …` (uptime seconds).
+/// Those can splice into the middle of an echoed key, and the serial file
+/// can contain a run of NULs. Either one pulls a single-character cursor
+/// past the prompt. Indexes into this string stay stable as the log grows:
+/// only shell and boot text remain, in order.
 fn typing_visible(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut out = String::with_capacity(raw.len());
@@ -612,7 +612,7 @@ fn typing_visible(raw: &str) -> String {
             i += 1;
             continue;
         }
-        if bytes[i..].starts_with(b"[timer]") {
+        if is_uptime_log_prefix(bytes, i) {
             while i < bytes.len() && bytes[i] != b'\n' {
                 i += 1;
             }
@@ -625,6 +625,18 @@ fn typing_visible(raw: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// True when `bytes[i..]` starts with `Ns: ` (kernel serial uptime prefix).
+fn is_uptime_log_prefix(bytes: &[u8], i: usize) -> bool {
+    let mut j = i;
+    if j >= bytes.len() || !bytes[j].is_ascii_digit() {
+        return false;
+    }
+    while j < bytes.len() && bytes[j].is_ascii_digit() {
+        j += 1;
+    }
+    bytes[j..].starts_with(b"s: ")
 }
 
 /// Boots the interactive kernel with a QMP monitor; once the machine is

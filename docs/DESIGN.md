@@ -648,6 +648,9 @@ wait/kill/supervise use **process Caps**, not global PIDs (plan:
 returns to that screen. There is no guest account. Access cards + `su`
 still switch without a password when the caller holds ALL on the target
 root.
+Console `write` accepts ASCII BEL (`0x07`): the console policy runs a
+short PC-speaker beep (`arch::speaker`) and does not draw the byte.
+The ring-3 shell emits BEL on “command not found”.
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing
