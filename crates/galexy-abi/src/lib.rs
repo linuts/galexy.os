@@ -304,7 +304,9 @@ pub const FILE_CAP_BASE: u64 = 3;
 /// below the high reserved band (`0x8000`…). Per-task, not global.
 pub const PROC_CAP_BASE: u64 = 0x40;
 /// Process Caps one task may hold at once (spawn children / transfers).
-pub const MAX_PROC_CAPS: u64 = 8;
+/// Process Caps per task. Raised to 16 in Milestone 53 so init can hold
+/// supervise Caps for twelve seats plus spare service children.
+pub const MAX_PROC_CAPS: u64 = 16;
 
 /* ---------------- address-space contract ---------------- */
 

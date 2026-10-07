@@ -89,34 +89,35 @@ abi explicitly says otherwise.
 
 1. Every task has a parent (kernel or another task).
 2. Parent normally holds the authoritative wait Cap from `spawn`.
-3. If the parent exits first **today**: children are reparented to the
-   kernel (`parent_slot = 0`) and the parent's process Caps are dropped
-   with the parent. Milestone **53** upgrades this to **transfer**
-   wait/control Caps to **init**.
-4. Init Cap-waits / reaps; restart policy is userspace (Milestone 53–54).
-5. Zombies exist until Cap-wait or Cap drop; the table bound is the ceiling.
+3. If the parent exits first and **init is live**: wait/control Caps for
+   live children **transfer to init** and `parent_slot` becomes init’s
+   slot. Without init (tests / early boot), children become kernel roots
+   (`parent_slot = 0`) and Caps die with the parent.
+4. Init Cap-waits / reaps; restart policy is userspace (Milestone 54).
+5. Zombies exist until Cap-wait or Cap drop; the table bound is the ceiling
+   (`MAX_PROC_CAPS` = 16 so init can supervise seats).
 
-Init is distinguished by **role** (first ring-3 task / orphan root), not
-by a magic “PID 1” in the public ABI.
+Init is distinguished by **role** (`is_init` flag / orphan root), not
+by a magic “PID 1” in the public ABI. Cap-kill of init is always
+`AccessDenied`; init exit panics the kernel.
 
 ## Boot evolution
 
-### Today (through review readiness)
+### Today (Milestone 53)
 
-1. Kernel starts F1–F12 shells with pre-login grants.
-2. `ensure_shell()` reloads a dead seat.
+1. Kernel loads **`init`** from the ramdisk when present (orphan root).
+2. Kernel still starts F1–F12 shells with pre-login grants
+   (`ensure_shell` shim — removed in Milestone 54).
 3. Login screen is in the shell; auth per `docs/AUTH.md`.
+4. Parent exit → Caps transfer to init; init Cap-waits/reaps.
 
-### Target (Phase 6)
+### Target (Milestone 54+)
 
-1. Kernel loads **`init`** once from the ramdisk.
+1. Kernel loads **`init`** only (no `spawn_all_shells`).
 2. Init spawns seat children (one per TTY), keeps supervise Caps.
 3. Seat shows the login screen; init does not prompt for passwords.
 4. Seat crash → init restart policy (replaces `ensure_shell`).
 5. Shutdown/reboot is ordered through init (flush, stop services, power).
-
-Milestone 47 lands Caps/wait/kill **without** requiring init yet:
-kernel-spawned shells remain until 53–54 cut over.
 
 ## Init (Milestone 53)
 

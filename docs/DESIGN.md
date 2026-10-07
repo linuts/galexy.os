@@ -441,6 +441,12 @@ rules live in `docs/SCHEDULING.md` (Frozen policy + Sched lock / IRQ
 rules). Wiring stays here; do not fork a second policy table. Full
 kernel lock-order table remains Milestone 48.
 
+**Init / orphan root (Milestone 53).** When ramdisk `init` is present the
+kernel loads it once (`Thread.is_init`, `Grants::init`). On parent reap,
+process Caps for live children move to init and `parent_slot` follows.
+Cap-kill of init is `AccessDenied`; init exit panics. Seats remain
+kernel-`ensure_shell` until Milestone 54.
+
 Two models, layered:
 
 **Cooperative tasks** — round-robin over voluntarily-yielding state

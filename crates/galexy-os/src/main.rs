@@ -43,6 +43,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // `shell`. The kernel loop paints a console switch, drains launches,
     // and keeps the status bar. Without that ELF, the in-kernel line
     // editor stays the consumer of TTY 0.
+    // Milestone 53: load userspace init as orphan root when present.
+    // Seats still come from the kernel until Milestone 54.
+    let _ = sched::spawn_init();
     let user_shell = sched::ramdisk::find("shell").is_some();
     if user_shell {
         sched::spawn_all_shells();
