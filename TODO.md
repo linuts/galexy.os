@@ -1988,6 +1988,6 @@ items stay here with rationale.
 - [ ] Block & wake — **Milestone 57**
 - [ ] Scheduler policy freeze — **Milestone 58**
 - [x] Mini Rust compiler frontend (gxr) — **Milestone 59** (Phase 8)
-- [ ] gxc codegen + ELF emit — **Milestone 60**
+- [x] gxc codegen + ELF emit — **Milestone 60**
 - [ ] Hello via gxc in QEMU — **Milestone 61**
 - [ ] On-OS gxc (follow-on) — **Milestone 62**
