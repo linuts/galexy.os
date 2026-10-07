@@ -83,10 +83,40 @@ fn qemu_command(img_path: &str, serial_path: &PathBuf) -> Command {
     cmd
 }
 
+/// QEMU `-drive` `cache=` mode for the galfs data disk (IDE slave).
+///
+/// Guest galfs always issues ATA FLUSH CACHE after writing the inactive
+/// dual slot. These modes exercise that barrier against the host cache.
+#[derive(Clone, Copy, Debug)]
+pub enum GalfsDiskCache {
+    /// Default for most tests — host page cache writes through.
+    Writethrough,
+    /// Host may buffer writes; durability depends on guest flush.
+    Writeback,
+    /// Bypass host page cache (`O_DIRECT`-ish); still needs guest flush
+    /// for any drive-side write cache QEMU models.
+    None,
+}
+
+impl GalfsDiskCache {
+    fn as_qemu(self) -> &'static str {
+        match self {
+            Self::Writethrough => "writethrough",
+            Self::Writeback => "writeback",
+            Self::None => "none",
+        }
+    }
+}
+
 /// Like [`qemu_command`], but the boot drive uses a per-drive snapshot and
 /// `galfs_path` is attached as the primary IDE slave without a snapshot so
 /// writes persist for a second boot of the same image.
-fn qemu_command_with_galfs(img_path: &str, galfs_path: &PathBuf, serial_path: &PathBuf) -> Command {
+fn qemu_command_with_galfs(
+    img_path: &str,
+    galfs_path: &PathBuf,
+    serial_path: &PathBuf,
+    cache: GalfsDiskCache,
+) -> Command {
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.arg("-drive")
         .arg(format!(
@@ -94,8 +124,9 @@ fn qemu_command_with_galfs(img_path: &str, galfs_path: &PathBuf, serial_path: &P
         ))
         .arg("-drive")
         .arg(format!(
-            "format=raw,file={},if=ide,index=1,cache=writethrough",
-            galfs_path.display()
+            "format=raw,file={},if=ide,index=1,cache={}",
+            galfs_path.display(),
+            cache.as_qemu()
         ))
         .arg("-smp")
         .arg("2")
@@ -116,10 +147,22 @@ fn qemu_command_with_galfs(img_path: &str, galfs_path: &PathBuf, serial_path: &P
 /// Boots `image` with a fresh empty galfs data disk, then again with the
 /// same data disk so the guest can prove the table survived. Returns
 /// `(first_exit, first_serial, img_after_write, second_exit, second_serial)`.
+///
+/// Uses [`GalfsDiskCache::Writethrough`] (see [`boot_with_galfs_cache`] for
+/// the flush matrix).
 pub fn boot_with_galfs(
     image: &Image,
 ) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
-    boot_with_galfs_inner(image, CorruptMode::None)
+    boot_with_galfs_cache(image, GalfsDiskCache::Writethrough)
+}
+
+/// Like [`boot_with_galfs`], but sets the IDE slave `cache=` mode so flush
+/// discipline can be tested under `writeback` and `none`.
+pub fn boot_with_galfs_cache(
+    image: &Image,
+    cache: GalfsDiskCache,
+) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
+    boot_with_galfs_inner(image, CorruptMode::None, cache)
 }
 
 /// Like [`boot_with_galfs`], but after the write boot the host destroys the
@@ -128,7 +171,7 @@ pub fn boot_with_galfs(
 pub fn boot_with_galfs_recover(
     image: &Image,
 ) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
-    boot_with_galfs_inner(image, CorruptMode::Newest)
+    boot_with_galfs_inner(image, CorruptMode::Newest, GalfsDiskCache::Writethrough)
 }
 
 /// Like [`boot_with_galfs_recover`], but simulates a torn write: the newest
@@ -136,7 +179,11 @@ pub fn boot_with_galfs_recover(
 pub fn boot_with_galfs_torn(
     image: &Image,
 ) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
-    boot_with_galfs_inner(image, CorruptMode::TornNewest)
+    boot_with_galfs_inner(
+        image,
+        CorruptMode::TornNewest,
+        GalfsDiskCache::Writethrough,
+    )
 }
 
 /// Write boot with `writer`, then corrupt **both** slots and boot `reader`.
@@ -153,10 +200,13 @@ pub fn boot_with_galfs_both_corrupt(
             .as_nanos()
     ));
     std::fs::write(&galfs_path, vec![0u8; 1024 * 1024]).expect("create galfs.img");
-    let (code1, serial1) = boot_once_with_galfs(&writer.bios, &galfs_path, &writer.name);
+    let cache = GalfsDiskCache::Writethrough;
+    let (code1, serial1) =
+        boot_once_with_galfs(&writer.bios, &galfs_path, &writer.name, cache);
     let img_after_write = std::fs::read(&galfs_path).expect("read galfs.img after write");
     corrupt_all_galfs_slots(&galfs_path);
-    let (code2, serial2) = boot_once_with_galfs(&reader.bios, &galfs_path, &reader.name);
+    let (code2, serial2) =
+        boot_once_with_galfs(&reader.bios, &galfs_path, &reader.name, cache);
     let img_after = std::fs::read(&galfs_path).expect("read galfs.img after corrupt boot");
     let _ = std::fs::remove_file(&galfs_path);
     (code1, serial1, img_after_write, code2, serial2, img_after)
@@ -171,6 +221,7 @@ enum CorruptMode {
 fn boot_with_galfs_inner(
     image: &Image,
     corrupt: CorruptMode,
+    cache: GalfsDiskCache,
 ) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
     let galfs_path = std::env::temp_dir().join(format!(
         "galexy-galfs-{}-{}.img",
@@ -183,7 +234,8 @@ fn boot_with_galfs_inner(
     // 1 MiB zeroed IDE slave — covers both 288-sector GALF slots.
     std::fs::write(&galfs_path, vec![0u8; 1024 * 1024]).expect("create galfs.img");
 
-    let (code1, serial1) = boot_once_with_galfs(&image.bios, &galfs_path, &image.name);
+    let (code1, serial1) =
+        boot_once_with_galfs(&image.bios, &galfs_path, &image.name, cache);
     if let Ok(file) = std::fs::File::options().write(true).open(&galfs_path) {
         let _ = file.sync_all();
     }
@@ -193,7 +245,8 @@ fn boot_with_galfs_inner(
         CorruptMode::Newest => corrupt_newest_galfs_slot(&galfs_path),
         CorruptMode::TornNewest => tear_newest_galfs_slot(&galfs_path),
     }
-    let (code2, serial2) = boot_once_with_galfs(&image.bios, &galfs_path, &image.name);
+    let (code2, serial2) =
+        boot_once_with_galfs(&image.bios, &galfs_path, &image.name, cache);
     let _ = std::fs::remove_file(&galfs_path);
     (code1, serial1, img_after_write, code2, serial2)
 }
@@ -274,9 +327,10 @@ fn boot_once_with_galfs(
     img_path: &str,
     galfs_path: &PathBuf,
     name: &str,
+    cache: GalfsDiskCache,
 ) -> (Option<i32>, String) {
     let serial_path = serial_log_path(name);
-    let mut child = qemu_command_with_galfs(img_path, galfs_path, &serial_path)
+    let mut child = qemu_command_with_galfs(img_path, galfs_path, &serial_path, cache)
         .spawn()
         .expect("failed to launch qemu-system-x86_64 (galfs disk)");
 

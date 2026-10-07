@@ -199,7 +199,8 @@ GALF dual slots, galfs stays RAM-only. Reads/writes reject LBAs past
 capacity. `flush()` issues FLUSH CACHE after a committed GALF slot
 write. The runner attaches a second raw image at `if=ide,index=1`
 without a snapshot (`cargo run` and the persistence tests) so writes
-survive across QEMU processes.
+survive across QEMU processes. Default `cache=writethrough`; the flush
+matrix also boots with `writeback` and `none`.
 
 ```rust
 pub struct PrimarySlave; // impl BlockDevice

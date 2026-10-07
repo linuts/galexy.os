@@ -170,6 +170,21 @@ slot 1 @ LBA DISK_SECTORS
 | Crash | Mid-write leaves the previous slot intact |
 | Version | Layout bump **refuses** old images (no silent reinterpret) |
 
+### Commit ordering and flush
+
+Every durable mutate encodes the **whole** sealed slot (actors, objects,
+shares, bitmap, and data blocks) into the inactive LBA range, issues
+`BlockDevice::write_sectors`, then `BlockDevice::flush` (ATA FLUSH CACHE
+today) **before** publishing the new generation in RAM. There is no
+separate “data then metadata” path: file bytes and directory metadata
+share one AEAD payload, so a torn write cannot leave a newer directory
+pointing at uncommitted blocks.
+
+Flush matrix (runner): `boot_with_galfs` uses `cache=writethrough`;
+`galfs_disk_persists_writeback_cache` / `_none_cache` repeat the
+persistence e2e under `cache=writeback` and `cache=none` so the guest
+barrier is not an accidental host-cache artifact.
+
 ### Sealed slots (v6…v8 blocks → v9 quotas → v10 shares → v11 indirect)
 
 **Threat (v1):** stolen `galfs.img` must not yield file bytes or password
@@ -325,13 +340,13 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 
 ### Target storage stack (Milestone 46)
 
-- **Landed (first slice):** `BlockDevice` trait; `ata::PrimarySlave`
-  impl; IDENTIFY capacity; galfs routes all I/O through `disk()` and
-  refuses disks smaller than both dual slots (`disk_capacity_sectors`,
-  `bin/test-galfs-disk`)
-- Virtio-blk / primary IDE master path for common QEMU flags
-- Keep dual-slot (or journal) commit discipline from STYLE
-- Docs: `cargo run` storage attach; CI matrix for disk backends
+- **Landed:** `BlockDevice` + `ata::PrimarySlave` + IDENTIFY capacity;
+  galfs via `disk()`; dual-slot size gate
+- **Landed:** flush matrix — persistence e2e under QEMU
+  `cache=writethrough` / `writeback` / `none`; commit ordering documented
+  above
+- Virtio-blk / primary IDE path for common QEMU flags
+- Docs: `cargo run` storage attach detail; CI matrix for disk backends
 
 ## Explicit non-goals
 
