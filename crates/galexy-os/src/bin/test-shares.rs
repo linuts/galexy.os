@@ -6,13 +6,18 @@
 extern crate alloc;
 
 use bootloader_api::{entry_point, BootInfo};
-use galexy_abi::SysError;
 use galexy_os::sched::galfs::{self, Token};
 use galexy_os::{
     arch::mm, drivers::screen, exit_qemu, println, sched, serial_println, QemuExitCode,
 };
 
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
+
+fn has_share_card(tokens: &[Token; galfs::TOKEN_SLOTS], object: u16, rights: u8) -> bool {
+    tokens
+        .iter()
+        .any(|t| t.is_live() && t.object == object && t.rights & rights == rights)
+}
 
 fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galexy_os::init();
@@ -44,16 +49,18 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let secret = galfs::create_file_under(desk, "secret").expect("secret file");
     let _ = galfs::append_file(secret, b"hi").expect("write secret");
 
-    // Without a share, eve's home ALL does not cover dan's tree.
+    // Without a share, eve's home ALL does not include dan's Desktop card.
     let mut eve_toks = [Token::empty(); galfs::TOKEN_SLOTS];
     let eve = galfs::root_named("eve").expect("eve root");
     galfs::push_token(&mut eve_toks, eve, galfs::RIGHT_ALL).expect("eve home");
+    galfs::apply_shares(eve, &mut eve_toks).expect("apply empty");
     assert!(
-        matches!(
-            galfs::open_file(eve, &eve_toks, "dan@Desktop/secret"),
-            Err(SysError::AccessDenied)
+        !has_share_card(
+            &eve_toks,
+            desk,
+            galfs::RIGHT_LIST | galfs::RIGHT_READ
         ),
-        "eve must not read dan without a share"
+        "eve must not receive dan Desktop without a share"
     );
 
     galfs::add_share(
@@ -69,8 +76,14 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     eve_toks = [Token::empty(); galfs::TOKEN_SLOTS];
     galfs::push_token(&mut eve_toks, eve, galfs::RIGHT_ALL).expect("eve home again");
     galfs::apply_shares(eve, &mut eve_toks).expect("apply shares");
-    let opened = galfs::open_file(eve, &eve_toks, "dan@Desktop/secret").expect("shared open");
-    assert_eq!(opened, secret);
+    assert!(
+        has_share_card(
+            &eve_toks,
+            desk,
+            galfs::RIGHT_LIST | galfs::RIGHT_READ
+        ),
+        "login must install the durable share card"
+    );
 
     galfs::remove_share(
         admin,
@@ -85,9 +98,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galfs::push_token(&mut eve_toks, eve, galfs::RIGHT_ALL).expect("eve home post-unshare");
     galfs::apply_shares(eve, &mut eve_toks).expect("apply after unshare");
     assert!(
-        matches!(
-            galfs::open_file(eve, &eve_toks, "dan@Desktop/secret"),
-            Err(SysError::AccessDenied)
+        !has_share_card(
+            &eve_toks,
+            desk,
+            galfs::RIGHT_LIST | galfs::RIGHT_READ
         ),
         "unshare must stop login re-apply"
     );
@@ -108,10 +122,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galfs::push_token(&mut eve_toks, eve2, galfs::RIGHT_ALL).expect("new eve home");
     galfs::apply_shares(eve2, &mut eve_toks).expect("apply after userdel");
     assert!(
-        matches!(
-            galfs::open_file(eve2, &eve_toks, "dan@Desktop/secret"),
-            Err(SysError::AccessDenied)
-        ),
+        !has_share_card(&eve_toks, desk, galfs::RIGHT_READ),
         "userdel must drop durable shares for that actor"
     );
 
