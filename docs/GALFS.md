@@ -109,9 +109,9 @@ child’s files (`PROCESS.md`).
 
 ## Table limits (today)
 
-Milestone **45** / GALF **v10**: actor/object tables plus a shared block
-pool, per-actor quotas, and durable home shares. Empty files cost an
-inode only; bytes live in direct blocks.
+Milestone **45** / GALF **v11**: actor/object tables plus a shared block
+pool, per-actor quotas, durable home shares, and single-indirect files.
+Empty files cost an inode only; bytes live in direct/indirect blocks.
 
 | Resource | Cap |
 | --- | --- |
@@ -119,7 +119,9 @@ inode only; bytes live in direct blocks.
 | Objects (files + dirs + roots) | 128 |
 | Durable home shares | 32 |
 | Block size | 512 bytes |
-| Direct blocks per file | 8 (max file 4 KiB) |
+| Direct blocks per file | 8 |
+| Single-indirect | 1 block of 256 u16 pointers |
+| Max file size | 32 KiB (`len` is u16) |
 | Block pool | 256 blocks |
 | Default user quota | 16 objects / 16 KiB |
 | Tokens per task | 8 |
@@ -127,8 +129,8 @@ inode only; bytes live in direct blocks.
 | Name length | 64 (object) / 32 (actor) |
 | Sectors per dual-slot image | 288 |
 
-The IF=0 syscall path must not heap-allocate over this table. Indirect
-blocks / larger files are the next raise.
+The IF=0 syscall path must not heap-allocate over this table. Double
+indirect / larger-than-u16 lengths remain open.
 
 ## On-disk: GALF slots
 
@@ -147,7 +149,7 @@ slot 1 @ LBA DISK_SECTORS
 | Crash | Mid-write leaves the previous slot intact |
 | Version | Layout bump **refuses** old images (no silent reinterpret) |
 
-### Sealed slots (v6 AEAD → v7 tables → v8 blocks → v9 quotas → v10 shares)
+### Sealed slots (v6…v8 blocks → v9 quotas → v10 shares → v11 indirect)
 
 **Threat (v1):** stolen `galfs.img` must not yield file bytes or password
 hashes offline. Cold-boot RAM and a live compromised kernel are out of
@@ -155,14 +157,15 @@ scope initially.
 
 1. Format creates a random **volume key**.
 2. KEK = PBKDF2(volume passphrase); wrap the volume key (ChaCha20-HMAC).
-3. Encrypt the actor/object/**share/bitmap/block** payload under the volume key.
+3. Encrypt the actor/object/**share/bitmap/block** payload under the volume key
+   (each object carries 8 directs + one single-indirect pointer).
 4. AAD binds magic + version + generation (slot splice rejected).
 5. CRC of ciphertext is a cheap reject before AEAD open.
 
 Bring-up unlock uses a fixed volume passphrase (`galfs` today).
 Interactive unlock is a follow-up. Details: `AUTH.md` → Sealed GALF.
 
-v10 refuses older images; delete `galfs.img` or let format recreate.
+v11 refuses older images; delete `galfs.img` or let format recreate.
 
 ## Boot and format
 
@@ -188,9 +191,10 @@ multi-block persist + dual-slot recover; the host asserts plaintext
 markers are absent from the raw image. `bin/test-galfs-corrupt` boots
 a both-bad image and refuses format. `bin/test-fsck` checks the live
 table after write/truncate/remove. `bin/test-shares` records a durable
-share, proves login re-apply, unshare, and `userdel` cleanup. Shell
-`tokens` lists the task’s cards (`USER_TOKENS`); `share` / `unshare`
-manage durable home shares.
+share, proves login re-apply, unshare, and `userdel` cleanup.
+`bin/test-indirect` writes past the eight directs, truncates through
+indirect, and fills a 32 KiB file. Shell `tokens` lists the task’s
+cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 
 ## Auth interaction
 
@@ -206,9 +210,9 @@ manage durable home shares.
 
 ### Today (through review readiness)
 
-- GALF **v10**: 32 actors / 128 objects / 32 durable shares; 256×512 block
-  pool; 8 directs/file; per-actor object + byte quotas (defaults for new
-  users; admin at table max)
+- GALF **v11**: 32 actors / 128 objects / 32 durable shares; 256×512 block
+  pool; 8 directs + single indirect/file (32 KiB max); per-actor object +
+  byte quotas (defaults for new users; admin at table max)
 - Sealed dual-slot image (288 sectors/slot) on the IDE slave
 - Object + block fill stress; remove reuses blocks without leaks
 - Shell: `ls` / `cat` / `echo` / `touch` / `mkdir` / `rm` / `cp` / `mv`
@@ -251,9 +255,16 @@ manage durable home shares.
 - `crates/galfs-fsck`: CLI over `galfs.img` (bring-up passphrase `galfs`)
 - Runner asserts host check on a guest-written image and both-corrupt
 
+### Single-indirect (landed)
+
+- Object records one `indirect` u16 after the eight direct pointers
+- Append / read / truncate / free walk directs then the indirect block
+- Max file 32 KiB (keeps on-disk `len` as u16); host fsck marks indirect
+- `bin/test-indirect`
+
 ### Remaining (Milestone 45)
 
-- Indirect blocks / larger than 4 KiB
+- Double-indirect / lengths beyond u16
 - Optional fsck repair into a new slot; durable-share disk e2e harness
 
 ### Target storage stack (Milestone 46)
@@ -277,7 +288,7 @@ manage durable home shares.
 | Milestone | Delivers |
 | --- | --- |
 | **44** | Sealed GALF (volume key + AEAD); threat model; no plaintext in image |
-| **45** | Capacity, blocks, ops, sync, quotas, host fsck, durable shares; indirect remain |
+| **45** | Capacity, blocks, ops, sync, quotas, host fsck, shares, single-indirect; polish remain |
 | **46** | Storage stack polish for demos / review |
 
 Until 45 lands, demo limits above are the shipped contract. New code

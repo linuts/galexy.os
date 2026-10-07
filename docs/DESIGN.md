@@ -509,8 +509,9 @@ handle snapshot. `read` copies the next bytes of an open file
 `close` drops the slot. `create(name, len, flags)` (syscall 9) puts a
 path in a fixed galfs table (128 objects, 32 actors with one root each,
 64-byte component names, shared 256×512-byte block pool with 8 direct
-pointers per file / 4 KiB max, no heap on the syscall path — Milestone
-45 / GALF v10). A path ending in `/` is a directory and returns 0. A file returns
+pointers plus one single-indirect block per file / 32 KiB max, no heap
+on the syscall path — Milestone 45 / GALF v11). A path ending in `/` is
+a directory and returns 0. A file returns
 READ|WRITE. `RDX == 1` empties an existing file; any other value creates
 only when the name is new. Uniqueness is the parent plus the component.
 The first path component may be `owner@name` (`dan@Desktop`); without an
@@ -569,30 +570,32 @@ owner, held token rights; needs LIST). Directory listing remains the
 exposes `whoami`, `users`, `useradd`, `userdel`, `su`, `truncate`, and
 `stat` (and resets cwd on `su`). Boot formats one immortal actor,
 `admin`, with Desktop. When the primary IDE slave is present,
-`galfs::init` loads the newest valid GALF **v10** sealed slot (dual
+`galfs::init` loads the newest valid GALF **v11** sealed slot (dual
 288-sector images: wrapped volume key + ChaCha20-HMAC payload of
-actors/objects/shares/bitmap/blocks + per-actor quotas, generation +
-ciphertext CRC + structural checks) or formats that admin tree under a
-fresh volume key; create/remove/append/rename/truncate/useradd/userdel
-/share/unshare sync to the inactive slot and flush the cache; `sync()`
-(syscall 20) is an explicit barrier (shell `sync`). Each actor has
-durable `max_objects` / `max_bytes` (defaults for new users; admin at
-table maxima); create/append/truncate-grow/cross-actor rename return
-`NoResource` when exceeded (`USER_QUOTA` / `USER_SETQUOTA`, shell
-`quota`). `userdel` also refuses open caps on that actor and clears
-tokens and durable shares that named its objects. Empty zeros format;
-both slots with GALF magic that fail checks leave galfs unavailable
-(no silent format). Without a slave the table stays RAM-only. Empty
-files allocate no blocks; append grows through direct pointers; remove
-frees blocks back to the bitmap. `cargo run` attaches a persistent
-`galfs.img`. `bin/test-galfs-disk` proves multi-block persist and
-dual-slot recover; `test-galfs-corrupt` refuses format on a both-bad
-image; `test-fsck` runs live-table consistency after mutate;
-`test-quota` covers object/byte limits; `test-shares` covers durable
-home shares. Host `galfs-fsck` (crate `galexy-galf`) unlocks a sealed
-image and reports structural issues; the runner checks a guest-written
-`galfs.img` offline. `test-scratch` / `test-rm` fill objects to
-`NoResource`; `test-blocks` fills the block pool; `test-ops` covers
+actors/objects/shares/bitmap/blocks + per-actor quotas + single-indirect
+pointers, generation + ciphertext CRC + structural checks) or formats
+that admin tree under a fresh volume key; create/remove/append/rename/
+truncate/useradd/userdel/share/unshare sync to the inactive slot and
+flush the cache; `sync()` (syscall 20) is an explicit barrier (shell
+`sync`). Each actor has durable `max_objects` / `max_bytes` (defaults
+for new users; admin at table maxima); create/append/truncate-grow/
+cross-actor rename return `NoResource` when exceeded (`USER_QUOTA` /
+`USER_SETQUOTA`, shell `quota`). `userdel` also refuses open caps on
+that actor and clears tokens and durable shares that named its objects.
+Empty zeros format; both slots with GALF magic that fail checks leave
+galfs unavailable (no silent format). Without a slave the table stays
+RAM-only. Empty files allocate no blocks; append grows through direct
+then single-indirect pointers (32 KiB max); remove frees blocks back to
+the bitmap. `cargo run` attaches a persistent `galfs.img`.
+`bin/test-galfs-disk` proves multi-block persist and dual-slot recover;
+`test-galfs-corrupt` refuses format on a both-bad image; `test-fsck`
+runs live-table consistency after mutate; `test-quota` covers
+object/byte limits; `test-shares` covers durable home shares;
+`test-indirect` covers past-direct writes and 32 KiB files. Host
+`galfs-fsck` (crate `galexy-galf`) unlocks a sealed image and reports
+structural issues; the runner checks a guest-written `galfs.img`
+offline. `test-scratch` / `test-rm` fill objects to `NoResource`;
+`test-blocks` fills the block pool; `test-ops` covers
 rename/truncate/stat. Shell `tokens` / `USER_TOKENS` lists cards.
 Utilities use `SPAWN_WAIT` so the prompt returns after `ls` / `mkdir`
 exit.
