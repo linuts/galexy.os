@@ -45,6 +45,8 @@ const _: () = assert!(DIRECT_BLOCKS == galexy_galf::DIRECT_BLOCKS);
 const _: () = assert!(BLOCK_SLOTS == galexy_galf::BLOCK_SLOTS);
 /// Tokens one task may hold.
 pub const TOKEN_SLOTS: usize = 8;
+/// Durable home shares recorded in the sealed image (re-applied at login).
+pub const SHARE_SLOTS: usize = 32;
 /// Default object quota for a new non-admin actor (root + Desktop count).
 pub const DEFAULT_MAX_OBJECTS: u16 = 16;
 /// Default byte quota for a new non-admin actor (sum of file lengths).
@@ -199,9 +201,31 @@ impl Object {
     }
 }
 
+/// Durable grant: object + rights installed on `grantee`'s login session.
+#[derive(Clone, Copy)]
+struct Share {
+    used: bool,
+    /// Actor index that receives the card at login.
+    grantee: u8,
+    rights: u8,
+    object: u16,
+}
+
+impl Share {
+    const fn empty() -> Self {
+        Self {
+            used: false,
+            grantee: 0,
+            rights: 0,
+            object: NO_OBJECT,
+        }
+    }
+}
+
 struct Table {
     actors: [Actor; ACTOR_SLOTS],
     objects: [Object; OBJECT_SLOTS],
+    shares: [Share; SHARE_SLOTS],
     blocks: [[u8; BLOCK_SIZE]; BLOCK_SLOTS],
     bitmap: [u8; BITMAP_BYTES],
 }
@@ -210,6 +234,7 @@ const fn empty_table() -> Table {
     Table {
         actors: [Actor::empty(); ACTOR_SLOTS],
         objects: [Object::empty(); OBJECT_SLOTS],
+        shares: [Share::empty(); SHARE_SLOTS],
         blocks: [[0u8; BLOCK_SIZE]; BLOCK_SLOTS],
         bitmap: [0u8; BITMAP_BYTES],
     }
@@ -244,9 +269,9 @@ static ADMIN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16
 /// LBA [`DISK_SECTORS`]. A sync writes the inactive slot with gen+1 and a
 /// CRC, then flushes — a crash mid-write leaves the previous slot intact.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-/// Bumped for per-actor quotas (Milestone 45). v8 images are refused;
+/// Bumped for durable home shares (Milestone 45). Older images are refused;
 /// format recreates admin under a wrapped volume key.
-pub const DISK_VERSION: u16 = 9;
+pub const DISK_VERSION: u16 = 10;
 /// Sectors per dual-slot image (must cover header + sealed payload).
 pub const DISK_SECTORS: usize = 288;
 pub const DISK_SLOT_COUNT: usize = 2;
@@ -255,6 +280,8 @@ const DISK_HEADER: usize = 128;
 /// used(1) + name_len(1) + name(32) + root(2) + salt(8) + hash(16)
 /// + max_objects(2) + max_bytes(4) = 66.
 const ACTOR_ON_DISK: usize = 66;
+/// used(1) + rights(1) + grantee(1) + pad(1) + object(2) = 6.
+const SHARE_ON_DISK: usize = 6;
 const _: () = assert!(DISK_MAGIC[0] == galexy_galf::DISK_MAGIC[0]);
 const _: () = assert!(DISK_MAGIC[1] == galexy_galf::DISK_MAGIC[1]);
 const _: () = assert!(DISK_MAGIC[2] == galexy_galf::DISK_MAGIC[2]);
@@ -263,10 +290,13 @@ const _: () = assert!(DISK_VERSION == galexy_galf::DISK_VERSION);
 const _: () = assert!(DISK_SECTORS == galexy_galf::DISK_SECTORS);
 const _: () = assert!(ACTOR_ON_DISK == galexy_galf::ACTOR_ON_DISK);
 const _: () = assert!(DISK_HEADER == galexy_galf::DISK_HEADER);
+const _: () = assert!(SHARE_SLOTS == galexy_galf::SHARE_SLOTS);
+const _: () = assert!(SHARE_ON_DISK == galexy_galf::SHARE_ON_DISK);
 /// kind+actor+name_len+pad + parent+len + name + direct block indexes.
 const OBJECT_ON_DISK: usize = 8 + NAME_CAP + DIRECT_BLOCKS * 2; // 88
 const PAYLOAD_LEN: usize = ACTOR_ON_DISK * ACTOR_SLOTS
     + OBJECT_ON_DISK * OBJECT_SLOTS
+    + SHARE_ON_DISK * SHARE_SLOTS
     + BITMAP_BYTES
     + BLOCK_SLOTS * BLOCK_SIZE;
 const _: () = assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * ata::SECTOR);
@@ -563,6 +593,14 @@ fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; ata::SECTOR]
         }
         off += OBJECT_ON_DISK;
     }
+    for share in &table.shares {
+        flat[off] = u8::from(share.used);
+        flat[off + 1] = share.rights;
+        flat[off + 2] = share.grantee;
+        flat[off + 3] = 0;
+        flat[off + 4..off + 6].copy_from_slice(&share.object.to_le_bytes());
+        off += SHARE_ON_DISK;
+    }
     flat[off..off + BITMAP_BYTES].copy_from_slice(&table.bitmap);
     off += BITMAP_BYTES;
     for block in &table.blocks {
@@ -725,6 +763,14 @@ fn decode_table(
         }
         off += OBJECT_ON_DISK;
     }
+    for share in &mut table.shares {
+        *share = Share::empty();
+        share.used = flat[off] != 0;
+        share.rights = flat[off + 1];
+        share.grantee = flat[off + 2];
+        share.object = u16::from_le_bytes([flat[off + 4], flat[off + 5]]);
+        off += SHARE_ON_DISK;
+    }
     table.bitmap.copy_from_slice(&flat[off..off + BITMAP_BYTES]);
     off += BITMAP_BYTES;
     for block in &mut table.blocks {
@@ -760,6 +806,19 @@ fn validate_table(table: &Table) -> bool {
     }
     if !saw_admin {
         return false;
+    }
+    for share in &table.shares {
+        if !share.used {
+            continue;
+        }
+        if share.rights == 0
+            || share.grantee as usize >= ACTOR_SLOTS
+            || !table.actors[share.grantee as usize].used
+            || share.object as usize >= OBJECT_SLOTS
+            || table.objects[share.object as usize].kind == KIND_EMPTY
+        {
+            return false;
+        }
     }
     let mut seen = [false; BLOCK_SLOTS];
     for (i, obj) in table.objects.iter().enumerate() {
@@ -1025,7 +1084,122 @@ pub fn remove_user(name: &str) -> Result<(), SysError> {
         table.objects[di] = Object::empty();
     }
     table.objects[root as usize] = Object::empty();
+    // Drop durable shares naming this actor or its (now-empty) objects.
+    for share in &mut table.shares {
+        if !share.used {
+            continue;
+        }
+        if share.grantee as usize == ai
+            || share.object == root
+            || desktop == Some(share.object as usize)
+        {
+            *share = Share::empty();
+        }
+    }
     table.actors[ai] = Actor::empty();
+    Ok(())
+}
+
+/// Records a durable home share for actor `grantee` on `path`.
+///
+/// Re-applied at login. Caller must already hold `rights` on the object
+/// (same confused-deputy rule as live `grant`).
+pub fn add_share(
+    root: u16,
+    tokens: &[Token; TOKEN_SLOTS],
+    path: &str,
+    rights: u8,
+    grantee: &str,
+) -> Result<(), SysError> {
+    if rights == 0 {
+        return Err(SysError::BadValue);
+    }
+    let object = resolve_and_check(root, tokens, path, rights)?;
+    let mut table = TABLE.lock();
+    let Some(gi) = table.actors.iter().position(|a| a.used && a.name_is(grantee)) else {
+        return Err(SysError::NotFound);
+    };
+    // Merge into an existing share on the same object+grantee when present.
+    for share in &mut table.shares {
+        if share.used && share.grantee as usize == gi && share.object == object {
+            share.rights |= rights;
+            drop(table);
+            sync();
+            return Ok(());
+        }
+    }
+    let Some(slot) = table.shares.iter().position(|s| !s.used) else {
+        return Err(SysError::NoResource);
+    };
+    table.shares[slot] = Share {
+        used: true,
+        grantee: gi as u8,
+        rights,
+        object,
+    };
+    drop(table);
+    sync();
+    Ok(())
+}
+
+/// Clears durable share rights for actor `grantee` on `path`.
+pub fn remove_share(
+    root: u16,
+    tokens: &[Token; TOKEN_SLOTS],
+    path: &str,
+    rights: u8,
+    grantee: &str,
+) -> Result<(), SysError> {
+    if rights == 0 {
+        return Err(SysError::BadValue);
+    }
+    let object = resolve_and_check(root, tokens, path, rights)?;
+    let mut table = TABLE.lock();
+    let Some(gi) = table.actors.iter().position(|a| a.used && a.name_is(grantee)) else {
+        return Err(SysError::NotFound);
+    };
+    let mut found = false;
+    for share in &mut table.shares {
+        if share.used && share.grantee as usize == gi && share.object == object {
+            found = true;
+            share.rights &= !rights;
+            if share.rights == 0 {
+                *share = Share::empty();
+            }
+        }
+    }
+    if !found {
+        return Err(SysError::NotFound);
+    }
+    drop(table);
+    sync();
+    Ok(())
+}
+
+/// Installs durable shares for the actor that owns `root` into `tokens`.
+///
+/// Best-effort: a full token table skips remaining shares (`Ok` still).
+pub fn apply_shares(root: u16, tokens: &mut [Token; TOKEN_SLOTS]) -> Result<(), SysError> {
+    let table = TABLE.lock();
+    if root as usize >= OBJECT_SLOTS || table.objects[root as usize].kind != KIND_DIR {
+        return Err(SysError::NotFound);
+    }
+    let ai = table.objects[root as usize].actor as usize;
+    if ai >= ACTOR_SLOTS || !table.actors[ai].used {
+        return Err(SysError::NotFound);
+    }
+    for share in &table.shares {
+        if !share.used || share.grantee as usize != ai {
+            continue;
+        }
+        if share.object as usize >= OBJECT_SLOTS
+            || table.objects[share.object as usize].kind == KIND_EMPTY
+        {
+            continue;
+        }
+        // Ignore NoResource — login still succeeds with ALL on home.
+        let _ = push_token(tokens, share.object, share.rights);
+    }
     Ok(())
 }
 

@@ -2038,11 +2038,12 @@ pub(crate) fn task_logout() -> Result<(), SysError> {
     })
 }
 
-/// Install `ALL` on `target` and the grants that go with that actor.
+/// Install `ALL` on `target`, durable home shares, and grants for that actor.
 fn install_session(caller: &mut Thread, target: u16) -> Result<(), SysError> {
     caller.fs_root = target;
     caller.fs_tokens = [galfs::Token::empty(); galfs::TOKEN_SLOTS];
     galfs::push_token(&mut caller.fs_tokens, target, galfs::RIGHT_ALL)?;
+    galfs::apply_shares(target, &mut caller.fs_tokens)?;
     let admin = galfs::is_admin_root(target);
     caller.born_admin = admin;
     caller.grants = if admin {
@@ -2051,6 +2052,40 @@ fn install_session(caller: &mut Thread, target: u16) -> Result<(), SysError> {
         Grants::session()
     };
     Ok(())
+}
+
+/// Durable home share for actor `grantee` (survives logout; reapplied at login).
+pub(crate) fn task_share(path: &str, rights: u8, grantee: &str) -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    let (fs_root, fs_tokens) = interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let caller = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+        if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        Ok((caller.fs_root, caller.fs_tokens))
+    })?;
+    galfs::add_share(fs_root, &fs_tokens, path, rights, grantee)
+}
+
+/// Clears durable share rights for actor `grantee`.
+pub(crate) fn task_unshare(path: &str, rights: u8, grantee: &str) -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    let (fs_root, fs_tokens) = interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let caller = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+        if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        Ok((caller.fs_root, caller.fs_tokens))
+    })?;
+    galfs::remove_share(fs_root, &fs_tokens, path, rights, grantee)
 }
 
 fn clear_session(caller: &mut Thread) {

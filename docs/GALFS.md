@@ -25,7 +25,8 @@ We keep:
 - **Tokens as access cards** — rights on an object id, not a path string
 - **Actors as homes** — each account owns one root (+ `Desktop/`)
 - **Spawn attenuation** — bare programs inherit empty tokens
-- **Explicit share** — `grant` / `revoke` move cards between live tasks
+- **Explicit share** — `grant` / `revoke` move cards between live tasks;
+  `share` / `unshare` record durable home shares re-applied at login
 
 We do **not** claim POSIX, POSIX ACLs, or a full VFS stack. galfs is the
 Galexy ABI for user trees.
@@ -108,14 +109,15 @@ child’s files (`PROCESS.md`).
 
 ## Table limits (today)
 
-Milestone **45** / GALF **v9**: actor/object tables plus a shared block
-pool and per-actor quotas. Empty files cost an inode only; bytes live in
-direct blocks.
+Milestone **45** / GALF **v10**: actor/object tables plus a shared block
+pool, per-actor quotas, and durable home shares. Empty files cost an
+inode only; bytes live in direct blocks.
 
 | Resource | Cap |
 | --- | --- |
 | Actors | 32 |
 | Objects (files + dirs + roots) | 128 |
+| Durable home shares | 32 |
 | Block size | 512 bytes |
 | Direct blocks per file | 8 (max file 4 KiB) |
 | Block pool | 256 blocks |
@@ -145,7 +147,7 @@ slot 1 @ LBA DISK_SECTORS
 | Crash | Mid-write leaves the previous slot intact |
 | Version | Layout bump **refuses** old images (no silent reinterpret) |
 
-### Sealed slots (v6 AEAD → v7 tables → v8 blocks → v9 quotas)
+### Sealed slots (v6 AEAD → v7 tables → v8 blocks → v9 quotas → v10 shares)
 
 **Threat (v1):** stolen `galfs.img` must not yield file bytes or password
 hashes offline. Cold-boot RAM and a live compromised kernel are out of
@@ -153,14 +155,14 @@ scope initially.
 
 1. Format creates a random **volume key**.
 2. KEK = PBKDF2(volume passphrase); wrap the volume key (ChaCha20-HMAC).
-3. Encrypt the actor/object/**bitmap/block** payload under the volume key.
+3. Encrypt the actor/object/**share/bitmap/block** payload under the volume key.
 4. AAD binds magic + version + generation (slot splice rejected).
 5. CRC of ciphertext is a cheap reject before AEAD open.
 
 Bring-up unlock uses a fixed volume passphrase (`galfs` today).
 Interactive unlock is a follow-up. Details: `AUTH.md` → Sealed GALF.
 
-v9 refuses older images; delete `galfs.img` or let format recreate.
+v10 refuses older images; delete `galfs.img` or let format recreate.
 
 ## Boot and format
 
@@ -175,7 +177,7 @@ v9 refuses older images; delete `galfs.img` or let format recreate.
    `useradd` / `userdel` / `passwd`, …) sync the inactive slot + flush
    when disk-backed. `Syscall::Sync` / shell `sync` is an extra barrier.
 5. `userdel` refuses `admin`, non-empty trees, and roots still in use;
-   clears tokens that named that actor’s objects.
+   clears tokens and durable shares that named that actor’s objects.
 
 Boot serial names the winning slot and generation; a bad newer sibling
 logs `(recovered from bad sibling)`.
@@ -185,8 +187,10 @@ block pool and reuses after remove. `bin/test-galfs-disk` proves
 multi-block persist + dual-slot recover; the host asserts plaintext
 markers are absent from the raw image. `bin/test-galfs-corrupt` boots
 a both-bad image and refuses format. `bin/test-fsck` checks the live
-table after write/truncate/remove. Shell `tokens` lists the task’s
-cards (`USER_TOKENS`).
+table after write/truncate/remove. `bin/test-shares` records a durable
+share, proves login re-apply, unshare, and `userdel` cleanup. Shell
+`tokens` lists the task’s cards (`USER_TOKENS`); `share` / `unshare`
+manage durable home shares.
 
 ## Auth interaction
 
@@ -202,12 +206,13 @@ cards (`USER_TOKENS`).
 
 ### Today (through review readiness)
 
-- GALF **v9**: 32 actors / 128 objects; 256×512 block pool; 8 directs/file;
-  per-actor object + byte quotas (defaults for new users; admin at table max)
+- GALF **v10**: 32 actors / 128 objects / 32 durable shares; 256×512 block
+  pool; 8 directs/file; per-actor object + byte quotas (defaults for new
+  users; admin at table max)
 - Sealed dual-slot image (288 sectors/slot) on the IDE slave
 - Object + block fill stress; remove reuses blocks without leaks
 - Shell: `ls` / `cat` / `echo` / `touch` / `mkdir` / `rm` / `cp` / `mv`
-  / `grant` / `revoke` / `quota` / `tokens` / `sync` via utilities + syscalls
+  / `grant` / `revoke` / `share` / `unshare` / `quota` / `tokens` / `sync`
 - Admin operator bypass still broad (narrow in Milestone 43 leftovers)
 
 ### Ops (landed)
@@ -227,10 +232,18 @@ cards (`USER_TOKENS`).
 
 ### Quotas (landed)
 
-- Each actor stores `max_objects` / `max_bytes` (durable on GALF v9)
+- Each actor stores `max_objects` / `max_bytes` (durable on GALF v9+)
 - New users: 16 objects / 16 KiB; admin: table + pool maxima
 - Enforced on create, append (short write), truncate grow, cross-actor rename
 - `USER_QUOTA` / `USER_SETQUOTA`; shell `quota` and `quota set`
+
+### Durable home shares (landed)
+
+- GALF v10 share table (32 × 6-byte records): grantee actor + object + rights
+- `Share` / `Unshare` syscalls; shell `share` / `unshare`
+- Login / `su` re-applies shares into the session token table
+- `userdel` drops shares naming the deleted actor or its removed objects
+- Live `grant`/`revoke` remain task-scoped (logout clears those cards)
 
 ### Host fsck (landed)
 
@@ -241,7 +254,7 @@ cards (`USER_TOKENS`).
 ### Remaining (Milestone 45)
 
 - Indirect blocks / larger than 4 KiB
-- Durable shares; optional fsck repair into a new slot
+- Optional fsck repair into a new slot; durable-share disk e2e harness
 
 ### Target storage stack (Milestone 46)
 
@@ -264,7 +277,7 @@ cards (`USER_TOKENS`).
 | Milestone | Delivers |
 | --- | --- |
 | **44** | Sealed GALF (volume key + AEAD); threat model; no plaintext in image |
-| **45** | Capacity, blocks, ops, sync, quotas, host fsck; durable shares remain |
+| **45** | Capacity, blocks, ops, sync, quotas, host fsck, durable shares; indirect remain |
 | **46** | Storage stack polish for demos / review |
 
 Until 45 lands, demo limits above are the shipped contract. New code

@@ -18,8 +18,8 @@
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
     arg, entry, files_cap, grant, keyboard_cap, read, reboot, revoke, shutdown, spawn_with,
-    stats_cap, sync, tasks_cap, threads_cap, user, user_login, user_logout, user_name,
-    user_name_pass, user_passwd, user_quota, user_setquota, write_console, yield_now,
+    share, stats_cap, sync, tasks_cap, threads_cap, unshare, user, user_login, user_logout,
+    user_name, user_name_pass, user_passwd, user_quota, user_setquota, write_console, yield_now,
 };
 
 entry!(main);
@@ -287,9 +287,10 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
     }
     if line == b"help" {
         write_console(b"commands: help, ls, echo, cat, touch, mkdir, cd, rm,\n");
-        write_console(b"cp, mv, truncate, stat, grant, revoke, whoami, users,\n");
-        write_console(b"tokens, quota, useradd, userdel, login, logout, passwd, su,\n");
-        write_console(b"sync, stats, tasks, threads, about, clear\n");
+        write_console(b"cp, mv, truncate, stat, grant, revoke, share, unshare,\n");
+        write_console(b"whoami, users, tokens, quota, useradd, userdel,\n");
+        write_console(b"login, logout, passwd, su, sync, stats, tasks, threads,\n");
+        write_console(b"about, clear\n");
         write_console(b"login [user] [pass] - omit pass for a masked Password: prompt\n");
         write_console(b"passwd [name] - masked Password: + Confirm: (no inline secret)\n");
         write_console(b"useradd <name> [pass] - omit pass for a masked Password: prompt\n");
@@ -297,6 +298,7 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
         write_console(b"logout returns to the login screen; Esc/Ctrl-C cancels a prompt\n");
         write_console(b"default admin/admin must passwd before other commands\n");
         write_console(b"grant/revoke: <rights> <path> <task>  (r w l c x a=all)\n");
+        write_console(b"share/unshare: <rights> <path> <user> (durable; login reapplies)\n");
         write_console(b"su <user> needs an access card; login uses a password\n");
         write_console(b"power: shutdown, reboot\n");
         prompt(cwd);
@@ -435,6 +437,14 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
     }
     if let Some(rest) = arg_of(line, b"revoke") {
         do_token(cwd, rest, false);
+        return None;
+    }
+    if let Some(rest) = arg_of(line, b"share") {
+        do_share(cwd, rest, true);
+        return None;
+    }
+    if let Some(rest) = arg_of(line, b"unshare") {
+        do_share(cwd, rest, false);
         return None;
     }
     if let Some(rest) = arg_of(line, b"cp") {
@@ -621,51 +631,15 @@ fn do_token(cwd: &Cwd, rest: &[u8], is_grant: bool) {
     } else {
         &b"usage: revoke <rights> <path> <task>\n"[..]
     };
-    let Some(sp1) = rest.iter().position(|b| *b == b' ') else {
-        write_console(usage);
+    let Some((rights, path, target)) = parse_rights_path_target(rest, usage) else {
         prompt(cwd);
         return;
     };
-    let rights_s = &rest[..sp1];
-    let after = trim(&rest[sp1 + 1..]);
-    let Some(sp2) = after.iter().position(|b| *b == b' ') else {
-        write_console(usage);
-        prompt(cwd);
-        return;
-    };
-    let path = trim(&after[..sp2]);
-    let task = trim(&after[sp2 + 1..]);
-    if rights_s.is_empty() || path.is_empty() || task.is_empty() || !path_arg_ok(path) {
-        write_console(usage);
-        prompt(cwd);
-        return;
-    }
-    if !task
+    if !target
         .iter()
         .all(|b| b.is_ascii_alphanumeric() || *b == b'.' || *b == b'_' || *b == b'-')
     {
         write_console(b"bad task name\n");
-        prompt(cwd);
-        return;
-    }
-    let mut rights = 0u64;
-    for &b in rights_s {
-        rights |= match b {
-            b'r' | b'R' => galexy_abi::TOKEN_READ,
-            b'w' | b'W' => galexy_abi::TOKEN_WRITE,
-            b'l' | b'L' => galexy_abi::TOKEN_LIST,
-            b'c' | b'C' => galexy_abi::TOKEN_CREATE,
-            b'x' | b'X' => galexy_abi::TOKEN_REMOVE,
-            b'a' | b'A' => galexy_abi::TOKEN_ALL,
-            _ => {
-                write_console(b"rights are r,w,l,c,x,a\n");
-                prompt(cwd);
-                return;
-            }
-        };
-    }
-    if rights == 0 {
-        write_console(usage);
         prompt(cwd);
         return;
     }
@@ -676,9 +650,9 @@ fn do_token(cwd: &Cwd, rest: &[u8], is_grant: bool) {
         return;
     };
     let result = if is_grant {
-        grant(&full[..n], rights, task)
+        grant(&full[..n], rights, target)
     } else {
-        revoke(&full[..n], rights, task)
+        revoke(&full[..n], rights, target)
     };
     if !result.ok {
         write_console(if is_grant { b"grant: " } else { b"revoke: " });
@@ -691,6 +665,97 @@ fn do_token(cwd: &Cwd, rest: &[u8], is_grant: bool) {
         };
     }
     prompt(cwd);
+}
+
+/// `share`/`unshare` `<rights> <path> <user>` — durable; reapplied at login.
+fn do_share(cwd: &Cwd, rest: &[u8], is_share: bool) {
+    let rest = trim(rest);
+    let usage = if is_share {
+        &b"usage: share <rights> <path> <user>\n"[..]
+    } else {
+        &b"usage: unshare <rights> <path> <user>\n"[..]
+    };
+    let Some((rights, path, user)) = parse_rights_path_target(rest, usage) else {
+        prompt(cwd);
+        return;
+    };
+    if !user
+        .iter()
+        .all(|b| b.is_ascii_alphanumeric() || *b == b'.' || *b == b'_' || *b == b'-')
+    {
+        write_console(b"bad user name\n");
+        prompt(cwd);
+        return;
+    }
+    let mut full = [0u8; PATH_MAX];
+    let Some(n) = compose(cwd, path, path.ends_with(b"/"), &mut full) else {
+        write_console(b"path too long\n");
+        prompt(cwd);
+        return;
+    };
+    let result = if is_share {
+        share(&full[..n], rights, user)
+    } else {
+        unshare(&full[..n], rights, user)
+    };
+    if !result.ok {
+        write_console(if is_share {
+            b"share: "
+        } else {
+            b"unshare: "
+        });
+        match SysError::from_code(result.value) {
+            SysError::NotFound => write_console(b"not found\n"),
+            SysError::AccessDenied => write_console(b"access denied\n"),
+            SysError::NoResource => write_console(b"no share slot\n"),
+            SysError::BadValue => write_console(b"bad value\n"),
+            _ => write_console(b"failed\n"),
+        };
+    }
+    prompt(cwd);
+}
+
+/// Shared parse for grant/revoke/share/unshare: `<rights> <path> <target>`.
+fn parse_rights_path_target<'a>(
+    rest: &'a [u8],
+    usage: &[u8],
+) -> Option<(u64, &'a [u8], &'a [u8])> {
+    let Some(sp1) = rest.iter().position(|b| *b == b' ') else {
+        write_console(usage);
+        return None;
+    };
+    let rights_s = &rest[..sp1];
+    let after = trim(&rest[sp1 + 1..]);
+    let Some(sp2) = after.iter().position(|b| *b == b' ') else {
+        write_console(usage);
+        return None;
+    };
+    let path = trim(&after[..sp2]);
+    let target = trim(&after[sp2 + 1..]);
+    if rights_s.is_empty() || path.is_empty() || target.is_empty() || !path_arg_ok(path) {
+        write_console(usage);
+        return None;
+    }
+    let mut rights = 0u64;
+    for &b in rights_s {
+        rights |= match b {
+            b'r' | b'R' => galexy_abi::TOKEN_READ,
+            b'w' | b'W' => galexy_abi::TOKEN_WRITE,
+            b'l' | b'L' => galexy_abi::TOKEN_LIST,
+            b'c' | b'C' => galexy_abi::TOKEN_CREATE,
+            b'x' | b'X' => galexy_abi::TOKEN_REMOVE,
+            b'a' | b'A' => galexy_abi::TOKEN_ALL,
+            _ => {
+                write_console(b"rights are r,w,l,c,x,a\n");
+                return None;
+            }
+        };
+    }
+    if rights == 0 {
+        write_console(usage);
+        return None;
+    }
+    Some((rights, path, target))
 }
 
 /// `cp`/`mv` `<src> <dst>` — both paths composed against cwd.

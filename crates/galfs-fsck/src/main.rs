@@ -88,5 +88,6 @@ fn print_issue(issue: Issue) {
         Issue::BlockMissing { block } => println!("error: block_missing block={block}"),
         Issue::FileTooLarge { object } => println!("error: file_too_large object={object}"),
         Issue::DirHasLength { object } => println!("error: dir_has_length object={object}"),
+        Issue::BadShare { share } => println!("error: bad_share share={share}"),
     }
 }

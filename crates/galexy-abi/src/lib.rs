@@ -459,11 +459,23 @@ pub enum Syscall {
     /// successful no-op. A present but corrupt/locked volume is
     /// `Unsupported`. Mutates already sync; this is an explicit barrier.
     Sync,
+    /// `share(path, len, rights, user, user_len)` — durable home share.
+    ///
+    /// Same register layout as [`Syscall::Grant`], but the target is an
+    /// **actor name** (not a live task). The share is stored in the GALF
+    /// image and re-applied at that actor's next login. Caller must hold
+    /// every right being shared. A full share table is `NoResource`.
+    Share,
+    /// `unshare(path, len, rights, user, user_len)` — clear durable rights.
+    ///
+    /// Same layout as [`Syscall::Share`]. Removes `rights` from the
+    /// matching share; an empty share slot is freed.
+    Unshare,
 }
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (lifting the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 21] = [
+pub const SYSCALLS: [Syscall; 23] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -485,6 +497,8 @@ pub const SYSCALLS: [Syscall; 21] = [
     Syscall::Truncate,
     Syscall::Stat,
     Syscall::Sync,
+    Syscall::Share,
+    Syscall::Unshare,
 ];
 
 /// `stat` kind: regular file.
