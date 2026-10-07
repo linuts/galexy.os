@@ -27,7 +27,7 @@ real KDF later without changing the syscall shape.
 | Pre-login | Seat with no actor: `fs_root = none`, empty tokens, console+keyboard only |
 
 There is **no guest account**. A seat is either logged in as a real actor
-or logged out waiting for `login`.
+or logged out on the login screen.
 
 `RIGHT_ALL` on an actor’s **root** is both that actor’s home session and
 a shareable **login card**. Paths of the form `/eve@/` name that root for
@@ -38,10 +38,19 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
 1. Format creates immortal `admin` with `Desktop/` and password `admin`.
 2. **Every F-key shell (F1–F12)** starts **logged out**: no root, no
    tokens, grants = console + keyboard only (no loader, no queries, no
-   power). Prompt is `galexy>`.
-3. `login <user> <password>` is required before utilities, galfs, or
-   power. After login the prompt is `user@galexy>`.
+   power). The seat shows a login screen:
+
+   ```text
+   Galexy.OS v0.1.0 (tty1)
+
+   Login as: _
+   Password: ********
+   ```
+
+   Wrong password prints `Login incorrect` and repeats the screen.
+3. After a successful password login the prompt is `user@galexy>`.
 4. `whoami` while logged out fails (`AccessDenied`).
+5. `logout` returns to the login screen (not a shell prompt).
 
 ## Password login and logout
 
@@ -55,7 +64,8 @@ logout
 receive the power grant; other users get loader + queries without power.
 
 `logout` clears tokens, sets `fs_root = none`, restores pre-login grants,
-and resets the shell cwd. The seat is ready for the next `login`.
+and returns the shell to the login screen. The CLI form `login <user>
+<password>` still switches identity from an already-logged-in seat.
 
 ```text
 useradd <name> <password>     # admin only

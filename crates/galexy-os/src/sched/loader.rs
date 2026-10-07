@@ -89,16 +89,18 @@ pub fn spawn_program_bsp(name: &str, bytes: &[u8]) -> ProgramRegion {
 
 /// Pins a shell named `name` to the BSP on console `tty`.
 ///
-/// Every seat starts **logged out** (console + keyboard only). `login`
-/// installs the session; `logout` returns to this state.
+/// Every seat starts **logged out** (console + keyboard only). The startup
+/// argument is a single byte: 1-based TTY index for the login banner.
+/// `login` installs the session; `logout` returns to the login screen.
 pub fn spawn_shell_on(name: &str, bytes: &[u8], tty: u8) -> ProgramRegion {
+    let tty_arg = [tty.wrapping_add(1)];
     spawn_program_placed(
         name,
         bytes,
         Some(0),
         true,
         Grants::pre_login(),
-        &[],
+        &tty_arg,
         tty,
         crate::sched::galfs::unauth_cred(),
     )

@@ -8,17 +8,18 @@
 //! again if it faults. The current directory lives here and starts over
 //! at `/` after a restart. Archive names stay at `/`. A path may begin
 //! with `/`, and the first component may be `owner@name` (`/dan@Desktop`).
-//! The prompt is `galexy>` when logged out, else `user@galexy>`
-//! (with `:/path` when cwd is not `/`).
+//! Boot shows a login screen (`Galexy.OS v… (ttyN)`). After login the
+//! prompt is `user@galexy>` (with `:/path` when cwd is not `/`). `logout`
+//! returns to the login screen.
 
 #![no_std]
 #![no_main]
 
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
-    entry, files_cap, grant, keyboard_cap, read, reboot, revoke, shutdown, spawn_with, stats_cap,
-    tasks_cap, threads_cap, user, user_login, user_logout, user_name, user_name_pass, user_passwd,
-    write_console, yield_now,
+    arg, entry, files_cap, grant, keyboard_cap, read, reboot, revoke, shutdown, spawn_with,
+    stats_cap, tasks_cap, threads_cap, user, user_login, user_logout, user_name, user_name_pass,
+    user_passwd, write_console, yield_now,
 };
 
 entry!(main);
@@ -26,30 +27,151 @@ entry!(main);
 const LINE_MAX: usize = 80;
 const PATH_MAX: usize = 64;
 const USER_MAX: usize = 16;
+const PASS_MAX: usize = 64;
 
 struct Cwd {
     buf: [u8; PATH_MAX],
     len: usize,
 }
 
+enum ReplEnd {
+    Logout,
+    Die(i32),
+}
+
 fn main() -> i32 {
     let kbd = keyboard_cap();
-    let mut line = [0u8; LINE_MAX];
-    let mut len = 0usize;
+    let tty = tty_number();
     let mut cwd = Cwd {
         buf: [0; PATH_MAX],
         len: 0,
     };
-    prompt(&cwd);
+    loop {
+        if !session_logged_in() {
+            if !login_screen(kbd, tty) {
+                return 1;
+            }
+            cwd.len = 0;
+        }
+        match repl(kbd, &mut cwd) {
+            ReplEnd::Logout => continue,
+            ReplEnd::Die(code) => return code,
+        }
+    }
+}
+
+/// 1-based TTY from the loader startup arg, or 1 if missing.
+fn tty_number() -> u8 {
+    match arg().first() {
+        Some(&n) if (1..=12).contains(&n) => n,
+        _ => 1,
+    }
+}
+
+fn session_logged_in() -> bool {
+    let mut name = [0u8; USER_MAX];
+    let got = user(&mut name, galexy_abi::USER_WHOAMI);
+    got.ok && got.value > 0
+}
+
+/// Login banner + prompts until a password succeeds.
+fn login_screen(kbd: Cap, tty: u8) -> bool {
+    loop {
+        write_console(&[0x0c]);
+        write_console(b"Galexy.OS v");
+        write_console(galexy_abi::OS_VERSION.as_bytes());
+        write_console(b" (tty");
+        write_tty_digits(tty);
+        write_console(b")\n\n");
+        write_console(b"Login as: ");
+        let mut name = [0u8; USER_MAX];
+        let Some(nlen) = read_line(kbd, &mut name, false) else {
+            return false;
+        };
+        if nlen == 0 {
+            continue;
+        }
+        write_console(b"Password: ");
+        let mut pass = [0u8; PASS_MAX];
+        let Some(plen) = read_line(kbd, &mut pass, true) else {
+            return false;
+        };
+        let result = user_login(&name[..nlen], &pass[..plen]);
+        for b in pass.iter_mut() {
+            *b = 0;
+        }
+        if result.ok {
+            write_console(b"\n");
+            return true;
+        }
+        write_console(b"\nLogin incorrect\n");
+        for _ in 0..30 {
+            yield_now();
+        }
+    }
+}
+
+fn write_tty_digits(tty: u8) {
+    if tty >= 10 {
+        write_console(&[b'0' + tty / 10, b'0' + tty % 10]);
+    } else {
+        write_console(&[b'0' + tty]);
+    }
+}
+
+/// Reads a line. When `secret`, echoes `*` instead of the character.
+fn read_line(kbd: Cap, buf: &mut [u8], secret: bool) -> Option<usize> {
+    let mut len = 0usize;
+    loop {
+        let mut chunk = [0u8; 8];
+        let got = read(kbd, &mut chunk);
+        if !got.ok {
+            write_console(b"\nread: keyboard denied\n");
+            return None;
+        }
+        if got.value == 0 {
+            yield_now();
+            continue;
+        }
+        let n = got.value as usize;
+        for &byte in &chunk[..n.min(chunk.len())] {
+            match byte {
+                b'\n' | b'\r' => {
+                    write_console(b"\n");
+                    return Some(len);
+                }
+                0x08 => {
+                    if len > 0 {
+                        len -= 1;
+                        buf[len] = 0;
+                        write_console(&[0x08, b' ', 0x08]);
+                    }
+                }
+                b if (b.is_ascii_graphic() || (!secret && b == b' ')) && len < buf.len() => {
+                    buf[len] = b;
+                    len += 1;
+                    if secret {
+                        write_console(b"*");
+                    } else {
+                        write_console(&[b]);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn repl(kbd: Cap, cwd: &mut Cwd) -> ReplEnd {
+    let mut line = [0u8; LINE_MAX];
+    let mut len = 0usize;
+    prompt(cwd);
     loop {
         let mut buf = [0u8; 8];
         let got = read(kbd, &mut buf);
         if !got.ok {
-            // Without a keyboard grant this would spin forever (the old
-            // `spawn shell` failure mode). Exit so the supervisor can
-            // load a real console shell if this was one.
             write_console(b"\nread: keyboard denied\n");
-            return 1;
+            return ReplEnd::Die(1);
         }
         if got.value == 0 {
             yield_now();
@@ -60,7 +182,9 @@ fn main() -> i32 {
             match byte {
                 b'\n' | b'\r' => {
                     write_console(b"\n");
-                    dispatch(trim(&line[..len]), &mut cwd);
+                    if let Some(end) = dispatch(trim(&line[..len]), cwd) {
+                        return end;
+                    }
                     len = 0;
                 }
                 0x08 => {
@@ -80,149 +204,156 @@ fn main() -> i32 {
     }
 }
 
-fn dispatch(line: &[u8], cwd: &mut Cwd) {
+/// `Some` ends the REPL. `None` keeps reading.
+fn dispatch(line: &[u8], cwd: &mut Cwd) -> Option<ReplEnd> {
     if line.is_empty() {
         prompt(cwd);
-        return;
+        return None;
     }
     if line == b"crash" {
         // Test seam: a null read kills this task. The kernel loads a new shell.
         unsafe {
             core::ptr::read_volatile(core::ptr::null::<u8>());
         }
-        return;
+        return None;
     }
     if line == b"help" {
         write_console(b"commands: help, ls, echo, cat, touch, mkdir, cd, rm,\n");
         write_console(b"cp, mv, grant, revoke, whoami, users, useradd, userdel,\n");
         write_console(b"login, logout, passwd, su, stats, tasks, threads, about, clear\n");
-        write_console(b"login <user> <pass>  |  useradd <user> <pass>\n");
+        write_console(b"login <user> <pass> switches identity; logout returns to login\n");
         write_console(b"grant/revoke: <rights> <path> <task>  (r w l c x a=all)\n");
         write_console(b"su <user> needs an access card; login uses a password\n");
-        write_console(b"every seat starts logged out; logout clears the session\n");
         write_console(b"power: shutdown, reboot\n");
         prompt(cwd);
-        return;
+        return None;
     }
     if line == b"about" {
-        write_console(b"galexy.os - a small Rust OS\n");
+        write_console(b"Galexy.OS v");
+        write_console(galexy_abi::OS_VERSION.as_bytes());
+        write_console(b" - a small Rust OS\n");
         write_console(b"this shell is a ring-3 program\n");
         prompt(cwd);
-        return;
+        return None;
     }
     if line == b"ls" {
         ls(cwd);
-        return;
+        return None;
     }
     if line == b"stats" {
         show(stats_cap(), cwd);
-        return;
+        return None;
     }
     if line == b"tasks" {
         show(tasks_cap(), cwd);
-        return;
+        return None;
     }
     if line == b"threads" {
         show(threads_cap(), cwd);
-        return;
+        return None;
     }
     if line == b"shutdown" {
         let _ = shutdown();
         write_console(b"shutdown: the machine stayed up\n");
         prompt(cwd);
-        return;
+        return None;
     }
     if line == b"reboot" {
         let _ = reboot();
         write_console(b"reboot: the machine stayed up\n");
         prompt(cwd);
-        return;
+        return None;
     }
     if line == b"clear" {
         write_console(&[0x0c]);
         prompt(cwd);
-        return;
+        return None;
     }
     if let Some(name) = arg_of(line, b"echo") {
         echo(cwd, name);
-        return;
+        return None;
     }
     if let Some(name) = arg_of(line, b"cat") {
         cat(cwd, name);
-        return;
+        return None;
     }
     if let Some(name) = arg_of(line, b"touch") {
         touch(cwd, name);
-        return;
+        return None;
     }
     if let Some(name) = arg_of(line, b"mkdir") {
         mkdir(cwd, name);
-        return;
+        return None;
     }
     if let Some(name) = arg_of(line, b"cd") {
         cd(cwd, name);
-        return;
+        return None;
     }
     if let Some(name) = arg_of(line, b"rm") {
         rm(cwd, name);
-        return;
+        return None;
     }
     if line == b"whoami" {
         whoami(cwd);
-        return;
+        return None;
     }
     if line == b"users" {
         users_cmd(cwd);
-        return;
+        return None;
     }
     if let Some(rest) = arg_of(line, b"useradd") {
         user_pass_op(cwd, rest, galexy_abi::USER_ADD, b"useradd");
-        return;
+        return None;
     }
     if let Some(rest) = arg_of(line, b"userdel") {
         user_op(cwd, rest, galexy_abi::USER_DEL, b"userdel");
-        return;
+        return None;
     }
     if let Some(rest) = arg_of(line, b"login") {
         user_pass_op(cwd, rest, galexy_abi::USER_LOGIN, b"login");
-        return;
+        return None;
     }
     if line == b"logout" {
         let result = user_logout();
-        report_user(cwd, b"logout", result, true);
-        return;
+        if !result.ok {
+            report_user(cwd, b"logout", result, false);
+            return None;
+        }
+        cwd.len = 0;
+        return Some(ReplEnd::Logout);
     }
     if let Some(rest) = arg_of(line, b"passwd") {
         passwd_cmd(cwd, rest);
-        return;
+        return None;
     }
     if let Some(rest) = arg_of(line, b"su") {
         user_op(cwd, rest, galexy_abi::USER_SU, b"su");
-        return;
+        return None;
     }
     if let Some(rest) = arg_of(line, b"grant") {
         do_token(cwd, rest, true);
-        return;
+        return None;
     }
     if let Some(rest) = arg_of(line, b"revoke") {
         do_token(cwd, rest, false);
-        return;
+        return None;
     }
     if let Some(rest) = arg_of(line, b"cp") {
         two_path_util(cwd, b"cp", rest);
-        return;
+        return None;
     }
     if let Some(rest) = arg_of(line, b"mv") {
         two_path_util(cwd, b"mv", rest);
-        return;
+        return None;
     }
     if !line.contains(&b' ') {
         launch(cwd, line);
-        return;
+        return None;
     }
     write_console(line);
     write_console(b": command not found\n");
     prompt(cwd);
+    None
 }
 
 fn echo(cwd: &Cwd, rest: &[u8]) {
@@ -841,19 +972,20 @@ fn show(cap: Cap, cwd: &Cwd) {
 
 fn prompt(cwd: &Cwd) {
     // One write, so a kernel log on the serial mirror cannot land between
-    // the name and `> `. Logged in: `user@galexy>` or `user@galexy:/path> `.
-    // Logged out: `galexy>`.
+    // the name and `> `. Shape: `user@galexy>` or `user@galexy:/path> `.
     let mut name = [0u8; USER_MAX];
     let got = user(&mut name, galexy_abi::USER_WHOAMI);
     let mut line = [0u8; USER_MAX + 1 + 6 + 2 + PATH_MAX + 2];
     let mut n = 0usize;
-    if got.ok && got.value > 0 {
-        let uname = &name[..(got.value as usize).min(USER_MAX)];
-        line[n..n + uname.len()].copy_from_slice(uname);
-        n += uname.len();
-        line[n] = b'@';
-        n += 1;
-    }
+    let uname = if got.ok && got.value > 0 {
+        &name[..(got.value as usize).min(USER_MAX)]
+    } else {
+        b"?"
+    };
+    line[n..n + uname.len()].copy_from_slice(uname);
+    n += uname.len();
+    line[n] = b'@';
+    n += 1;
     line[n..n + 6].copy_from_slice(b"galexy");
     n += 6;
     if cwd.len > 0 {
