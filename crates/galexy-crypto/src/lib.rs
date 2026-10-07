@@ -18,7 +18,11 @@ pub const SALT_LEN: usize = 8;
 pub const HASH_LEN: usize = 16;
 
 /// PBKDF2 iteration count (HMAC-SHA256).
-pub const PBKDF2_ITERS: u32 = 100_000;
+///
+/// Kept modest so debug QEMU boots (format + login + useradd) stay inside
+/// the 60 s runner timeout; raise once a release-profile / dedicated KDF
+/// path exists.
+pub const PBKDF2_ITERS: u32 = 10_000;
 
 /// Fills `out` with PBKDF2-HMAC-SHA256(password, salt, [`PBKDF2_ITERS`]).
 pub fn hash_password(password: &[u8], salt: &[u8; SALT_LEN], out: &mut [u8; HASH_LEN]) {
@@ -161,5 +165,20 @@ mod tests {
         let mut buf = *b"secret!!";
         wipe_bytes(&mut buf);
         assert_eq!(buf, [0u8; 8]);
+    }
+
+    /// PBKDF2-HMAC-SHA256 (password/salt, c=1, dkLen=32) vs host hashlib.
+    #[test]
+    fn pbkdf2_known_answer_c1() {
+        let mut out = [0u8; 32];
+        pbkdf2_hmac_sha256(b"password", b"salt", 1, &mut out);
+        assert_eq!(
+            out,
+            [
+                0x12, 0x0f, 0xb6, 0xcf, 0xfc, 0xf8, 0xb3, 0x2c, 0x43, 0xe7, 0x22, 0x52, 0x56, 0xc4,
+                0xf8, 0x37, 0xa8, 0x65, 0x48, 0xc9, 0x2c, 0xcc, 0x35, 0x48, 0x08, 0x05, 0x98, 0x7c,
+                0xb7, 0x0b, 0xe1, 0x7b
+            ]
+        );
     }
 }

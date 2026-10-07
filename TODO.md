@@ -1048,8 +1048,9 @@ Replace demo hashing before any other auth work depends on the on-disk shape.
       (documented). Used for salts; later AEAD nonces too
 - [x] **Random salts**: `useradd` / `passwd` / format fill 8-byte salts
       from the CSPRNG; `salt_from_seed` test-only in `galexy-crypto`
-- [x] **Real KDF**: PBKDF2-HMAC-SHA256 in `galexy-crypto` (100 000
-      iters); GALF **v5** (same 8+16 on-disk widths; v4 images refused).
+- [x] **Real KDF**: PBKDF2-HMAC-SHA256 in `galexy-crypto` (10 000
+      iters — debug-QEMU budget; raise later); GALF **v5** (same 8+16
+      on-disk widths; v4 images refused).
       Argon2id deferred until a dedicated KDF stack (12 fat kstacks
       broke multi-seat boot)
 - [x] **Constant-time verify** retained; host unit tests for wrong /

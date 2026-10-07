@@ -13,12 +13,13 @@ A password never grants rights on someone else’s tree by itself — after
 login you hold `RIGHT_ALL` on **your** root; everything else is granted.
 
 Disk encryption is out of scope for now (Milestone 44). Passwords use
-**PBKDF2-HMAC-SHA256** (`galexy-crypto`: 100 000 iterations) with an
+**PBKDF2-HMAC-SHA256** (`galexy-crypto`: 10 000 iterations) with an
 8-byte CSPRNG salt and a 16-byte digest per actor (GALF **v5**). Salts
 come from `arch::rand` (RDRAND, with a tick-mixed fallback). Empty
 passwords are rejected. Syscall staging buffers are wiped after login /
-useradd / passwd. (Argon2id is preferred later once a dedicated KDF
-stack exists — fat per-task kstacks made twelve-seat boot unusable.)
+useradd / passwd. Iteration count is capped for debug-QEMU boot budget;
+raise it (or switch to Argon2id on a dedicated KDF stack) once release
+profiles or fatter kstacks make that practical.
 
 ## Pieces
 
