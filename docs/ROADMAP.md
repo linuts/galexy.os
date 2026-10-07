@@ -236,9 +236,10 @@ checklist). Style: `docs/STYLE.md`.
 3. **45 galfs for real usage** — extents/capacity, rename/truncate/stat,
    sync/fsck, quotas & cards
 4. **46 Storage stack** — BlockDevice; virtio or primary IDE; flush
-5. **47 Process, ABI & caps** — process-Cap foundation (spawn returns a
-   Cap; wait/kill by Cap; debug ids for listings only — **not** a Unix
-   PID ABI), segments, forge/ceiling tests. Init itself is Phase 6.
+5. **47 Process, ABI & caps** — process-Cap foundation per
+   `docs/PROCESS.md` (spawn returns a Cap; wait/kill by Cap; debug ids
+   for listings only — **not** a Unix PID ABI), segments, forge/ceiling
+   tests. Init itself is Phase 6.
 6. **48 Memory, safety & concurrency** — W^X, scrub, lock-order freeze
 7. **49 Console, audit & UX** — cursor, overflow, auth/grant audit log
 8. **50 Shell for real demos** — pipes, glob, line editing

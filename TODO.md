@@ -5,7 +5,8 @@ Tracking document for concrete work items. Big-picture direction lives in
 
 Shipped through Milestone 42 (password auth + login screen). **Next
 focus:** Phase — Review readiness (Milestones **43–52**), then Phase 6 —
-process model / init / seats (**53–55**). Style rules: `docs/STYLE.md`.
+process Caps / init / seats (**53–55**). Plan: `docs/PROCESS.md`. Style:
+`docs/STYLE.md`.
 
 ## Milestone 1 — Boot skeleton ✅
 
