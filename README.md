@@ -12,7 +12,7 @@ galfs access cards), not global file descriptors or PIDs.
 | Passwords, login, access cards | [`docs/AUTH.md`](docs/AUTH.md) |
 | galfs trees, tokens, sealed disk | [`docs/GALFS.md`](docs/GALFS.md) |
 | Process Caps, init, seats (plan) | [`docs/PROCESS.md`](docs/PROCESS.md) |
-| Scheduler, time, block/wake (plan) | [`docs/SCHEDULING.md`](docs/SCHEDULING.md) |
+| Scheduler, time, block/wake (frozen v1) | [`docs/SCHEDULING.md`](docs/SCHEDULING.md) |
 | Mini Rust compiler / gxc (plan) | [`docs/COMPILER.md`](docs/COMPILER.md) |
 | How the kernel is wired | [`docs/DESIGN.md`](docs/DESIGN.md) |
 | Coding rules | [`docs/STYLE.md`](docs/STYLE.md) |

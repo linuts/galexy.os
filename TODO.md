@@ -1149,7 +1149,7 @@ Lockout and idle logout need a trustworthy clock source.
       busy, next-second wake when idle (`arm_timer_for_load`); sleep
       queues / next-sleeper arming → **Milestone 56** ✅
 - [x] Docs: time model for reviewers — SCHEDULING.md (M56); policy freeze
-      remains **Milestone 58**
+      **Milestone 58** ✅
 
 ## Milestone 44 — Sealed GALF (disk encryption)
 
@@ -1812,34 +1812,35 @@ General park/wake beyond spawn/wait-on-child.
       Cap-kill of sleep/I/O waiters → `Interrupted` then EXITED /
       Cap-wait `137`; `SysError::Interrupted` in abi
 
-## Milestone 58 — Scheduler policy freeze
+## Milestone 58 — Scheduler policy freeze ✅
 
 Write down what the scheduler *is*, so review does not invent CFS.
 
 ### Document and freeze
 
-- [ ] **`SCHEDULING.md` + DESIGN policy section**: pin-at-spawn,
+- [x] **`SCHEDULING.md` + DESIGN policy section**: pin-at-spawn,
       idle-pass steal + cooldown, per-CPU rotation, quantum =
       `online()` ms share-split, tickless idle + deadline sleep (M56),
-      block/wake (M57) — keep SCHEDULING as the plan, DESIGN as the
-      wiring
-- [ ] **Numbers freeze**: quantum formula, steal cooldown (~100 ticks),
-      max threads / soft frame reserve — cited from code, not folklore
-- [ ] **ABI table**: sleep + any new wake-related errors marked stable
-      or explicitly experimental (same bar as M51/M55 process Caps)
-- [ ] **Lock-order / IRQ-gate** cross-check with Milestone 48 concurrency
-      bullets; sched-specific rules live next to the policy section
-- [ ] Reviewer one-pager: README / ROADMAP already point at
-      `SCHEDULING.md`; keep it current through freeze
+      block/wake (M57) — SCHEDULING holds frozen policy; DESIGN is wiring
+- [x] **Numbers freeze**: `quantum_ms` = `online()`,
+      `STEAL_COOLDOWN_TICKS` = 100, `IDLE_MAX_MS` = 1000,
+      `MAX_THREADS` = 64, `SPAWN_FRAME_RESERVE` = 64,
+      `SLEEP_MS_MAX` = 60_000 — cited in SCHEDULING.md
+- [x] **ABI table**: `Syscall::Sleep` + `SysError::Interrupted` marked
+      **stable**; Cap-wait/kill remain experimental until Phase 6
+- [x] **Lock-order / IRQ-gate** sched rules in SCHEDULING.md (cross-check
+      with M48); full kernel lock table stays an M48 checkbox
+- [x] Reviewer one-pager: README / ROADMAP point at frozen
+      `SCHEDULING.md`
 
 ### Explicit non-goals (v1)
 
-- [ ] No multi-level feedback / CFS / weighted fair queueing
-- [ ] No POSIX `nice` / realtime priority classes
-- [ ] No per-task CPU affinity ABI (pin is kernel policy; steal remains
+- [x] No multi-level feedback / CFS / weighted fair queueing
+- [x] No POSIX `nice` / realtime priority classes
+- [x] No per-task CPU affinity ABI (pin is kernel policy; steal remains
       idle-only unless a later phase adds Caps)
-- [ ] No tickless *busy* (CPU-bound work stays quantum-paced)
-- [ ] Cooperative `run()` sweep fairness nits stay waived unless a bug
+- [x] No tickless *busy* (CPU-bound work stays quantum-paced)
+- [x] Cooperative `run()` sweep fairness nits stay waived unless a bug
       shows up (same as M48 note)
 
 ## Phase 8 — Mini Rust compiler (hello world)
@@ -1974,7 +1975,7 @@ items stay here with rationale.
 - [x] Time & deadlines (sleep / next-deadline arming) — **Milestone 56**
       (Phase 7)
 - [x] Block & wake — **Milestone 57**
-- [ ] Scheduler policy freeze — **Milestone 58**
+- [x] Scheduler policy freeze — **Milestone 58**
 - [x] Mini Rust compiler frontend (gxr) — **Milestone 59** (Phase 8)
 - [x] gxc codegen + ELF emit — **Milestone 60**
 - [x] Hello via gxc in QEMU — **Milestone 61**

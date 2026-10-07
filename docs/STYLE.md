@@ -71,7 +71,7 @@ them as the target.
 
 ## Scheduling
 
-Runtime rules for Phase 7 (Milestones **56–58**). Full plan:
+Runtime rules for Phase 7 (Milestones **56–58** ✅). Frozen policy:
 `docs/SCHEDULING.md`. Process Caps stay in `PROCESS.md` — this section is
 when tasks run, sleep, and block.
 
@@ -88,9 +88,10 @@ when tasks run, sleep, and block.
   loops are transitional; Cap-wait / event wake replace them.
 - **No affinity ABI in v1.** Ownership is kernel policy; steal stays
   idle-only unless a later phase adds Caps.
-- **ABI changes** for sleep / wake errors ship in `galexy-abi` + DESIGN +
-  callers in the **same PR**, marked experimental until Milestone 58
-  freezes them.
+- **Frozen numbers and ABI.** `Sleep`, `SLEEP_MS_MAX`, and
+  `SysError::Interrupted` are stable (M58). Changing quantum / steal
+  cooldown / `MAX_THREADS` / `SPAWN_FRAME_RESERVE` needs a milestone or
+  DESIGN waiver — cite `docs/SCHEDULING.md` → Frozen policy.
 
 ## Compiler (gxc)
 
