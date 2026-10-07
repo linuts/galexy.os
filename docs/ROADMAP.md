@@ -236,8 +236,8 @@ checklist). Style: `docs/STYLE.md`.
 3. **45 galfs for real usage** — extents/capacity, rename/truncate/stat,
    sync/refuse-format, quotas, host fsck, durable shares, single-indirect
    (M45 polish / double-indirect remain)
-4. **46 Storage stack** — BlockDevice + ATA capacity (landed first
-   slice); virtio or primary IDE; flush matrix
+4. **46 Storage stack** — BlockDevice, ATA capacity, flush matrix,
+   virtio-blk (landed); optional partition offset remains
 5. **47 Process, ABI & caps** — process-Cap foundation per
    `docs/PROCESS.md` (spawn returns a Cap; wait/kill by Cap; debug ids
    for listings only — **not** a Unix PID ABI), segments, forge/ceiling

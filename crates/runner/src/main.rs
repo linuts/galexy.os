@@ -47,14 +47,27 @@ fn main() {
         let ovmf_fd = std::env::var("OVMF_FD").unwrap_or_else(|_| OVMF_FD_DEFAULT.to_string());
         cmd.arg("-bios").arg(ovmf_fd);
     }
-    // Boot image is snapshotted; the galfs slave is not — guest writes persist.
+    // Boot image is snapshotted; the galfs data disk is not — guest writes persist.
+    // Default attach is virtio-blk-pci (legacy IO BAR). Set GALEXY_GALFS_IDE=1
+    // for the older primary-IDE-slave path (still covered by boot tests).
     cmd.arg("-drive").arg(format!(
         "format=raw,file={img_path},if=ide,index=0,snapshot=on"
     ));
-    cmd.arg("-drive").arg(format!(
-        "format=raw,file={},if=ide,index=1,cache=writethrough",
-        galfs_path.display()
-    ));
+    let use_ide = std::env::var_os("GALEXY_GALFS_IDE").is_some();
+    if use_ide {
+        cmd.arg("-drive").arg(format!(
+            "format=raw,file={},if=ide,index=1,cache=writethrough",
+            galfs_path.display()
+        ));
+    } else {
+        cmd.arg("-drive").arg(format!(
+            "format=raw,file={},if=none,id=galfs,cache=writethrough",
+            galfs_path.display()
+        ));
+        cmd.arg("-device").arg(
+            "virtio-blk-pci,drive=galfs,disable-legacy=off,disable-modern=on,queue-size=128",
+        );
+    }
     // SMP: 2 cores, exposed by the per-CPU substrate (gs:[8] syscall path,
     // per-CPU GDT/TSS). `-cpu max` exposes FSGSBASE, required by the
     // per-CPU mechanism (WRGSBASE/RDGSBASE).

@@ -29,13 +29,14 @@ cargo run                 # BIOS (default); COM1 on your terminal
 cargo run -- --uefi       # UEFI — set OVMF_FD if the default path is missing
 ```
 
-`cargo run` attaches a persistent `galfs.img` as the primary IDE **slave**
-(`if=ide,index=1,cache=writethrough`; boot image is master `index=0` with
-`snapshot=on`). Guest galfs talks to that disk through `BlockDevice`
-(ATA PIO today). Override the image path with
-`GALEXY_GALFS_IMG=/path/to/img`. Delete `galfs.img` to force a fresh
-format after a layout bump. Persistence e2e also runs under
-`cache=writeback` and `cache=none` (see `docs/GALFS.md`).
+`cargo run` attaches a persistent `galfs.img` as **virtio-blk-pci**
+(legacy IO BAR; boot image stays IDE master `index=0` with `snapshot=on`).
+Guest galfs prefers virtio-blk when present, else the ATA primary slave.
+Override the image path with `GALEXY_GALFS_IMG=/path/to/img`. Set
+`GALEXY_GALFS_IDE=1` to force the IDE-slave attach. Delete `galfs.img` to
+force a fresh format after a layout bump. Persistence e2e covers IDE
+(`cache=writethrough` / `writeback` / `none`) and virtio-blk (see
+`docs/GALFS.md`).
 
 UEFI firmware path defaults to `/usr/share/ovmf/x64/OVMF.4m.fd`. On many
 distros:

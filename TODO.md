@@ -1296,8 +1296,10 @@ Reviewers will ask how storage grows past QEMU's secondary IDE.
 - [x] **Device abstraction**: `BlockDevice` trait (read/write sectors,
       flush, capacity) with ATA PIO `PrimarySlave` as the first impl;
       galfs uses only `disk()` → trait (no raw `ata::` I/O)
-- [ ] **Primary IDE / virtio-blk**: at least one path that works with
-      common QEMU flags without a hand-rolled `-drive` slave only
+- [x] **Primary IDE / virtio-blk**: `drivers/virtio_blk` (legacy PCI) +
+      `boot_with_galfs_virtio`; `cargo run` defaults to virtio-blk-pci
+      (`GALEXY_GALFS_IDE=1` keeps the IDE slave); galfs prefers virtio
+      when present
 - [x] **Identify / capacity**: IDENTIFY words 60–61 / 100–103 →
       `capacity_sectors()`; galfs gates on ≥ dual-slot size; out-of-range
       LBA → `BadValue`; `disk_capacity_sectors` + `bin/test-galfs-disk`
@@ -1310,8 +1312,8 @@ Reviewers will ask how storage grows past QEMU's secondary IDE.
 - [x] **Hot-unplug / missing disk**: boot without slave stays RAM-only;
       too-small disk logged + RAM-only; no panic
 - [x] Docs: how `cargo run` attaches storage (`README` + `GALFS.md`)
-- [ ] CI matrix for disk backends (virtio vs IDE) when a second backend
-      lands
+- [x] Disk backend matrix in runner tests: IDE (writethrough / writeback /
+      none) + virtio-blk-pci persistence e2e
 
 ## Milestone 47 — Process, ABI & capabilities
 

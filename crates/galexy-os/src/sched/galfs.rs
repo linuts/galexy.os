@@ -8,8 +8,8 @@
 //! When a [`BlockDevice`] large enough for both dual slots is present,
 //! the table is loaded from a GALF image (checksum + generation) or
 //! formatted if both slots are bad. Mutates sync to the inactive slot
-//! then flush. Without a usable disk the table stays RAM-only. The first
-//! backend is the primary IDE slave (`ata::PrimarySlave`).
+//! then flush. Without a usable disk the table stays RAM-only. Backends:
+//! virtio-blk (preferred when present), else ATA primary slave.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -26,6 +26,7 @@ const _: () = assert!(HASH_LEN == galexy_crypto::HASH_LEN);
 
 use crate::drivers::ata::PrimarySlave;
 use crate::drivers::block::{self, BlockDevice};
+use crate::drivers::virtio_blk::VirtioBlk;
 
 /// Objects the kernel will hold (files, directories, and actor roots).
 pub const OBJECT_SLOTS: usize = 128;
@@ -329,9 +330,16 @@ static DISK_BUF: Mutex<[[u8; block::SECTOR]; DISK_SECTORS]> =
 /// Unwrapped volume key while the disk is mounted. `None` when locked / RAM-only.
 static VOLUME_KEY: Mutex<Option<[u8; KEY_LEN]>> = Mutex::new(None);
 
-/// The block device galfs uses for durable slots (ATA primary slave today).
+/// The block device galfs uses for durable slots.
+///
+/// Prefers virtio-blk when QEMU attached one; otherwise the ATA primary
+/// slave. Probe order is fixed so IDE-only boots stay unchanged.
 fn disk() -> &'static dyn BlockDevice {
-    &PrimarySlave
+    if VirtioBlk.present() {
+        &VirtioBlk
+    } else {
+        &PrimarySlave
+    }
 }
 
 /// True when the device is present and large enough for both GALF slots.

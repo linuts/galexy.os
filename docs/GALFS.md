@@ -345,8 +345,10 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 - **Landed:** flush matrix — persistence e2e under QEMU
   `cache=writethrough` / `writeback` / `none`; commit ordering documented
   above
-- Virtio-blk / primary IDE path for common QEMU flags
-- Docs: `cargo run` storage attach detail; CI matrix for disk backends
+- **Landed:** `virtio-blk` legacy PCI (`drivers/virtio_blk`); galfs
+  prefers it when present; `cargo run` attaches virtio-blk-pci by
+  default (`GALEXY_GALFS_IDE=1` for IDE slave); `galfs_disk_persists_virtio_blk`
+- Optional: partition offset (GALF not required at LBA 0)
 
 ## Explicit non-goals
 

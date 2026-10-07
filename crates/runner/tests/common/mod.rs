@@ -83,10 +83,10 @@ fn qemu_command(img_path: &str, serial_path: &PathBuf) -> Command {
     cmd
 }
 
-/// QEMU `-drive` `cache=` mode for the galfs data disk (IDE slave).
+/// QEMU `-drive` `cache=` mode for the galfs data disk.
 ///
-/// Guest galfs always issues ATA FLUSH CACHE after writing the inactive
-/// dual slot. These modes exercise that barrier against the host cache.
+/// Guest galfs always flushes after writing the inactive dual slot.
+/// These modes exercise that barrier against the host cache.
 #[derive(Clone, Copy, Debug)]
 pub enum GalfsDiskCache {
     /// Default for most tests — host page cache writes through.
@@ -108,27 +108,51 @@ impl GalfsDiskCache {
     }
 }
 
+/// How the galfs image is attached to QEMU.
+#[derive(Clone, Copy, Debug)]
+pub enum GalfsBackend {
+    /// Primary IDE slave (`if=ide,index=1`) — ATA PIO `PrimarySlave`.
+    IdeSlave,
+    /// Virtio-blk PCI transitional (legacy IO BAR) — `drivers::virtio_blk`.
+    VirtioPci,
+}
+
 /// Like [`qemu_command`], but the boot drive uses a per-drive snapshot and
-/// `galfs_path` is attached as the primary IDE slave without a snapshot so
-/// writes persist for a second boot of the same image.
+/// `galfs_path` is attached without a snapshot so writes persist for a
+/// second boot of the same image.
 fn qemu_command_with_galfs(
     img_path: &str,
     galfs_path: &PathBuf,
     serial_path: &PathBuf,
     cache: GalfsDiskCache,
+    backend: GalfsBackend,
 ) -> Command {
     let mut cmd = Command::new("qemu-system-x86_64");
-    cmd.arg("-drive")
-        .arg(format!(
-            "format=raw,file={img_path},if=ide,index=0,snapshot=on"
-        ))
-        .arg("-drive")
-        .arg(format!(
-            "format=raw,file={},if=ide,index=1,cache={}",
-            galfs_path.display(),
-            cache.as_qemu()
-        ))
-        .arg("-smp")
+    cmd.arg("-drive").arg(format!(
+        "format=raw,file={img_path},if=ide,index=0,snapshot=on"
+    ));
+    match backend {
+        GalfsBackend::IdeSlave => {
+            cmd.arg("-drive").arg(format!(
+                "format=raw,file={},if=ide,index=1,cache={}",
+                galfs_path.display(),
+                cache.as_qemu()
+            ));
+        }
+        GalfsBackend::VirtioPci => {
+            cmd.arg("-drive").arg(format!(
+                "format=raw,file={},if=none,id=galfs,cache={}",
+                galfs_path.display(),
+                cache.as_qemu()
+            ));
+            // Force legacy IO BAR so the guest virtio-blk driver can use
+            // the transitional register layout (no modern MMIO yet).
+            cmd.arg("-device").arg(
+                "virtio-blk-pci,drive=galfs,disable-legacy=off,disable-modern=on,queue-size=128",
+            );
+        }
+    }
+    cmd.arg("-smp")
         .arg("2")
         .arg("-cpu")
         .arg("max")
@@ -162,7 +186,25 @@ pub fn boot_with_galfs_cache(
     image: &Image,
     cache: GalfsDiskCache,
 ) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
-    boot_with_galfs_inner(image, CorruptMode::None, cache)
+    boot_with_galfs_inner(
+        image,
+        CorruptMode::None,
+        cache,
+        GalfsBackend::IdeSlave,
+    )
+}
+
+/// Like [`boot_with_galfs`], but attaches the data disk as virtio-blk-pci
+/// (legacy) instead of the IDE slave.
+pub fn boot_with_galfs_virtio(
+    image: &Image,
+) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
+    boot_with_galfs_inner(
+        image,
+        CorruptMode::None,
+        GalfsDiskCache::Writethrough,
+        GalfsBackend::VirtioPci,
+    )
 }
 
 /// Like [`boot_with_galfs`], but after the write boot the host destroys the
@@ -171,7 +213,12 @@ pub fn boot_with_galfs_cache(
 pub fn boot_with_galfs_recover(
     image: &Image,
 ) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
-    boot_with_galfs_inner(image, CorruptMode::Newest, GalfsDiskCache::Writethrough)
+    boot_with_galfs_inner(
+        image,
+        CorruptMode::Newest,
+        GalfsDiskCache::Writethrough,
+        GalfsBackend::IdeSlave,
+    )
 }
 
 /// Like [`boot_with_galfs_recover`], but simulates a torn write: the newest
@@ -183,6 +230,7 @@ pub fn boot_with_galfs_torn(
         image,
         CorruptMode::TornNewest,
         GalfsDiskCache::Writethrough,
+        GalfsBackend::IdeSlave,
     )
 }
 
@@ -201,12 +249,13 @@ pub fn boot_with_galfs_both_corrupt(
     ));
     std::fs::write(&galfs_path, vec![0u8; 1024 * 1024]).expect("create galfs.img");
     let cache = GalfsDiskCache::Writethrough;
+    let backend = GalfsBackend::IdeSlave;
     let (code1, serial1) =
-        boot_once_with_galfs(&writer.bios, &galfs_path, &writer.name, cache);
+        boot_once_with_galfs(&writer.bios, &galfs_path, &writer.name, cache, backend);
     let img_after_write = std::fs::read(&galfs_path).expect("read galfs.img after write");
     corrupt_all_galfs_slots(&galfs_path);
     let (code2, serial2) =
-        boot_once_with_galfs(&reader.bios, &galfs_path, &reader.name, cache);
+        boot_once_with_galfs(&reader.bios, &galfs_path, &reader.name, cache, backend);
     let img_after = std::fs::read(&galfs_path).expect("read galfs.img after corrupt boot");
     let _ = std::fs::remove_file(&galfs_path);
     (code1, serial1, img_after_write, code2, serial2, img_after)
@@ -222,6 +271,7 @@ fn boot_with_galfs_inner(
     image: &Image,
     corrupt: CorruptMode,
     cache: GalfsDiskCache,
+    backend: GalfsBackend,
 ) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
     let galfs_path = std::env::temp_dir().join(format!(
         "galexy-galfs-{}-{}.img",
@@ -231,11 +281,11 @@ fn boot_with_galfs_inner(
             .expect("clock")
             .as_nanos()
     ));
-    // 1 MiB zeroed IDE slave — covers both 288-sector GALF slots.
+    // 1 MiB zeroed data disk — covers both 288-sector GALF slots.
     std::fs::write(&galfs_path, vec![0u8; 1024 * 1024]).expect("create galfs.img");
 
     let (code1, serial1) =
-        boot_once_with_galfs(&image.bios, &galfs_path, &image.name, cache);
+        boot_once_with_galfs(&image.bios, &galfs_path, &image.name, cache, backend);
     if let Ok(file) = std::fs::File::options().write(true).open(&galfs_path) {
         let _ = file.sync_all();
     }
@@ -246,7 +296,7 @@ fn boot_with_galfs_inner(
         CorruptMode::TornNewest => tear_newest_galfs_slot(&galfs_path),
     }
     let (code2, serial2) =
-        boot_once_with_galfs(&image.bios, &galfs_path, &image.name, cache);
+        boot_once_with_galfs(&image.bios, &galfs_path, &image.name, cache, backend);
     let _ = std::fs::remove_file(&galfs_path);
     (code1, serial1, img_after_write, code2, serial2)
 }
@@ -328,11 +378,13 @@ fn boot_once_with_galfs(
     galfs_path: &PathBuf,
     name: &str,
     cache: GalfsDiskCache,
+    backend: GalfsBackend,
 ) -> (Option<i32>, String) {
     let serial_path = serial_log_path(name);
-    let mut child = qemu_command_with_galfs(img_path, galfs_path, &serial_path, cache)
-        .spawn()
-        .expect("failed to launch qemu-system-x86_64 (galfs disk)");
+    let mut child =
+        qemu_command_with_galfs(img_path, galfs_path, &serial_path, cache, backend)
+            .spawn()
+            .expect("failed to launch qemu-system-x86_64 (galfs disk)");
 
     let deadline = Instant::now() + TEST_TIMEOUT;
     let code = loop {
