@@ -835,6 +835,18 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
 
 /// User stack size in 4 KiB pages.
 pub(crate) const USER_STACK_PAGES: usize = 4;
+
+/// Soft floor of free frames required before a user `spawn` / blob load.
+///
+/// Covers one task's FreshL4, stack, scratch, code pages, and page-table
+/// growth, plus headroom so the rest of the kernel can still allocate.
+/// Below this, spawn returns `NoResource` instead of panicking mid-map.
+pub const SPAWN_FRAME_RESERVE: usize = 64;
+
+/// True when the frame pool can absorb another user-task spawn.
+pub fn spawn_frames_available() -> bool {
+    crate::arch::mm::free_frames() >= SPAWN_FRAME_RESERVE
+}
 /// User stack offset inside the task's P4 region (1 GiB in — keeps the
 /// code page and stack far apart; the region is 512 GiB).
 pub(crate) const USER_STACK_OFFSET: u64 = 1 << 30;
@@ -899,6 +911,12 @@ pub(crate) fn spawn_user_with_grants(
         assert!(
             mm::on_kernel_tree(),
             "spawn_user_task: must run on the kernel tree (main-loop context)"
+        );
+        assert!(
+            spawn_frames_available(),
+            "spawn_user_task: free frames {} < SPAWN_FRAME_RESERVE {}",
+            mm::free_frames(),
+            SPAWN_FRAME_RESERVE
         );
         let fresh = mm::FreshL4::new().expect("no frame for a fresh task table");
         let root = fresh.frame;
@@ -1454,6 +1472,23 @@ pub fn drain_spawn() {
         return;
     };
     let name = core::str::from_utf8(&name_raw[..len]).unwrap_or("");
+    if !spawn_frames_available() {
+        serial_println!(
+            "[sched] spawn '{}': low frames ({} < {}); waking NoResource",
+            name,
+            crate::arch::mm::free_frames(),
+            SPAWN_FRAME_RESERVE
+        );
+        interrupts::without_interrupts(|| {
+            let mut threads = THREADS.lock();
+            wake_spawn_waiter(
+                &mut threads,
+                waiter_slot,
+                SyscallResult::err(SysError::NoResource),
+            );
+        });
+        return;
+    }
     let grants = if query {
         Grants::console_query()
     } else {

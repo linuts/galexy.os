@@ -40,6 +40,8 @@ pub const KERNEL_CS_SELECTOR: u16 = 0x08;
 pub const KERNEL_DS_SELECTOR: u16 = 0x10;
 pub const USER_CS_SELECTOR: u16 = 0x18;
 pub const USER_DS_SELECTOR: u16 = 0x20;
+/// User data selector with RPL 3 — loaded into DS/ES on return to ring 3.
+pub const USER_DS_RPL3: u16 = USER_DS_SELECTOR | 3;
 pub const TSS_SELECTOR: u16 = 0x28;
 
 /// One CPU's descriptor tables (GDT + TSS + double-fault IST stack).

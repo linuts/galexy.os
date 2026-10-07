@@ -4,9 +4,11 @@
 //! Register state at SYSCALL entry (fixed CPU semantics):
 //! - `rcx` = user RIP, `r11` = user RFLAGS (explicitly NOT saved by the
 //!   instruction), `rsp` = user RSP (unchanged), other GPRs = user values,
-//!   DS/ES/FS/GS untouched (still the kernel bootstrap selectors — user
-//!   code must not use segment-based addressing; ring-3 segment hygiene is
-//!   future ABI work).
+//!   DS/ES/FS/GS still the kernel bootstrap selectors on entry.
+//! - On return to ring 3, DS/ES are reloaded with the user data selector
+//!   (RPL 3). FS stays the kernel bootstrap selector (unused by user
+//!   programs). GS keeps the kernel per-CPU base across rings — userland
+//!   must not load GS.
 //!
 //! Entry protocol: switch to the CURRENT task's kernel stack (per-CPU
 //! `gs:[8]`, written on every switch-in to a user task), push the uniform
@@ -144,9 +146,18 @@ pub unsafe extern "C" fn syscall_entry_naked() {
         "pop r11", "pop r10", "pop r9", "pop r8",
         "pop rbp", "pop rdi", "pop rsi", "pop rdx",
         "pop rcx", "pop rbx", "pop rax",
+        // Ring-3 data segments: SYSCALL left DS/ES as kernel selectors.
+        // Reload before iretq so user code sees RPL-3 DS/ES. Preserve rax
+        // (syscall result). FS unused; GS stays the per-CPU base.
+        "push rax",
+        "mov ax, {user_ds}",
+        "mov ds, ax",
+        "mov es, ax",
+        "pop rax",
         "iretq",
         user_ss = sym USER_SS,
         user_cs = sym USER_CS,
+        user_ds = const crate::arch::gdt::USER_DS_RPL3,
         rust = sym syscall_rust,
         stable = sym crate::sched::CTX_STABLE,
     );

@@ -728,9 +728,11 @@ arch shim dies loudly instead.
   closes the window; the user's RFLAGS still rides in R11 into the frame.
 - Dispatch result: 0 resumes the outgoing frame (pop + iretq), a pointer
   switches (yield/exit handoff — the decomposition used by the timer too).
-- Ring-3 segment hygiene: SYSCALL leaves DS/ES/FS/GS as the kernel's
-  bootstrap selectors; user code must not do segment-based addressing
-  (TODO'd).
+- Ring-3 segment hygiene: SYSCALL entry leaves DS/ES/FS/GS as the
+  kernel bootstrap selectors. On return to ring 3 (syscall, timer, and
+  page-fault iretq tails), DS/ES are reloaded with the user data
+  selector (RPL 3). FS stays the kernel bootstrap selector (unused).
+  GS keeps the kernel per-CPU base — userland must not load GS.
 
 ### banner — "the boot showcase"
 

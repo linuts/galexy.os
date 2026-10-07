@@ -1363,8 +1363,9 @@ same discipline as files. Optional debug ids for listings only.
       alphanumeric + `.` `_` `-`; documented on `Syscall::Spawn`
 - [x] **Args & env**: freeze **single arg blob** (`SPAWN_ARG_MAX` 256)
       in abi until a later argv/env bump
-- [ ] **Ring-3 segment reload**: SYSCALL return restores user DS/ES (and
-      documents FS/GS policy); today kernel bootstrap selectors remain
+- [x] **Ring-3 segment reload**: SYSCALL / timer / page-fault `iretq`
+      tails reload DS/ES with user data (RPL 3); FS unused; GS stays
+      the per-CPU base (`USER_DS_RPL3`, DESIGN note)
 - [ ] **More query caps or `sysinfo`**: uptime, free frames, galfs
       usage, task list (debug ids only) — for review demos
 - [x] ABI doc section: process Cap wait/kill/spawn marked
@@ -1380,13 +1381,16 @@ Make the object-capability story hold under exhaustion and forgery.
 
 - [x] **Cap forge battery** (process Caps): wait/give without rights →
       AccessDenied; empty/stale Cap → BadCap (`test-orphan`,
-      `test-procgive`, `test-proccap`); file/reserved forge battery still
-      open
+      `test-procgive`, `test-proccap`); reserved + file forge battery
+      (`test-capforge`: keyboard/loader/stats without grant, WRITE-only
+      file Cap → AccessDenied)
 - [x] **Per-task budgets** (documented): `MAX_OPEN_FILES` 8,
       `MAX_PROC_CAPS` 8, `SPAWN_ARG_MAX` 256, `SPAWN_NAME_MAX` 64,
       `TOKEN_SLOTS`; process Cap ceiling in `test-procbudget`
-- [ ] **Frame/charge limits (soft)**: optional max frames per user task;
-      spawn fails cleanly when the machine is low on memory
+- [x] **Frame/charge limits (soft)**: `SPAWN_FRAME_RESERVE` (64) —
+      loader spawn returns `NoResource` when free frames are below the
+      floor; kernel `spawn_user_*` asserts the same reserve (per-task
+      frame caps deferred)
 - [x] **Give/pipe lifecycle** (process Caps): `give` moves a process Cap
       with attenuation (`PROC_TRANSFER`); pipe lifecycle already covered;
       process Cap give covered (`test-procgive`)
