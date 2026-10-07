@@ -71,43 +71,46 @@ them as the target.
 
 ## Process model and init
 
-Clean-slate rules for Milestones **47** and **53–55**. Do not grow a
-second, permanent “Unix compatibility” layer beside these.
+Clean-slate rules for Milestones **47** and **53–55**. Galexy is a
+capability OS — do **not** make global integers the process API just
+because Unix did in 1970. Do not grow a POSIX layer beside these rules.
 
 - **Spawn, not fork.** New tasks are created by `spawn` (load ELF + args
   + attenuated caps/tokens). No `fork`/`clone` that duplicates an address
   space. Attenuation happens at spawn time, not after.
-- **PID is the stable identity.** Every live or zombie task has a
-  monotonic `Pid` that is never reused while any waiter could still name
-  it. Scheduler slot indices may recycle; **slots are not PIDs**.
-- **Names are labels.** Task names are for `tasks` listings and debugging.
-  Kernel wait/kill/reparent APIs take **PIDs**. Do not add a long-lived
-  parallel wait-by-name ABI once PID wait ships (migrate `SPAWN_WAIT`
-  callers in the same milestone window).
-- **PID ≠ authority.** Knowing a number does not grant `kill` / `wait` /
-  inspect. Those need a documented relationship (parent, same session
-  with rights, or an explicit process capability / admin path). Caps and
-  galfs tokens remain the authorization story.
-- **Hierarchy is real.** Each task has a parent PID. On parent exit,
-  children are reparented to **init (PID 1)**. Exit status is kept until
-  a waiter reaps it (zombie); unbounded zombie growth is a bug.
-- **Init is userspace.** PID 1 is the first ring-3 program. Policy
-  (which seats to start, restart-on-crash, shutdown order) lives there —
-  not in `ensure_shell()` forever. The kernel only supplies mechanism:
-  create PID 1, reparent orphans, refuse to kill PID 1, panic if PID 1
-  exits.
-- **Seats over ambient root.** Login TTYs and long-running services are
-  children of init (or of a small supervisor init starts), each with
-  their own session/caps — not a permanent kernel-injected admin shell.
-- **Signals stay small.** Directed `kill` / fault delivery by PID (and
-  later process group) with explicit rights. No full POSIX signal set
-  for review-era work unless a milestone checkbox says so.
-- **Process groups / sessions (Milestone 55)** are for job control and
-  TTY foreground — design them before wiring Ctrl-C, not as an
-  afterthought dump of `setpgid` flags.
-- **ABI changes** for Pid / wait / kill ship in `galexy-abi` + DESIGN +
-  `galexy-rt` + shell/init in the **same PR**, marked experimental until
-  Milestone 51/55 freezes them.
+- **Process Cap is the identity.** `spawn` returns a **Cap** to the child
+  (rights: wait / kill / transfer / inspect — exact bits in abi). Wait,
+  kill, and supervise take that Cap. Holding the Cap *is* authority —
+  same story as files and galfs tokens. No `kill(pid)` / `wait(pid)` that
+  anyone can aim at a guessed number.
+- **Debug ids are not handles.** A monotonic debug id (KOID-style) may
+  appear in `tasks` listings and serial logs. It is **never** an
+  authorization key and must not gain an `open_process(id)` ambient
+  syscall. Scheduler slots may recycle; slots are not identities either.
+- **Names are labels.** Task names are for humans and listings. Do not
+  keep a permanent wait-by-name ABI once Cap-wait ships (migrate
+  `SPAWN_WAIT` in the same milestone window).
+- **Hierarchy is Cap transfer.** The kernel tracks a parent task. On
+  parent exit, wait/control Caps for children move to **init** (or init
+  receives equivalent rights). Exit status stays until a Cap-holder
+  reaps it (zombie); unbounded zombies are a bug.
+- **Init is userspace.** Init is the first ring-3 program and the
+  orphan root — distinguished by role, not by magic “PID 1” in the ABI.
+  Policy (seats, restart, shutdown order) lives in init; the kernel
+  supplies mechanism: create init, transfer orphans, refuse kill of
+  init’s process without a kernel path, panic if init exits.
+- **Seats over ambient root.** Login TTYs and services are children of
+  init (Caps init retains or delegates), each with their own session —
+  not permanent kernel-injected admin shells.
+- **Signals stay small.** Directed stop/fault via a process Cap (and
+  later a **job/group Cap**). No full POSIX signal set unless a
+  milestone checkbox says so.
+- **Jobs / sessions (Milestone 55)** are capability-addressed groupings
+  for TTY foreground and Ctrl-C — design the Cap rights before wiring
+  the key, not a `setpgid` flag dump.
+- **ABI changes** for process Caps / wait / kill ship in `galexy-abi` +
+  DESIGN + `galexy-rt` + shell/init in the **same PR**, marked
+  experimental until Milestone 51/55 freezes them.
 
 ## Secrets and passwords
 
