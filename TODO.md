@@ -1136,13 +1136,16 @@ Tighten who can run code and what cards they carry.
 
 Lockout and idle logout need a trustworthy clock source.
 
-- [ ] **Monotonic time**: expose ticks or a `clock` query (LAPIC-based);
-      document resolution and wrap behavior
+- [x] **Monotonic time**: `timer_ticks()` (1 tick ≈ 1 ms); LAPIC
+      one-shot deadlines advance it by the armed window (tickless idle)
 - [ ] **Wall clock (optional)**: CMOS/UEFI runtime clock or “no wall
       clock” waive — audit lines may use monotonic only
 - [ ] **Lockout cool-down** wired to monotonic time (session items above)
 - [ ] **Idle logout** wired to monotonic time (session items above)
 - [ ] **Timeout helpers** in tests (QEMU accelerate / tick injection)
+- [x] **Tickless idle (MVP)**: LAPIC one-shot — preempt quantum when
+      busy, next-second wake when idle (`arm_timer_for_load`); full
+      program-next-deadline / sleep queues remain later
 - [ ] Docs: time model for reviewers (what is and is not synchronized)
 
 ## Milestone 44 — Sealed GALF (disk encryption)

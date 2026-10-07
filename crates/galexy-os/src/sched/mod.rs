@@ -3046,7 +3046,9 @@ pub unsafe fn syscall_handoff(
 /// RSP).
 pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
     crate::arch::cpu::set_departed_slot(0);
-    crate::arch::timer_tick(); // tick accounting + 1s heartbeat
+    // Tickless: advance by the one-shot duration that just fired.
+    let elapsed = crate::arch::apic::take_armed_ms();
+    crate::arch::timer::tick_by(elapsed);
 
     let me = cpu_sched();
     let next_ctx = interrupts::without_interrupts(|| {
@@ -3054,13 +3056,13 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
         let my_cpu = crate::arch::cpu::current_index() as u8;
         let current = me.current.load(Ordering::Relaxed);
 
-        // CPU-time attribution: this tick goes to whoever was running.
+        // CPU-time attribution: charge the armed window to whoever ran.
         match current {
             0 => {
-                me.main_ticks.fetch_add(1, Ordering::Relaxed);
+                me.main_ticks.fetch_add(elapsed, Ordering::Relaxed);
             }
             i => {
-                threads[i - 1].ticks.fetch_add(1, Ordering::Relaxed);
+                threads[i - 1].ticks.fetch_add(elapsed, Ordering::Relaxed);
             }
         }
 
@@ -3213,8 +3215,35 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
         Some(ctx)
     });
 
+    // Always re-arm a preempt quantum from the IRQ path so boot / busy
+    // main work keeps ~1 ms cadence. The idle loop stretches the deadline
+    // to the next second via [`arm_timer_for_load`] immediately before `hlt`.
+    crate::arch::apic::arm_oneshot_ms(crate::arch::apic::quantum_ms());
+
     // EOI before entering the next task (or returning to this one).
     crate::arch::end_timer_interrupt();
 
     next_ctx.unwrap_or(0)
+}
+
+/// True when THIS CPU owns at least one `RUNNING` thread.
+fn cpu_has_runnable() -> bool {
+    let my_cpu = crate::arch::cpu::current_index() as u8;
+    interrupts::without_interrupts(|| {
+        THREADS.lock().iter().any(|t| {
+            t.owner == my_cpu && t.state.load(Ordering::Acquire) == STATE_RUNNING
+        })
+    })
+}
+
+/// Reprogram the local LAPIC for the current load (call before `hlt`).
+///
+/// Busy → preempt quantum; idle → next whole second. Device IRQs still
+/// wake the CPU early; the next halt re-arms.
+pub fn arm_timer_for_load() {
+    if cpu_has_runnable() {
+        crate::arch::apic::arm_oneshot_ms(crate::arch::apic::quantum_ms());
+    } else {
+        crate::arch::apic::arm_oneshot_ms(crate::arch::apic::idle_deadline_ms());
+    }
 }

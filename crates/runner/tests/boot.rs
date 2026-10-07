@@ -2084,7 +2084,7 @@ fn uefi_image_boots_and_timer_ticks() {
     let mut last = String::new();
     for _ in 0..3 {
         last = boot_uefi(&image, Duration::from_secs(45));
-        if last.contains("1s: ") {
+        if serial_uptime_secs(&last) >= 1 {
             break;
         }
     }
@@ -2097,7 +2097,7 @@ fn uefi_image_boots_and_timer_ticks() {
         "UEFI memory bring-up marker missing; serial:\n{last}"
     );
     assert!(
-        last.contains("1s: "),
+        serial_uptime_secs(&last) >= 1,
         "UEFI timer uptime prefix missing (LAPIC timer must tick under OVMF); serial:\n{last}"
     );
     assert!(
@@ -2121,11 +2121,26 @@ fn main_kernel_boots_and_timer_ticks() {
         "boot info marker missing; serial:\n{serial}"
     );
     assert!(
-        serial.contains("1s: "),
+        serial_uptime_secs(&serial) >= 1,
         "timer uptime prefix missing; serial:\n{serial}"
     );
     assert!(
         serial.contains("[loader] program 'shell' ready"),
         "ring-3 shell was not spawned; serial:\n{serial}"
     );
+}
+
+/// Highest `Ns:` uptime prefix seen in a serial transcript (tickless may
+/// skip printing on the exact `1s:` boundary).
+fn serial_uptime_secs(serial: &str) -> u64 {
+    let mut best = 0u64;
+    for line in serial.lines() {
+        let Some((head, _)) = line.split_once("s: ") else {
+            continue;
+        };
+        if let Ok(n) = head.parse::<u64>() {
+            best = best.max(n);
+        }
+    }
+    best
 }

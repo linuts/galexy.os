@@ -14,7 +14,10 @@
 //! the LAPIC's spurious vector is 0xFF (unused); the timer vector is wired
 //! in a later commit, keyboard delivery goes through the I/O APIC.
 
+use core::sync::atomic::{AtomicU32, Ordering};
+
 use spin::Once;
+use x86_64::instructions::interrupts;
 use x86_64::instructions::port::Port;
 use x86_64::registers::model_specific::Msr;
 use x86_64::structures::paging::{Page, PageTableFlags, PhysFrame, Size4KiB};
@@ -288,6 +291,14 @@ fn map_lapic_page(base: u64) -> VirtAddr {
 /// Calibrated timer rate in ticks per millisecond.
 static TICKS_PER_MS: Once<u32> = Once::new();
 
+/// Per-CPU armed one-shot duration (ms). The IRQ path consumes this so
+/// `timer_ticks` advances by the deadline that actually fired (tickless).
+static ARMED_MS: [AtomicU32; crate::arch::cpu::MAX_CPUS] =
+    [const { AtomicU32::new(0) }; crate::arch::cpu::MAX_CPUS];
+
+/// Longest idle sleep (status-bar / uptime second boundary).
+pub const IDLE_MAX_MS: u32 = 1000;
+
 /// The calibrated LAPIC-timer rate (ticks per millisecond at divide-by-1).
 /// Panics before calibration (a bug, not a condition to handle).
 pub fn ticks_per_ms() -> u32 {
@@ -297,8 +308,14 @@ pub fn ticks_per_ms() -> u32 {
         .unwrap_or_else(|| panic!("apic: timer not calibrated (init runs first)"))
 }
 
-/// Calibrates the LAPIC timer against the PIT, then arms it in PERIODIC
-/// mode at ~1 kHz (vector 32, the same vector the PIT timer used).
+/// Preempt quantum in milliseconds (SMP share-split: N CPUs → N ms each).
+pub fn quantum_ms() -> u32 {
+    (crate::arch::cpu::online() as u32).max(1)
+}
+
+/// Calibrates the LAPIC timer against the PIT. Arming is one-shot /
+/// deadline-based ([`arm_timer`] / [`arm_oneshot_ms`]) — not a 1 kHz
+/// periodic metronome.
 ///
 /// Interrupts must be OFF. Uses the PIT channel 2 in one-shot mode (gate =
 /// port 0x61 bit 0, speaker bit cleared): ~10 ms window, counted by the
@@ -330,44 +347,54 @@ fn init_timer() {
     while !pit_drained() {}
     let elapsed = u32::MAX - reg(REG_CURRENT_COUNT);
 
-    // Quantize to ticks-per-ms with a floor of 1 (a 0 value would hang the
-    // periodic counter). Accuracy: ±2% at the 10 ms window; skews tick rate
-    // by at most that — far under the scheduler's needs.
+    // Quantize to ticks-per-ms with a floor of 1. Accuracy: ±2% at the
+    // 10 ms window — far under the scheduler's needs.
     let per_ms = (elapsed / CAL_MS).max(1);
     TICKS_PER_MS.call_once(|| per_ms);
     serial_println!("[apic] timer calibrated: {} ticks/ms", per_ms);
 }
 
-/// Arms THIS CPU's LAPIC timer: periodic on vector 32, period =
-/// ticks-per-ms × (CPUs online) — the SHARE SPLIT (SMP M18): with N CPUs
-/// each ticks every N ms, so the machine-wide tick rate stays ~1 kHz and
-/// tick accounting (TICKS/1000 seconds), the heartbeat and quake semantics
-/// survive the multicore hop. Every CPU's local bus clock is the same
-/// divisor: the BSP's calibration serves all.
-///
-/// Called by the BSP AFTER `boot_aps()` (its ICR must reflect the final
-/// online count) and by each AP right after its LAPIC bring-up.
+/// Arms THIS CPU's first deadline (preempt quantum). Called by the BSP
+/// AFTER `boot_aps()` and by each AP after LAPIC bring-up.
 pub fn arm_timer() {
-    let icr = ticks_per_ms()
-        .saturating_mul(crate::arch::cpu::online() as u32)
-        .max(1);
-    // Vector 32 (TIMER_INTERRUPT_ID — unchanged naked handler + tick path),
-    // periodic (bit 17), unmasked. EOI comes from the timer switch path.
-    set_reg(REG_DIV_CONF, DIV_1);
-    set_reg(REG_LVT_TIMER, u32::from(TIMER_VECTOR) | PERIODIC_BIT);
-    // Order matters: LVT BEFORE the initial count (xAPIC write order
-    // contract); the first expiry starts the endless reload cycle.
-    set_reg(REG_INITIAL_COUNT, icr);
+    arm_oneshot_ms(quantum_ms());
     serial_println!(
-        "[apic] timer armed (periodic, {} ticks {}, cpu {})",
-        icr,
-        if crate::arch::cpu::online() > 1 {
-            "1/Ns share"
-        } else {
-            "~1ms"
-        },
+        "[apic] timer armed (oneshot, quantum {} ms, cpu {})",
+        quantum_ms(),
         crate::arch::cpu::current_index()
     );
+}
+
+/// Program a one-shot LAPIC timer for `ms` milliseconds on this CPU.
+///
+/// Clears periodic mode. IRQ-gated (lock-audit). Clamped to
+/// `1..=IDLE_MAX_MS`.
+pub fn arm_oneshot_ms(ms: u32) {
+    let ms = ms.clamp(1, IDLE_MAX_MS);
+    interrupts::without_interrupts(|| {
+        let cpu = crate::arch::cpu::current_index();
+        ARMED_MS[cpu].store(ms, Ordering::Relaxed);
+        let icr = ticks_per_ms().saturating_mul(ms).max(1);
+        set_reg(REG_DIV_CONF, DIV_1);
+        // One-shot: LVT timer bit 17 clear. EOI still comes from the switch.
+        set_reg(REG_LVT_TIMER, u32::from(TIMER_VECTOR));
+        set_reg(REG_INITIAL_COUNT, icr);
+    });
+}
+
+/// Idle deadline: ms until the next whole second of `timer_ticks`, or
+/// [`IDLE_MAX_MS`]. Keeps status-bar / uptime wakes without a 1 kHz poll.
+pub fn idle_deadline_ms() -> u32 {
+    let into = (crate::arch::timer_ticks() % 1000) as u32;
+    (IDLE_MAX_MS - into).max(1)
+}
+
+/// Consumes the armed duration for this CPU (called from the timer IRQ).
+/// Returns at least 1 if the arming record was lost.
+pub fn take_armed_ms() -> u64 {
+    let cpu = crate::arch::cpu::current_index();
+    let ms = ARMED_MS[cpu].swap(0, Ordering::Relaxed);
+    u64::from(ms.max(1))
 }
 
 /// Program PIT channel 2 for a one-shot of `counts` (speaker OFF, gate ON).
@@ -403,9 +430,9 @@ fn pit_drained() -> bool {
 /// scheduler quantum all keep their meaning across the delivery swap.
 const TIMER_VECTOR: u8 = crate::arch::pics::TIMER_INTERRUPT_ID;
 
-/// LVT timer flags: masked-off (bit 16), periodic mode (bit 17).
+/// LVT timer flags: masked-off (bit 16). Periodic mode (bit 17) is unused —
+/// deadlines are one-shot and re-armed from the IRQ / idle path.
 const MASKED_BIT: u32 = 1 << 16;
-const PERIODIC_BIT: u32 = 1 << 17;
 /// Divide-by-1 (divide-configuration register encoding).
 const DIV_1: u32 = 0b1011;
 
