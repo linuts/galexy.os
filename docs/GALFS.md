@@ -78,11 +78,17 @@ narrows the blanket bypass).
 | --- | --- |
 | No `owner@` | Walk from the task’s `fs_root` |
 | `owner@…` | Resolve actor by name, then walk from that root |
-| Depth | Bounded (`MAX_DEPTH`); demo sizes in DESIGN |
+| Depth | At most `MAX_DEPTH` (**8**) components after parse |
+| Component charset | ASCII alphanumeric plus `.` `_` `-` only |
+| `.` / `..` | Rejected (`BadValue`) — no walk-up |
+| Length | Component ≤ 64 bytes; empty / `//` rejected |
+| Trailing `/` | Marks a directory path (`Desktop/`, `eve@/`) |
 | Archive names | Ramdisk hits first (READ); else galfs |
 
-Shell cwd is userspace-only; the kernel always sees absolute or
-owner-qualified components from the syscall args.
+Names are **bytes**, not Unicode scalars: non-ASCII and embedded NUL
+are `BadValue`. Shell cwd is userspace-only; the kernel always sees
+absolute or owner-qualified components from the syscall args.
+`bin/test-paths` covers the negative cases.
 
 ## Tokens on a task
 
@@ -282,11 +288,16 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 - `share` uses the same hold-every-right check as `grant`
 - `bin/test-cards`
 
+### Path policy (landed)
+
+- Byte charset; reject `.` / `..`, overlong, depth > 8, NUL, non-ASCII
+- `bin/test-paths`
+
 ### Remaining (Milestone 45)
 
 - Double-indirect / lengths beyond u16
 - Optional fsck repair into a new slot; durable-share disk e2e harness
-- Path canonicalization negative tests; crash/torn-write injection
+- Crash / torn-write injection
 
 ### Target storage stack (Milestone 46)
 
