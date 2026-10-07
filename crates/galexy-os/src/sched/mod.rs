@@ -123,11 +123,7 @@ pub fn run() {
 /* ---------------- preemptive threads ---------------- */
 
 /// Per-thread kernel stack size.
-///
-/// Sized for Argon2id password hashing on the syscall path (plus the
-/// usual frame / galfs nesting). 32–64 KiB overflowed the canary under
-/// login; 128 KiB is the floor that survived `test-users`.
-pub(crate) const THREAD_STACK_SIZE: usize = 128 * 1024;
+pub(crate) const THREAD_STACK_SIZE: usize = 32 * 1024;
 
 /// 16-byte-aligned buffer (FXSAVE requires it).
 #[repr(align(16))]

@@ -13,12 +13,12 @@ A password never grants rights on someone else’s tree by itself — after
 login you hold `RIGHT_ALL` on **your** root; everything else is granted.
 
 Disk encryption is out of scope for now (Milestone 44). Passwords use
-**Argon2id** (`galexy-crypto`: m=64 KiB, t=3, p=1) with an 8-byte
-CSPRNG salt and a 16-byte digest per actor (GALF **v5**). Salts come from
-`arch::rand` (RDRAND, with a tick-mixed fallback). Empty passwords are
-rejected. Syscall staging buffers are wiped after login / useradd /
-passwd. User kernel stacks are 128 KiB so the KDF on the syscall path
-does not overflow.
+**PBKDF2-HMAC-SHA256** (`galexy-crypto`: 100 000 iterations) with an
+8-byte CSPRNG salt and a 16-byte digest per actor (GALF **v5**). Salts
+come from `arch::rand` (RDRAND, with a tick-mixed fallback). Empty
+passwords are rejected. Syscall staging buffers are wiped after login /
+useradd / passwd. (Argon2id is preferred later once a dedicated KDF
+stack exists — fat per-task kstacks made twelve-seat boot unusable.)
 
 ## Pieces
 

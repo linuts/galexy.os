@@ -1,39 +1,28 @@
 //! Password KDF and secret helpers for galexy.os.
 //!
-//! `no_std` + `alloc` (Argon2 needs a short-lived scratch buffer). Platform
-//! CSPRNG lives in the kernel (`arch::rand`); this crate is pure crypto.
+//! `no_std` and **alloc-free** (fits IF=0 syscalls and thin kstacks).
+//! Platform CSPRNG lives in the kernel (`arch::rand`).
+//!
+//! KDF: PBKDF2-HMAC-SHA256 with a freestanding SHA-256 (no `sha2` crate —
+//! its asm path does not build for `x86_64-unknown-none`).
 
 #![no_std]
 #![deny(clippy::all)]
 #![deny(missing_docs)]
 
-extern crate alloc;
-
-use argon2::{Algorithm, Argon2, Params, Version};
+mod sha256;
 
 /// Salt length stored on each actor (CSPRNG-filled at set-password).
 pub const SALT_LEN: usize = 8;
 /// Derived-key length stored on each actor.
 pub const HASH_LEN: usize = 16;
 
-/// Argon2id memory cost in KiB (64 KiB — fit for IF=0 login on QEMU TCG).
-pub const ARGON2_M_KIB: u32 = 64;
-/// Argon2id time cost (passes).
-pub const ARGON2_T_COST: u32 = 3;
-/// Argon2id parallelism (lanes).
-pub const ARGON2_P_COST: u32 = 1;
+/// PBKDF2 iteration count (HMAC-SHA256).
+pub const PBKDF2_ITERS: u32 = 100_000;
 
-fn argon2() -> Argon2<'static> {
-    let params = Params::new(ARGON2_M_KIB, ARGON2_T_COST, ARGON2_P_COST, Some(HASH_LEN))
-        .expect("argon2 params");
-    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
-}
-
-/// Fills `out` with Argon2id(password, salt).
+/// Fills `out` with PBKDF2-HMAC-SHA256(password, salt, [`PBKDF2_ITERS`]).
 pub fn hash_password(password: &[u8], salt: &[u8; SALT_LEN], out: &mut [u8; HASH_LEN]) {
-    argon2()
-        .hash_password_into(password, salt, out)
-        .expect("argon2id hash");
+    pbkdf2_hmac_sha256(password, salt, PBKDF2_ITERS, out);
 }
 
 /// Constant-time compare of two digests.
@@ -53,6 +42,54 @@ pub fn wipe_bytes(buf: &mut [u8]) {
         unsafe {
             core::ptr::write_volatile(b, 0);
         }
+    }
+}
+
+fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
+    let mut key_block = [0u8; 64];
+    if key.len() > 64 {
+        key_block[..32].copy_from_slice(&sha256::hash(key));
+    } else {
+        key_block[..key.len()].copy_from_slice(key);
+    }
+    let mut ipad = [0x36u8; 64];
+    let mut opad = [0x5cu8; 64];
+    for i in 0..64 {
+        ipad[i] ^= key_block[i];
+        opad[i] ^= key_block[i];
+    }
+    let mut inner = sha256::Sha256::new();
+    inner.update(&ipad);
+    inner.update(msg);
+    let inner_hash = inner.finalize();
+    let mut outer = sha256::Sha256::new();
+    outer.update(&opad);
+    outer.update(&inner_hash);
+    outer.finalize()
+}
+
+fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iters: u32, out: &mut [u8]) {
+    let mut block_index = 1u32;
+    let mut offset = 0usize;
+    while offset < out.len() {
+        let mut block = {
+            let mut msg = [0u8; 256];
+            let n = salt.len().min(252);
+            msg[..n].copy_from_slice(&salt[..n]);
+            msg[n..n + 4].copy_from_slice(&block_index.to_be_bytes());
+            hmac_sha256(password, &msg[..n + 4])
+        };
+        let mut u = block;
+        for _ in 1..iters {
+            u = hmac_sha256(password, &u);
+            for i in 0..32 {
+                block[i] ^= u[i];
+            }
+        }
+        let n = (out.len() - offset).min(32);
+        out[offset..offset + n].copy_from_slice(&block[..n]);
+        offset += n;
+        block_index = block_index.wrapping_add(1);
     }
 }
 

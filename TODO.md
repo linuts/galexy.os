@@ -1048,16 +1048,20 @@ Replace demo hashing before any other auth work depends on the on-disk shape.
       (documented). Used for salts; later AEAD nonces too
 - [x] **Random salts**: `useradd` / `passwd` / format fill 8-byte salts
       from the CSPRNG; `salt_from_seed` test-only in `galexy-crypto`
-- [x] **Real KDF**: Argon2id in `galexy-crypto` (m=64 KiB, t=3, p=1);
-      GALF **v5** (same 8+16 on-disk widths; v4 images refused)
+- [x] **Real KDF**: PBKDF2-HMAC-SHA256 in `galexy-crypto` (100 000
+      iters); GALF **v5** (same 8+16 on-disk widths; v4 images refused).
+      Argon2id deferred until a dedicated KDF stack (12 fat kstacks
+      broke multi-seat boot)
 - [x] **Constant-time verify** retained; host unit tests for wrong /
       truncated password and distinct salts for the same password
-- [x] **Docs**: `AUTH.md` names Argon2id + parameters; CRC mix retired
+- [x] **Docs**: `AUTH.md` names the KDF + parameters; CRC mix retired
 - [x] **Password policy (minimal)**: reject empty passwords; max 64
       bytes (syscall staging); ASCII graphic + space
 - [x] **Wipe**: zero password staging buffers after login/useradd/passwd;
       wipe derived-key scratch after verify; host wipe unit test
-- [ ] Suite: `test-users` + format/load path still green on GALF bump
+- [x] Suite: `test-users` + galfs (+ disk) green on GALF v5
+- [ ] **Follow-up**: Argon2id on a dedicated KDF stack / arena (keep
+      32 KiB task kstacks)
 
 ### Interactive secrets (no-echo prompts)
 

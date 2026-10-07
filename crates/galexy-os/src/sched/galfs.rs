@@ -201,8 +201,8 @@ static ADMIN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16
 /// LBA [`DISK_SECTORS`]. A sync writes the inactive slot with gen+1 and a
 /// CRC, then flushes — a crash mid-write leaves the previous slot intact.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-/// Bumped when password hashing moved to Argon2id (v5). v4 CRC hashes
-/// cannot verify; load refuses the image and format recreates admin.
+/// Bumped when password hashing moved to PBKDF2-HMAC-SHA256 (v5). v4 CRC
+/// hashes cannot verify; load refuses the image and format recreates admin.
 pub const DISK_VERSION: u16 = 5;
 pub const DISK_SECTORS: usize = 80;
 pub const DISK_SLOT_COUNT: usize = 2;

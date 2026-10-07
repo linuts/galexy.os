@@ -100,7 +100,7 @@ TODO.md         milestone checkboxes
 crates/
   galexy-abi/     syscall numbers, Cap model, errors (host-tested)
   galexy-core/    pure primitives (host-tested)
-  galexy-crypto/  Argon2id password KDF (host-tested)
+  galexy-crypto/  PBKDF2-HMAC-SHA256 password KDF (host-tested)
   galexy-os/      kernel (lib + main + test bins)
   userspace/      galexy-rt, shell, util, hello
   runner/         image build, `cargo run`, QEMU boot tests

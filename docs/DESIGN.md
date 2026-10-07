@@ -566,8 +566,9 @@ the table stays RAM-only. The table holds 16 actors, 64 objects, and
 `bin/test-galfs-disk` proves a file survives two QEMU boots and that a
 corrupt newest slot still recovers from the older copy. Shell utilities
 use `SPAWN_WAIT` so the prompt returns after `ls` / `mkdir` exit.
-Auth is password for identity (Argon2id in `galexy-crypto`, CSPRNG salts)
-plus galfs tokens for authorization (see `docs/AUTH.md`). Process
+Auth is password for identity (PBKDF2-HMAC-SHA256 in `galexy-crypto`,
+CSPRNG salts) plus galfs tokens for authorization (see `docs/AUTH.md`).
+Process
 wait/kill/supervise use **process Caps**, not global PIDs (plan:
 `docs/PROCESS.md`; Milestone 47 + Phase 6). Every F-key shell boots
 **logged out** (console + keyboard only) on a login screen

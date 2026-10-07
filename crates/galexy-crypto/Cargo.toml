@@ -8,4 +8,3 @@ name = "galexy_crypto"
 path = "src/lib.rs"
 
 [dependencies]
-argon2 = { version = "0.5.3", default-features = false, features = ["alloc"] }
