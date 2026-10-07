@@ -1,8 +1,9 @@
 # STYLE — galexy.os conventions
 
 Rules for how code in this repo is written. Reviewers (and future me) should
-enforce these. Auth/token and galfs rules below are binding once
-Milestones 43+ land; until then treat them as the target.
+enforce these. Auth/token, galfs, and process/init rules below are binding
+once the matching milestones land (43+ / 47 / 53–55); until then treat
+them as the target.
 
 ## Rust idioms
 
@@ -67,6 +68,46 @@ Milestones 43+ land; until then treat them as the target.
   explicitly designed (Milestone 45). Do not silently persist cards.
 - Ramdisk `SPAWN_WAIT` utilities inherit the caller's cards — treat those
   ELFs as privileged. New utils need a one-line trust note in the PR.
+
+## Process model and init
+
+Clean-slate rules for Milestones **47** and **53–55**. Do not grow a
+second, permanent “Unix compatibility” layer beside these.
+
+- **Spawn, not fork.** New tasks are created by `spawn` (load ELF + args
+  + attenuated caps/tokens). No `fork`/`clone` that duplicates an address
+  space. Attenuation happens at spawn time, not after.
+- **PID is the stable identity.** Every live or zombie task has a
+  monotonic `Pid` that is never reused while any waiter could still name
+  it. Scheduler slot indices may recycle; **slots are not PIDs**.
+- **Names are labels.** Task names are for `tasks` listings and debugging.
+  Kernel wait/kill/reparent APIs take **PIDs**. Do not add a long-lived
+  parallel wait-by-name ABI once PID wait ships (migrate `SPAWN_WAIT`
+  callers in the same milestone window).
+- **PID ≠ authority.** Knowing a number does not grant `kill` / `wait` /
+  inspect. Those need a documented relationship (parent, same session
+  with rights, or an explicit process capability / admin path). Caps and
+  galfs tokens remain the authorization story.
+- **Hierarchy is real.** Each task has a parent PID. On parent exit,
+  children are reparented to **init (PID 1)**. Exit status is kept until
+  a waiter reaps it (zombie); unbounded zombie growth is a bug.
+- **Init is userspace.** PID 1 is the first ring-3 program. Policy
+  (which seats to start, restart-on-crash, shutdown order) lives there —
+  not in `ensure_shell()` forever. The kernel only supplies mechanism:
+  create PID 1, reparent orphans, refuse to kill PID 1, panic if PID 1
+  exits.
+- **Seats over ambient root.** Login TTYs and long-running services are
+  children of init (or of a small supervisor init starts), each with
+  their own session/caps — not a permanent kernel-injected admin shell.
+- **Signals stay small.** Directed `kill` / fault delivery by PID (and
+  later process group) with explicit rights. No full POSIX signal set
+  for review-era work unless a milestone checkbox says so.
+- **Process groups / sessions (Milestone 55)** are for job control and
+  TTY foreground — design them before wiring Ctrl-C, not as an
+  afterthought dump of `setpgid` flags.
+- **ABI changes** for Pid / wait / kill ship in `galexy-abi` + DESIGN +
+  `galexy-rt` + shell/init in the **same PR**, marked experimental until
+  Milestone 51/55 freezes them.
 
 ## Secrets and passwords
 

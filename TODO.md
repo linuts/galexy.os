@@ -1029,7 +1029,8 @@ survives a stolen disk image, a filesystem usable beyond demos, and kernel
 edges that a reviewer will poke. **Ten milestones (43–52)** — each keeps
 the full former checklist as subsections (nothing dropped). Order is
 dependency-aware; each milestone must leave the suite green.
-Conventions: `docs/STYLE.md`.
+Conventions: `docs/STYLE.md`. Process **init / seats** land in Phase 6
+(53–55) after `review-rc1`; Milestone 47 still ships the PID foundation.
 
 ---
 ## Milestone 43 — Auth hardening
@@ -1287,27 +1288,48 @@ Reviewers will ask how storage grows past QEMU's secondary IDE.
 
 ## Milestone 47 — Process, ABI & capabilities
 
-What a non-toy program and a forged Cap will hit.
+What a non-toy program and a forged Cap will hit. This milestone lays the
+**clean-slate process foundation** (PIDs, parent, wait, exit status);
+userspace **init** and seat supervision are Phase 6 (Milestones 53–55).
+Style: `docs/STYLE.md` → Process model and init.
 
-### User ABI & process model hygiene
+### Process identity (PID foundation)
 
-Kernel edges visible the moment someone ports a non-toy program.
+Today tasks are named + slot-indexed. Keep names as labels; make **Pid**
+the stable identity before anything grows around wait/kill.
 
-- [ ] **Ring-3 segment reload**: SYSCALL return restores user DS/ES (and
-      documents FS/GS policy); today kernel bootstrap selectors remain
+- [ ] **Design note** in `DESIGN.md`: spawn-not-fork; Pid vs slot vs name;
+      parent/child; zombie until wait; PID ≠ authority (caps still gate)
+- [ ] **`Pid` in `galexy-abi`**: monotonic id; never reuse while a zombie
+      or wait reference exists; document width and wrap policy
+- [ ] **`getpid` / `getppid`** (or query-cap fields) for the calling task
+- [ ] **Parent pointer** on every task; first kernel-spawned user tasks
+      use parent `0` / “kernel” until init exists (Milestone 53 reparents
+      the tree under PID 1)
+- [ ] **Exit status**: surface child exit code to a waiting parent; shell
+      `echo $?` or equivalent
+- [ ] **Wait by PID**: evolve `SPAWN_WAIT` (or add `wait`) so the waiter
+      names a Pid; migrate shell/utils in the same window — **no permanent
+      dual wait-by-name ABI** (STYLE)
+- [ ] **Wait/reap hygiene**: waiter exits first → child becomes
+      waitable by the new parent (eventually init); no dangling wait
+      edges; zombies bounded by task table
+- [ ] **Kill by PID (signals-lite)**: stop a runaway task with an explicit
+      rights check (parent, session, or admin path) — not “know the name”
+- [ ] **Names as labels**: `tasks` listing shows Pid + name; unique-live
+      name rule may remain for UX but is not the wait key
+- [ ] **Name length / charset** for labels aligned with spawn checks;
+      documented in abi
 - [ ] **Args & env**: spawn already passes one argument blob — define
       argv/env layout (or explicitly freeze “single arg blob” in ABI)
-- [ ] **Exit status**: surface child exit code to a waiting parent
-      (`SPAWN_WAIT`); shell `echo $?` or equivalent
-- [ ] **Signals-lite or kill**: admin/owner can stop a runaway task by
-      name (beyond fault-kill); ties to supervisor story
+- [ ] **Ring-3 segment reload**: SYSCALL return restores user DS/ES (and
+      documents FS/GS policy); today kernel bootstrap selectors remain
 - [ ] **More query caps or `sysinfo`**: uptime, free frames, galfs
-      usage — for operators during review demos
-- [ ] **Wait/reap hygiene**: document what happens if the waiter exits
-      first; no zombie wait edges
-- [ ] **Name length / charset** for tasks aligned with spawn checks;
-      documented in abi
-- [ ] ABI doc section: stable vs experimental syscalls
+      usage, Pid table snapshot — for operators during review demos
+- [ ] ABI doc section: stable vs experimental syscalls (Pid/wait/kill
+      marked experimental until Phase 6 freezes)
+- [ ] Tests: spawn → wait exit code; kill rights denied for stranger
+      Pid; slot reuse does not reuse Pid while zombie exists
 
 ### Capability & resource accounting
 
@@ -1326,6 +1348,8 @@ Make the object-capability story hold under exhaustion and forgery.
       add a regression comment/test if a change regresses it)
 - [ ] **Loader EXEC**: only the shell (or tasks with loader grant) can
       spawn; pre-login denial covered in Milestone 43 — cross-link tests here
+- [ ] **Spawn returns Pid** to the caller (abi + `galexy-rt`); shell can
+      print/wait it without scraping names
 
 ## Milestone 48 — Memory, safety & concurrency
 
@@ -1516,11 +1540,13 @@ What we will tell a reviewer we are *not* doing — written down.
 
 - [ ] **No network stack** for review-rc1
 - [ ] **No GPU / multi-framebuffer**
-- [ ] **No POSIX compatibility claim** — galexy ABI only
+- [ ] **No POSIX compatibility claim** — galexy ABI only (PIDs/wait/kill
+      are Galexy process model, not a Linux ABI promise)
 - [ ] **No MFA / networked IdP / PAM**
 - [ ] **No demand-paged swap**
 - [ ] **No multiprocessor device drivers** (keyboard/FB stay BSP)
 - [ ] **No secure boot / measured boot** (ramdisk hash optional in hardening below)
+- [ ] **No systemd/dbus** — Phase 6 init is a small supervised table
 - [ ] Each non-goal listed in `THREAT.md` with one-line rationale
 - [ ] ROADMAP Phase 5 updated to listed here under Milestone 45
 
@@ -1539,6 +1565,117 @@ The “ready for review” checklist — not a feature dump.
       same PR
 - [ ] **STYLE.md audit**: PR checklist that secrets/GALF/IF=0 rules were
       followed (short bullet list in the PR template or REVIEWER.md)
+- [ ] Phase 6 process/init milestones listed in ROADMAP (not required to
+      tag `review-rc1`, but design notes from M47 must not contradict them)
+
+---
+
+## Phase 6 — Process model, init & supervised seats
+
+Goal: a **modern, clean-slate** process architecture — PIDs and a real
+hierarchy, userspace init as PID 1, seats/services supervised in
+userspace — without pretending to be POSIX. Builds on Milestone 47.
+Style rules: `docs/STYLE.md` → Process model and init. Direction:
+`docs/ROADMAP.md` Phase 6.
+
+## Milestone 53 — Init (PID 1)
+
+Mechanism in the kernel; policy in userspace.
+
+### Kernel mechanism
+
+- [ ] **PID 1 is the first ring-3 task**: kernel loads `init` (ramdisk)
+      once; it is the root of the user process tree
+- [ ] **Orphan reparent**: when a parent exits, live children move to
+      init; zombies wait for init (or the waiting parent) to reap
+- [ ] **Init is immortal to user kill**: `kill` of PID 1 fails; if init
+      exits/faults → kernel panic (or controlled reboot) with a clear
+      serial reason — never silently `ensure_shell` around it
+- [ ] **Retire kernel seat supervisor**: `ensure_shell()` / auto-respawn
+      of `shell`…`shell12` becomes a transitional shim, then **removed**
+      once init owns seats (Milestone 54). Document the cutover in DESIGN
+- [ ] **Shutdown/reboot path**: power syscalls either require a right
+      held by init (or a grant init gives the operator shell), or become
+      “request to init” so flush/order happens in userspace first
+- [ ] Tests: orphan reparent; kill PID 1 denied; init exit panics/reboots
+      deterministically in a test kernel
+
+### Userspace init program
+
+- [ ] **`crates/userspace/init`**: minimal PID 1 — reap zombies in a
+      loop, start configured children, handle shutdown request
+- [ ] **Config surface (v1)**: fixed table in init or a small `/etc/init`
+      galfs file — which programs to spawn at boot (getty/seats, optional
+      services). No dbus/systemd graph in v1
+- [ ] **Restart policy (v1)**: on child exit, restart | once | ignore —
+      per entry; crash loops back off with monotonic time (M43 clock)
+- [ ] **Caps/tokens for children**: init attenuates what each child gets
+      (login seat ≠ disk service); never ambient “all rights because
+      parent is init”
+- [ ] **Logging**: init writes a short serial/console line on
+      start/reap/restart/shutdown (feeds Milestone 49 audit story)
+- [ ] Docs: `DESIGN.md` boot → init → seats diagram; AUTH notes that
+      login seats are init children
+
+## Milestone 54 — Seats & service supervision
+
+Move F-key consoles and long-runners under init.
+
+### Login seats (getty → shell)
+
+- [ ] **Per-TTY seat child**: init spawns one seat program per console
+      (or one getty that execs/spawns the shell) with the TTY arg used
+      today for the login banner
+- [ ] **Login screen stays in the seat**: logged-out UI remains the
+      shell (or a thin getty); init does not embed password prompts
+- [ ] **Seat crash → restart**: replacing today's kernel `ensure_shell`
+      with init's restart policy; supervisor typing e2e updated
+- [ ] **Session id**: bind Milestone 43 session generation to the seat's
+      Pid/session so audits name a stable process identity
+- [ ] **F1–F12 switching** remains kernel console selection; only the
+      *task lifecycle* moves to init
+- [ ] Tests: kill seat → login screen returns; other seats unaffected
+
+### Service supervision (lite)
+
+Small and explicit — not a systemd clone.
+
+- [ ] **Service table**: name, program, restart policy, required caps /
+      token skeleton, optional dependency “after:” (ordering only in v1)
+- [ ] **Operator surface**: `svc status|start|stop|restart <name>` (shell
+      builtins or a tiny util) talking to init via a documented IPC
+      (pipe/galfs control file/syscall — pick one in DESIGN, keep it
+      capability-gated)
+- [ ] **No ambient root services**: each service runs as an actor or
+      with a dedicated card set; document the trust boundary
+- [ ] **Hang detection (optional)**: liveness pipe or deadline; mark
+      waived if not in v1
+- [ ] Docs: which boot services exist for `review-rc1` vs Phase 6 demos
+- [ ] Explicit non-goals for v1: socket activation, cgroups, timers,
+      device manager, user bus
+
+## Milestone 55 — Sessions & job control (lite)
+
+Enough structure for demos and Ctrl-C — still not POSIX.
+
+### Sessions and process groups
+
+- [ ] **Session** = login seat (or service root); **process group** =
+      pipeline / job under that session
+- [ ] **`setsid` / `setpgid` equivalents** in abi (galexy names); spawn
+      can join/create a group
+- [ ] **TTY foreground group**: keyboard-generated interrupt (Ctrl-C)
+      delivers signals-lite to the foreground group only
+- [ ] **Shell jobs (v1)**: one foreground pipeline; background optional
+      or waived with DESIGN note
+- [ ] **Wait for group / job**: shell can wait for its pipeline without
+      reaping unrelated cousins
+- [ ] Tests: Ctrl-C kills foreground `linger`, not a sibling seat; wait
+      collects pipeline exit status
+- [ ] ABI freeze note: Pid + wait + kill + session/group marked stable
+      or explicitly experimental in the Milestone 51 table
+- [ ] Explicit non-goals: full job-control tty ioctls, POSIX job specs,
+      `SIGTSTP`/`SIGCONT` zoo unless a later milestone opts in
 
 ---
 
@@ -1595,9 +1732,12 @@ items stay here with rationale.
 - [ ] Sealed GALF — **Milestone 44**
 - [ ] galfs for real usage — **Milestone 45**
 - [ ] Storage stack — **Milestone 46**
-- [ ] Process/ABI/caps — **Milestone 47**
+- [ ] Process/ABI/caps (PID foundation) — **Milestone 47**
 - [ ] Memory/safety/concurrency — **Milestone 48**
 - [ ] Console/audit — **Milestone 49**
 - [ ] Shell demos — **Milestone 50**
 - [ ] Docs/tests/CI/soak — **Milestone 51**
 - [ ] Review RC — **Milestone 52**
+- [ ] Init (PID 1) — **Milestone 53** (Phase 6)
+- [ ] Seats & service supervision — **Milestone 54**
+- [ ] Sessions & job control lite — **Milestone 55**

@@ -236,7 +236,9 @@ checklist). Style: `docs/STYLE.md`.
 3. **45 galfs for real usage** — extents/capacity, rename/truncate/stat,
    sync/fsck, quotas & cards
 4. **46 Storage stack** — BlockDevice; virtio or primary IDE; flush
-5. **47 Process, ABI & caps** — segments, exit status, forge/ceiling tests
+5. **47 Process, ABI & caps** — PID foundation (spawn-not-fork, parent,
+   wait/exit status, kill-by-Pid with rights), segments, forge/ceiling
+   tests. Names stay labels. Init itself is Phase 6.
 6. **48 Memory, safety & concurrency** — W^X, scrub, lock-order freeze
 7. **49 Console, audit & UX** — cursor, overflow, auth/grant audit log
 8. **50 Shell for real demos** — pipes, glob, line editing
@@ -246,6 +248,23 @@ checklist). Style: `docs/STYLE.md`.
 
 Standing rule unchanged: each milestone leaves the suite green; prefer
 explicit waivers in the threat/FS docs over half-landed features.
+
+## Phase 6 — Process model, init & supervised seats
+
+Goal: finish the clean-slate process architecture so Galexy feels like a
+**modern capability OS** — not a named-task toy and not a POSIX clone.
+Concrete checkboxes: `TODO.md` Milestones **53–55**. Style:
+`docs/STYLE.md` → Process model and init.
+
+1. **53 Init (PID 1)** — userspace init; orphan reparent; retire kernel
+   `ensure_shell` policy; ordered shutdown
+2. **54 Seats & service supervision** — getty/login seats as init
+   children; small restart table; capability-gated operator `svc`
+3. **55 Sessions & job control (lite)** — session/process group; TTY
+   foreground; Ctrl-C to the foreground group only
+
+Non-goals for this phase: systemd/dbus, full POSIX signals/job control,
+socket activation, cgroups.
 
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
