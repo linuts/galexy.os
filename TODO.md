@@ -1093,10 +1093,11 @@ Make seats behave like accounts, not permanent admin shells.
       reset cwd; return to the login screen
 - [x] **Pre-login grants**: console + keyboard only (no loader / query /
       power) until `login`; admin login restores power
-- [ ] **Force admin password change**: after format, `admin`/`admin` is
-      marked must-change; `login`/`passwd` required before other commands
-      (except `passwd` / `help` / `whoami`). Or require a boot-time
-      `passwd` on first interactive F1 session
+- [x] **Force admin password change** (shell): login as `admin`/`admin`
+      sets a seat flag; only `passwd` / `help` / `whoami` / `logout` until
+      `passwd` succeeds. Typing e2e clears the default before other cmds.
+- [ ] **Kernel must-change** (follow-up): persist flag on the actor /
+      deny mutating syscalls so non-shell clients cannot skip the gate
 - [ ] **Login lockout**: after N failures per actor (and/or per TTY),
       refuse further attempts for a cool-down; count visible via `stats`
       or serial audit line

@@ -28,6 +28,8 @@ const LINE_MAX: usize = 80;
 const PATH_MAX: usize = 64;
 const USER_MAX: usize = 16;
 const PASS_MAX: usize = 64;
+/// Format-time admin password; seats that still use it must `passwd` first.
+const ADMIN_DEFAULT_PASS: &[u8] = b"admin";
 
 struct Cwd {
     buf: [u8; PATH_MAX],
@@ -46,15 +48,25 @@ fn main() -> i32 {
         buf: [0; PATH_MAX],
         len: 0,
     };
+    let mut must_change = false;
     loop {
         if !session_logged_in() {
-            if !login_screen(kbd, tty) {
-                return 1;
+            match login_screen(kbd, tty) {
+                None => return 1,
+                Some(change) => {
+                    must_change = change;
+                    cwd.len = 0;
+                    if must_change {
+                        write_console(b"passwd: change the default password\n");
+                    }
+                }
             }
-            cwd.len = 0;
         }
-        match repl(kbd, &mut cwd) {
-            ReplEnd::Logout => continue,
+        match repl(kbd, &mut cwd, &mut must_change) {
+            ReplEnd::Logout => {
+                must_change = false;
+                continue;
+            }
             ReplEnd::Die(code) => return code,
         }
     }
@@ -75,7 +87,10 @@ fn session_logged_in() -> bool {
 }
 
 /// Login banner + prompts until a password succeeds.
-fn login_screen(kbd: Cap, tty: u8) -> bool {
+///
+/// Returns `Some(must_change)` — `must_change` is set when `admin` still
+/// uses the format default password.
+fn login_screen(kbd: Cap, tty: u8) -> Option<bool> {
     loop {
         write_console(&[0x0c]);
         write_console(b"Galexy.OS v");
@@ -86,25 +101,26 @@ fn login_screen(kbd: Cap, tty: u8) -> bool {
         write_console(b"Login as: ");
         let mut name = [0u8; USER_MAX];
         match read_line(kbd, &mut name, false) {
-            LineRead::Denied => return false,
+            LineRead::Denied => return None,
             LineRead::Cancel | LineRead::Overlong => continue,
             LineRead::Line(0) => continue,
             LineRead::Line(nlen) => {
                 write_console(b"Password: ");
                 let mut pass = [0u8; PASS_MAX];
                 let plen = match read_line(kbd, &mut pass, true) {
-                    LineRead::Denied => return false,
+                    LineRead::Denied => return None,
                     LineRead::Cancel | LineRead::Overlong | LineRead::Line(0) => {
                         wipe(&mut pass);
                         continue;
                     }
                     LineRead::Line(n) => n,
                 };
+                let default_admin = &name[..nlen] == b"admin" && &pass[..plen] == ADMIN_DEFAULT_PASS;
                 let result = user_login(&name[..nlen], &pass[..plen]);
                 wipe(&mut pass);
                 if result.ok {
                     write_console(b"\n");
-                    return true;
+                    return Some(default_admin);
                 }
                 write_console(b"\nLogin incorrect\n");
                 for _ in 0..30 {
@@ -201,7 +217,7 @@ fn read_line(kbd: Cap, buf: &mut [u8], secret: bool) -> LineRead {
     }
 }
 
-fn repl(kbd: Cap, cwd: &mut Cwd) -> ReplEnd {
+fn repl(kbd: Cap, cwd: &mut Cwd, must_change: &mut bool) -> ReplEnd {
     let mut line = [0u8; LINE_MAX];
     let mut len = 0usize;
     prompt(cwd);
@@ -221,7 +237,7 @@ fn repl(kbd: Cap, cwd: &mut Cwd) -> ReplEnd {
             match byte {
                 b'\n' | b'\r' => {
                     write_console(b"\n");
-                    if let Some(end) = dispatch(kbd, trim(&line[..len]), cwd) {
+                    if let Some(end) = dispatch(kbd, trim(&line[..len]), cwd, must_change) {
                         return end;
                     }
                     len = 0;
@@ -243,9 +259,22 @@ fn repl(kbd: Cap, cwd: &mut Cwd) -> ReplEnd {
     }
 }
 
+/// Commands allowed while the default admin password is still in use.
+fn must_change_allowed(line: &[u8]) -> bool {
+    line == b"help"
+        || line == b"whoami"
+        || line == b"logout"
+        || arg_of(line, b"passwd").is_some()
+}
+
 /// `Some` ends the REPL. `None` keeps reading.
-fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd) -> Option<ReplEnd> {
+fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Option<ReplEnd> {
     if line.is_empty() {
+        prompt(cwd);
+        return None;
+    }
+    if *must_change && !must_change_allowed(line) {
+        write_console(b"passwd: change the default password first\n");
         prompt(cwd);
         return None;
     }
@@ -263,6 +292,7 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd) -> Option<ReplEnd> {
         write_console(b"login [user] [pass] - omit pass for a masked Password: prompt\n");
         write_console(b"passwd [name] [pass] / useradd <name> [pass] - same secret prompt\n");
         write_console(b"logout returns to the login screen; Esc/Ctrl-C cancels a prompt\n");
+        write_console(b"default admin/admin must passwd before other commands\n");
         write_console(b"grant/revoke: <rights> <path> <task>  (r w l c x a=all)\n");
         write_console(b"su <user> needs an access card; login uses a password\n");
         write_console(b"power: shutdown, reboot\n");
@@ -343,7 +373,7 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd) -> Option<ReplEnd> {
         return None;
     }
     if let Some(rest) = arg_of(line, b"useradd") {
-        user_pass_op(kbd, cwd, rest, galexy_abi::USER_ADD, b"useradd");
+        user_pass_op(kbd, cwd, rest, galexy_abi::USER_ADD, b"useradd", must_change);
         return None;
     }
     if let Some(rest) = arg_of(line, b"userdel") {
@@ -351,7 +381,7 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd) -> Option<ReplEnd> {
         return None;
     }
     if let Some(rest) = arg_of(line, b"login") {
-        user_pass_op(kbd, cwd, rest, galexy_abi::USER_LOGIN, b"login");
+        user_pass_op(kbd, cwd, rest, galexy_abi::USER_LOGIN, b"login", must_change);
         return None;
     }
     if line == b"logout" {
@@ -361,10 +391,11 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd) -> Option<ReplEnd> {
             return None;
         }
         cwd.len = 0;
+        *must_change = false;
         return Some(ReplEnd::Logout);
     }
     if let Some(rest) = arg_of(line, b"passwd") {
-        passwd_cmd(kbd, cwd, rest);
+        passwd_cmd(kbd, cwd, rest, must_change);
         return None;
     }
     if let Some(rest) = arg_of(line, b"su") {
@@ -677,7 +708,14 @@ fn user_op(cwd: &mut Cwd, rest: &[u8], op: u64, label: &[u8]) {
     report_user(cwd, label, result, op == galexy_abi::USER_SU);
 }
 
-fn user_pass_op(kbd: Cap, cwd: &mut Cwd, rest: &[u8], op: u64, label: &[u8]) {
+fn user_pass_op(
+    kbd: Cap,
+    cwd: &mut Cwd,
+    rest: &[u8],
+    op: u64,
+    label: &[u8],
+    must_change: &mut bool,
+) {
     let rest = trim(rest);
     let mut name_buf = [0u8; USER_MAX];
     let mut pass_buf = [0u8; PASS_MAX];
@@ -743,12 +781,21 @@ fn user_pass_op(kbd: Cap, cwd: &mut Cwd, rest: &[u8], op: u64, label: &[u8]) {
         pass_inline
     };
 
+    let default_admin = op == galexy_abi::USER_LOGIN
+        && name == b"admin"
+        && pass == ADMIN_DEFAULT_PASS;
     let result = if op == galexy_abi::USER_LOGIN {
         user_login(name, pass)
     } else {
         user_name_pass(name, pass, op)
     };
     wipe(&mut pass_buf);
+    if result.ok && op == galexy_abi::USER_LOGIN {
+        *must_change = default_admin;
+        if *must_change {
+            write_console(b"passwd: change the default password\n");
+        }
+    }
     report_user(
         cwd,
         label,
@@ -757,7 +804,7 @@ fn user_pass_op(kbd: Cap, cwd: &mut Cwd, rest: &[u8], op: u64, label: &[u8]) {
     );
 }
 
-fn passwd_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8]) {
+fn passwd_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8], must_change: &mut bool) {
     let rest = trim(rest);
     let mut pass_buf = [0u8; PASS_MAX];
     let (name, pass) = if rest.is_empty() {
@@ -790,6 +837,12 @@ fn passwd_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8]) {
     }
     let result = user_passwd(name, pass);
     wipe(&mut pass_buf);
+    if result.ok {
+        // Changing own password (empty name) clears the default-password gate.
+        if name.is_empty() || name == b"admin" {
+            *must_change = false;
+        }
+    }
     report_user(cwd, b"passwd", result, false);
 }
 

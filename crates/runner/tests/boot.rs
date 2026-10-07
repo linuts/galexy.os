@@ -655,8 +655,52 @@ const LOGIN_ADMIN_KEYS: &[(&str, &str)] = &[
     ("ret", "admin@galexy> "),
 ];
 
+/// After boot login with the format default, change it so other commands work.
+const CLEAR_DEFAULT_PASSWD: &[(&str, &str)] = &[
+    ("p", "p"),
+    ("a", "a"),
+    ("s", "s"),
+    ("s", "s"),
+    ("w", "w"),
+    ("d", "d"),
+    ("spc", " "),
+    ("t", "t"),
+    ("e", "e"),
+    ("s", "s"),
+    ("t", "t"),
+    ("p", "p"),
+    ("a", "a"),
+    ("s", "s"),
+    ("s", "s"),
+    ("ret", "admin@galexy> "),
+];
+
+/// Login screen using the post-`passwd` password (`testpass`).
+const LOGIN_ADMIN_TESTPASS_KEYS: &[(&str, &str)] = &[
+    ("a", "a"),
+    ("d", "d"),
+    ("m", "m"),
+    ("i", "i"),
+    ("n", "n"),
+    ("ret", "Password: "),
+    ("t", "*"),
+    ("e", "*"),
+    ("s", "*"),
+    ("t", "*"),
+    ("p", "*"),
+    ("a", "*"),
+    ("s", "*"),
+    ("s", "*"),
+    ("ret", "admin@galexy> "),
+];
+
 fn with_login<'a>(keys: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
-    LOGIN_ADMIN_KEYS.iter().chain(keys.iter()).copied().collect()
+    LOGIN_ADMIN_KEYS
+        .iter()
+        .chain(CLEAR_DEFAULT_PASSWD.iter())
+        .chain(keys.iter())
+        .copied()
+        .collect()
 }
 
 /// After each `Password: `, console echo must be `*` only. Kernel log
@@ -699,7 +743,7 @@ fn assert_passwords_masked(serial: &str) {
     }
 }
 
-/// After the boot login screen, CLI `login admin` with a masked prompt.
+/// After boot login + passwd, CLI `login admin` with masked `testpass`.
 const LOGIN_CLI_PROMPT_KEYS: &[(&str, &str)] = &[
     ("l", "l"),
     ("o", "o"),
@@ -713,11 +757,14 @@ const LOGIN_CLI_PROMPT_KEYS: &[(&str, &str)] = &[
     ("i", "i"),
     ("n", "n"),
     ("ret", "Password: "),
+    ("t", "*"),
+    ("e", "*"),
+    ("s", "*"),
+    ("t", "*"),
+    ("p", "*"),
     ("a", "*"),
-    ("d", "*"),
-    ("m", "*"),
-    ("i", "*"),
-    ("n", "*"),
+    ("s", "*"),
+    ("s", "*"),
     ("ret", "admin@galexy> "),
 ];
 
@@ -1036,6 +1083,46 @@ const SHELL_RESERVE_KEYS: &[(&str, &str)] = &[
     ("ret", "shell: reserved"),
 ];
 
+/// Default admin/admin must `passwd` before other commands.
+#[test]
+fn shell_must_change_typing_e2e() {
+    let mut keys = LOGIN_ADMIN_KEYS.to_vec();
+    keys.extend([
+        ("t", "t"),
+        ("o", "o"),
+        ("u", "u"),
+        ("c", "c"),
+        ("h", "h"),
+        ("spc", " "),
+        ("x", "x"),
+        ("ret", "passwd: change the default password first"),
+    ]);
+    keys.extend(CLEAR_DEFAULT_PASSWD.iter().copied());
+    keys.extend([
+        ("t", "t"),
+        ("o", "o"),
+        ("u", "u"),
+        ("c", "c"),
+        ("h", "h"),
+        ("spc", " "),
+        ("x", "x"),
+        ("ret", "admin@galexy> "),
+    ]);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "admin@galexy> ",
+        Duration::from_millis(30),
+        Duration::from_secs(120),
+    );
+    assert!(
+        serial.contains("passwd: change the default password first"),
+        "must-change did not block touch; serial:\n{serial}"
+    );
+    assert_passwords_masked(&serial);
+}
+
 /// Boot login screen + CLI `login admin` both mask the password on COM1.
 #[test]
 fn shell_secret_prompt_typing_e2e() {
@@ -1183,8 +1270,8 @@ fn shell_run_hello_typing_e2e() {
     // never overflow the i8042 queue between keys.
     // After `crash` the seat is logged out again — login, then probe.
     let mut keys = with_login(SUPERVISOR_AFTER_LOGIN);
-    // New shell is logged out; login again, then a probe key + linger beat.
-    keys.extend(LOGIN_ADMIN_KEYS.iter().copied());
+    // New shell is logged out; password was changed before crash.
+    keys.extend(LOGIN_ADMIN_TESTPASS_KEYS.iter().copied());
     keys.extend([("x", "x"), ("y", "beat\n")]);
     let serial = boot_and_type(
         &image("galexy-os"),
@@ -1249,8 +1336,10 @@ fn shell_run_hello_typing_e2e_uefi() {
 /// F2 runs a command on the second shell; F1 returns to the first.
 #[test]
 fn shell_tty_switch_e2e() {
-    let mut keys: Vec<(&str, &str)> = TTY_AFTER_F2.to_vec();
-    keys.extend(LOGIN_ADMIN_KEYS.iter().copied());
+    // F1 clears the default password first so F2's login uses testpass.
+    let mut keys = with_login(&[]);
+    keys.extend(TTY_AFTER_F2.iter().copied());
+    keys.extend(LOGIN_ADMIN_TESTPASS_KEYS.iter().copied());
     keys.extend(TTY_AFTER_LOGIN.iter().copied());
     let serial = boot_and_type(
         &image("galexy-os"),

@@ -77,6 +77,11 @@ Inline `login <user> <password>` remains for scripts and older tests.
 `logout` clears tokens, sets `fs_root = none`, restores pre-login grants,
 and returns the shell to the login screen.
 
+After format, `admin` / `admin` is the default. A seat that logs in with
+that pair must run `passwd` before other shell commands (`help`,
+`whoami`, and `logout` remain available). Kernel-wide enforcement of the
+same gate is a follow-up.
+
 ```text
 useradd <name> [password]     # admin only; prompts if password omitted
 passwd [name] [password]      # admin, or self; bare `passwd` prompts
