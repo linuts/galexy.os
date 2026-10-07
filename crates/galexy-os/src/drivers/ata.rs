@@ -3,13 +3,17 @@
 //! Drive 0 (master) is the boot image — never touch it. Drive 1 (slave)
 //! holds the galfs image when the runner attaches one. If the slave is
 //! absent, every call returns `Unsupported` and galfs stays RAM-only.
+//!
+//! Implements [`crate::drivers::block::BlockDevice`] as [`PrimarySlave`].
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use spin::Mutex;
 use x86_64::instructions::port::Port;
 
 use galexy_abi::SysError;
+
+use super::block::BlockDevice;
 
 const DATA: u16 = 0x1F0;
 const ERROR: u16 = 0x1F1;
@@ -38,7 +42,33 @@ const SLAVE: u8 = 1;
 
 static READY: AtomicBool = AtomicBool::new(false);
 static PROBED: AtomicBool = AtomicBool::new(false);
+static CAPACITY: AtomicU64 = AtomicU64::new(0);
 static LOCK: Mutex<()> = Mutex::new(());
+
+/// Primary IDE slave as a [`BlockDevice`] (galfs data disk).
+pub struct PrimarySlave;
+
+impl BlockDevice for PrimarySlave {
+    fn present(&self) -> bool {
+        present()
+    }
+
+    fn capacity_sectors(&self) -> u64 {
+        capacity_sectors()
+    }
+
+    fn read_sectors(&self, lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError> {
+        read_sectors(lba, dst)
+    }
+
+    fn write_sectors(&self, lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
+        write_sectors(lba, src)
+    }
+
+    fn flush(&self) -> Result<(), SysError> {
+        flush()
+    }
+}
 
 /// Probes the slave once. Returns whether a usable disk is there.
 pub fn present() -> bool {
@@ -53,11 +83,22 @@ pub fn present() -> bool {
     READY.store(ok, Ordering::Release);
     PROBED.store(true, Ordering::Release);
     if ok {
-        crate::serial_println!("[ata] primary slave ready (galfs disk)");
+        crate::serial_println!(
+            "[ata] primary slave ready ({} sectors)",
+            CAPACITY.load(Ordering::Relaxed)
+        );
     } else {
         crate::serial_println!("[ata] no primary slave; galfs stays in RAM");
     }
     ok
+}
+
+/// Sector count from IDENTIFY (0 if absent / not probed).
+pub fn capacity_sectors() -> u64 {
+    if !present() {
+        return 0;
+    }
+    CAPACITY.load(Ordering::Acquire)
 }
 
 fn identify_slave() -> bool {
@@ -84,14 +125,39 @@ fn identify_slave() -> bool {
     if wait_drq().is_err() {
         return false;
     }
-    for _ in 0..256 {
-        let _ = inw(DATA);
+    let mut words = [0u16; 256];
+    for w in &mut words {
+        *w = inw(DATA);
     }
+    // Words 60–61: total user-addressable sectors (LBA28).
+    let lba28 = u32::from(words[60]) | (u32::from(words[61]) << 16);
+    let cap = if lba28 != 0 {
+        u64::from(lba28)
+    } else {
+        // Words 100–103: Max LBA for 48-bit addressing.
+        u64::from(words[100])
+            | (u64::from(words[101]) << 16)
+            | (u64::from(words[102]) << 32)
+            | (u64::from(words[103]) << 48)
+    };
+    if cap == 0 {
+        return false;
+    }
+    CAPACITY.store(cap, Ordering::Release);
     true
 }
 
 /// ATA sector-count register is one byte; PIO commands are chunked here.
 const PIO_MAX_SECTORS: usize = 255;
+
+fn check_range(lba: u32, count: usize) -> Result<(), SysError> {
+    let cap = CAPACITY.load(Ordering::Acquire);
+    let end = u64::from(lba).saturating_add(count as u64);
+    if count == 0 || end > cap {
+        return Err(SysError::BadValue);
+    }
+    Ok(())
+}
 
 /// Reads `dst.len()` sectors starting at `lba` into `dst` (each SECTOR bytes).
 pub fn read_sectors(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError> {
@@ -101,6 +167,7 @@ pub fn read_sectors(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError> 
     if !present() {
         return Err(SysError::Unsupported);
     }
+    check_range(lba, dst.len())?;
     let _g = LOCK.lock();
     let mut off = 0usize;
     while off < dst.len() {
@@ -119,6 +186,7 @@ pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
     if !present() {
         return Err(SysError::Unsupported);
     }
+    check_range(lba, src.len())?;
     let _g = LOCK.lock();
     let mut off = 0usize;
     while off < src.len() {

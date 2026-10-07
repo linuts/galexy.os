@@ -49,7 +49,11 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     assert!(
         galfs::disk_backed(),
-        "ATA slave must back galfs for this test"
+        "block device must back galfs for this test"
+    );
+    assert!(
+        galfs::disk_capacity_sectors() >= (galfs::DISK_SECTORS * galfs::DISK_SLOT_COUNT) as u64,
+        "IDENTIFY capacity must cover both GALF dual slots"
     );
 
     let admin = galfs::admin_root();

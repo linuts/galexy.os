@@ -1293,19 +1293,21 @@ Multi-user usage beyond one admin and ad-hoc grants.
 
 Reviewers will ask how storage grows past QEMU's secondary IDE.
 
-- [ ] **Device abstraction**: `BlockDevice` trait (read/write sectors,
-      flush) with ATA PIO as the first impl
+- [x] **Device abstraction**: `BlockDevice` trait (read/write sectors,
+      flush, capacity) with ATA PIO `PrimarySlave` as the first impl;
+      galfs uses only `disk()` → trait (no raw `ata::` I/O)
 - [ ] **Primary IDE / virtio-blk**: at least one path that works with
       common QEMU flags without a hand-rolled `-drive` slave only
-- [ ] **Identify / capacity**: expose disk size to galfs so the image
-      cannot silently truncate
-- [ ] **Flush discipline**: FLUSH CACHE (or virtio barrier) on every
-      slot commit; test with `cache=writeback` and `cache=none`
+- [x] **Identify / capacity**: IDENTIFY words 60–61 / 100–103 →
+      `capacity_sectors()`; galfs gates on ≥ dual-slot size; out-of-range
+      LBA → `BadValue`; `disk_capacity_sectors` + `bin/test-galfs-disk`
+- [ ] **Flush discipline**: FLUSH CACHE already on every slot commit;
+      test with `cache=writeback` and `cache=none`
 - [ ] **Optional**: simple partition offset (GALF not required at LBA 0)
 - [ ] **Write barriers**: document ordering (data then metadata) for
       multi-block file updates
-- [ ] **Hot-unplug / missing disk**: boot without slave stays RAM-only;
-      clearly logged; no panic
+- [x] **Hot-unplug / missing disk**: boot without slave stays RAM-only;
+      too-small disk logged + RAM-only; no panic
 - [ ] Docs: how `cargo run` attaches storage; CI matrix for disk backends
 
 ## Milestone 47 — Process, ABI & capabilities

@@ -5,10 +5,11 @@
 //! set of rights; the path is only a lookup. Boot creates one immortal
 //! actor, [`ADMIN_NAME`]. Lock order: [`THREADS`] then this table.
 //!
-//! When the primary IDE slave is present, the table is loaded from a
-//! dual-slot GALF image (checksum + generation) or formatted if both
-//! slots are bad. Mutates sync to the inactive slot then flush. Without
-//! a slave the table stays RAM-only.
+//! When a [`BlockDevice`] large enough for both dual slots is present,
+//! the table is loaded from a GALF image (checksum + generation) or
+//! formatted if both slots are bad. Mutates sync to the inactive slot
+//! then flush. Without a usable disk the table stays RAM-only. The first
+//! backend is the primary IDE slave (`ata::PrimarySlave`).
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -23,7 +24,8 @@ use galexy_crypto::{
 const _: () = assert!(SALT_LEN == galexy_crypto::SALT_LEN);
 const _: () = assert!(HASH_LEN == galexy_crypto::HASH_LEN);
 
-use crate::drivers::ata;
+use crate::drivers::ata::PrimarySlave;
+use crate::drivers::block::{self, BlockDevice};
 
 /// Objects the kernel will hold (files, directories, and actor roots).
 pub const OBJECT_SLOTS: usize = 128;
@@ -311,22 +313,40 @@ const PAYLOAD_LEN: usize = ACTOR_ON_DISK * ACTOR_SLOTS
     + SHARE_ON_DISK * SHARE_SLOTS
     + BITMAP_BYTES
     + BLOCK_SLOTS * BLOCK_SIZE;
-const _: () = assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * ata::SECTOR);
+const _: () = assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * block::SECTOR);
 const _: () = assert!(BLOCK_SLOTS % 8 == 0);
 const _: () = assert!(FILE_BYTES <= u16::MAX as usize);
+/// Sectors both dual slots need at LBA 0 (capacity gate).
+const DISK_MIN_SECTORS: u64 = (DISK_SECTORS * DISK_SLOT_COUNT) as u64;
 /// Default password for the immortal admin account at format.
 pub const ADMIN_DEFAULT_PASSWORD: &str = "admin";
 /// Bring-up volume passphrase (wraps the disk key). Interactive unlock is
 /// a follow-up; tests and `cargo run` use this constant for now.
 pub const VOLUME_PASSPHRASE: &[u8] = b"galfs";
 
-static DISK_BUF: Mutex<[[u8; ata::SECTOR]; DISK_SECTORS]> =
-    Mutex::new([[0u8; ata::SECTOR]; DISK_SECTORS]);
+static DISK_BUF: Mutex<[[u8; block::SECTOR]; DISK_SECTORS]> =
+    Mutex::new([[0u8; block::SECTOR]; DISK_SECTORS]);
 /// Unwrapped volume key while the disk is mounted. `None` when locked / RAM-only.
 static VOLUME_KEY: Mutex<Option<[u8; KEY_LEN]>> = Mutex::new(None);
 
+/// The block device galfs uses for durable slots (ATA primary slave today).
+fn disk() -> &'static dyn BlockDevice {
+    &PrimarySlave
+}
+
+/// True when the device is present and large enough for both GALF slots.
+fn disk_usable() -> bool {
+    let d = disk();
+    d.present() && d.capacity_sectors() >= DISK_MIN_SECTORS
+}
+
+/// Addressable sector count from IDENTIFY (`0` if absent / unknown).
+pub fn disk_capacity_sectors() -> u64 {
+    disk().capacity_sectors()
+}
+
 /// Builds actor [`ADMIN_NAME`] with an empty Desktop, or loads the newest
-/// valid GALF slot from the ATA slave. Call once.
+/// valid GALF slot from the block device. Call once.
 ///
 /// Sync policy: every successful mutate that changes the table calls
 /// [`sync`] (inactive slot + flush). [`sync_explicit`] is an extra barrier.
@@ -334,7 +354,13 @@ pub fn init() {
     if BOOTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    if ata::present() {
+    if disk().present() && !disk_usable() {
+        crate::serial_println!(
+            "[galfs] disk too small ({} sectors; need {}); RAM-only",
+            disk().capacity_sectors(),
+            DISK_MIN_SECTORS,
+        );
+    } else if disk_usable() {
         match load_from_disk() {
             DiskLoad::Loaded { recovered } => {
                 let slot = ACTIVE_SLOT.load(Ordering::Relaxed);
@@ -383,17 +409,17 @@ fn format_fresh() {
     wipe_bytes(&mut vk);
     if sync_to_disk() {
         crate::serial_println!("[galfs] formatted sealed disk");
-    } else if !ata::present() {
-        crate::serial_println!("[galfs] RAM-only (no ATA slave)");
+    } else if !disk_usable() {
+        crate::serial_println!("[galfs] RAM-only (no usable block device)");
     }
 }
 
-/// True when this boot is using the ATA slave for the table.
+/// True when this boot is using a block device for the table.
 pub fn disk_backed() -> bool {
     DISK_LIVE.load(Ordering::Acquire)
 }
 
-/// True when the ATA slave looked like GALF but no slot validated.
+/// True when the disk looked like GALF but no slot validated.
 pub fn disk_corrupt() -> bool {
     DISK_CORRUPT.load(Ordering::Acquire)
 }
@@ -411,7 +437,7 @@ pub fn disk_slot_info() -> (u32, u64) {
     )
 }
 
-/// Writes the in-RAM table to the slave. No-op when no disk is attached.
+/// Writes the in-RAM table to the block device. No-op when RAM-only.
 pub fn sync() {
     let _ = sync_to_disk();
 }
@@ -421,7 +447,7 @@ pub fn sync_explicit() -> Result<(), SysError> {
     if DISK_CORRUPT.load(Ordering::Acquire) {
         return Err(SysError::Unsupported);
     }
-    if !ata::present() {
+    if !disk_usable() {
         return Ok(());
     }
     if sync_to_disk() {
@@ -432,7 +458,7 @@ pub fn sync_explicit() -> Result<(), SysError> {
 }
 
 fn sync_to_disk() -> bool {
-    if !ata::present() || DISK_CORRUPT.load(Ordering::Acquire) {
+    if !disk_usable() || DISK_CORRUPT.load(Ordering::Acquire) {
         return false;
     }
     if VOLUME_KEY.lock().is_none() {
@@ -447,11 +473,12 @@ fn sync_to_disk() -> bool {
         let table = TABLE.lock();
         encode_table(&table, next_gen, &mut buf);
     }
-    if ata::write_sectors(lba, &*buf).is_err() {
+    let d = disk();
+    if d.write_sectors(lba, &*buf).is_err() {
         crate::serial_println!("[galfs] disk sync write failed");
         return false;
     }
-    if ata::flush().is_err() {
+    if d.flush().is_err() {
         crate::serial_println!("[galfs] disk flush failed");
         return false;
     }
@@ -480,7 +507,7 @@ fn load_from_disk() -> DiskLoad {
     let mut cand = LOAD_CAND.lock();
     for slot in 0..DISK_SLOT_COUNT as u32 {
         let lba = (slot as usize * DISK_SECTORS) as u32;
-        if ata::read_sectors(lba, &mut *buf).is_err() {
+        if disk().read_sectors(lba, &mut *buf).is_err() {
             continue;
         }
         let magic = buf[0][0..4] == DISK_MAGIC;
@@ -561,7 +588,7 @@ fn refresh_roots(table: &Table) {
     ADMIN_ROOT.store(admin, Ordering::Relaxed);
 }
 
-fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; ata::SECTOR]; DISK_SECTORS]) {
+fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; block::SECTOR]; DISK_SECTORS]) {
     let vk = VOLUME_KEY
         .lock()
         .expect("galfs: encode requires unlocked volume");
@@ -673,7 +700,7 @@ fn seal_aad(generation: u64) -> [u8; 14] {
 /// Decodes a sealed slot. Returns the generation when unlock + AEAD succeed.
 /// Decrypts the payload in place in `sectors`.
 fn decode_table(
-    sectors: &mut [[u8; ata::SECTOR]; DISK_SECTORS],
+    sectors: &mut [[u8; block::SECTOR]; DISK_SECTORS],
     table: &mut Table,
 ) -> Option<u64> {
     let flat = sectors_flat_mut(sectors);
@@ -944,12 +971,12 @@ fn validate_object_blocks(table: &Table, obj: &Object, seen: &mut [bool; BLOCK_S
     true
 }
 
-fn sectors_flat_mut(sectors: &mut [[u8; ata::SECTOR]; DISK_SECTORS]) -> &mut [u8] {
+fn sectors_flat_mut(sectors: &mut [[u8; block::SECTOR]; DISK_SECTORS]) -> &mut [u8] {
     // SAFETY: `[[u8; SECTOR]; N]` is contiguous bytes with no padding.
     unsafe {
         core::slice::from_raw_parts_mut(
             sectors.as_mut_ptr().cast::<u8>(),
-            DISK_SECTORS * ata::SECTOR,
+            DISK_SECTORS * block::SECTOR,
         )
     }
 }

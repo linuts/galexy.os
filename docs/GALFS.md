@@ -190,7 +190,8 @@ v11 refuses older images; delete `galfs.img` or let format recreate.
 
 ## Boot and format
 
-1. If ATA slave present → try load newest valid sealed slot.
+1. If a `BlockDevice` with capacity ≥ dual-slot image is present → try
+   load newest valid sealed slot.
 2. Empty zeros (no GALF magic) → format: immortal `admin` + `Desktop/`,
    default password `admin`, new volume key, sync sealed image.
 3. Both slots carry GALF magic but fail decode/validate → **refuse
@@ -324,8 +325,13 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 
 ### Target storage stack (Milestone 46)
 
-- Deeper ATA / virtio story as needed for demos
+- **Landed (first slice):** `BlockDevice` trait; `ata::PrimarySlave`
+  impl; IDENTIFY capacity; galfs routes all I/O through `disk()` and
+  refuses disks smaller than both dual slots (`disk_capacity_sectors`,
+  `bin/test-galfs-disk`)
+- Virtio-blk / primary IDE master path for common QEMU flags
 - Keep dual-slot (or journal) commit discipline from STYLE
+- Docs: `cargo run` storage attach; CI matrix for disk backends
 
 ## Explicit non-goals
 
