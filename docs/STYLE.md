@@ -176,7 +176,7 @@ POSIX layer beside these rules.
 
 - When behavior changes, update in this order: code → doc comment →
   `TODO.md` checkbox → `README.md` feature list → relevant deep doc
-  (`DESIGN.md`, `AUTH.md`, `PROCESS.md`, later `FS.md` / `THREAT.md`).
+  (`DESIGN.md`, `AUTH.md`, `GALFS.md`, `PROCESS.md`, later `THREAT.md`).
 - `ROADMAP.md` only for direction shifts or new phases.
 - `TODO.md` checkboxes are only checked after the item is *verified
   working* (e.g. seen in QEMU), never when "written".

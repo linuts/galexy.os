@@ -7,6 +7,9 @@ galexy.os separates **who you are** from **what you can touch**.
 | Authentication | Password (per actor, salted hash on disk) | Who is at this seat? |
 | Authorization | galfs tokens (`RIGHT_*` on an object) | Which folders/files may this task use? |
 
+Filesystem shape (actors, paths, tokens, sealed GALF slots):
+`docs/GALFS.md`. This doc is the auth/session layer on top.
+
 Tokens are **access cards**. They are not a substitute for login. A card
 can be handed to another user or to an app without sharing a password.
 A password never grants rights on someone else’s tree by itself — after

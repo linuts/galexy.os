@@ -11,8 +11,8 @@ galexy.os treats **tasks as kernel objects**. You name them with a
 
 This document is the plan. Checkboxes live in `TODO.md` (Milestone **47**,
 Phase 6 **53–55**). Style rules: `docs/STYLE.md` → Process model and init.
-Auth/tokens stay in `docs/AUTH.md` — passwords and galfs cards do not
-replace process Caps.
+Auth/tokens stay in `docs/AUTH.md`; the galfs tree/token/disk model is
+`docs/GALFS.md`. Passwords and galfs cards do not replace process Caps.
 
 ## Why not PIDs
 
