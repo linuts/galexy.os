@@ -1603,7 +1603,12 @@ pub fn drain_spawn() {
             )
         })
     } else {
-        serial_println!("[sched] spawn '{}' missing at drain; waking waiter", name);
+        serial_println!(
+            "[sched] spawn '{}' elf='{}' seat={} missing at drain",
+            name,
+            elf_name,
+            seat
+        );
         None
     };
     interrupts::without_interrupts(|| {
