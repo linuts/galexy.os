@@ -827,6 +827,49 @@ Two tiers, chosen after studying the bootloader crate's own test suite:
 QEMU exit-code mapping (empirically verified): `Success` (0x10) → exit 33,
 `Failed` (0x11) → exit 35.
 
+## Process Caps (Milestone 47)
+
+Plan: `docs/PROCESS.md`. Style: `docs/STYLE.md` → Process model and init.
+Checkboxes: `TODO.md` Milestone 47.
+
+**Why not PIDs as ABI.** A guessable global integer (`kill(pid)`,
+`waitpid(pid)`) fights the rest of Galexy — files, galfs tokens, and
+devices are Caps. Spawn stays spawn-not-fork. Authority is a **process
+Cap** returned to the parent; listings may show a monotonic **debug id**
+and a human **name**, but there is no `open_process(debug_id)` syscall.
+
+| Concept | Role |
+| --- | --- |
+| Process Cap | Handle + `PROC_*` rights over a task |
+| Debug id | KOID-style number for `tasks` / serial only |
+| Name | Label (`shell`, `hello`); not the wait/kill key |
+| Parent | Kernel parent pointer; orphans go to init (M53) |
+| Zombie | Exited task kept until Cap-wait reaps |
+
+**Rights** (`galexy-abi::CapRights`, bits 6–9):
+
+| Right | Allows |
+| --- | --- |
+| `PROC_WAIT` | Block until exit; receive status; reap |
+| `PROC_KILL` | Stop the task (signals-lite) |
+| `PROC_TRANSFER` | `give` the Cap to another task |
+| `PROC_INSPECT` | Read debug id / name / state |
+| `PROC_PARENT` | Union granted to the spawner by default |
+
+Attenuation on `grant`/`give` applies the same intersection rule as file
+Caps. Dropping the last wait Cap without a reaper is a bug path — orphans
+must land at init with wait rights once Milestone 53 lands.
+
+**Today → target.** Shell utilities still use `SPAWN_WAIT` (wait-by-name
+in the same window). Milestone 47 migrates to Cap-wait in one cut — no
+permanent dual ABI. `SELF_INDEX` grows toward a self Cap with inspect /
+limited rights; `getpid` is not the primary API. Args remain a single
+blob until argv/env layout freezes in abi.
+
+**ABI stability.** Process Cap wait/kill stay **experimental** until
+Phase 6 freezes init and seat supervision. Numbers for `PROC_*` bits are
+pinned in `galexy-abi` tests.
+
 ## Known sharp edges
 
 - `bootloader` 0.11's builder API differs entirely from 0.9's `bootimage`;

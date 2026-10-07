@@ -239,9 +239,10 @@ checklist). Style: `docs/STYLE.md`.
 4. **46 Storage stack** — BlockDevice, ATA capacity, flush matrix,
    virtio-blk, partition offset (landed)
 5. **47 Process, ABI & caps** — process-Cap foundation per
-   `docs/PROCESS.md` (spawn returns a Cap; wait/kill by Cap; debug ids
-   for listings only — **not** a Unix PID ABI), segments, forge/ceiling
-   tests. Init itself is Phase 6.
+   `docs/PROCESS.md` (DESIGN note + `PROC_*` rights landed; spawn
+   returns a Cap; wait/kill by Cap; debug ids for listings only —
+   **not** a Unix PID ABI), segments, forge/ceiling tests. Init itself
+   is Phase 6.
 6. **48 Memory, safety & concurrency** — W^X, scrub, lock-order freeze
 7. **49 Console, audit & UX** — cursor, overflow, auth/grant audit log
 8. **50 Shell for real demos** — pipes, glob, line editing

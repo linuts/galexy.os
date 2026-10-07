@@ -1330,12 +1330,13 @@ Plan: `docs/PROCESS.md`. Style: `docs/STYLE.md` → Process model and init.
 Today: names + slots. Target: **spawn returns a Cap to the child** —
 same discipline as files. Optional debug ids for listings only.
 
-- [ ] **Design note** in `DESIGN.md`: why not PIDs as ABI (guessable
+- [x] **Design note** in `DESIGN.md`: why not PIDs as ABI (guessable
       global namespace); spawn-not-fork; process Cap rights; debug id vs
       Cap; parent + Cap transfer on orphaning; zombie until Cap-wait
-- [ ] **Process Cap rights** in `galexy-abi`: e.g. `PROC_WAIT`,
-      `PROC_KILL`, `PROC_TRANSFER`, `PROC_INSPECT` (final names in abi);
-      document attenuation on `grant`/`give`
+- [x] **Process Cap rights** in `galexy-abi`: `PROC_WAIT` /
+      `PROC_KILL` / `PROC_TRANSFER` / `PROC_INSPECT` / `PROC_PARENT`
+      (bits 6–9); attenuation same intersection rule as file Caps
+      (`DESIGN.md` + abi docs)
 - [ ] **`spawn` returns a child Cap** to the caller (`galexy-rt` + shell);
       without the Cap you cannot wait or kill that task
 - [ ] **Self Cap**: calling task can obtain a Cap to itself (inspect /
@@ -1780,7 +1781,7 @@ items stay here with rationale.
       **Milestone 43**
 - [ ] Sealed GALF — **Milestone 44**
 - [ ] galfs for real usage — **Milestone 45**
-- [ ] Storage stack — **Milestone 46**
+- [x] Storage stack — **Milestone 46**
 - [ ] Process/ABI/caps (process-Cap foundation) — **Milestone 47**
 - [ ] Memory/safety/concurrency — **Milestone 48**
 - [ ] Console/audit — **Milestone 49**
