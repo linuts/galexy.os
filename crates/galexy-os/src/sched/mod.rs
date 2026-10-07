@@ -1388,6 +1388,20 @@ pub fn parent_slot_of(name: &str) -> Option<u8> {
     })
 }
 
+/// 1-based thread slot for a RUNNING or WAITING task named `name`.
+pub fn slot_of_name(name: &str) -> Option<u8> {
+    interrupts::without_interrupts(|| {
+        THREADS.lock().iter().enumerate().find_map(|(i, t)| {
+            let state = t.state.load(Ordering::Acquire);
+            if (state == STATE_RUNNING || state == STATE_WAITING) && t.name() == name {
+                Some((i + 1) as u8)
+            } else {
+                None
+            }
+        })
+    })
+}
+
 // (main_ticks moved into the per-CPU table above.)
 
 /// Argument bytes copied onto a new task's stack. Matches the syscall cap.
@@ -1625,6 +1639,18 @@ pub fn drain_spawn() {
             );
             return;
         };
+        // Milestone 55: seat (or any) spawn makes the child the TTY's
+        // foreground job Cap target for Ctrl-C.
+        if let Some(w) = threads.get(waiter_slot as usize - 1) {
+            let tty = w.tty as usize;
+            if tty < FG_SLOTS.len() {
+                let gen = threads[child_slot as usize - 1]
+                    .cap_gen
+                    .load(Ordering::Acquire);
+                FG_SLOTS[tty].store(child_slot, Ordering::Release);
+                FG_GENS[tty].store(gen, Ordering::Release);
+            }
+        }
         if wait_exit {
             if let Some(w) = threads.get_mut(waiter_slot as usize - 1) {
                 w.wait_child_slot.store(child_slot, Ordering::Release);
@@ -1666,6 +1692,81 @@ pub fn shell_is_live() -> bool {
 /// True when every F-key seat name is live (Milestone 54 boot gate).
 pub fn seats_are_live() -> bool {
     SHELL_NAMES.iter().all(|name| named_is_live(name))
+}
+
+/// Per-TTY foreground job (Milestone 55): child slot + cap_gen.
+const FG_COUNT: usize = crate::drivers::keyboard::TTY_COUNT;
+static FG_SLOTS: [AtomicU8; FG_COUNT] = [const { AtomicU8::new(0) }; FG_COUNT];
+static FG_GENS: [AtomicU32; FG_COUNT] = [const { AtomicU32::new(0) }; FG_COUNT];
+
+/// Test helper: pin TTY `tty`'s foreground job to `child_slot`.
+pub fn set_foreground_for_test(tty: u8, child_slot: u8) {
+    let tty = tty as usize;
+    if tty >= FG_COUNT || child_slot == 0 {
+        return;
+    }
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let Some(t) = threads.get(child_slot as usize - 1) else {
+            return;
+        };
+        let gen = t.cap_gen.load(Ordering::Acquire);
+        FG_SLOTS[tty].store(child_slot, Ordering::Release);
+        FG_GENS[tty].store(gen, Ordering::Release);
+    });
+}
+
+/// Ctrl-C / signals-lite: kill the foreground job on `tty` if live.
+///
+/// Returns true when a foreground task was stopped (caller should not
+/// deliver `^C` into the keyboard ring). The process Cap holder Cap-waits
+/// exit status `137`.
+pub fn interrupt_foreground(tty: u8) -> bool {
+    let tty = tty as usize;
+    if tty >= FG_COUNT {
+        return false;
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let slot = FG_SLOTS[tty].load(Ordering::Acquire);
+        let gen = FG_GENS[tty].load(Ordering::Acquire);
+        if slot == 0 || slot as usize > threads.len() {
+            return false;
+        }
+        let i = slot as usize - 1;
+        if threads[i].cap_gen.load(Ordering::Acquire) != gen {
+            FG_SLOTS[tty].store(0, Ordering::Release);
+            return false;
+        }
+        if threads[i].is_init {
+            return false;
+        }
+        let state = threads[i].state.load(Ordering::Acquire);
+        if state != STATE_RUNNING && state != STATE_WAITING {
+            FG_SLOTS[tty].store(0, Ordering::Release);
+            return false;
+        }
+        if state == STATE_WAITING {
+            interrupt_io_waiter(&mut threads, i);
+        }
+        threads[i]
+            .exit_code
+            .store(EXIT_KILLED, Ordering::Release);
+        threads[i].state.store(STATE_EXITED, Ordering::Release);
+        let mut raw = [0u8; NAME_CAP];
+        let n = threads[i].name_len as usize;
+        raw[..n].copy_from_slice(&threads[i].name_bytes[..n]);
+        let name = core::str::from_utf8(&raw[..n]).unwrap_or("");
+        serial_println!(
+            "[sched] fg job '{}' killed by Ctrl-C on tty{} id={}",
+            name,
+            tty + 1,
+            threads[i].debug_id
+        );
+        wake_exit_waiters(&mut threads, slot, EXIT_KILLED);
+        FG_SLOTS[tty].store(0, Ordering::Release);
+        true
+    })
 }
 
 /// True when a user `spawn` is queued (single-slot PENDING_SPAWN).
