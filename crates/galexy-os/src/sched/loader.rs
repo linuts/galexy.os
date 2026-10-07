@@ -143,6 +143,10 @@ fn spawn_program_placed(
         xmas_elf::header::Type::Executable => {}
         other => panic!("spawn_program: unsupported ELF type {other:?} (static EXEC only)"),
     }
+    assert!(
+        elf_load_wx_ok(&elf),
+        "spawn_program: ELF has a writable+executable PT_LOAD (W^X)"
+    );
     let entry_vaddr = elf.header.pt2.entry_point();
 
     interrupts::without_interrupts(|| {
@@ -315,6 +319,27 @@ fn place_arg(fab_top: u64, stack_top: u64, arg: &[u8]) -> (u64, u64) {
 
 /// Maps one PT_LOAD segment: frames per 4 KiB page covering
 /// `[p_vaddr, p_vaddr + p_memsz)`, file contents copied for the first
+/// True when every `PT_LOAD` obeys W^X (no segment is both writable and
+/// executable). Used by the loader and by `test-wx`.
+pub fn elf_bytes_wx_ok(bytes: &[u8]) -> bool {
+    let Ok(elf) = ElfFile::new(bytes) else {
+        return false;
+    };
+    elf_load_wx_ok(&elf)
+}
+
+fn elf_load_wx_ok(elf: &ElfFile) -> bool {
+    for ph in elf.program_iter() {
+        let Ok(Type::Load) = ph.get_type() else {
+            continue;
+        };
+        if ph.flags().is_write() && ph.flags().is_execute() {
+            return false;
+        }
+    }
+    true
+}
+
 /// `p_filesz` bytes, zeroed beyond (BSS) + page slack.
 ///
 /// # Safety
@@ -348,7 +373,15 @@ unsafe fn map_segment(mapper: &mut OffsetPageTable<'static>, elf: &ElfFile, ph: 
         vaddr.as_u64()
     );
 
+    // W^X: never map a PT_LOAD that is both writable and executable.
+    assert!(
+        !(ph.flags().is_write() && ph.flags().is_execute()),
+        "loader: refusing W|X PT_LOAD at {:#x} (W^X)",
+        vaddr.as_u64()
+    );
+
     // Flags: R (PRESENT) + W (WRITABLE) + X (no NO_EXECUTE); always USER.
+    // Executable pages stay non-writable; writable pages get NO_EXECUTE.
     let flags = PageTableFlags::PRESENT
         | PageTableFlags::USER_ACCESSIBLE
         | (if ph.flags().is_write() {

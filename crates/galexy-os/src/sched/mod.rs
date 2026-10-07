@@ -974,6 +974,7 @@ pub(crate) fn spawn_user_with_grants(
         // SAFETY: a FreshL4 root: coherent, freshly cloned, not active.
         unsafe {
             mm::with_table(root, |mapper| {
+                // Code: RX (PRESENT|USER, never WRITABLE). Stack/scratch: RW|NX.
                 let code_page = Page::containing_address(region);
                 mapper
                     .map_to(

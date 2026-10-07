@@ -1425,8 +1425,8 @@ Close or formally waive the known memory-model nits.
       still fire in dedicated tests
 - [ ] **Frame accounting**: free frames at boot vs after N spawn/exit
       cycles stays stable (existing churn tests + a documented budget)
-- [ ] **User map W^X**: code pages RX, stack/scratch RW never X; test
-      that jumping to stack faults
+- [x] **User map W^X**: blob code RX, stack/scratch RW|NX; `test-wx`
+      jumps to scratch (NX #PF) and reclaims frames
 - [ ] **ASLR-lite (optional)**: randomize user P4 pick among free
       entries, or waive with rationale in THREAT.md
 
@@ -1438,8 +1438,9 @@ Push the easy wins a systems engineer will check in the first hour.
       reuse (or documented skip with threat note)
 - [ ] **Password / key scrub** audit across login, passwd, unlock
       (cross-check Milestones 43/44)
-- [ ] **NX / W^X audit** (cross-check paging items above): ELF loader rejects
-      writable+executable segments or maps them safely
+- [x] **NX / W^X audit** (cross-check paging items above): ELF loader
+      refuses W|X `PT_LOAD` (`elf_bytes_wx_ok` + assert in `map_segment`);
+      `test-wx` covers forged W|X header + live NX fault
 - [ ] **User pointer TOCTOU**: copy path/password into kernel buffers
       before parse/verify (document if already true; fix if not)
 - [ ] **Integer / length checks**: every `len` from userland checked
