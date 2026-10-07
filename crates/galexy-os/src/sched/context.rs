@@ -112,9 +112,20 @@ pub unsafe extern "C" fn timer_handler_naked() {
         "pop r11", "pop r10", "pop r9", "pop r8",
         "pop rbp", "pop rdi", "pop rsi", "pop rdx",
         "pop rcx", "pop rbx", "pop rax",
+        // Returning to ring 3: reload DS/ES (not saved in Context).
+        // Stack layout for iretq: RIP, CS, RFLAGS, RSP, SS — CS at [rsp+8].
+        "test byte ptr [rsp + 8], 3",
+        "jz 3f",
+        "push rax",
+        "mov ax, {user_ds}",
+        "mov ds, ax",
+        "mov es, ax",
+        "pop rax",
+        "3:",
         "iretq",
         sched = sym timer_sched,
         stable = sym super::CTX_STABLE,
+        user_ds = const crate::arch::gdt::USER_DS_RPL3,
     );
 }
 
@@ -156,9 +167,19 @@ pub unsafe extern "C" fn page_fault_handler_naked() {
         "pop r11", "pop r10", "pop r9", "pop r8",
         "pop rbp", "pop rdi", "pop rsi", "pop rdx",
         "pop rcx", "pop rbx", "pop rax",
+        // Same DS/ES hygiene as the timer tail (CPL-3 returns only).
+        "test byte ptr [rsp + 8], 3",
+        "jz 3f",
+        "push rax",
+        "mov ax, {user_ds}",
+        "mov ds, ax",
+        "mov es, ax",
+        "pop rax",
+        "3:",
         "iretq",
         sched = sym page_fault_sched,
         stable = sym super::CTX_STABLE,
+        user_ds = const crate::arch::gdt::USER_DS_RPL3,
     );
 }
 

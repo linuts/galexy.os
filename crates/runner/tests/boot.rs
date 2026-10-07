@@ -1028,6 +1028,20 @@ fn procbudget_test_passes() {
 }
 
 #[test]
+fn capforge_test_passes() {
+    let (code, serial) = boot(&image("test-capforge"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-capforge should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-capforge] passed"),
+        "test-capforge success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn seek_test_passes() {
     let (code, serial) = boot(&image("test-seek"));
     assert_eq!(
