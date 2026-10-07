@@ -1014,6 +1014,7 @@ Passwords authenticate; tokens authorize. See `docs/AUTH.md`. Suite grows.
 - [x] **GALF v4**: actor salt+hash; default admin password `admin`
 - [x] **`login` / `passwd` / `useradd <name> <pass>`** syscalls + shell
 - [x] **F2–F12 guest** seats (no power); F1 stays admin at boot
+      *(superseded: every seat now boots logged out; see login-on-boot)*
 - [x] **Spawn**: utilities inherit tokens; bare programs get empty tokens
 - [x] **Console budget**: 512 bytes/tick short-write (bounds linger floods)
 - [x] **`crash` omitted from `help`** (test seam kept)
@@ -1081,42 +1082,40 @@ Passwords must not appear in the shell line, COM1 mirror, or argv.
 - [ ] **Abort**: Esc or Ctrl-C cancels a password prompt without login
 - [ ] **Length cap**: overlong paste is rejected with a clear error; no
       silent truncate of secrets
-- [ ] Typing e2e: guest on F2 logs in without the password appearing in
-      the captured serial transcript
+- [ ] Typing e2e: F2 logs in without the password appearing in the
+      captured serial transcript
 
 ### Session hygiene
 
 Make seats behave like accounts, not permanent admin shells.
 
+- [x] **Login on every boot seat**: F1–F12 start logged out (no guest
+      account); prompt `galexy>` until `login`
+- [x] **`logout`**: clear tokens, `fs_root = none`, pre-login grants,
+      reset cwd; prompt `galexy>`
+- [x] **Pre-login grants**: console + keyboard only (no loader / query /
+      power) until `login`; admin login restores power
 - [ ] **Force admin password change**: after format, `admin`/`admin` is
       marked must-change; `login`/`passwd` required before other commands
       (except `passwd` / `help` / `whoami`). Or require a boot-time
       `passwd` on first interactive F1 session
-- [ ] **`logout`**: clear tokens, `fs_root = none`, drop power if held,
-      return to guest grants; reset cwd; shell prompt → `guest@galexy>`
 - [ ] **Login lockout**: after N failures per actor (and/or per TTY),
       refuse further attempts for a cool-down; count visible via `stats`
       or serial audit line
 - [ ] **Remove `crash` from production shells**: `cfg` / build feature so
       release images omit the seam; keep it only on test kernels that the
       supervisor e2e uses
-- [ ] **F1 policy switch**: config or boot flag — `auto_admin` (today)
-      vs `login_required` on every seat including F1 (review default:
-      `login_required` for multi-user demos)
 - [ ] **Idle timeout (optional but planned)**: after N seconds with no
       keys on a logged-in seat, auto-`logout` (needs monotonic clock below)
 - [ ] **Session id / generation**: bump a counter on login/logout so
       stale grants targeting a recycled task name cannot confuse audits
-- [ ] Tests: logout → guest cannot open prior Desktop; lockout trips;
-      must-change blocks `touch` until `passwd`
+- [ ] Tests: lockout trips; must-change blocks `touch` until `passwd`
 
 ### Least-privilege seats & spawn
 
 Tighten who can run code and what cards they carry.
 
-- [ ] **Guest without loader**: F2–F12 session grants = console +
-      keyboard + queries only until `login` (no `spawn` / no power).
-      After login, restore loader (and not power unless admin)
+- [x] **Pre-login without loader** (ships with login-on-boot)
 - [ ] **Narrow admin operator bypass**: remove blanket `token_allows`
       success for admin root. Keep admin-only for `useradd` / `userdel` /
       `passwd <other>`; foreign trees require an explicit card (or a new
@@ -1125,16 +1124,12 @@ Tighten who can run code and what cards they carry.
       *filterable* token set (default: parent's tokens; optional mask in
       `r10` or a follow-up ABI). Bare spawn stays empty-token
 - [ ] **Ramdisk trust note**: document that every SPAWN_WAIT binary is
-      trusted code with the caller's cards; Milestone 45 signs/measures
+      trusted code with the caller's cards; Milestone 51 signs/measures
 - [ ] **Login cards**: document semantics; add optional one-shot revoke
       on first `su` with a card (flag on the token or grant path)
-- [ ] **Power grant**: only admin sessions (or an explicit grant) may
-      hold `POWER`; login as a normal user never restores power
-- [ ] **Query grant**: decide whether guest keeps `files`/`tasks` snapshots
-      (prefer: tasks/threads ok, files empty until login)
 - [ ] Update `test-galfs`: admin listing foreign trees without a card
       must fail again once bypass is removed
-- [ ] Docs: `AUTH.md` operator model rewritten to match
+- [ ] Docs: `AUTH.md` operator model kept current with bypass changes
 
 ### Timekeeping for auth and audit
 
@@ -1330,7 +1325,7 @@ Make the object-capability story hold under exhaustion and forgery.
 - [ ] **Query caps**: snapshots do not allocate on IF=0 (already true —
       add a regression comment/test if a change regresses it)
 - [ ] **Loader EXEC**: only the shell (or tasks with loader grant) can
-      spawn; guest denial covered in Milestone 43 — cross-link tests here
+      spawn; pre-login denial covered in Milestone 43 — cross-link tests here
 
 ## Milestone 48 — Memory, safety & concurrency
 
@@ -1456,7 +1451,7 @@ Paperwork a systems engineer expects before reading code.
       seat); trusts (physical F1, ramdisk publisher); non-goals
 - [ ] **`docs/FS.md`**: galfs layout, versions, sync, recovery, quotas,
       path grammar — split out of the long DESIGN syscall essay
-- [ ] **`AUTH.md` refresh**: end-state after Milestones 43–43
+- [ ] **`AUTH.md` refresh**: end-state after Milestones 43–44
 - [ ] **Reviewer README section**: how to build, run BIOS/UEFI, attach
       disk, default accounts, where logs go
 - [ ] **ABI stability table**: syscall numbers + struct layouts marked
@@ -1469,7 +1464,7 @@ Paperwork a systems engineer expects before reading code.
 Evidence, not assertions.
 
 - [ ] **Negative suite**: path fuzz (host); grant/revoke confused-deputy
-      cases; guest spawn denied; bare spawn cannot write galfs
+      cases; pre-login spawn denied; bare spawn cannot write galfs
 - [ ] **Ramdisk measurement**: hash of the packed tar at build time;
       kernel checks optional allowlist before `SPAWN_WAIT` inherit
       (or document “trusted ramdisk” as a hard requirement)
@@ -1537,10 +1532,8 @@ The “ready for review” checklist — not a feature dump.
       docs with rationale
 - [ ] Full suite green BIOS+UEFI; disk persist + corrupt recover + auth
       e2e + galfs capacity smoke
-- [ ] Default build: no `crash`, `login_required`, KDF live, encryption
-      on if disk present
-- [ ] Fresh format walkthrough in README (admin password set at first
-      boot; guest on F2; grant demo)
+- [ ] Default build: no `crash`, KDF live, encryption on if disk present
+- [ ] Fresh format walkthrough in README (login on every seat; grant demo)
 - [ ] Tag `review-rc1` (or note in ROADMAP) with a short changelog
 - [ ] Freeze window: ABI changes require DESIGN + abi crate bump in the
       same PR

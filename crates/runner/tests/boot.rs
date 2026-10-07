@@ -639,6 +639,32 @@ fn runshell_test_passes() {
 /// syscall (mirrored to COM1 by the kernel).
 const HELLO_TEXT: &str = "Hello from a real Rust user program!";
 
+/// Every seat boots logged out; typing e2e starts with `login admin admin`.
+const LOGIN_ADMIN_KEYS: &[(&str, &str)] = &[
+    ("l", "l"),
+    ("o", "o"),
+    ("g", "g"),
+    ("i", "i"),
+    ("n", "n"),
+    ("spc", " "),
+    ("a", "a"),
+    ("d", "d"),
+    ("m", "m"),
+    ("i", "i"),
+    ("n", "n"),
+    ("spc", " "),
+    ("a", "a"),
+    ("d", "d"),
+    ("m", "m"),
+    ("i", "i"),
+    ("n", "n"),
+    ("ret", "admin@galexy> "),
+];
+
+fn with_login<'a>(keys: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+    LOGIN_ADMIN_KEYS.iter().chain(keys.iter()).copied().collect()
+}
+
 /// Qcode + expected-echo pairs for typing `hello` + Enter (typing
 /// E2E). Each key syncs on the shell's echo of it (console = screen +
 /// serial); the Enter key syncs on hello's program output (the write
@@ -653,9 +679,9 @@ const RUN_HELLO_KEYS: &[(&str, &str)] = &[
 ];
 
 /// `hello`, then `linger`, then `crash`. The prompt returns while `linger`
-/// is still running. `crash` kills the shell; the next `x` is echoed by the
-/// shell the kernel loaded again, and `beat` is still arriving.
-const SUPERVISOR_KEYS: &[(&str, &str)] = &[
+/// is still running. `crash` kills the shell; login again, then `x` is
+/// echoed by the new shell, and `beat` is still arriving.
+const SUPERVISOR_AFTER_LOGIN: &[(&str, &str)] = &[
     ("h", "h"),
     ("e", "e"),
     ("l", "l"),
@@ -675,17 +701,15 @@ const SUPERVISOR_KEYS: &[(&str, &str)] = &[
     ("s", "s"),
     ("h", "h"),
     ("ret", "killing the task"),
-    // `x` is echoed by the new shell. Sync on the prompt: a bare `x` also
-    // matches the `0x` in the loader's log line.
-    ("x", "admin@galexy> "),
-    ("y", "beat\n"),
 ];
 
-/// F2 selects the second shell. `echo hi` there, then F1 and a key on the
-/// first shell. Serial mirrors only the console on screen, so each side is
-/// proven by text that appears after its switch.
-const TTY_KEYS: &[(&str, &str)] = &[
+/// F2 selects the second shell. Login there, `echo hi`, then F1 and a key
+/// on the first shell (still logged out until login — only echoes `z`).
+const TTY_AFTER_F2: &[(&str, &str)] = &[
     ("f2", "[tty] 2"),
+];
+
+const TTY_AFTER_LOGIN: &[(&str, &str)] = &[
     ("e", "e"),
     ("c", "c"),
     ("h", "h"),
@@ -700,7 +724,7 @@ const TTY_KEYS: &[(&str, &str)] = &[
 
 /// `stats`, then `threads`, then `tasks`. Each Enter syncs on a line only
 /// the query `read` produces (the banner's "frames free" is screen-only).
-const QUERY_KEYS: &[(&str, &str)] = &[
+const QUERY_AFTER_LOGIN: &[(&str, &str)] = &[
     ("s", "s"),
     ("t", "t"),
     ("a", "a"),
@@ -961,13 +985,14 @@ const SHELL_RESERVE_KEYS: &[(&str, &str)] = &[
 /// thread and the ramdisk's `banner.txt`.
 #[test]
 fn shell_query_typing_e2e() {
+    let keys = with_login(QUERY_AFTER_LOGIN);
     let serial = boot_and_type(
         &image("galexy-os"),
-        QUERY_KEYS,
+        &keys,
         "[boot] main loop ready",
         "",
         Duration::from_millis(30),
-        Duration::from_secs(60),
+        Duration::from_secs(90),
     );
     assert!(
         serial.contains("frames free:"),
@@ -994,13 +1019,14 @@ fn shell_query_typing_e2e() {
 /// Typing `shell` is refused: F1–F12 own those task names.
 #[test]
 fn shell_nested_spawn_refused_e2e() {
+    let keys = with_login(SHELL_RESERVE_KEYS);
     let serial = boot_and_type(
         &image("galexy-os"),
-        SHELL_RESERVE_KEYS,
+        &keys,
         "[boot] main loop ready",
         "shell: reserved",
         Duration::from_millis(30),
-        Duration::from_secs(45),
+        Duration::from_secs(60),
     );
     assert!(
         serial.contains("shell: reserved"),
@@ -1017,13 +1043,14 @@ fn shell_nested_spawn_refused_e2e() {
 /// `rm` drops a scratch file and refuses a directory that still has a child.
 #[test]
 fn shell_util_typing_e2e() {
+    let keys = with_login(UTIL_KEYS);
     let serial = boot_and_type(
         &image("galexy-os"),
-        UTIL_KEYS,
+        &keys,
         "[boot] main loop ready",
         "rm: directory not empty",
         Duration::from_millis(30),
-        Duration::from_secs(150),
+        Duration::from_secs(180),
     );
     assert!(
         serial.contains("plumbing works"),
@@ -1077,13 +1104,18 @@ fn shell_run_hello_typing_e2e() {
     // consumer) is live — serial marker, not a sleep: init timing under
     // TCG varies. Each key syncs on the guest's echo, so host load can
     // never overflow the i8042 queue between keys.
+    // After `crash` the seat is logged out again — login, then probe.
+    let mut keys = with_login(SUPERVISOR_AFTER_LOGIN);
+    // New shell is logged out; login again, then a probe key + linger beat.
+    keys.extend(LOGIN_ADMIN_KEYS.iter().copied());
+    keys.extend([("x", "x"), ("y", "beat\n")]);
     let serial = boot_and_type(
         &image("galexy-os"),
-        SUPERVISOR_KEYS,
+        &keys,
         "[boot] main loop ready",
         "beat\n",
         Duration::from_millis(30),
-        Duration::from_secs(90),
+        Duration::from_secs(120),
     );
     assert!(
         serial.contains(HELLO_TEXT),
@@ -1098,7 +1130,7 @@ fn shell_run_hello_typing_e2e() {
         .expect("typed `crash` never faulted the shell");
     let after_fault = &serial[fault_at..];
     let prompt_at = after_fault.find("admin@galexy> ").unwrap_or_else(|| {
-        panic!("a new shell prompt never appeared after the fault; serial:\n{serial}")
+        panic!("login after fault never produced admin prompt; serial:\n{serial}")
     });
     assert!(
         after_fault[prompt_at..].contains("beat\n"),
@@ -1112,11 +1144,12 @@ fn shell_run_hello_typing_e2e() {
 #[test]
 fn shell_run_hello_typing_e2e_uefi() {
     let image = image("galexy-os");
+    let keys = with_login(RUN_HELLO_KEYS);
     let mut last = String::new();
     for _ in 0..3 {
         last = boot_and_type_uefi(
             &image,
-            RUN_HELLO_KEYS,
+            &keys,
             "[boot] main loop ready",
             "exited (syscall)",
             Duration::from_millis(30),
@@ -1139,13 +1172,16 @@ fn shell_run_hello_typing_e2e_uefi() {
 /// F2 runs a command on the second shell; F1 returns to the first.
 #[test]
 fn shell_tty_switch_e2e() {
+    let mut keys: Vec<(&str, &str)> = TTY_AFTER_F2.to_vec();
+    keys.extend(LOGIN_ADMIN_KEYS.iter().copied());
+    keys.extend(TTY_AFTER_LOGIN.iter().copied());
     let serial = boot_and_type(
         &image("galexy-os"),
-        TTY_KEYS,
+        &keys,
         "[boot] main loop ready",
         "hi",
         Duration::from_millis(30),
-        Duration::from_secs(90),
+        Duration::from_secs(120),
     );
     let tty2 = serial.find("[tty] 2").expect("F2 never switched consoles");
     let hi = serial[tty2..]

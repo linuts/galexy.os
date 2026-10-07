@@ -194,6 +194,11 @@ pub fn user_login(name: &[u8], password: &[u8]) -> SyscallResult {
     user_name_pass(name, password, galexy_abi::USER_LOGIN)
 }
 
+/// Clear the current session (logged out).
+pub fn user_logout() -> SyscallResult {
+    user_name_pass(&[], &[], galexy_abi::USER_LOGOUT)
+}
+
 /// Set password for `name` (empty name = self).
 pub fn user_passwd(name: &[u8], password: &[u8]) -> SyscallResult {
     user_name_pass(name, password, galexy_abi::USER_PASSWD)

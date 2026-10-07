@@ -562,8 +562,8 @@ pub fn admin_cred() -> FsCred {
     FsCred::launcher(root)
 }
 
-/// Unauthenticated seat: no actor root and no tokens.
-pub fn guest_cred() -> FsCred {
+/// Pre-login / logged-out seat: no actor root and no tokens.
+pub fn unauth_cred() -> FsCred {
     FsCred::none()
 }
 
@@ -579,15 +579,10 @@ pub fn is_admin_root(root: u16) -> bool {
 
 /// Writes the actor name for `root` into `out`. Returns the byte count.
 ///
-/// [`NO_OBJECT`] is the guest session and writes `guest`.
+/// [`NO_OBJECT`] (logged out) is [`SysError::AccessDenied`].
 pub fn name_of_root(root: u16, out: &mut [u8]) -> Result<usize, SysError> {
     if root == NO_OBJECT {
-        const GUEST: &[u8] = b"guest";
-        if GUEST.len() > out.len() {
-            return Err(SysError::BadBuffer);
-        }
-        out[..GUEST.len()].copy_from_slice(GUEST);
-        return Ok(GUEST.len());
+        return Err(SysError::AccessDenied);
     }
     let table = TABLE.lock();
     let actor = table

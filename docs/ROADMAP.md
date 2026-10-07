@@ -217,9 +217,9 @@ first real program landed in Milestone 13:
   unique live task names, keyboard-denied shell exits. Suite: 47 QEMU boots).
 - Password auth + least privilege ✅ (Milestone 42: passwords prove
   identity; galfs tokens remain access cards. GALF v4 stores salt+hash;
-  F1 boots as admin, F2–F12 as guest; `login`/`passwd`/`useradd` with
-  password; `/eve@/` login cards; bare spawn clears tokens; console
-  write budget per tick. See `docs/AUTH.md`. Disk encryption deferred.
+  every F-key seat boots logged out; `login`/`logout`/`passwd`/`useradd`;
+  `/eve@/` login cards; bare spawn clears tokens; console write budget
+  per tick. See `docs/AUTH.md`. Disk encryption deferred.
   Suite: 47 QEMU boots).
 
 ## Phase 5 — Review readiness (systems-engineer bar)
@@ -229,8 +229,9 @@ demos, and kernel edges a reviewer will poke. Concrete checkboxes live in
 `TODO.md` Milestones **43–52** (ten milestones; subsections keep the full
 checklist). Style: `docs/STYLE.md`.
 
-1. **43 Auth hardening** — KDF/CSPRNG, no-echo prompts, logout/lockout,
-   guest without loader, narrow admin bypass, monotonic time for cool-downs
+1. **43 Auth hardening** — KDF/CSPRNG, no-echo prompts, lockout/idle
+   logout polish, narrow admin bypass, monotonic time for cool-downs
+   (login-on-boot + `logout` already shipped with no guest account)
 2. **44 Sealed GALF** — volume key + AEAD; boot unlock
 3. **45 galfs for real usage** — extents/capacity, rename/truncate/stat,
    sync/fsck, quotas & cards

@@ -68,10 +68,11 @@ through a capability and starts a userland program when you type its name
       `reboot`, ...) + live status bar ("quiet OS" demo) — utilities wait
       for exit before the prompt returns; bare program names keep running;
       a shell fault loads the shell again; F1–F12 switch consoles;
-      the visible console is what COM1 mirrors. Boot actor is `admin`
-      (add others with `useradd <name> <pass>`; `login` with a password;
-      `grant` hands access cards; `su` needs a card). Typing `shell`
-      is refused — use F1–F12 for consoles. See `docs/AUTH.md`.
+      the visible console is what COM1 mirrors. Every seat boots logged
+      out (`login admin admin` on a fresh format; `logout` clears the
+      session). Add users with `useradd`; `grant` hands access cards;
+      `su` needs a card. Typing `shell` is refused — use F1–F12.
+      See `docs/AUTH.md`.
 - [x] Test harness: host unit tests + per-kernel QEMU integration tests
 - [x] Programs beyond blobs: `galexy-rt` runtime (`entry!`, syscall
       wrappers, user panic handler), kernel ELF loader (static ET_EXEC,
