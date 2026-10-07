@@ -1130,6 +1130,17 @@ pub fn threads_count() -> usize {
     })
 }
 
+/// True while a task named `name` is RUNNING or WAITING (sleep / Cap-wait /
+/// spawn park). False once it has exited (or never existed).
+pub fn is_name_live(name: &str) -> bool {
+    interrupts::without_interrupts(|| {
+        THREADS.lock().iter().any(|t| {
+            let state = t.state.load(Ordering::Relaxed);
+            t.name() == name && (state == STATE_RUNNING || state == STATE_WAITING)
+        })
+    })
+}
+
 /// The owner CPU of the thread named `name` ("pinned at spawn" — SMP M18);
 /// `None` when no RUNNING thread by that name exists.
 pub fn thread_owner(name: &str) -> Option<u8> {
