@@ -7,7 +7,8 @@ extern crate alloc;
 
 use bootloader_api::{entry_point, BootInfo};
 use galexy_abi::{
-    SysError, Syscall, USER_ADD, USER_DEL, USER_LOGIN, USER_LOGOUT, USER_USERS, USER_WHOAMI,
+    SysError, Syscall, USER_ADD, USER_DEL, USER_LOGIN, USER_LOGOUT, USER_SU, USER_USERS,
+    USER_WHOAMI,
 };
 use galexy_os::{
     arch::mm, drivers::screen, exit_qemu, println, sched, serial_println, QemuExitCode,
@@ -36,6 +37,13 @@ struct Report {
     del_ok: u64,
     del_admin_err: u64,
     bad_login_err: u64,
+    su_eve_ok: u64,
+    who_su_n: u64,
+    who_su: [u8; 16],
+    su_admin_ok: u64,
+    who_back_n: u64,
+    who_back: [u8; 16],
+    su_admin_as_eve_err: u64,
 }
 
 fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
@@ -93,6 +101,18 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert_eq!(report.del_ok, 1);
     assert_eq!(report.del_admin_err, SysError::Unsupported as u64);
     assert_eq!(report.bad_login_err, SysError::AccessDenied as u64);
+    assert_eq!(report.su_eve_ok, 1, "admin may su eve without password");
+    assert_eq!(&report.who_su[..report.who_su_n as usize], b"eve");
+    assert_eq!(
+        report.su_admin_ok, 1,
+        "born-admin seat must su admin after su away"
+    );
+    assert_eq!(&report.who_back[..report.who_back_n as usize], b"admin");
+    assert_eq!(
+        report.su_admin_as_eve_err,
+        SysError::AccessDenied as u64,
+        "password-login as eve must not su admin"
+    );
 
     loop {
         x86_64::instructions::hlt();
@@ -231,6 +251,35 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     code.extend_from_slice(&[0x48, 0x0F, 0x44, 0xC8]);
     code.extend_from_slice(&[0x48, 0x89, 0xC8]);
     store(&mut code, 0, 0xc0);
+
+    // admin → su eve → whoami eve → su admin → whoami admin
+    // Report layout: su_eve_ok@0xc8 who_su_n@0xd0 who_su@0xd8
+    // su_admin_ok@0xe8 who_back_n@0xf0 who_back@0xf8
+    // su_admin_as_eve_err@0x108
+    call_user_name(&mut code, eve_addr, eve.len() as u64, USER_SU);
+    store(&mut code, 2, 0xc8);
+    call_user(&mut code, scratch + 0xd8, 16, USER_WHOAMI);
+    store(&mut code, 0, 0xd0);
+    call_user_name(&mut code, admin_addr, admin.len() as u64, USER_SU);
+    store(&mut code, 2, 0xe8);
+    call_user(&mut code, scratch + 0xf8, 16, USER_WHOAMI);
+    store(&mut code, 0, 0xf0);
+
+    // login eve (clears born_admin) → su admin must AccessDenied
+    call_user_pass(
+        &mut code,
+        eve_addr,
+        eve.len() as u64,
+        secret_addr,
+        secret.len() as u64,
+        USER_LOGIN,
+    );
+    call_user_name(&mut code, admin_addr, admin.len() as u64, USER_SU);
+    code.extend_from_slice(&[0x48, 0x85, 0xD2]);
+    code.extend_from_slice(&[0x48, 0xC7, 0xC1, 0, 0, 0, 0]);
+    code.extend_from_slice(&[0x48, 0x0F, 0x44, 0xC8]);
+    code.extend_from_slice(&[0x48, 0x89, 0xC8]);
+    store(&mut code, 0, 0x108);
 
     mov_r64_imm(&mut code, 0, DONE);
     store(&mut code, 0, 0x00);

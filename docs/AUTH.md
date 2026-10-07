@@ -136,8 +136,11 @@ logout        # return to pre-login (not a switch to another user)
 Admin may `su` to any actor without a password (operator seat). A session
 whose `fs_root` is admin also passes every token check (list/open/grant),
 so an admin console can manage any tree without collecting cards.
-Returning to admin after `su` elsewhere uses `su admin` (if born-admin /
-card) or `login admin <pass>`.
+Returning to admin after `su` elsewhere uses `su admin` when the seat
+was born/logged-in as admin (`born_admin` survives `su` away — it is
+only cleared by `logout` or a password `login` as a non-admin), or
+`login admin <pass>`. Non-admin sessions have no Power grant: `shutdown`
+/ `reboot` return access denied.
 
 ## Spawn policy (least privilege)
 
