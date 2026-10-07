@@ -836,6 +836,15 @@ fn syscall_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if let Some(kind) = query_kind(cap.index()) {
         return syscall_read_query(cap, kind, addr, len);
     }
+    if cap.index() == galexy_abi::reserved::SELF_INDEX {
+        return syscall_read_self(cap, addr, len);
+    }
+    if (galexy_abi::PROC_CAP_BASE
+        ..galexy_abi::PROC_CAP_BASE + galexy_abi::MAX_PROC_CAPS)
+        .contains(&cap.index())
+    {
+        return syscall_read_proc(cap, addr, len);
+    }
     // Short read: a request larger than the staging cap returns a prefix.
     let len = len.min(MAX_READ);
     if len > 0 && user_buffer(addr, len, true).is_err() {
@@ -848,6 +857,47 @@ fn syscall_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     };
     if n > 0 {
         // SAFETY: the destination was accepted as present, user, writable.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                staged.as_ptr(),
+                VirtAddr::new(addr).as_mut_ptr::<u8>(),
+                n,
+            );
+        }
+    }
+    SyscallResult::ok(n as u64)
+}
+
+fn syscall_read_self(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+    if !cap.rights().contains(CapRights::PROC_INSPECT) {
+        return SyscallResult::err(SysError::AccessDenied);
+    }
+    copy_inspect(addr, len, |dst| crate::sched::task_self_inspect(dst))
+}
+
+fn syscall_read_proc(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+    copy_inspect(addr, len, |dst| crate::sched::task_proc_inspect(cap, dst))
+}
+
+fn copy_inspect(
+    addr: u64,
+    len: u64,
+    fill: impl FnOnce(&mut [u8]) -> Result<usize, SysError>,
+) -> SyscallResult {
+    let len = len.min(MAX_READ);
+    if len == 0 {
+        return SyscallResult::ok(0);
+    }
+    if user_buffer(addr, len, true).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut staged = [0u8; MAX_READ as usize];
+    let n = match fill(&mut staged[..len as usize]) {
+        Ok(n) => n,
+        Err(err) => return SyscallResult::err(err),
+    };
+    if n > 0 {
+        // SAFETY: destination accepted as present, user, writable.
         unsafe {
             core::ptr::copy_nonoverlapping(
                 staged.as_ptr(),
@@ -992,6 +1042,16 @@ fn render_tasks(out: &mut TextBuf<'_>) {
     out.push(b" active, ");
     out.push_u64(crate::sched::spawned_total() as u64);
     out.push(b" spawned since boot\npreemption: timer @ ~1kHz, round-robin incl. main loop\n");
+    // Process labels: debug id is for listings only (not a handle).
+    crate::sched::for_user_tasks(|id, name, state| {
+        out.push(b"id=");
+        out.push_u64(id);
+        out.push(b" name=");
+        out.push(name.as_bytes());
+        out.push(b" state=");
+        out.push(state.as_bytes());
+        out.push(b"\n");
+    });
 }
 
 fn render_files(out: &mut TextBuf<'_>) {
@@ -1011,7 +1071,10 @@ fn render_files(out: &mut TextBuf<'_>) {
 }
 
 fn render_threads(out: &mut TextBuf<'_>) {
-    crate::sched::for_running_threads(|name, ticks| {
+    crate::sched::for_running_threads(|id, name, ticks| {
+        out.push(b"id=");
+        out.push_u64(id);
+        out.push(b" ");
         out.push(name.as_bytes());
         out.push(b": ");
         out.push_u64(ticks);

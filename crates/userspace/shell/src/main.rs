@@ -16,6 +16,8 @@
 #![no_std]
 #![no_main]
 
+use core::sync::atomic::{AtomicU64, Ordering};
+
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
     arg, close, entry, files_cap, grant, keyboard_cap, read, reboot, revoke, shutdown, spawn_with,
@@ -23,6 +25,9 @@ use galexy_rt::{
     user_name, user_name_pass, user_passwd, user_quota, user_setquota, wait, write_console,
     yield_now,
 };
+
+/// Exit status of the last Cap-waited utility (or spawn failure).
+static LAST_STATUS: AtomicU64 = AtomicU64::new(0);
 
 entry!(main);
 
@@ -292,7 +297,7 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
         write_console(b"cp, mv, truncate, stat, grant, revoke, share, unshare,\n");
         write_console(b"whoami, users, tokens, quota, useradd, userdel,\n");
         write_console(b"login, logout, passwd, su, sync, stats, tasks, threads,\n");
-        write_console(b"about, clear\n");
+        write_console(b"about, clear, echo $?\n");
         write_console(b"login [user] [pass] - omit pass for a masked Password: prompt\n");
         write_console(b"passwd [name] - masked Password: + Confirm: (no inline secret)\n");
         write_console(b"useradd <name> [pass] - omit pass for a masked Password: prompt\n");
@@ -468,6 +473,12 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
 }
 
 fn echo(cwd: &Cwd, rest: &[u8]) {
+    if rest == b"$?" {
+        write_u64_dec(LAST_STATUS.load(Ordering::Relaxed));
+        write_console(b"\n");
+        prompt(cwd);
+        return;
+    }
     if let Some((text, name, append)) = redirection(rest) {
         if name.is_empty() || name.contains(&b' ') || name.contains(&b'/') {
             write_console(b"echo: usage: echo [text] > name\n");
@@ -1279,13 +1290,45 @@ fn spawn_and_prompt(cwd: &Cwd, program: &[u8], arg: &[u8], grants: u64, wait_exi
             SysError::NotFound => write_console(b"command not found\n"),
             _ => write_console(b"failed\n"),
         };
+        // 127 ≈ command not found; other spawn failures are 1.
+        let code = if matches!(SysError::from_code(result.value), SysError::NotFound) {
+            127
+        } else {
+            1
+        };
+        LAST_STATUS.store(code, Ordering::Relaxed);
     } else if wait_exit {
-        let _ = wait(Cap::from_bits(result.value));
+        let waited = wait(Cap::from_bits(result.value));
+        LAST_STATUS.store(
+            if waited.ok {
+                waited.value
+            } else {
+                1
+            },
+            Ordering::Relaxed,
+        );
     } else {
         // Fire-and-forget: drop the Cap so an exited child can be reaped.
         let _ = close(Cap::from_bits(result.value));
+        LAST_STATUS.store(0, Ordering::Relaxed);
     }
     prompt(cwd);
+}
+
+fn write_u64_dec(value: u64) {
+    if value == 0 {
+        write_console(b"0");
+        return;
+    }
+    let mut tmp = [0u8; 20];
+    let mut i = tmp.len();
+    let mut n = value;
+    while n > 0 {
+        i -= 1;
+        tmp[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    write_console(&tmp[i..]);
 }
 
 /// F-key console task names. The kernel also rejects spawning these.

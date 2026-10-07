@@ -972,6 +972,20 @@ fn proccap_test_passes() {
 }
 
 #[test]
+fn selfcap_test_passes() {
+    let (code, serial) = boot(&image("test-selfcap"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-selfcap should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-selfcap] passed"),
+        "test-selfcap success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn seek_test_passes() {
     let (code, serial) = boot(&image("test-seek"));
     assert_eq!(
@@ -1255,6 +1269,26 @@ const RUN_HELLO_KEYS: &[(&str, &str)] = &[
     ("l", "l"),
     ("o", "o"),
     ("ret", HELLO_TEXT),
+];
+
+/// `echo hi`, then `echo $?` — Cap-wait status should be 0.
+const STATUS_AFTER_LOGIN: &[(&str, &str)] = &[
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("h", "h"),
+    ("i", "i"),
+    ("ret", "hi\n"),
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("shift+4", "$"),
+    ("shift+slash", "?"),
+    ("ret", "0\n"),
 ];
 
 /// `hello`, then `linger`, then `crash`. The prompt returns while `linger`
@@ -1647,6 +1681,10 @@ fn shell_query_typing_e2e() {
         "typed `tasks` never produced the task line; serial:\n{serial}"
     );
     assert!(
+        serial.contains("id=") && serial.contains("name=shell"),
+        "typed `tasks` never listed a process Cap label; serial:\n{serial}"
+    );
+    assert!(
         serial.contains("banner.txt"),
         "typed `ls` never listed banner.txt; serial:\n{serial}"
     );
@@ -1731,6 +1769,30 @@ fn shell_util_typing_e2e() {
     assert!(
         serial.contains("rm: directory not empty"),
         "typed `rm box` should refuse a directory that still has a child; serial:\n{serial}"
+    );
+}
+
+/// Cap-wait exit status surfaces as `echo $?`.
+#[test]
+fn shell_echo_status_typing_e2e() {
+    let keys = with_login(STATUS_AFTER_LOGIN);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "",
+        Duration::from_millis(30),
+        Duration::from_secs(90),
+    );
+    assert_passwords_masked(&serial);
+    assert!(
+        serial.contains("hi\n"),
+        "typed `echo hi` never printed; serial:\n{serial}"
+    );
+    // Builtin `echo $?` after a successful utility Cap-wait.
+    assert!(
+        serial.contains("0\n"),
+        "typed `echo $?` never printed 0; serial:\n{serial}"
     );
 }
 

@@ -142,7 +142,11 @@ pub mod reserved {
     /// The text console: the first user-visible output resource. The shell
     /// itself goes through a `Cap` for the console (`write(sys_console, ...)`).
     pub const CONSOLE_INDEX: u64 = 1;
-    /// The calling task itself (introspection, exit-equivalents).
+    /// The calling task itself (inspect / limited process rights).
+    ///
+    /// `read` with [`super::CapRights::PROC_INSPECT`] returns a text
+    /// snapshot: `id=<debug> name=<label> state=<running|waiting|exited>`.
+    /// Not a kill/wait handle — use [`super::Syscall::Exit`] to stop self.
     pub const SELF_INDEX: u64 = 2;
 
     /// The console capability, as handed to every booting task that has
@@ -151,11 +155,11 @@ pub mod reserved {
         Cap::new(CONSOLE_INDEX, rights)
     }
 
-    /// The self capability.
+    /// The self capability (inspect + read snapshot).
     pub const fn self_cap() -> Cap {
         Cap::new(
             SELF_INDEX,
-            super::CapRights::READ.union(super::CapRights::WRITE),
+            super::CapRights::READ.union(super::CapRights::PROC_INSPECT),
         )
     }
 
