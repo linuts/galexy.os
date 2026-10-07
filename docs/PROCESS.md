@@ -182,11 +182,11 @@ process Cap never grants galfs rights on the child’s files.
 
 | Milestone | Delivers |
 | --- | --- |
-| **47** | Process Cap rights; spawn returns Cap; Cap-wait + exit status; Cap-kill; debug ids optional; forge tests |
+| **47** | Process Cap rights; spawn returns Cap; Cap-wait + exit status; Cap-kill; give/ceiling; ring-3 DS/ES reload; reserved/file forge + soft frame reserve |
 | **53** | Userspace init; orphan Cap transfer; kill-init denied; retire `ensure_shell` policy |
 | **54** | Seats under init; service table + `svc`; supervise Caps |
 | **55** | Session/job Caps; foreground Ctrl-C |
 
-Until 47 lands, today’s name + `SPAWN_WAIT` + kernel `ensure_shell`
-remain the shipped behavior. New code must not dig a deeper PID-shaped
-API beside this plan.
+M47 process Caps ship alongside name + `SPAWN_WAIT` + kernel
+`ensure_shell`. New code must not dig a deeper PID-shaped API beside
+this plan; init Cap transfer stays Milestone 53.
