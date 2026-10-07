@@ -147,9 +147,11 @@ sudo dd if=<galexy-os-bios.img> of=/dev/sdX bs=1M status=progress
 ├── rust-toolchain.toml              # pinned nightly + components/targets
 ├── scripts/                         # headless boot-test tooling
 ├── docs/
-│   ├── STYLE.md                     # code style & conventions
-│   ├── ROADMAP.md                   # where this is going
-│   └── DESIGN.md                    # how the pieces fit
+│   ├── STYLE.md                     # conventions (secrets, GALF, IF=0)
+│   ├── ROADMAP.md                   # where this is going (Phase 5 = review)
+│   ├── DESIGN.md                    # how the pieces fit
+│   └── AUTH.md                      # passwords + token access cards
+│                                    #   (THREAT.md / FS.md planned M57)
 ├── crates/
 │   ├── galexy-abi/                  # THE syscall ABI: numbers, capability
 │   │                                #   model, error codes (kernel<->user

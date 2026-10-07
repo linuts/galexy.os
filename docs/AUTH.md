@@ -101,6 +101,12 @@ within budget; a tight write loop cannot pin COM1.
 
 ## Explicit non-goals (for now)
 
-- Disk encryption / sealed password store
-- PAM-style modules, MFA, networked IdP
-- Removing the `crash` test seam (kept for supervisor e2e; omitted from `help`)
+Tracked for review readiness in `TODO.md` Milestones 43–44 (auth +
+sealed disk). Until those land:
+
+- Disk encryption / sealed password store → Milestone 44
+- Real KDF, random salts, no-echo prompts, sessions, least privilege →
+  Milestone 43
+- PAM-style modules, MFA, networked IdP (still out of scope for review)
+- Removing the `crash` test seam from production images → Milestone 43
+  (kept for supervisor e2e; omitted from `help`)

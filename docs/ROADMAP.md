@@ -219,8 +219,33 @@ first real program landed in Milestone 13:
   identity; galfs tokens remain access cards. GALF v4 stores salt+hash;
   F1 boots as admin, F2–F12 as guest; `login`/`passwd`/`useradd` with
   password; `/eve@/` login cards; bare spawn clears tokens; console
-  write budget per tick.   See `docs/AUTH.md`. Disk encryption deferred.
+  write budget per tick. See `docs/AUTH.md`. Disk encryption deferred.
   Suite: 47 QEMU boots).
+
+## Phase 5 — Review readiness (systems-engineer bar)
+
+Goal: auth that survives a stolen disk image, a filesystem usable beyond
+demos, and kernel edges a reviewer will poke. Concrete checkboxes live in
+`TODO.md` Milestones **43–52** (ten milestones; subsections keep the full
+checklist). Style: `docs/STYLE.md`.
+
+1. **43 Auth hardening** — KDF/CSPRNG, no-echo prompts, logout/lockout,
+   guest without loader, narrow admin bypass, monotonic time for cool-downs
+2. **44 Sealed GALF** — volume key + AEAD; boot unlock
+3. **45 galfs for real usage** — extents/capacity, rename/truncate/stat,
+   sync/fsck, quotas & cards
+4. **46 Storage stack** — BlockDevice; virtio or primary IDE; flush
+5. **47 Process, ABI & caps** — segments, exit status, forge/ceiling tests
+6. **48 Memory, safety & concurrency** — W^X, scrub, lock-order freeze
+7. **49 Console, audit & UX** — cursor, overflow, auth/grant audit log
+8. **50 Shell for real demos** — pipes, glob, line editing
+9. **51 Docs, tests, CI & soak** — THREAT/FS, negative suite, review-smoke,
+   non-goals freeze
+10. **52 Review RC** — default secure build; tag `review-rc1`
+
+Standing rule unchanged: each milestone leaves the suite green; prefer
+explicit waivers in the threat/FS docs over half-landed features.
+
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left
   that stack. The name is a fixed buffer, so spawn does not leak.
