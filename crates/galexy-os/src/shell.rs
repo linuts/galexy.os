@@ -221,10 +221,9 @@ pub fn render_status_bar() {
 }
 
 fn render_status_bar_inner() {
-    let Some((rows, cols)) = screen::terminal_size() else {
+    let Some((_, cols)) = screen::terminal_size() else {
         return;
     };
-    let last_row = rows - 1;
 
     // Build the bar text. The F-key names the console on screen.
     let mut text = alloc::format!("F{} | ", screen::shown_tty() + 1);
@@ -238,12 +237,8 @@ fn render_status_bar_inner() {
         text.truncate(cols);
     }
 
-    // Redraw the bar without disturbing the typing cursor.
-    let (cx, cy) = screen::pos();
-    screen::fill_row(last_row, BAR_BG);
-    screen::set_color(BAR_FG);
-    screen::set_pos(0, last_row);
-    screen::out_plain(&text);
-    screen::set_color(TEXT_COLOR);
-    screen::set_pos(cx, cy);
+    // Paint the status row without moving the text cursor — see
+    // `screen::draw_status_bar`. Using set_pos/out_plain here could leave
+    // the input cursor on the status row so typed keys never appear above it.
+    screen::draw_status_bar(BAR_BG, BAR_FG, &text);
 }

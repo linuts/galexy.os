@@ -121,8 +121,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert!(rows > 1, "the status row needs a row of its own");
     let text_rows = rows - 1;
     screen::clear_screen();
-    screen::set_pos(0, rows - 1);
-    screen::out_plain("S");
+    screen::draw_status_bar(screen::Color::new(0, 0, 0), screen::Color::new(0xE0, 0xE0, 0xE0), "S");
     screen::set_pos(0, 0);
     screen::out_str("A");
     for _ in 0..text_rows {
@@ -168,8 +167,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert!(cr_b >= 200, "CR cleared the rest of the line");
 
     screen::clear_screen();
-    screen::set_pos(0, rows - 1);
-    screen::out_plain("S");
+    screen::draw_status_bar(screen::Color::new(0, 0, 0), screen::Color::new(0xE0, 0xE0, 0xE0), "S");
     screen::set_pos(0, 0);
     // Raw bytes also go to COM1; the harness checks this string.
     console::out_str("\u{1b}[31mZ\u{1b}[2J");
@@ -240,6 +238,39 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert!(
         kept >= 200,
         "the background write was not kept (intensity {kept})"
+    );
+
+    /* --- prompt on the last text row stays visible across status redraws --- */
+
+    screen::clear_screen();
+    screen::set_pos(0, 0);
+    for _ in 1..text_rows {
+        console::out_str("\n");
+    }
+    console::out_str("galexy> ");
+    // Status bar used to steal the text cursor; redraw must not hide typing.
+    for _ in 0..3 {
+        screen::draw_status_bar(
+            screen::Color::new(0x20, 0x28, 0x38),
+            screen::Color::new(0xC8, 0xD0, 0xE0),
+            "F1 | main 0 | frames 0",
+        );
+    }
+    console::out_str("abc");
+    let prompt_y = (text_rows - 1) * LINE_HEIGHT;
+    // "galexy> abc" — check the 'a' after the 8-char prompt.
+    let typed = unsafe {
+        region_max_intensity(addr, info, 8 * CHAR_WIDTH, prompt_y, CHAR_WIDTH, 16)
+    };
+    assert!(
+        typed >= 200,
+        "typed input on the bottom prompt row is invisible (intensity {typed})"
+    );
+    let status_still =
+        unsafe { region_max_intensity(addr, info, 0, status_y, CHAR_WIDTH, 16) };
+    assert!(
+        status_still >= 200,
+        "status bar lost after bottom-row typing (intensity {status_still})"
     );
 
     println!("[test-screen] ink={} erased={} scroll-ok", ink_a, erased_b);

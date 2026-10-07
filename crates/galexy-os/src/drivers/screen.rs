@@ -123,7 +123,8 @@ impl AnsiParser {
 /// at this font's advance.
 const TTY_COLS: usize = 200;
 /// Text rows remembered per TTY, not counting the status bar.
-const TTY_ROWS: usize = 48;
+/// Sized for tall framebuffers (4K / 18px line ≈ 120 text rows).
+const TTY_ROWS: usize = 128;
 
 /// One saved character. A zero `ch` is an empty cell.
 #[derive(Clone, Copy)]
@@ -199,24 +200,35 @@ impl ScreenWriter {
         }
     }
 
-    /// Draws one glyph and advances. The status row is in-place: it never
-    /// scrolls. Normal text wraps inside the rows above that row.
+    /// Draws one glyph and advances. Normal text stays in the rows above
+    /// the status bar; if the cursor ever drifts onto the status row
+    /// (legacy `set_pos` paths), snap it back so typing stays visible.
     fn put_glyph(&mut self, c: char) {
-        if self.char_y >= self.text_rows() {
-            if self.char_x < self.max_char_x() {
-                self.draw_glyph(c);
-                self.char_x += 1;
-            }
+        self.clamp_to_text();
+        let rows = self.text_rows();
+        if rows == 0 {
             return;
         }
         if self.char_x >= self.max_char_x() {
             self.new_line();
+            self.clamp_to_text();
         }
-        if self.char_y < self.text_rows() {
+        if self.char_y < rows {
             self.store_cell(c);
             self.draw_glyph(c);
         }
         self.char_x += 1;
+    }
+
+    /// Keeps the text cursor on a scrollable text row, never the status bar.
+    fn clamp_to_text(&mut self) {
+        let rows = self.text_rows();
+        if rows == 0 {
+            return;
+        }
+        if self.char_y >= rows {
+            self.char_y = rows - 1;
+        }
     }
 
     fn feed_esc(&mut self, c: char) {
@@ -370,11 +382,8 @@ impl ScreenWriter {
     }
 
     fn tab(&mut self) {
+        self.clamp_to_text();
         let next = (self.char_x / TAB_WIDTH + 1) * TAB_WIDTH;
-        if self.char_y >= self.text_rows() {
-            self.char_x = next.min(self.max_char_x());
-            return;
-        }
         if next >= self.max_char_x() {
             self.new_line();
         } else {
@@ -513,11 +522,8 @@ impl ScreenWriter {
             self.char_x = 0;
             return;
         }
+        self.clamp_to_text();
         if self.char_y + 1 >= rows {
-            if self.char_y >= rows {
-                self.char_x = 0;
-                return;
-            }
             self.scroll_up();
         } else {
             self.char_y += 1;
@@ -837,21 +843,54 @@ pub fn pos() -> (usize, usize) {
     pos
 }
 
-/// Moves the cursor to a character cell (no output). For status-bar redraws
-/// and fixed-position UI.
+/// Moves the cursor to a character cell (no output). Clamped to the text
+/// area — use [`draw_status_bar`] for the status row.
 pub fn set_pos(char_x: usize, char_y: usize) {
     with_lock(|screen| {
         screen.char_x = char_x;
         screen.char_y = char_y;
+        screen.clamp_to_text();
     });
 }
 
-/// Fills one text line's pixels with a solid color and moves the cursor to
-/// that line's start — the base for status bars (write text over it after).
+/// Fills one text line's pixels with a solid color without moving the
+/// text cursor.
 pub fn fill_row(row: usize, color: Color) {
     with_lock(|screen| {
         screen.fg = color;
         screen.fill_row(row);
+    });
+}
+
+/// Paints the status row in-place without touching the text cursor.
+///
+/// The shell's input line must stay on a text row; hijacking `char_x` /
+/// `char_y` for the bar (then failing to restore) made typed characters
+/// land on the status row and vanish on the next redraw.
+pub fn draw_status_bar(bg: Color, fg: Color, text: &str) {
+    with_lock(|screen| {
+        let row = match screen.max_char_y() {
+            0 => return,
+            n => n - 1,
+        };
+        let saved_x = screen.char_x;
+        let saved_y = screen.char_y;
+        let saved_fg = screen.fg;
+        let cols = screen.max_char_x();
+
+        screen.fg = bg;
+        screen.clear_row_pixels(row);
+        screen.fg = fg;
+        screen.char_y = row;
+        for (i, c) in text.chars().take(cols).enumerate() {
+            screen.char_x = i;
+            screen.draw_glyph(c);
+        }
+
+        screen.char_x = saved_x;
+        screen.char_y = saved_y;
+        screen.fg = saved_fg;
+        screen.clamp_to_text();
     });
 }
 
@@ -920,8 +959,8 @@ pub fn apply_tty_switch() {
     show_tty(index);
 }
 
-/// Writes glyphs with no escape parsing. The status bar uses this so a
-/// half-finished CSI sequence cannot swallow the bar text.
+/// Writes glyphs with no escape parsing (text area only). Prefer
+/// [`draw_status_bar`] for the bottom status row.
 pub fn out_plain(s: &str) {
     with_lock(|screen| {
         for c in s.chars() {
