@@ -1394,7 +1394,7 @@ Make the object-capability story hold under exhaustion and forgery.
       (`test-capforge`: keyboard/loader/stats without grant, WRITE-only
       file Cap → AccessDenied)
 - [x] **Per-task budgets** (documented): `MAX_OPEN_FILES` 8,
-      `MAX_PROC_CAPS` 8, `SPAWN_ARG_MAX` 256, `SPAWN_NAME_MAX` 64,
+      `MAX_PROC_CAPS` 16 (M53), `SPAWN_ARG_MAX` 256, `SPAWN_NAME_MAX` 64,
       `TOKEN_SLOTS`; process Cap ceiling in `test-procbudget`
 - [x] **Frame/charge limits (soft)**: `SPAWN_FRAME_RESERVE` (64) —
       loader spawn returns `NoResource` when free frames are below the
@@ -1651,42 +1651,29 @@ Mechanism in the kernel; policy in userspace.
 
 ### Kernel mechanism
 
-- [ ] **Init is the first ring-3 task**: kernel loads `init` (ramdisk)
-      once; it is the root of the user process tree (role flag / reserved
-      slot — not an ABI “PID 1”)
-- [ ] **Orphan Cap transfer**: when a parent exits, wait/control Caps for
-      live children move to init; zombies are Cap-waitable by init (or
-      whoever still holds a wait Cap)
-- [ ] **Init is immortal to user kill**: kill Cap on init is not issued
-      to others (or always AccessDenied); if init exits/faults → kernel
-      panic (or controlled reboot) with a clear serial reason — never
-      silently `ensure_shell` around it
-- [ ] **Retire kernel seat supervisor**: `ensure_shell()` / auto-respawn
-      of `shell`…`shell12` becomes a transitional shim, then **removed**
-      once init owns seats (Milestone 54). Document the cutover in DESIGN
-- [ ] **Shutdown/reboot path**: power syscalls either require a right
-      held by init (or a grant init gives the operator shell), or become
-      “request to init” so flush/order happens in userspace first
-- [ ] Tests: orphan Cap transfer; kill-init denied; init exit
-      panics/reboots deterministically in a test kernel
+- [x] **Init is the first ring-3 task**: kernel loads `init` (ramdisk)
+      when present (`is_init` role flag — not an ABI “PID 1”)
+- [x] **Orphan Cap transfer**: when a parent exits, wait/control Caps for
+      live children move to init; children reparent to init’s slot
+- [x] **Init is immortal to user kill**: `task_kill` → AccessDenied on
+      `is_init`; init exit/fault panics (`init exited — no orphan root`)
+- [ ] **Retire kernel seat supervisor**: `ensure_shell()` remains a
+      transitional shim until Milestone 54 owns seats
+- [ ] **Shutdown/reboot path**: deferred — init holds power grant; ordered
+      “request to init” is Milestone 54 polish
+- [x] Tests: `bin/test-init` + `init_test_passes` (orphan Cap transfer to
+      init); `test-orphan` still covers no-init → kernel root
 
 ### Userspace init program
 
-- [ ] **`crates/userspace/init`**: minimal orphan root — Cap-wait/reap
-      loop, start configured children, handle shutdown request
-- [ ] **Config surface (v1)**: fixed table in init or a small `/etc/init`
-      galfs file — which programs to spawn at boot (getty/seats, optional
-      services). No dbus/systemd graph in v1
-- [ ] **Restart policy (v1)**: on child exit, restart | once | ignore —
-      per entry; crash loops back off with monotonic time (M43 clock);
-      init keeps the child’s Cap to supervise
-- [ ] **Caps/tokens for children**: init attenuates what each child gets
-      (login seat ≠ disk service); never ambient “all rights because
-      parent is init”
-- [ ] **Logging**: init writes a short serial/console line on
-      start/reap/restart/shutdown (debug ids OK in logs; Caps stay private)
-- [ ] Docs: `DESIGN.md` boot → init → seats diagram; AUTH notes that
-      login seats are init children
+- [x] **`crates/userspace/init`**: Cap-wait/reap loop on process Cap
+      slots; logs ready/reap (seat spawn is M54)
+- [ ] **Config surface (v1)**: fixed seat table in init — **Milestone 54**
+- [ ] **Restart policy (v1)**: **Milestone 54**
+- [x] **Caps/tokens for children**: init grants are attenuated
+      (`Grants::init` — no keyboard); seat Caps via spawn (M54)
+- [x] **Logging**: `[init] ready` / `[init] reaped child` on console
+- [x] Docs: PROCESS / DESIGN note M53 orphan root; seats cutover M54
 
 ## Milestone 54 — Seats & service supervision
 
