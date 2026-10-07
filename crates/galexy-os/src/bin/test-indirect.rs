@@ -63,13 +63,17 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert_eq!(galfs::blocks_used(), 1, "indirect + unused data freed");
     assert!(galfs::fsck_ok(), "after truncate shrink");
 
-    // Grow through truncate into indirect again.
+    // Grow through truncate into indirect again (new bytes are zero-filled).
     galfs::truncate_file(file, PAST_DIRECT).expect("truncate grow past direct");
     assert_eq!(galfs::blocks_used(), 10, "grow reallocates indirect");
-    let mut zeros = [0u8; PAST_DIRECT];
-    let zn = galfs::read_file_bytes(file, &mut zeros).expect("read grown");
+    let mut buf = [0u8; PAST_DIRECT];
+    let zn = galfs::read_file_bytes(file, &mut buf).expect("read grown");
     assert_eq!(zn, PAST_DIRECT);
-    assert!(zeros.iter().all(|&b| b == 0), "truncate grow zero-fills");
+    assert_eq!(&buf[..100], &pattern[..100], "prefix survives shrink+grow");
+    assert!(
+        buf[100..].iter().all(|&b| b == 0),
+        "truncate grow zero-fills the new region"
+    );
 
     // Full 32 KiB file.
     let full = galfs::create_file_under(desktop, "full").expect("full");
