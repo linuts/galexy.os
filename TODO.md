@@ -469,7 +469,8 @@ host tests, green per commit.
       future work
 - [x] **UEFI tests graduated** (`runner/tests/boot.rs`): the smoke test
       became `uefi_image_boots_and_timer_ticks` — asserts MADT + LAPIC +
-      `[timer] 1s up` under OVMF (3 retries for OVMF disk flakiness);
+      uptime-prefixed serial (`1s: …`) under OVMF (3 retries for OVMF
+      disk flakiness);
       NEW `shell_run_hello_typing_e2e_uefi` — the full typed `run
       hello` under OVMF via QMP. Harness fix en route: QMP reply reads
       must SKIP async event lines (RTC_CHANGE under OVMF interleaves

@@ -1304,7 +1304,7 @@ fn spawn_and_prompt(cwd: &Cwd, program: &[u8], arg: &[u8], grants: u64, wait_exi
             SysError::Unsupported => write_console(b"reserved\n"),
             SysError::NotFound => {
                 write_console(b"command not found\n");
-                write_console(b"\x07");
+                let _ = write_console(b"\x07");
             }
             _ => write_console(b"failed\n"),
         };
