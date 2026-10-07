@@ -226,7 +226,8 @@ first real program landed in Milestone 13:
 
 Goal: auth that survives a stolen disk image, a filesystem usable beyond
 demos, and kernel edges a reviewer will poke. Concrete checkboxes live in
-`TODO.md` Milestones 43–60. Dependency-aware order:
+`TODO.md` Milestones 43–67. Style rules for secrets, GALF versions,
+caps, and IF=0 paths: `docs/STYLE.md`. Dependency-aware order:
 
 1. **Auth crypto & sessions** (43–46) — CSPRNG + real KDF + random salts;
    no-echo password prompts; logout / lockout / force admin change;
@@ -246,6 +247,9 @@ demos, and kernel edges a reviewer will poke. Concrete checkboxes live in
    table; negative tests + ramdisk measurement; pipelines/glob; release
    candidate gates (`login_required`, KDF, encryption on when disk
    present, tag `review-rc1`).
+7. **Solidifying pass** (61–67) — cap/resource accounting; monotonic
+   time for lockout/idle; W^X and scrub; lock-order freeze; CI/repro
+   tooling; soak/perf budgets; explicit non-goals freeze.
 
 Standing rule unchanged: each milestone leaves the suite green; prefer
 explicit waivers in the threat/FS docs over half-landed features.
