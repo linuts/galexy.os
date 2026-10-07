@@ -1276,10 +1276,12 @@ Multi-user usage beyond one admin and ad-hoc grants.
       (byte names only — document)
 - [ ] Sharing e2e: eve grants read to dan's live shell; logout clears
       live cards; durable share survives reboot (disk harness)
-- [ ] **Confused-deputy tests**: task with LIST-only cannot grant WRITE;
-      cannot grant on a path it cannot resolve (same bar for `share`)
-- [ ] **Token / share slot exhaustion**: full table → `NoResource`;
-      revoke/unshare frees a slot; document maxima
+- [x] **Confused-deputy tests**: LIST-only cannot `share` WRITE; cannot
+      share a path without a covering card; missing path `NotFound`
+      (`bin/test-cards`; same `resolve_and_check` bar as `grant`)
+- [x] **Token / share slot exhaustion**: full table → `NoResource`;
+      revoke/unshare frees a slot; maxima documented (`TOKEN_SLOTS`=8,
+      `SHARE_SLOTS`=32); `bin/test-cards`
 
 ## Milestone 46 — Storage stack
 

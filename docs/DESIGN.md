@@ -591,10 +591,11 @@ the bitmap. `cargo run` attaches a persistent `galfs.img`.
 `test-galfs-corrupt` refuses format on a both-bad image; `test-fsck`
 runs live-table consistency after mutate; `test-quota` covers
 object/byte limits; `test-shares` covers durable home shares;
-`test-indirect` covers past-direct writes and 32 KiB files. Host
-`galfs-fsck` (crate `galexy-galf`) unlocks a sealed image and reports
-structural issues; the runner checks a guest-written `galfs.img`
-offline. `test-scratch` / `test-rm` fill objects to `NoResource`;
+`test-indirect` covers past-direct writes and 32 KiB files;
+`test-cards` covers token/share slot exhaustion and confused-deputy
+`share` rules. Host `galfs-fsck` (crate `galexy-galf`) unlocks a sealed
+image and reports structural issues; the runner checks a guest-written
+`galfs.img` offline. `test-scratch` / `test-rm` fill objects to `NoResource`;
 `test-blocks` fills the block pool; `test-ops` covers
 rename/truncate/stat. Shell `tokens` / `USER_TOKENS` lists cards.
 Utilities use `SPAWN_WAIT` so the prompt returns after `ls` / `mkdir`
