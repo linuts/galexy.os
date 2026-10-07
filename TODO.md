@@ -1301,14 +1301,17 @@ Reviewers will ask how storage grows past QEMU's secondary IDE.
 - [x] **Identify / capacity**: IDENTIFY words 60–61 / 100–103 →
       `capacity_sectors()`; galfs gates on ≥ dual-slot size; out-of-range
       LBA → `BadValue`; `disk_capacity_sectors` + `bin/test-galfs-disk`
-- [ ] **Flush discipline**: FLUSH CACHE already on every slot commit;
-      test with `cache=writeback` and `cache=none`
+- [x] **Flush discipline**: FLUSH CACHE on every slot commit; runner
+      `boot_with_galfs_cache` + `galfs_disk_persists_writeback_cache` /
+      `_none_cache` (also `writethrough` default)
 - [ ] **Optional**: simple partition offset (GALF not required at LBA 0)
-- [ ] **Write barriers**: document ordering (data then metadata) for
-      multi-block file updates
+- [x] **Write barriers**: whole sealed slot (data + metadata) then
+      flush then publish gen — documented in `GALFS.md`
 - [x] **Hot-unplug / missing disk**: boot without slave stays RAM-only;
       too-small disk logged + RAM-only; no panic
-- [ ] Docs: how `cargo run` attaches storage; CI matrix for disk backends
+- [x] Docs: how `cargo run` attaches storage (`README` + `GALFS.md`)
+- [ ] CI matrix for disk backends (virtio vs IDE) when a second backend
+      lands
 
 ## Milestone 47 — Process, ABI & capabilities
 

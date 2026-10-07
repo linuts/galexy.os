@@ -5,8 +5,8 @@ mod common;
 
 use common::{
     boot, boot_and_type, boot_and_type_uefi, boot_liveness, boot_uefi, boot_with_galfs,
-    boot_with_galfs_both_corrupt, boot_with_galfs_recover, boot_with_galfs_torn, image,
-    QEMU_EXIT_SUCCESS,
+    boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_recover,
+    boot_with_galfs_torn, image, GalfsDiskCache, QEMU_EXIT_SUCCESS,
 };
 use std::time::Duration;
 
@@ -553,31 +553,56 @@ fn paths_test_passes() {
 
 #[test]
 fn galfs_disk_persists_across_reboot() {
-    let (code1, serial1, img, code2, serial2) = boot_with_galfs(&image("test-galfs-disk"));
+    assert_galfs_disk_persists(boot_with_galfs(&image("test-galfs-disk")), "writethrough");
+}
+
+/// Guest FLUSH CACHE must make the inactive-slot commit durable when the
+/// host page cache may buffer (`cache=writeback`).
+#[test]
+fn galfs_disk_persists_writeback_cache() {
+    assert_galfs_disk_persists(
+        boot_with_galfs_cache(&image("test-galfs-disk"), GalfsDiskCache::Writeback),
+        "writeback",
+    );
+}
+
+/// Same persistence bar with `cache=none` (bypass host page cache).
+#[test]
+fn galfs_disk_persists_none_cache() {
+    assert_galfs_disk_persists(
+        boot_with_galfs_cache(&image("test-galfs-disk"), GalfsDiskCache::None),
+        "none",
+    );
+}
+
+fn assert_galfs_disk_persists(
+    result: (Option<i32>, String, Vec<u8>, Option<i32>, String),
+    cache_label: &str,
+) {
+    let (code1, serial1, img, code2, serial2) = result;
     assert_eq!(
         code1,
         Some(QEMU_EXIT_SUCCESS),
-        "test-galfs-disk write boot should exit with Success; serial:\n{serial1}"
+        "test-galfs-disk write boot (cache={cache_label}) should exit with Success; serial:\n{serial1}"
     );
     assert!(
         serial1.contains("[test-galfs-disk] wrote"),
-        "write marker missing; serial:\n{serial1}"
+        "write marker missing (cache={cache_label}); serial:\n{serial1}"
     );
     assert!(
         !img.windows(b"persist-ok-block-store".len())
             .any(|w| w == b"persist-ok-block-store"),
-        "sealed galfs.img must not contain plaintext file bytes"
+        "sealed galfs.img must not contain plaintext file bytes (cache={cache_label})"
     );
     assert_eq!(
         code2,
         Some(QEMU_EXIT_SUCCESS),
-        "test-galfs-disk verify boot should exit with Success; serial:\n{serial2}"
+        "test-galfs-disk verify boot (cache={cache_label}) should exit with Success; serial:\n{serial2}"
     );
     assert!(
         serial2.contains("[test-galfs-disk] passed"),
-        "verify marker missing; serial:\n{serial2}"
+        "verify marker missing (cache={cache_label}); serial:\n{serial2}"
     );
-    // Host offline fsck must accept the sealed image the guest just wrote.
     let mut slot_buf = vec![0u8; galexy_galf::DISK_SECTORS * galexy_galf::SECTOR];
     let mut best = Box::new(galexy_galf::Table::empty());
     let mut cand = Box::new(galexy_galf::Table::empty());
@@ -590,7 +615,7 @@ fn galfs_disk_persists_across_reboot() {
     );
     assert!(
         report.ok,
-        "host galfs-fsck must pass a healthy image; issues: {:?}",
+        "host galfs-fsck must pass (cache={cache_label}); issues: {:?}",
         &report.issues[..report.issue_count]
     );
 }
