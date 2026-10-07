@@ -1014,6 +1014,20 @@ fn procgive_test_passes() {
 }
 
 #[test]
+fn procbudget_test_passes() {
+    let (code, serial) = boot(&image("test-procbudget"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-procbudget should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-procbudget] passed"),
+        "test-procbudget success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn seek_test_passes() {
     let (code, serial) = boot(&image("test-seek"));
     assert_eq!(

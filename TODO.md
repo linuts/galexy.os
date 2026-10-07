@@ -1384,7 +1384,7 @@ Make the object-capability story hold under exhaustion and forgery.
       open
 - [x] **Per-task budgets** (documented): `MAX_OPEN_FILES` 8,
       `MAX_PROC_CAPS` 8, `SPAWN_ARG_MAX` 256, `SPAWN_NAME_MAX` 64,
-      `TOKEN_SLOTS` — ceiling tests still open
+      `TOKEN_SLOTS`; process Cap ceiling in `test-procbudget`
 - [ ] **Frame/charge limits (soft)**: optional max frames per user task;
       spawn fails cleanly when the machine is low on memory
 - [x] **Give/pipe lifecycle** (process Caps): `give` moves a process Cap
