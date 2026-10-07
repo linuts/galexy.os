@@ -507,9 +507,9 @@ from `FILE_CAP_BASE` (3), authoritative grant intersected with the
 handle snapshot. `read` copies the next bytes of an open file
 (short-read at 1 KiB, 0 at EOF);
 `close` drops the slot. `create(name, len, flags)` (syscall 9) puts a
-path in a fixed galfs table (64 objects, 16 actors with one root each,
-64-byte component names, 512-byte file buffers, no heap on the syscall
-path). A path ending in `/` is a directory and returns 0. A file returns
+path in a fixed galfs table (128 objects, 32 actors with one root each,
+64-byte component names, 512-byte inline file buffers, no heap on the
+syscall path — Milestone 45 / GALF v7). A path ending in `/` is a directory and returns 0. A file returns
 READ|WRITE. `RDX == 1` empties an existing file; any other value creates
 only when the name is new. Uniqueness is the parent plus the component.
 The first path component may be `owner@name` (`dan@Desktop`); without an
@@ -556,16 +556,18 @@ tree). Add/del require the caller's root to be `admin`. A seat born as
 admin may `su admin` to return. The shell exposes `whoami`, `users`,
 `useradd`, `userdel`, and `su` (and resets cwd on `su`). Boot formats
 one immortal actor, `admin`, with Desktop. When the primary IDE slave
-is present, `galfs::init` loads the newest valid GALF **v6** sealed slot
-(dual 80-sector images: wrapped volume key + ChaCha20-HMAC payload,
+is present, `galfs::init` loads the newest valid GALF **v7** sealed slot
+(dual 160-sector images: wrapped volume key + ChaCha20-HMAC payload,
 generation + ciphertext CRC + structural checks) or formats that admin
 tree under a fresh volume key; create/remove/append/useradd/userdel sync
 to the inactive slot and flush the cache. `userdel` also refuses open caps
 on that actor and clears tokens that named its objects. Without a slave
-the table stays RAM-only. The table holds 16 actors, 64 objects, and
-512-byte files. `cargo run` attaches a persistent `galfs.img`.
-`bin/test-galfs-disk` proves a file survives two QEMU boots and that a
-corrupt newest slot still recovers from the older copy. Shell utilities
+the table stays RAM-only. The table holds 32 actors, 128 objects, and
+512-byte inline files (block/extent store is the next M45 step).
+`cargo run` attaches a persistent `galfs.img`. `bin/test-galfs-disk`
+proves a file survives two QEMU boots and that a corrupt newest slot
+still recovers from the older copy. `test-scratch` / `test-rm` fill the
+object table to `NoResource` and reuse after remove. Shell utilities
 use `SPAWN_WAIT` so the prompt returns after `ls` / `mkdir` exit.
 Auth is password for identity (PBKDF2-HMAC-SHA256 in `galexy-crypto`,
 CSPRNG salts) plus galfs tokens for authorization (see `docs/AUTH.md`).

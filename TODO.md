@@ -1174,13 +1174,14 @@ Capacity, operations, durability, and multi-user sharing.
 
 ### galfs capacity & on-disk layout
 
-Demo limits (16 actors / 64 objects / 512-byte files) are not real usage.
+Interim table bump (32 actors / 128 objects / 512-byte inline files) is
+GALF **v7**. Block/extent store and larger files remain.
 
-- [ ] **Sizing plan** in `DESIGN.md`: target actors, objects, max file
-      size, max depth — pick numbers that still avoid heap on the IF=0
-      syscall path (or document a deferred-work queue for mutate)
-- [ ] **GALF version bump**: header fields for table sizes; migrate or
-      refuse old images cleanly
+- [x] **Sizing plan** in `DESIGN.md` / `GALFS.md`: 32 actors, 128 objects,
+      512-byte inline files, depth 8 — still no heap on the IF=0 path;
+      block store is the next raise
+- [x] **GALF version bump**: v7 header carries actor/object counts;
+      refuses older images (including sealed v6)
 - [ ] **Block/extent store**: replace inline 512-byte buffers with a
       block allocator on the disk image (fixed block size, extent list or
       single-indirect). Empty files cost one inode, not a full buffer
@@ -1188,12 +1189,14 @@ Demo limits (16 actors / 64 objects / 512-byte files) are not real usage.
       correct across block boundaries
 - [ ] **More opens**: raise per-task file table above 8, or justify 8 in
       DESIGN as intentional
-- [ ] **Stress test**: fill actors/objects/blocks to `NoResource`;
-      recover; delete; reuse slots without leaking blocks
+- [x] **Stress test (objects)**: `test-scratch` / `test-rm` fill to
+      `NoResource` and reuse after remove (actor/block fill with the
+      block store)
 - [ ] **Free-block bitmap** (or equivalent) with leak detector in fsck
 - [ ] **Endian / packed structs**: explicit little-endian on disk;
       `zerocopy`/`bytemuck`-style or manual to_le; host fsck shares defs
-- [ ] Suite growth: capacity + fragmentation smoke under QEMU
+- [x] Suite growth: object-capacity fill under QEMU (`test-scratch` /
+      `test-rm`); fragmentation smoke waits on the block store
 
 ### galfs operations for real usage
 

@@ -29,7 +29,8 @@ profiles or fatter kstacks make that practical.
 slave must not recover file bytes or password hashes offline. Cold-boot
 RAM extraction and a compromised live kernel are out of scope for now.
 
-GALF **v6** slots are sealed:
+GALF **v7** slots are sealed (same AEAD as v6; larger actor/object
+tables — see `GALFS.md`):
 
 1. Format creates a random 32-byte volume key.
 2. A KEK is derived from the volume passphrase (`galfs` for bring-up)
@@ -39,7 +40,7 @@ GALF **v6** slots are sealed:
 4. Boot unlocks with the bring-up passphrase automatically today;
    interactive unlock is a follow-up.
 
-v5 plaintext images are refused (format recreates admin).
+Older images (including sealed v6) are refused (format recreates admin).
 
 ## Pieces
 
@@ -170,5 +171,5 @@ Tracked for review readiness in `TODO.md` Milestones 43–44:
 - Removing the `crash` test seam from production images → Milestone 43
   (kept for supervisor e2e; omitted from `help`)
 
-**Note:** GALF **v6** refuses v5 images. Delete `galfs.img` or let
-format recreate a sealed volume after upgrading.
+**Note:** GALF **v7** refuses older images (including sealed v6). Delete
+`galfs.img` or let format recreate a sealed volume after upgrading.

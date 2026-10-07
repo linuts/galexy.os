@@ -41,7 +41,7 @@ Galexy ABI for user trees.
 | `fs_root` | Session default root for paths without an owner prefix |
 | Path | Lookup string (`/Desktop/notes`, `/eve@Desktop/x`); not authority |
 | GALF | On-disk dual-slot image of the actor/object tables |
-| Volume key | Random key that encrypts a sealed slot’s payload (v6) |
+| Volume key | Random key that encrypts a sealed slot’s payload (v6+) |
 
 ## Rights
 
@@ -108,19 +108,22 @@ child’s files (`PROCESS.md`).
 
 ## Table limits (today)
 
-Demo sizes — Milestone **45** grows them for real usage:
+Milestone **45** (GALF **v7**) raised actor/object slots. File bytes stay
+inline until the block/extent store lands later in the same milestone.
 
 | Resource | Cap |
 | --- | --- |
-| Actors | 16 |
-| Objects (files + dirs + roots) | 64 |
-| File payload | 512 bytes |
+| Actors | 32 |
+| Objects (files + dirs + roots) | 128 |
+| File payload | 512 bytes (inline) |
 | Tokens per task | 8 |
 | Path depth | 8 components |
 | Name length | 64 (object) / 32 (actor) |
+| Sectors per dual-slot image | 160 |
 
-The IF=0 syscall path must not heap-allocate over this table. Capacity
-growth either keeps that invariant or documents a deferred-work path.
+The IF=0 syscall path must not heap-allocate over this table. Further
+growth (block store, larger files) either keeps that invariant or
+documents a deferred-work path.
 
 ## On-disk: GALF slots
 
@@ -139,7 +142,7 @@ slot 1 @ LBA DISK_SECTORS
 | Crash | Mid-write leaves the previous slot intact |
 | Version | Layout bump **refuses** old images (no silent reinterpret) |
 
-### Sealed v6 (Milestone 44)
+### Sealed slots (Milestone 44 → v6; capacity bump → v7)
 
 **Threat (v1):** stolen `galfs.img` must not yield file bytes or password
 hashes offline. Cold-boot RAM and a live compromised kernel are out of
@@ -154,8 +157,8 @@ scope initially.
 Bring-up unlock uses a fixed volume passphrase (`galfs` today).
 Interactive unlock is a follow-up. Details: `AUTH.md` → Sealed GALF.
 
-v5 plaintext images are refused; delete `galfs.img` or let format
-recreate.
+v7 refuses older images (including sealed v6); delete `galfs.img` or let
+format recreate.
 
 ## Boot and format
 
@@ -185,17 +188,18 @@ absent from the raw image.
 
 ### Today (through review readiness)
 
-- Fixed table sizes; 512-byte files
-- Sealed dual-slot GALF v6 on the IDE slave
+- GALF **v7**: 32 actors / 128 objects; 512-byte inline files
+- Sealed dual-slot image (160 sectors/slot) on the IDE slave
+- Object-table fill stress (`test-scratch` / `test-rm`) hits `NoResource`
 - Shell: `ls` / `cat` / `echo` / `touch` / `mkdir` / `rm` / `cp` / `mv`
   / `grant` / `revoke` via utilities + syscalls
 - Admin operator bypass still broad (narrow in Milestone 43 leftovers)
 
-### Target capacity (Milestone 45)
+### Remaining capacity (Milestone 45)
 
-- Larger actors/objects/files via block/extent store
+- Block/extent store for larger files (keep IF=0 or defer mutate)
 - Endian-safe on-disk structs; shared defs with host fsck
-- Stress to `NoResource` without leaking blocks
+- Actor + block fill stress; reuse without leaking blocks
 
 ### Target storage stack (Milestone 46)
 
@@ -216,7 +220,7 @@ absent from the raw image.
 | Milestone | Delivers |
 | --- | --- |
 | **44** | Sealed GALF (volume key + AEAD); threat model; no plaintext in image |
-| **45** | Capacity & layout for real usage; block store; fsck-friendly defs |
+| **45** | Capacity & layout (v7 tables landed; block store + fsck defs next) |
 | **46** | Storage stack polish for demos / review |
 
 Until 45 lands, demo limits above are the shipped contract. New code
