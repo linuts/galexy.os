@@ -713,43 +713,50 @@ fn with_login<'a>(keys: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
         .collect()
 }
 
-/// After each `Password: `, console echo must be `*` only. Kernel log
-/// lines (`[timer] …`) may interleave on COM1 and are ignored.
+/// After each `Password:` / `Confirm:`, console echo must be `*` only.
+/// Kernel log lines (`[timer] …`) may interleave on COM1 and are ignored.
 fn assert_passwords_masked(serial: &str) {
-    let mut from = 0;
-    while let Some(rel) = serial[from..].find("Password: ") {
-        let start = from + rel + "Password: ".len();
-        let rest = &serial[start..];
-        let mut saw_star = false;
-        for line in rest.split('\n') {
-            let line = line.trim_end();
-            if line.is_empty() {
-                break;
-            }
-            if line.starts_with('[') {
-                continue;
-            }
-            if line.contains("galexy>") || line.starts_with("Login") {
-                break;
-            }
-            for c in line.chars() {
-                if c == '*' {
-                    saw_star = true;
-                } else if c == '[' {
-                    // Same-line kernel log after stars: `*[timer] 2s up`.
+    for marker in ["Password: ", "Confirm: "] {
+        let mut from = 0;
+        while let Some(rel) = serial[from..].find(marker) {
+            let start = from + rel + marker.len();
+            let rest = &serial[start..];
+            let mut saw_star = false;
+            for line in rest.split('\n') {
+                let line = line.trim_end();
+                if line.is_empty() {
                     break;
-                } else {
-                    panic!(
-                        "password cleartext leaked to serial after Password: ({line:?}); serial:\n{serial}"
-                    );
+                }
+                if line.starts_with('[') {
+                    continue;
+                }
+                if line.contains("galexy>")
+                    || line.starts_with("Login")
+                    || line.starts_with("Password:")
+                    || line.starts_with("Confirm:")
+                    || line.starts_with("passwd:")
+                {
+                    break;
+                }
+                for c in line.chars() {
+                    if c == '*' {
+                        saw_star = true;
+                    } else if c == '[' {
+                        // Same-line kernel log after stars: `*[timer] 2s up`.
+                        break;
+                    } else {
+                        panic!(
+                            "password cleartext leaked to serial after {marker}({line:?}); serial:\n{serial}"
+                        );
+                    }
                 }
             }
+            assert!(
+                saw_star,
+                "{marker}prompt had no masked echo; serial:\n{serial}"
+            );
+            from = start;
         }
-        assert!(
-            saw_star,
-            "Password: prompt had no masked echo; serial:\n{serial}"
-        );
-        from = start;
     }
 }
 
