@@ -556,10 +556,11 @@ tree). Add/del require the caller's root to be `admin`. A seat born as
 admin may `su admin` to return. The shell exposes `whoami`, `users`,
 `useradd`, `userdel`, and `su` (and resets cwd on `su`). Boot formats
 one immortal actor, `admin`, with Desktop. When the primary IDE slave
-is present, `galfs::init` loads the newest valid GALF **v5** slot (dual
-80-sector images with generation + CRC-32 + structural checks) or
-formats that admin tree; create/remove/append/useradd/userdel sync to
-the inactive slot and flush the cache. `userdel` also refuses open caps
+is present, `galfs::init` loads the newest valid GALF **v6** sealed slot
+(dual 80-sector images: wrapped volume key + ChaCha20-HMAC payload,
+generation + ciphertext CRC + structural checks) or formats that admin
+tree under a fresh volume key; create/remove/append/useradd/userdel sync
+to the inactive slot and flush the cache. `userdel` also refuses open caps
 on that actor and clears tokens that named its objects. Without a slave
 the table stays RAM-only. The table holds 16 actors, 64 objects, and
 512-byte files. `cargo run` attaches a persistent `galfs.img`.
