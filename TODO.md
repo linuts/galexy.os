@@ -1306,7 +1306,9 @@ Reviewers will ask how storage grows past QEMU's secondary IDE.
 - [x] **Flush discipline**: FLUSH CACHE on every slot commit; runner
       `boot_with_galfs_cache` + `galfs_disk_persists_writeback_cache` /
       `_none_cache` (also `writethrough` default)
-- [ ] **Optional**: simple partition offset (GALF not required at LBA 0)
+- [x] **Optional**: simple partition offset — `set_disk_lba_base` /
+      `DISK_PART_LBA` (2048); `bin/test-galfs-part` +
+      `galfs_disk_persists_partition_offset`
 - [x] **Write barriers**: whole sealed slot (data + metadata) then
       flush then publish gen — documented in `GALFS.md`
 - [x] **Hot-unplug / missing disk**: boot without slave stays RAM-only;

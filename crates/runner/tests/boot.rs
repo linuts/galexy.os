@@ -5,8 +5,9 @@ mod common;
 
 use common::{
     boot, boot_and_type, boot_and_type_uefi, boot_liveness, boot_uefi, boot_with_galfs,
-    boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_recover,
-    boot_with_galfs_torn, boot_with_galfs_virtio, image, GalfsDiskCache, QEMU_EXIT_SUCCESS,
+    boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_part,
+    boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio, image,
+    GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
 };
 use std::time::Duration;
 
@@ -585,6 +586,65 @@ fn galfs_disk_persists_virtio_blk() {
         "guest must bind virtio-blk; serial:\n{serial1}"
     );
     assert_galfs_disk_persists((code1, serial1, img, code2, serial2), "virtio-pci");
+}
+
+/// GALF dual slots start at LBA 2048 — absolute LBA 0 stays empty.
+#[test]
+fn galfs_disk_persists_partition_offset() {
+    let (code1, serial1, img, code2, serial2) =
+        boot_with_galfs_part(&image("test-galfs-part"));
+    assert_eq!(
+        code1,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-galfs-part write boot should exit with Success; serial:\n{serial1}"
+    );
+    assert!(
+        serial1.contains("[test-galfs-part] wrote"),
+        "write marker missing; serial:\n{serial1}"
+    );
+    assert!(
+        serial1.contains("LBA base 2048"),
+        "format must log partition LBA base; serial:\n{serial1}"
+    );
+    assert!(
+        img.len() > GALFS_PART_BYTE_OFF,
+        "parted image too short"
+    );
+    assert!(
+        img[..GALFS_PART_BYTE_OFF].iter().all(|&b| b == 0),
+        "bytes before partition offset must stay zero"
+    );
+    assert!(
+        !img[GALFS_PART_BYTE_OFF..]
+            .windows(b"persist-ok-part-offset".len())
+            .any(|w| w == b"persist-ok-part-offset"),
+        "sealed partition image must not contain plaintext"
+    );
+    assert_eq!(
+        code2,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-galfs-part verify boot should exit with Success; serial:\n{serial2}"
+    );
+    assert!(
+        serial2.contains("[test-galfs-part] passed"),
+        "verify marker missing; serial:\n{serial2}"
+    );
+    let galf = &img[GALFS_PART_BYTE_OFF..];
+    let mut slot_buf = vec![0u8; galexy_galf::DISK_SECTORS * galexy_galf::SECTOR];
+    let mut best = Box::new(galexy_galf::Table::empty());
+    let mut cand = Box::new(galexy_galf::Table::empty());
+    let report = galexy_galf::check_image(
+        galf,
+        galexy_galf::DEFAULT_VOLUME_PASSPHRASE,
+        &mut slot_buf,
+        &mut best,
+        &mut cand,
+    );
+    assert!(
+        report.ok,
+        "host fsck must pass image at partition offset; issues: {:?}",
+        &report.issues[..report.issue_count]
+    );
 }
 
 fn assert_galfs_disk_persists(
