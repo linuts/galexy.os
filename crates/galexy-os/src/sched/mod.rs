@@ -1644,7 +1644,7 @@ const SHELL_NAMES: [&str; 12] = [
 ];
 
 /// True when `name` is reserved for an F-key console shell.
-fn is_console_shell_name(name: &str) -> bool {
+pub fn is_console_shell_name(name: &str) -> bool {
     SHELL_NAMES.contains(&name)
 }
 
