@@ -31,10 +31,14 @@ pub const OBJECT_SLOTS: usize = 128;
 pub const ACTOR_SLOTS: usize = 32;
 /// Fixed data block size (one ATA sector).
 pub const BLOCK_SIZE: usize = 512;
-/// Direct block pointers per file (no indirect yet).
+/// Direct block pointers per file.
 pub const DIRECT_BLOCKS: usize = 8;
-/// Bytes one file can hold (`BLOCK_SIZE * DIRECT_BLOCKS`).
-pub const FILE_BYTES: usize = BLOCK_SIZE * DIRECT_BLOCKS;
+/// u16 pointers that fit in one single-indirect block.
+pub const INDIRECT_PTRS: usize = BLOCK_SIZE / 2;
+/// Bytes one file can hold (8 directs + single indirect; `len` stays u16).
+pub const FILE_BYTES: usize = 32 * 1024;
+/// Logical data blocks covering [`FILE_BYTES`].
+const MAX_DATA_BLOCKS: usize = FILE_BYTES / BLOCK_SIZE;
 /// Shared block pool capacity (Milestone 45 / GALF v8+).
 pub const BLOCK_SLOTS: usize = 256;
 // Host fsck (`galexy-galf`) must stay byte-identical — STYLE: no forked magic.
@@ -42,7 +46,11 @@ const _: () = assert!(OBJECT_SLOTS == galexy_galf::OBJECT_SLOTS);
 const _: () = assert!(ACTOR_SLOTS == galexy_galf::ACTOR_SLOTS);
 const _: () = assert!(BLOCK_SIZE == galexy_galf::BLOCK_SIZE);
 const _: () = assert!(DIRECT_BLOCKS == galexy_galf::DIRECT_BLOCKS);
+const _: () = assert!(INDIRECT_PTRS == galexy_galf::INDIRECT_PTRS);
+const _: () = assert!(FILE_BYTES == galexy_galf::FILE_BYTES);
 const _: () = assert!(BLOCK_SLOTS == galexy_galf::BLOCK_SLOTS);
+const _: () = assert!(MAX_DATA_BLOCKS <= DIRECT_BLOCKS + INDIRECT_PTRS);
+const _: () = assert!(FILE_BYTES <= u16::MAX as usize);
 /// Tokens one task may hold.
 pub const TOKEN_SLOTS: usize = 8;
 /// Durable home shares recorded in the sealed image (re-applied at login).
@@ -179,6 +187,8 @@ pub(crate) struct Object {
     name_len: u8,
     /// Direct block indexes into [`Table::blocks`] (`NO_BLOCK` if unused).
     blocks: [u16; DIRECT_BLOCKS],
+    /// Single-indirect block holding further data-block indexes (`NO_BLOCK` none).
+    indirect: u16,
     pub(crate) len: u16,
 }
 
@@ -191,6 +201,7 @@ impl Object {
             name: [0; NAME_CAP],
             name_len: 0,
             blocks: [NO_BLOCK; DIRECT_BLOCKS],
+            indirect: NO_BLOCK,
             len: 0,
         }
     }
@@ -269,9 +280,9 @@ static ADMIN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16
 /// LBA [`DISK_SECTORS`]. A sync writes the inactive slot with gen+1 and a
 /// CRC, then flushes — a crash mid-write leaves the previous slot intact.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-/// Bumped for durable home shares (Milestone 45). Older images are refused;
-/// format recreates admin under a wrapped volume key.
-pub const DISK_VERSION: u16 = 10;
+/// Bumped for single-indirect file blocks (Milestone 45). Older images are
+/// refused; format recreates admin under a wrapped volume key.
+pub const DISK_VERSION: u16 = 11;
 /// Sectors per dual-slot image (must cover header + sealed payload).
 pub const DISK_SECTORS: usize = 288;
 pub const DISK_SLOT_COUNT: usize = 2;
@@ -292,8 +303,9 @@ const _: () = assert!(ACTOR_ON_DISK == galexy_galf::ACTOR_ON_DISK);
 const _: () = assert!(DISK_HEADER == galexy_galf::DISK_HEADER);
 const _: () = assert!(SHARE_SLOTS == galexy_galf::SHARE_SLOTS);
 const _: () = assert!(SHARE_ON_DISK == galexy_galf::SHARE_ON_DISK);
-/// kind+actor+name_len+pad + parent+len + name + direct block indexes.
-const OBJECT_ON_DISK: usize = 8 + NAME_CAP + DIRECT_BLOCKS * 2; // 88
+/// kind+actor+name_len+pad + parent+len + name + directs + indirect.
+const OBJECT_ON_DISK: usize = 8 + NAME_CAP + DIRECT_BLOCKS * 2 + 2; // 90
+const _: () = assert!(OBJECT_ON_DISK == galexy_galf::OBJECT_ON_DISK);
 const PAYLOAD_LEN: usize = ACTOR_ON_DISK * ACTOR_SLOTS
     + OBJECT_ON_DISK * OBJECT_SLOTS
     + SHARE_ON_DISK * SHARE_SLOTS
@@ -591,6 +603,8 @@ fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; ata::SECTOR]
         for (i, blk) in obj.blocks.iter().enumerate() {
             flat[boff + i * 2..boff + i * 2 + 2].copy_from_slice(&blk.to_le_bytes());
         }
+        let ioff = boff + DIRECT_BLOCKS * 2;
+        flat[ioff..ioff + 2].copy_from_slice(&obj.indirect.to_le_bytes());
         off += OBJECT_ON_DISK;
     }
     for share in &table.shares {
@@ -756,6 +770,8 @@ fn decode_table(
         for (i, blk) in obj.blocks.iter_mut().enumerate() {
             *blk = u16::from_le_bytes([flat[boff + i * 2], flat[boff + i * 2 + 1]]);
         }
+        let ioff = boff + DIRECT_BLOCKS * 2;
+        obj.indirect = u16::from_le_bytes([flat[ioff], flat[ioff + 1]]);
         if obj.len as usize > FILE_BYTES {
             let mut gone = vk;
             wipe_bytes(&mut gone);
@@ -860,7 +876,7 @@ fn validate_table(table: &Table) -> bool {
                 cur = p;
             }
         }
-        if !validate_object_blocks(obj, &mut seen, &table.bitmap) {
+        if !validate_object_blocks(table, obj, &mut seen) {
             return false;
         }
     }
@@ -873,29 +889,57 @@ fn validate_table(table: &Table) -> bool {
     true
 }
 
-fn validate_object_blocks(obj: &Object, seen: &mut [bool; BLOCK_SLOTS], bitmap: &[u8]) -> bool {
+fn mark_block(seen: &mut [bool; BLOCK_SLOTS], bitmap: &[u8], b: u16) -> bool {
+    if b as usize >= BLOCK_SLOTS || seen[b as usize] {
+        return false;
+    }
+    if (bitmap[b as usize / 8] >> (b as usize % 8)) & 1 == 0 {
+        return false;
+    }
+    seen[b as usize] = true;
+    true
+}
+
+fn validate_object_blocks(table: &Table, obj: &Object, seen: &mut [bool; BLOCK_SLOTS]) -> bool {
+    let bitmap = &table.bitmap;
     let need = if obj.kind == KIND_FILE {
         if obj.len as usize > FILE_BYTES {
             return false;
         }
         (obj.len as usize + BLOCK_SIZE - 1) / BLOCK_SIZE
-    } else if obj.len != 0 {
+    } else if obj.len != 0 || obj.indirect != NO_BLOCK {
         return false;
     } else {
         0
     };
     for (i, &b) in obj.blocks.iter().enumerate() {
         if i < need {
-            if b as usize >= BLOCK_SLOTS || seen[b as usize] {
+            if !mark_block(seen, bitmap, b) {
                 return false;
             }
-            if (bitmap[b as usize / 8] >> (b as usize % 8)) & 1 == 0 {
-                return false;
-            }
-            seen[b as usize] = true;
         } else if b != NO_BLOCK {
             return false;
         }
+    }
+    if need > DIRECT_BLOCKS {
+        if obj.indirect == NO_BLOCK || !mark_block(seen, bitmap, obj.indirect) {
+            return false;
+        }
+        let ib = obj.indirect as usize;
+        for i in 0..INDIRECT_PTRS {
+            let off = i * 2;
+            let b = u16::from_le_bytes([table.blocks[ib][off], table.blocks[ib][off + 1]]);
+            let slot = DIRECT_BLOCKS + i;
+            if slot < need {
+                if !mark_block(seen, bitmap, b) {
+                    return false;
+                }
+            } else if b != NO_BLOCK {
+                return false;
+            }
+        }
+    } else if obj.indirect != NO_BLOCK {
+        return false;
     }
     true
 }
@@ -1446,6 +1490,7 @@ pub fn create_file_under(parent: u16, name: &str) -> Result<u16, SysError> {
     obj.actor = actor as u8;
     place_name(obj, name);
     obj.blocks = [NO_BLOCK; DIRECT_BLOCKS];
+    obj.indirect = NO_BLOCK;
     obj.len = 0;
     drop(table);
     sync();
@@ -1718,6 +1763,7 @@ pub(crate) fn create(
     obj.actor = actor as u8;
     place_name(obj, last);
     obj.blocks = [NO_BLOCK; DIRECT_BLOCKS];
+    obj.indirect = NO_BLOCK;
     obj.len = 0;
     if parsed.dir {
         Ok(None)
@@ -1793,14 +1839,77 @@ fn free_block(table: &mut Table, block: u16) {
 }
 
 fn free_file_blocks(table: &mut Table, index: usize) {
-    let blocks = table.objects[index].blocks;
-    for b in blocks {
+    for slot in 0..MAX_DATA_BLOCKS {
+        let b = data_block(table, index, slot);
         if b != NO_BLOCK {
             free_block(table, b);
+            let _ = set_data_block(table, index, slot, NO_BLOCK);
         }
+    }
+    let indirect = table.objects[index].indirect;
+    if indirect != NO_BLOCK {
+        free_block(table, indirect);
+        table.objects[index].indirect = NO_BLOCK;
     }
     table.objects[index].blocks = [NO_BLOCK; DIRECT_BLOCKS];
     table.objects[index].len = 0;
+}
+
+/// Logical data-block index → physical pool index (`NO_BLOCK` if unset).
+fn data_block(table: &Table, oi: usize, slot: usize) -> u16 {
+    if slot < DIRECT_BLOCKS {
+        return table.objects[oi].blocks[slot];
+    }
+    let ii = slot - DIRECT_BLOCKS;
+    let indirect = table.objects[oi].indirect;
+    if indirect == NO_BLOCK || ii >= INDIRECT_PTRS {
+        return NO_BLOCK;
+    }
+    let off = ii * 2;
+    let ib = indirect as usize;
+    u16::from_le_bytes([table.blocks[ib][off], table.blocks[ib][off + 1]])
+}
+
+/// Sets the physical block for logical data-block `slot`. Allocates the
+/// indirect block when first needed. Returns false if allocation fails.
+fn set_data_block(table: &mut Table, oi: usize, slot: usize, block: u16) -> bool {
+    if slot < DIRECT_BLOCKS {
+        table.objects[oi].blocks[slot] = block;
+        return true;
+    }
+    let ii = slot - DIRECT_BLOCKS;
+    if ii >= INDIRECT_PTRS || slot >= MAX_DATA_BLOCKS {
+        return false;
+    }
+    if table.objects[oi].indirect == NO_BLOCK {
+        if block == NO_BLOCK {
+            return true;
+        }
+        let Some(ib) = alloc_block(table) else {
+            return false;
+        };
+        // Pointer slots must be NO_BLOCK (0xffff), not zero (block 0).
+        table.blocks[ib as usize].fill(0xff);
+        table.objects[oi].indirect = ib;
+    }
+    let ib = table.objects[oi].indirect as usize;
+    let off = ii * 2;
+    table.blocks[ib][off..off + 2].copy_from_slice(&block.to_le_bytes());
+    true
+}
+
+/// Ensures logical data-block `slot` has a pool block; allocates if needed.
+fn ensure_data_block(table: &mut Table, oi: usize, slot: usize) -> Option<u16> {
+    let existing = data_block(table, oi, slot);
+    if existing != NO_BLOCK {
+        return Some(existing);
+    }
+    let b = alloc_block(table)?;
+    if !set_data_block(table, oi, slot, b) {
+        free_block(table, b);
+        return None;
+    }
+    Some(b)
 }
 
 /// Appends `src` to a file. Returns the byte count written (short on full
@@ -1823,13 +1932,10 @@ pub(crate) fn append(index: u16, src: &[u8]) -> Option<usize> {
         }
         let slot = pos / BLOCK_SIZE;
         let off = pos % BLOCK_SIZE;
-        if table.objects[i].blocks[slot] == NO_BLOCK {
-            let Some(b) = alloc_block(&mut table) else {
-                break;
-            };
-            table.objects[i].blocks[slot] = b;
-        }
-        let bi = table.objects[i].blocks[slot] as usize;
+        let Some(bi) = ensure_data_block(&mut table, i, slot) else {
+            break;
+        };
+        let bi = bi as usize;
         let mut room = (BLOCK_SIZE - off)
             .min(src.len() - written)
             .min(FILE_BYTES - pos);
@@ -1863,7 +1969,7 @@ pub(crate) fn read_at(index: u16, start: usize, dst: &mut [u8]) -> Option<usize>
         let pos = start + copied;
         let slot = pos / BLOCK_SIZE;
         let off = pos % BLOCK_SIZE;
-        let b = table.objects[i].blocks[slot];
+        let b = data_block(&table, i, slot);
         if b == NO_BLOCK || b as usize >= BLOCK_SLOTS {
             return None;
         }
@@ -2017,7 +2123,7 @@ fn reassign_actor_subtree(table: &mut Table, root: u16, actor: u8) {
     }
 }
 
-/// Sets a file's length, allocating or freeing direct blocks as needed.
+/// Sets a file's length, allocating or freeing data blocks as needed.
 pub(crate) fn truncate(index: u16, new_len: usize) -> Result<(), SysError> {
     if new_len > FILE_BYTES {
         return Err(SysError::BadValue);
@@ -2037,18 +2143,25 @@ pub(crate) fn truncate(index: u16, new_len: usize) -> Result<(), SysError> {
         } else {
             (new_len + BLOCK_SIZE - 1) / BLOCK_SIZE
         };
-        for slot in keep..DIRECT_BLOCKS {
-            let b = table.objects[i].blocks[slot];
+        for slot in keep..MAX_DATA_BLOCKS {
+            let b = data_block(&table, i, slot);
             if b != NO_BLOCK {
                 free_block(&mut table, b);
-                table.objects[i].blocks[slot] = NO_BLOCK;
+                let _ = set_data_block(&mut table, i, slot, NO_BLOCK);
+            }
+        }
+        if keep <= DIRECT_BLOCKS {
+            let indirect = table.objects[i].indirect;
+            if indirect != NO_BLOCK {
+                free_block(&mut table, indirect);
+                table.objects[i].indirect = NO_BLOCK;
             }
         }
         if new_len > 0 {
             let slot = (new_len - 1) / BLOCK_SIZE;
             let off = new_len % BLOCK_SIZE;
             if off != 0 {
-                let b = table.objects[i].blocks[slot] as usize;
+                let b = data_block(&table, i, slot) as usize;
                 table.blocks[b][off..].fill(0);
             }
         }
@@ -2064,26 +2177,45 @@ pub(crate) fn truncate(index: u16, new_len: usize) -> Result<(), SysError> {
     }
 
     // Grow with zero-fill; roll back on pool exhaustion.
-    let saved_blocks = table.objects[i].blocks;
+    let saved_directs = table.objects[i].blocks;
+    let saved_indirect = table.objects[i].indirect;
+    let saved_indirect_bytes = if saved_indirect != NO_BLOCK {
+        Some(table.blocks[saved_indirect as usize])
+    } else {
+        None
+    };
     let mut pos = old;
     while pos < new_len {
         let slot = pos / BLOCK_SIZE;
-        if table.objects[i].blocks[slot] == NO_BLOCK {
-            let Some(b) = alloc_block(&mut table) else {
-                // Roll back newly allocated blocks.
-                for s in 0..DIRECT_BLOCKS {
-                    let b = table.objects[i].blocks[s];
-                    if b != saved_blocks[s] && b != NO_BLOCK {
-                        free_block(&mut table, b);
-                    }
+        let Some(bi) = ensure_data_block(&mut table, i, slot) else {
+            // Roll back newly allocated data / indirect blocks.
+            for s in 0..MAX_DATA_BLOCKS {
+                let now = data_block(&table, i, s);
+                let was = if s < DIRECT_BLOCKS {
+                    saved_directs[s]
+                } else if let Some(bytes) = saved_indirect_bytes {
+                    let ii = s - DIRECT_BLOCKS;
+                    u16::from_le_bytes([bytes[ii * 2], bytes[ii * 2 + 1]])
+                } else {
+                    NO_BLOCK
+                };
+                if now != was && now != NO_BLOCK {
+                    free_block(&mut table, now);
                 }
-                table.objects[i].blocks = saved_blocks;
-                table.objects[i].len = old as u16;
-                return Err(SysError::NoResource);
-            };
-            table.objects[i].blocks[slot] = b;
-        }
-        let bi = table.objects[i].blocks[slot] as usize;
+            }
+            let now_indirect = table.objects[i].indirect;
+            if now_indirect != saved_indirect && now_indirect != NO_BLOCK {
+                free_block(&mut table, now_indirect);
+            }
+            table.objects[i].blocks = saved_directs;
+            table.objects[i].indirect = saved_indirect;
+            if let (Some(bytes), true) = (saved_indirect_bytes, saved_indirect != NO_BLOCK) {
+                table.blocks[saved_indirect as usize] = bytes;
+            }
+            table.objects[i].len = old as u16;
+            return Err(SysError::NoResource);
+        };
+        let bi = bi as usize;
         let off = pos % BLOCK_SIZE;
         let n = (BLOCK_SIZE - off).min(new_len - pos);
         if pos >= old {

@@ -1174,18 +1174,20 @@ Capacity, operations, durability, and multi-user sharing.
 
 ### galfs capacity & on-disk layout
 
-GALF **v9**: 32 actors / 128 objects / 256×512 block pool / 8 directs
-(4 KiB max file) + per-actor quotas. Indirect blocks remain.
+GALF **v11**: 32 actors / 128 objects / 256×512 block pool / 8 directs +
+single indirect (32 KiB max file) + per-actor quotas + durable shares.
 
 - [x] **Sizing plan** in `DESIGN.md` / `GALFS.md`: 32 actors, 128 objects,
-      256 blocks × 512, 8 directs/file, depth 8 — still no heap on IF=0
+      256 blocks × 512, 8 directs + single indirect/file, depth 8 — still
+      no heap on IF=0
 - [x] **GALF version bump**: v8 header carries actor/object/block counts;
-      refuses older images (including sealed v7); **v9** adds per-actor
-      quota fields on each actor record
-- [x] **Block store (direct)**: shared pool + per-file direct pointers;
-      empty files cost one inode; sealed payload includes bitmap+blocks
-- [x] **Larger files (to 4 KiB)**: multi-block append/read with seek
-      across block boundaries; indirect / bigger files still open
+      refuses older images; **v9** quotas; **v10** shares; **v11**
+      single-indirect + 32 KiB max (`len` stays u16)
+- [x] **Block store (direct + single indirect)**: shared pool + 8 direct
+      pointers + one indirect block of u16 indexes; empty files cost one
+      inode; sealed payload includes bitmap+blocks
+- [x] **Larger files (to 32 KiB)**: multi-block append/read/truncate across
+      direct and indirect; `bin/test-indirect`; double-indirect still open
 - [ ] **More opens**: raise per-task file table above 8, or justify 8 in
       DESIGN as intentional
 - [x] **Stress test (objects + blocks)**: `test-scratch` / `test-rm` /
@@ -1195,8 +1197,8 @@ GALF **v9**: 32 actors / 128 objects / 256×512 block pool / 8 directs
 - [x] **Shared on-disk defs**: `galexy-galf` holds layout constants +
       decode/check; kernel asserts matching magic/version/sizes (explicit
       little-endian encode already); fuller `zerocopy` share still open
-- [x] Suite growth: object + block capacity under QEMU; fragmentation
-      smoke still light (no indirect yet)
+- [x] Suite growth: object + block + indirect capacity under QEMU;
+      fragmentation / double-indirect still open
 
 ### galfs operations for real usage
 

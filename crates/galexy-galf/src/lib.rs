@@ -19,15 +19,18 @@ pub const DISK_SECTORS: usize = 288;
 pub const DISK_SLOT_COUNT: usize = 2;
 /// On-disk magic.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-/// Current sealed layout (quotas + durable home shares).
-pub const DISK_VERSION: u16 = 10;
+/// Current sealed layout (quotas + shares + single-indirect blocks).
+pub const DISK_VERSION: u16 = 11;
 
 pub const OBJECT_SLOTS: usize = 128;
 pub const ACTOR_SLOTS: usize = 32;
 pub const SHARE_SLOTS: usize = 32;
 pub const BLOCK_SIZE: usize = 512;
 pub const DIRECT_BLOCKS: usize = 8;
-pub const FILE_BYTES: usize = BLOCK_SIZE * DIRECT_BLOCKS;
+/// u16 pointers in one single-indirect block.
+pub const INDIRECT_PTRS: usize = BLOCK_SIZE / 2;
+/// 8 directs + single indirect; file `len` stays u16.
+pub const FILE_BYTES: usize = 32 * 1024;
 pub const BLOCK_SLOTS: usize = 256;
 pub const BITMAP_BYTES: usize = BLOCK_SLOTS / 8;
 pub const NAME_CAP: usize = 64;
@@ -36,7 +39,8 @@ pub const ACTOR_NAME: usize = 32;
 pub const DISK_HEADER: usize = 128;
 /// used + name_len + name + root + salt + hash + max_objects + max_bytes.
 pub const ACTOR_ON_DISK: usize = 66;
-pub const OBJECT_ON_DISK: usize = 8 + NAME_CAP + DIRECT_BLOCKS * 2;
+/// kind+actor+name_len+pad + parent+len + name + directs + indirect.
+pub const OBJECT_ON_DISK: usize = 8 + NAME_CAP + DIRECT_BLOCKS * 2 + 2;
 /// used + rights + grantee + pad + object.
 pub const SHARE_ON_DISK: usize = 6;
 pub const PAYLOAD_LEN: usize = ACTOR_ON_DISK * ACTOR_SLOTS
@@ -143,6 +147,7 @@ pub struct Object {
     pub name: [u8; NAME_CAP],
     pub name_len: u8,
     pub blocks: [u16; DIRECT_BLOCKS],
+    pub indirect: u16,
     pub len: u16,
 }
 
@@ -155,6 +160,7 @@ impl Object {
             name: [0; NAME_CAP],
             name_len: 0,
             blocks: [NO_BLOCK; DIRECT_BLOCKS],
+            indirect: NO_BLOCK,
             len: 0,
         }
     }
@@ -409,6 +415,8 @@ pub fn decode_slot(flat: &mut [u8], passphrase: &[u8], table: &mut Table) -> Opt
         for (i, blk) in obj.blocks.iter_mut().enumerate() {
             *blk = u16::from_le_bytes([flat[boff + i * 2], flat[boff + i * 2 + 1]]);
         }
+        let ioff = boff + DIRECT_BLOCKS * 2;
+        obj.indirect = u16::from_le_bytes([flat[ioff], flat[ioff + 1]]);
         if obj.len as usize > FILE_BYTES {
             let mut gone = vk;
             wipe_bytes(&mut gone);
@@ -515,7 +523,7 @@ fn collect_issues(table: &Table, report: &mut Report) {
                 }
             }
         }
-        check_object_blocks(obj, i as u16, &mut seen, &table.bitmap, report);
+        check_object_blocks(table, obj, i as u16, &mut seen, report);
     }
     for (i, used) in seen.iter().enumerate() {
         let bit = (table.bitmap[i / 8] >> (i % 8)) & 1 != 0;
@@ -528,13 +536,33 @@ fn collect_issues(table: &Table, report: &mut Report) {
     }
 }
 
+fn mark_seen(
+    seen: &mut [bool; BLOCK_SLOTS],
+    bitmap: &[u8],
+    b: u16,
+    report: &mut Report,
+) {
+    if b as usize >= BLOCK_SLOTS {
+        report.push(Issue::BlockMissing { block: b });
+        return;
+    }
+    if seen[b as usize] {
+        report.push(Issue::BlockDuplicate { block: b });
+    }
+    if (bitmap[b as usize / 8] >> (b as usize % 8)) & 1 == 0 {
+        report.push(Issue::BlockMissing { block: b });
+    }
+    seen[b as usize] = true;
+}
+
 fn check_object_blocks(
+    table: &Table,
     obj: &Object,
     index: u16,
     seen: &mut [bool; BLOCK_SLOTS],
-    bitmap: &[u8],
     report: &mut Report,
 ) {
+    let bitmap = &table.bitmap;
     let need = if obj.kind == KIND_FILE {
         if obj.len as usize > FILE_BYTES {
             report.push(Issue::FileTooLarge { object: index });
@@ -544,25 +572,41 @@ fn check_object_blocks(
     } else if obj.len != 0 {
         report.push(Issue::DirHasLength { object: index });
         0
+    } else if obj.indirect != NO_BLOCK {
+        report.push(Issue::BlockLeak { block: obj.indirect });
+        return;
     } else {
         0
     };
     for (i, &b) in obj.blocks.iter().enumerate() {
         if i < need {
-            if b as usize >= BLOCK_SLOTS {
-                report.push(Issue::BlockMissing { block: b });
-                continue;
-            }
-            if seen[b as usize] {
-                report.push(Issue::BlockDuplicate { block: b });
-            }
-            if (bitmap[b as usize / 8] >> (b as usize % 8)) & 1 == 0 {
-                report.push(Issue::BlockMissing { block: b });
-            }
-            seen[b as usize] = true;
+            mark_seen(seen, bitmap, b, report);
         } else if b != NO_BLOCK {
             report.push(Issue::BlockLeak { block: b });
         }
+    }
+    if need > DIRECT_BLOCKS {
+        if obj.indirect == NO_BLOCK {
+            report.push(Issue::BlockMissing { block: NO_BLOCK });
+            return;
+        }
+        mark_seen(seen, bitmap, obj.indirect, report);
+        let ib = obj.indirect as usize;
+        if ib >= BLOCK_SLOTS {
+            return;
+        }
+        for i in 0..INDIRECT_PTRS {
+            let off = i * 2;
+            let b = u16::from_le_bytes([table.blocks[ib][off], table.blocks[ib][off + 1]]);
+            let slot = DIRECT_BLOCKS + i;
+            if slot < need {
+                mark_seen(seen, bitmap, b, report);
+            } else if b != NO_BLOCK {
+                report.push(Issue::BlockLeak { block: b });
+            }
+        }
+    } else if obj.indirect != NO_BLOCK {
+        report.push(Issue::BlockLeak { block: obj.indirect });
     }
 }
 
@@ -608,8 +652,10 @@ mod tests {
     fn layout_constants_fit_slot() {
         assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * SECTOR);
         assert_eq!(ACTOR_ON_DISK, 66);
+        assert_eq!(OBJECT_ON_DISK, 90);
         assert_eq!(SHARE_ON_DISK, 6);
         assert_eq!(SHARE_SLOTS, 32);
-        assert_eq!(DISK_VERSION, 10);
+        assert_eq!(FILE_BYTES, 32 * 1024);
+        assert_eq!(DISK_VERSION, 11);
     }
 }
