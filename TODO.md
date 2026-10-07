@@ -1434,8 +1434,9 @@ Close or formally waive the known memory-model nits.
 
 Push the easy wins a systems engineer will check in the first hour.
 
-- [ ] **Stack wipe on reap**: kstack / user scratch pages zeroed before
-      reuse (or documented skip with threat note)
+- [x] **Stack wipe on reap**: `deallocate_frame` zeros every freed frame
+      (user stack/scratch/code + page tables); reap zeros heap `stack` /
+      `kstack` before drop
 - [ ] **Password / key scrub** audit across login, passwd, unlock
       (cross-check Milestones 43/44)
 - [x] **NX / W^X audit** (cross-check paging items above): ELF loader

@@ -690,10 +690,15 @@ pub fn reap() {
                 let count = mm::free_user_tree(root, user_p4);
                 serial_println!("[sched] freed task '{}' tree: {} frame(s)", name, count);
             }
-            let stack = core::mem::take(&mut threads[i].stack);
-            drop(stack); // returns the 32 KiB to the heap
-            let kstack = core::mem::take(&mut threads[i].kstack);
-            drop(kstack); // user tasks: kernel-mode stack back to the heap
+            // Wipe heap stacks before return so a later alloc cannot read
+            // leftover syscall frames / secrets (user tree frames are wiped
+            // in `deallocate_frame` during `free_user_tree`).
+            let mut stack = core::mem::take(&mut threads[i].stack);
+            stack.fill(0);
+            drop(stack);
+            let mut kstack = core::mem::take(&mut threads[i].kstack);
+            kstack.fill(0);
+            drop(kstack);
             freed += 1;
         }
         drop(threads);
