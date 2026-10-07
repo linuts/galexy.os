@@ -423,6 +423,7 @@ dependencies = [
  "bootloader",
  "galexy-galf",
  "galexy-os",
+ "gxc",
  "hello",
  "shell",
  "tar",

@@ -180,6 +180,16 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, syscall_kill(Cap::from_bits(frame.rdi)));
             Outcome::Resume
         }
+        n if n == Syscall::Sleep as u64 => match crate::sched::task_sleep(frame.rdi) {
+            Ok(()) => {
+                stamp(frame, SyscallResult::ok(0));
+                Outcome::Handoff
+            }
+            Err(err) => {
+                stamp(frame, SyscallResult::err(err));
+                Outcome::Resume
+            }
+        },
         // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));

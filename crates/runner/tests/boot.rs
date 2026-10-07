@@ -1154,6 +1154,29 @@ fn realprogram_test_passes() {
     );
 }
 
+/// Milestone 56: `sleep` parks until a monotonic deadline (`nap` util).
+#[test]
+fn sleep_test_passes() {
+    let (code, serial) = boot(&image("test-sleep"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-sleep should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-sleep] passed"),
+        "test-sleep success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("napping"),
+        "nap never printed start; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("awake"),
+        "nap never woke from sleep; serial:\n{serial}"
+    );
+}
+
 /// Milestone 61: ELF from host `gxc` (gxr subset) runs under the loader.
 #[test]
 fn hellogxc_test_passes() {

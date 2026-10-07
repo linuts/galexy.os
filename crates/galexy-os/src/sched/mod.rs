@@ -148,7 +148,7 @@ impl FxArea {
 const STATE_RUNNING: u8 = 0;
 const STATE_EXITED: u8 = 1; // returned from its entry; reaped by the main loop
 const STATE_FREED: u8 = 2; // stack + fx freed; rotation-skipped until reused
-const STATE_WAITING: u8 = 3; // parked inside `spawn`/`wait` until a child event
+const STATE_WAITING: u8 = 3; // parked: spawn/wait/sleep/I/O until an event
 
 /// Bytes kept for a thread's name. Spawn already rejects a longer name.
 const NAME_CAP: usize = 64;
@@ -346,10 +346,14 @@ struct Thread {
     /// on the BSP: the keyboard and the framebuffer have one consumer.
     no_steal: bool,
     /// When `STATE_WAITING`: 1-based child slot to wake on (0 = wait for
-    /// pending spawn load only). Cap-wait uses this instead of a name.
+    /// pending spawn load only, or a sleep / I/O wait). Cap-wait uses this
+    /// instead of a name.
     wait_child_slot: AtomicU8,
     /// When waiting on a child: true = wake on exit; false = wake on load.
     wait_for_exit: AtomicBool,
+    /// Absolute `timer_ticks` deadline for [`Syscall::Sleep`]. `0` means
+    /// this wait is not a sleep (spawn/Cap-wait/I/O).
+    sleep_deadline: AtomicU64,
     /// Exit status stamped on [`STATE_EXITED`] (read by Cap-wait).
     exit_code: AtomicU64,
     /// Bumped when the slot is reaped/reused so old process Caps fail.
@@ -765,6 +769,7 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
             no_steal: init.no_steal,
             wait_child_slot: AtomicU8::new(0),
             wait_for_exit: AtomicBool::new(false),
+            sleep_deadline: AtomicU64::new(0),
             exit_code: AtomicU64::new(0),
             cap_gen: AtomicU32::new(1),
             debug_id: NEXT_DEBUG_ID.fetch_add(1, Ordering::Relaxed),
@@ -819,6 +824,7 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             no_steal: false,
             wait_child_slot: AtomicU8::new(0),
             wait_for_exit: AtomicBool::new(false),
+            sleep_deadline: AtomicU64::new(0),
             exit_code: AtomicU64::new(0),
             cap_gen: AtomicU32::new(1),
             debug_id: NEXT_DEBUG_ID.fetch_add(1, Ordering::Relaxed),
@@ -1069,6 +1075,7 @@ pub(crate) fn spawn_user_with_grants(
             no_steal: false,
             wait_child_slot: AtomicU8::new(0),
             wait_for_exit: AtomicBool::new(false),
+            sleep_deadline: AtomicU64::new(0),
             exit_code: AtomicU64::new(0),
             cap_gen: AtomicU32::new(1),
             debug_id: NEXT_DEBUG_ID.fetch_add(1, Ordering::Relaxed),
@@ -1120,6 +1127,17 @@ pub fn threads_count() -> usize {
             .iter()
             .filter(|t| t.state.load(Ordering::Relaxed) == STATE_RUNNING)
             .count()
+    })
+}
+
+/// True while a task named `name` is RUNNING or WAITING (sleep / Cap-wait /
+/// spawn park). False once it has exited (or never existed).
+pub fn is_name_live(name: &str) -> bool {
+    interrupts::without_interrupts(|| {
+        THREADS.lock().iter().any(|t| {
+            let state = t.state.load(Ordering::Relaxed);
+            t.name() == name && (state == STATE_RUNNING || state == STATE_WAITING)
+        })
     })
 }
 
@@ -1639,6 +1657,7 @@ fn wake_spawn_waiter(threads: &mut [Thread], waiter_slot: u8, result: SyscallRes
     stamp_waiter_frame(thread, result);
     thread.wait_child_slot.store(0, Ordering::Relaxed);
     thread.wait_for_exit.store(false, Ordering::Relaxed);
+    thread.sleep_deadline.store(0, Ordering::Relaxed);
     thread.state.store(STATE_RUNNING, Ordering::Release);
 }
 
@@ -1672,6 +1691,7 @@ fn wake_exit_waiters(threads: &mut [Thread], child_slot: u8, exit_code: u64) {
         stamp_waiter_frame(thread, SyscallResult::ok(exit_code));
         thread.wait_child_slot.store(0, Ordering::Relaxed);
         thread.wait_for_exit.store(false, Ordering::Relaxed);
+        thread.sleep_deadline.store(0, Ordering::Relaxed);
         thread.state.store(STATE_RUNNING, Ordering::Release);
         any = true;
     }
@@ -3049,10 +3069,13 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
     // Tickless: advance by the one-shot duration that just fired.
     let elapsed = crate::arch::apic::take_armed_ms();
     crate::arch::timer::tick_by(elapsed);
+    let now = crate::arch::timer_ticks();
 
     let me = cpu_sched();
     let next_ctx = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
+        // Sleep deadlines use monotonic ticks advanced just above.
+        wake_due_sleepers(&mut threads, now);
         let my_cpu = crate::arch::cpu::current_index() as u8;
         let current = me.current.load(Ordering::Relaxed);
 
@@ -3236,14 +3259,93 @@ fn cpu_has_runnable() -> bool {
     })
 }
 
+/// Park the current user task until `timer_ticks` reaches `now + ms`.
+///
+/// Returns `Ok(())` after marking the task `WAITING` (caller must hand off).
+/// No Cap required. `ms` is clamped to `1..=SLEEP_MS_MAX`.
+pub(crate) fn task_sleep(ms: u64) -> Result<(), SysError> {
+    let ms = ms.clamp(1, galexy_abi::SLEEP_MS_MAX);
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    let now = crate::arch::timer_ticks();
+    let deadline = now.saturating_add(ms);
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        thread.wait_child_slot.store(0, Ordering::Relaxed);
+        thread.wait_for_exit.store(false, Ordering::Relaxed);
+        thread.sleep_deadline.store(deadline, Ordering::Release);
+        thread.state.store(STATE_WAITING, Ordering::Release);
+        Ok(())
+    })
+}
+
+/// Wake sleepers whose deadline is due. Call under the timer path after
+/// `timer_ticks` advances.
+fn wake_due_sleepers(threads: &mut [Thread], now: u64) {
+    for thread in threads.iter_mut() {
+        if thread.state.load(Ordering::Acquire) != STATE_WAITING {
+            continue;
+        }
+        let deadline = thread.sleep_deadline.load(Ordering::Acquire);
+        if deadline == 0 || now < deadline {
+            continue;
+        }
+        stamp_waiter_frame(thread, SyscallResult::ok(0));
+        thread.sleep_deadline.store(0, Ordering::Relaxed);
+        thread.wait_child_slot.store(0, Ordering::Relaxed);
+        thread.wait_for_exit.store(false, Ordering::Relaxed);
+        thread.state.store(STATE_RUNNING, Ordering::Release);
+    }
+}
+
+/// Milliseconds until the nearest sleep deadline, if any sleeper exists.
+fn ms_until_next_sleep() -> Option<u32> {
+    let now = crate::arch::timer_ticks();
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let mut best: Option<u64> = None;
+        for thread in threads.iter() {
+            if thread.state.load(Ordering::Acquire) != STATE_WAITING {
+                continue;
+            }
+            let deadline = thread.sleep_deadline.load(Ordering::Acquire);
+            if deadline == 0 {
+                continue;
+            }
+            let remain = if deadline <= now {
+                1
+            } else {
+                deadline - now
+            };
+            best = Some(match best {
+                Some(b) => b.min(remain),
+                None => remain,
+            });
+        }
+        best.map(|ms| ms.min(u64::from(crate::arch::apic::IDLE_MAX_MS)) as u32)
+    })
+}
+
 /// Reprogram the local LAPIC for the current load (call before `hlt`).
 ///
-/// Busy → preempt quantum; idle → next whole second. Device IRQs still
-/// wake the CPU early; the next halt re-arms.
+/// Busy → preempt quantum; idle → min(next whole second, next sleeper).
+/// Device IRQs still wake the CPU early; the next halt re-arms. The IRQ
+/// path itself always re-arms a quantum (preempt fairness).
 pub fn arm_timer_for_load() {
     if cpu_has_runnable() {
         crate::arch::apic::arm_oneshot_ms(crate::arch::apic::quantum_ms());
     } else {
-        crate::arch::apic::arm_oneshot_ms(crate::arch::apic::idle_deadline_ms());
+        let idle = crate::arch::apic::idle_deadline_ms();
+        let ms = match ms_until_next_sleep() {
+            Some(s) => idle.min(s).max(1),
+            None => idle,
+        };
+        crate::arch::apic::arm_oneshot_ms(ms);
     }
 }

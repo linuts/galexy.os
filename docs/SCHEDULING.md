@@ -70,8 +70,10 @@ system is the preemptive thread/user-task rotation.
   `SPAWN_WAIT`).
 - Cap-wait: park until the Cap'd child exits.
 - Cap-kill wakes waiters with a defined exit status.
-- There is **no** general sleep syscall and **no** blocking keyboard/pipe
-  park yet — those are Phase 7.
+- **`sleep(ms)`** (Milestone 56): park until monotonic `timer_ticks`
+  reaches a deadline; no Cap. Idle LAPIC arm is
+  `min(next second, next sleeper)`. Busy IRQ path still re-arms a
+  preempt quantum. Keyboard/pipe block is Milestone 57.
 
 ## Time model
 
