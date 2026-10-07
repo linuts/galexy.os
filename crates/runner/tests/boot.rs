@@ -595,6 +595,54 @@ fn galfs_disk_persists_across_reboot() {
 }
 
 #[test]
+fn share_disk_persists_across_reboot() {
+    let (code1, serial1, img, code2, serial2) = boot_with_galfs(&image("test-share-disk"));
+    assert_eq!(
+        code1,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-share-disk write boot should exit with Success; serial:\n{serial1}"
+    );
+    assert!(
+        serial1.contains("[test-share-disk] wrote"),
+        "write marker missing; serial:\n{serial1}"
+    );
+    assert!(
+        !img.windows(b"share-disk-marker".len())
+            .any(|w| w == b"share-disk-marker"),
+        "sealed galfs.img must not contain plaintext share file bytes"
+    );
+    assert_eq!(
+        code2,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-share-disk verify boot should exit with Success; serial:\n{serial2}"
+    );
+    assert!(
+        serial2.contains("[test-share-disk] passed"),
+        "verify marker missing; serial:\n{serial2}"
+    );
+    let mut slot_buf = vec![0u8; galexy_galf::DISK_SECTORS * galexy_galf::SECTOR];
+    let mut best = Box::new(galexy_galf::Table::empty());
+    let mut cand = Box::new(galexy_galf::Table::empty());
+    let report = galexy_galf::check_image(
+        &img,
+        galexy_galf::DEFAULT_VOLUME_PASSPHRASE,
+        &mut slot_buf,
+        &mut best,
+        &mut cand,
+    );
+    assert!(
+        report.ok,
+        "host galfs-fsck must pass a healthy share image; issues: {:?}",
+        &report.issues[..report.issue_count]
+    );
+    // Sealed payload should carry at least one durable share after boot 1.
+    assert!(
+        best.shares.iter().any(|s| s.used),
+        "host decode must see a used share slot"
+    );
+}
+
+#[test]
 fn galfs_disk_recovers_from_corrupt_slot() {
     let (code1, serial1, _img, code2, serial2) =
         boot_with_galfs_recover(&image("test-galfs-disk"));
