@@ -1888,6 +1888,8 @@ fn set_data_block(table: &mut Table, oi: usize, slot: usize, block: u16) -> bool
         let Some(ib) = alloc_block(table) else {
             return false;
         };
+        // Pointer slots must be NO_BLOCK (0xffff), not zero (block 0).
+        table.blocks[ib as usize].fill(0xff);
         table.objects[oi].indirect = ib;
     }
     let ib = table.objects[oi].indirect as usize;
