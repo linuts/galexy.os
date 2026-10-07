@@ -90,28 +90,43 @@ fn identify_slave() -> bool {
     true
 }
 
+/// ATA sector-count register is one byte; PIO commands are chunked here.
+const PIO_MAX_SECTORS: usize = 255;
+
 /// Reads `dst.len()` sectors starting at `lba` into `dst` (each SECTOR bytes).
 pub fn read_sectors(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError> {
-    if dst.is_empty() || dst.len() > 255 {
+    if dst.is_empty() {
         return Err(SysError::BadValue);
     }
     if !present() {
         return Err(SysError::Unsupported);
     }
     let _g = LOCK.lock();
-    pio_read(lba, dst)
+    let mut off = 0usize;
+    while off < dst.len() {
+        let n = (dst.len() - off).min(PIO_MAX_SECTORS);
+        pio_read(lba + off as u32, &mut dst[off..off + n])?;
+        off += n;
+    }
+    Ok(())
 }
 
 /// Writes `src.len()` sectors starting at `lba`.
 pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
-    if src.is_empty() || src.len() > 255 {
+    if src.is_empty() {
         return Err(SysError::BadValue);
     }
     if !present() {
         return Err(SysError::Unsupported);
     }
     let _g = LOCK.lock();
-    pio_write(lba, src)
+    let mut off = 0usize;
+    while off < src.len() {
+        let n = (src.len() - off).min(PIO_MAX_SECTORS);
+        pio_write(lba + off as u32, &src[off..off + n])?;
+        off += n;
+    }
+    Ok(())
 }
 
 /// Issues FLUSH CACHE so prior writes reach stable media before return.
