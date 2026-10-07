@@ -655,9 +655,135 @@ const LOGIN_ADMIN_KEYS: &[(&str, &str)] = &[
     ("ret", "admin@galexy> "),
 ];
 
+/// After boot login with the format default, change it so other commands work.
+/// `passwd` always prompts: masked Password: then Confirm:.
+const CLEAR_DEFAULT_PASSWD: &[(&str, &str)] = &[
+    ("p", "p"),
+    ("a", "a"),
+    ("s", "s"),
+    ("s", "s"),
+    ("w", "w"),
+    ("d", "d"),
+    ("ret", "Password: "),
+    ("t", "*"),
+    ("e", "*"),
+    ("s", "*"),
+    ("t", "*"),
+    ("p", "*"),
+    ("a", "*"),
+    ("s", "*"),
+    ("s", "*"),
+    ("ret", "Confirm: "),
+    ("t", "*"),
+    ("e", "*"),
+    ("s", "*"),
+    ("t", "*"),
+    ("p", "*"),
+    ("a", "*"),
+    ("s", "*"),
+    ("s", "*"),
+    ("ret", "admin@galexy> "),
+];
+
+/// Login screen using the post-`passwd` password (`testpass`).
+const LOGIN_ADMIN_TESTPASS_KEYS: &[(&str, &str)] = &[
+    ("a", "a"),
+    ("d", "d"),
+    ("m", "m"),
+    ("i", "i"),
+    ("n", "n"),
+    ("ret", "Password: "),
+    ("t", "*"),
+    ("e", "*"),
+    ("s", "*"),
+    ("t", "*"),
+    ("p", "*"),
+    ("a", "*"),
+    ("s", "*"),
+    ("s", "*"),
+    ("ret", "admin@galexy> "),
+];
+
 fn with_login<'a>(keys: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
-    LOGIN_ADMIN_KEYS.iter().chain(keys.iter()).copied().collect()
+    LOGIN_ADMIN_KEYS
+        .iter()
+        .chain(CLEAR_DEFAULT_PASSWD.iter())
+        .chain(keys.iter())
+        .copied()
+        .collect()
 }
+
+/// After each `Password:` / `Confirm:`, console echo must be `*` only.
+/// Kernel log lines (`[timer] …`) may interleave on COM1 and are ignored.
+fn assert_passwords_masked(serial: &str) {
+    for marker in ["Password: ", "Confirm: "] {
+        let mut from = 0;
+        while let Some(rel) = serial[from..].find(marker) {
+            let start = from + rel + marker.len();
+            let rest = &serial[start..];
+            let mut saw_star = false;
+            for line in rest.split('\n') {
+                let line = line.trim_end();
+                if line.is_empty() {
+                    break;
+                }
+                if line.starts_with('[') {
+                    continue;
+                }
+                if line.contains("galexy>")
+                    || line.starts_with("Login")
+                    || line.starts_with("Password:")
+                    || line.starts_with("Confirm:")
+                    || line.starts_with("passwd:")
+                {
+                    break;
+                }
+                for c in line.chars() {
+                    if c == '*' {
+                        saw_star = true;
+                    } else if c == '[' {
+                        // Same-line kernel log after stars: `*[timer] 2s up`.
+                        break;
+                    } else {
+                        panic!(
+                            "password cleartext leaked to serial after {marker}({line:?}); serial:\n{serial}"
+                        );
+                    }
+                }
+            }
+            assert!(
+                saw_star,
+                "{marker}prompt had no masked echo; serial:\n{serial}"
+            );
+            from = start;
+        }
+    }
+}
+
+/// After boot login + passwd, CLI `login admin` with masked `testpass`.
+const LOGIN_CLI_PROMPT_KEYS: &[(&str, &str)] = &[
+    ("l", "l"),
+    ("o", "o"),
+    ("g", "g"),
+    ("i", "i"),
+    ("n", "n"),
+    ("spc", " "),
+    ("a", "a"),
+    ("d", "d"),
+    ("m", "m"),
+    ("i", "i"),
+    ("n", "n"),
+    ("ret", "Password: "),
+    ("t", "*"),
+    ("e", "*"),
+    ("s", "*"),
+    ("t", "*"),
+    ("p", "*"),
+    ("a", "*"),
+    ("s", "*"),
+    ("s", "*"),
+    ("ret", "admin@galexy> "),
+];
 
 /// Qcode + expected-echo pairs for typing `hello` + Enter (typing
 /// E2E). Each key syncs on the shell's echo of it (console = screen +
@@ -974,6 +1100,66 @@ const SHELL_RESERVE_KEYS: &[(&str, &str)] = &[
     ("ret", "shell: reserved"),
 ];
 
+/// Default admin/admin must `passwd` before other commands.
+#[test]
+fn shell_must_change_typing_e2e() {
+    let mut keys = LOGIN_ADMIN_KEYS.to_vec();
+    keys.extend([
+        ("t", "t"),
+        ("o", "o"),
+        ("u", "u"),
+        ("c", "c"),
+        ("h", "h"),
+        ("spc", " "),
+        ("x", "x"),
+        ("ret", "passwd: change the default password first"),
+    ]);
+    keys.extend(CLEAR_DEFAULT_PASSWD.iter().copied());
+    keys.extend([
+        ("t", "t"),
+        ("o", "o"),
+        ("u", "u"),
+        ("c", "c"),
+        ("h", "h"),
+        ("spc", " "),
+        ("x", "x"),
+        ("ret", "admin@galexy> "),
+    ]);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "admin@galexy> ",
+        Duration::from_millis(30),
+        Duration::from_secs(120),
+    );
+    assert!(
+        serial.contains("passwd: change the default password first"),
+        "must-change did not block touch; serial:\n{serial}"
+    );
+    assert_passwords_masked(&serial);
+}
+
+/// Boot login screen + CLI `login admin` both mask the password on COM1.
+#[test]
+fn shell_secret_prompt_typing_e2e() {
+    let keys = with_login(LOGIN_CLI_PROMPT_KEYS);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "admin@galexy> ",
+        Duration::from_millis(30),
+        Duration::from_secs(120),
+    );
+    assert_passwords_masked(&serial);
+    let prompts = serial.matches("Password: ").count();
+    assert!(
+        prompts >= 2,
+        "expected boot + CLI password prompts; serial:\n{serial}"
+    );
+}
+
 /// The ring-3 shell's query caps: typed `stats` / `threads` / `tasks` /
 /// `ls` come back as console text (screen + serial), including a live
 /// thread and the ramdisk's `banner.txt`.
@@ -988,6 +1174,7 @@ fn shell_query_typing_e2e() {
         Duration::from_millis(30),
         Duration::from_secs(90),
     );
+    assert_passwords_masked(&serial);
     assert!(
         serial.contains("frames free:"),
         "typed `stats` never produced the frame line; serial:\n{serial}"
@@ -1100,8 +1287,8 @@ fn shell_run_hello_typing_e2e() {
     // never overflow the i8042 queue between keys.
     // After `crash` the seat is logged out again — login, then probe.
     let mut keys = with_login(SUPERVISOR_AFTER_LOGIN);
-    // New shell is logged out; login again, then a probe key + linger beat.
-    keys.extend(LOGIN_ADMIN_KEYS.iter().copied());
+    // New shell is logged out; password was changed before crash.
+    keys.extend(LOGIN_ADMIN_TESTPASS_KEYS.iter().copied());
     keys.extend([("x", "x"), ("y", "beat\n")]);
     let serial = boot_and_type(
         &image("galexy-os"),
@@ -1166,8 +1353,10 @@ fn shell_run_hello_typing_e2e_uefi() {
 /// F2 runs a command on the second shell; F1 returns to the first.
 #[test]
 fn shell_tty_switch_e2e() {
-    let mut keys: Vec<(&str, &str)> = TTY_AFTER_F2.to_vec();
-    keys.extend(LOGIN_ADMIN_KEYS.iter().copied());
+    // F1 clears the default password first so F2's login uses testpass.
+    let mut keys = with_login(&[]);
+    keys.extend(TTY_AFTER_F2.iter().copied());
+    keys.extend(LOGIN_ADMIN_TESTPASS_KEYS.iter().copied());
     keys.extend(TTY_AFTER_LOGIN.iter().copied());
     let serial = boot_and_type(
         &image("galexy-os"),
@@ -1188,6 +1377,7 @@ fn shell_tty_switch_e2e() {
         serial[tty2 + hi + tty1..].contains('z'),
         "the first shell did not echo after F1; serial:\n{serial}"
     );
+    assert_passwords_masked(&serial);
 }
 
 #[test]

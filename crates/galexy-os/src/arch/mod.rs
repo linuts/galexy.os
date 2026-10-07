@@ -15,6 +15,7 @@ pub mod ioapic;
 pub mod mm;
 mod pics;
 pub mod power;
+pub mod rand;
 pub mod syscall;
 pub mod timer;
 

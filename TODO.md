@@ -1044,48 +1044,45 @@ time for lockout/idle.
 
 Replace demo hashing before any other auth work depends on the on-disk shape.
 
-- [ ] **CSPRNG**: boot entropy source (RDRAND/RDSEED with a documented
-      fallback; mix timer/ATA jitter only as secondary). Expose
-      `galexy_core::random` (or kernel `rand`) used by salts and later
-      encryption nonces — no password-derived salts
-- [ ] **Random salts**: `useradd` / `passwd` / format fill 8+ byte salts
-      from the CSPRNG; delete `salt_from_seed` for production paths
-      (tests may keep a deterministic helper behind `#[cfg(test)]`)
-- [ ] **Real KDF**: Argon2id or scrypt (pick one; document parameters:
-      memory, iterations, parallelism) replacing the CRC mix in
-      `galexy_core::password`. Keep salt+hash field widths or bump GALF
-      with an explicit version + migration
-- [ ] **Constant-time verify** retained; add host unit tests for wrong
-      password, truncated password, and salt uniqueness across two users
-      with the same password
-- [ ] **Docs**: `AUTH.md` + `DESIGN.md` name the KDF and parameters;
-      interim CRC called out as retired
-- [ ] **Password policy (minimal)**: reject empty passwords; document max
-      length (ABI buffer); optional min length for interactive `passwd`
-- [ ] **Wipe**: zero password stack buffers after hash/verify; unit test
-      that a reused buffer does not retain prior secrets under Miri/host
-      sanitizers where practical
-- [ ] Suite: `test-users` + format/load path still green on GALF bump
+- [x] **CSPRNG**: `arch::rand` — RDRAND with tick-mixed xorshift fallback
+      (documented). Used for salts; later AEAD nonces too
+- [x] **Random salts**: `useradd` / `passwd` / format fill 8-byte salts
+      from the CSPRNG; `salt_from_seed` test-only in `galexy-crypto`
+- [x] **Real KDF**: PBKDF2-HMAC-SHA256 in `galexy-crypto` (10 000
+      iters — debug-QEMU budget; raise later); GALF **v5** (same 8+16
+      on-disk widths; v4 images refused).
+      Argon2id deferred until a dedicated KDF stack (12 fat kstacks
+      broke multi-seat boot)
+- [x] **Constant-time verify** retained; host unit tests for wrong /
+      truncated password and distinct salts for the same password
+- [x] **Docs**: `AUTH.md` names the KDF + parameters; CRC mix retired
+- [x] **Password policy (minimal)**: reject empty passwords; max 64
+      bytes (syscall staging); ASCII graphic + space
+- [x] **Wipe**: zero password staging buffers after login/useradd/passwd;
+      wipe derived-key scratch after verify; host wipe unit test
+- [x] Suite: `test-users` + galfs (+ disk) green on GALF v5
+- [ ] **Follow-up**: Argon2id on a dedicated KDF stack / arena (keep
+      32 KiB task kstacks)
 
 ### Interactive secrets (no-echo prompts)
 
 Passwords must not appear in the shell line, COM1 mirror, or argv.
 
-- [ ] **Shell secret read**: line editor mode that echoes `*` or nothing;
-      Backspace works; buffer never passed to `write_console` as cleartext
-- [ ] **`login` / `passwd` / `useradd`**: interactive prompts when args
-      omitted (`login eve` → `Password:`). Inline `login eve secret`
-      remains for tests only, or is removed once typing e2e covers prompts
-- [ ] **Kernel**: optional — accept password via a one-shot scratch buffer
-      syscall if keeping secrets out of the command string is cleaner;
-      document the chosen shape in `galexy-abi`
-- [ ] **Serial policy**: secret mode suppresses COM1 echo for that line
-      on the visible TTY path (required, not optional)
-- [ ] **Abort**: Esc or Ctrl-C cancels a password prompt without login
-- [ ] **Length cap**: overlong paste is rejected with a clear error; no
-      silent truncate of secrets
-- [ ] Typing e2e: F2 logs in without the password appearing in the
-      captured serial transcript
+- [x] **Shell secret read**: `read_line(..., secret)` echoes `*`;
+      Backspace works; cleartext never passed to `write_console`
+- [x] **`login` / `passwd` / `useradd`**: interactive prompts when args
+      omitted (`login eve` → `Password:`). `passwd` always prompts
+      masked `Password:` + `Confirm:` (no inline secret). Inline
+      `login eve secret` kept for scripts; typing e2e covers masks
+- [x] **Serial policy**: secret mode only writes `*` (COM1 mirrors
+      `write_console` on the visible TTY — no cleartext path)
+- [x] **Abort**: Esc or Ctrl-C cancels a password prompt (`MapLettersToUnicode`)
+- [x] **Length cap**: overlong input → `password too long` / `input too long`;
+      buffer wiped; no silent truncate
+- [x] Typing e2e: login screen + CLI `login admin` mask; serial has no
+      cleartext after `Password: `
+- [ ] **Kernel** (optional follow-up): one-shot scratch password syscall
+      if keeping secrets out of argv is needed beyond interactive prompts
 
 ### Session hygiene
 
@@ -1097,10 +1094,11 @@ Make seats behave like accounts, not permanent admin shells.
       reset cwd; return to the login screen
 - [x] **Pre-login grants**: console + keyboard only (no loader / query /
       power) until `login`; admin login restores power
-- [ ] **Force admin password change**: after format, `admin`/`admin` is
-      marked must-change; `login`/`passwd` required before other commands
-      (except `passwd` / `help` / `whoami`). Or require a boot-time
-      `passwd` on first interactive F1 session
+- [x] **Force admin password change** (shell): login as `admin`/`admin`
+      sets a seat flag; only `passwd` / `help` / `whoami` / `logout` until
+      `passwd` succeeds. Typing e2e clears the default before other cmds.
+- [ ] **Kernel must-change** (follow-up): persist flag on the actor /
+      deny mutating syscalls so non-shell clients cannot skip the gate
 - [ ] **Login lockout**: after N failures per actor (and/or per TTY),
       refuse further attempts for a cool-down; count visible via `stats`
       or serial audit line

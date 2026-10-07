@@ -12,9 +12,14 @@ can be handed to another user or to an app without sharing a password.
 A password never grants rights on someone else’s tree by itself — after
 login you hold `RIGHT_ALL` on **your** root; everything else is granted.
 
-Disk encryption is out of scope for now. The password hash is an interim
-iterated mix (see `galexy_core::password`); it will be replaced with a
-real KDF later without changing the syscall shape.
+Disk encryption is out of scope for now (Milestone 44). Passwords use
+**PBKDF2-HMAC-SHA256** (`galexy-crypto`: 10 000 iterations) with an
+8-byte CSPRNG salt and a 16-byte digest per actor (GALF **v5**). Salts
+come from `arch::rand` (RDRAND, with a tick-mixed fallback). Empty
+passwords are rejected. Syscall staging buffers are wiped after login /
+useradd / passwd. Iteration count is capped for debug-QEMU boot budget;
+raise it (or switch to Argon2id on a dedicated KDF stack) once release
+profiles or fatter kstacks make that practical.
 
 ## Pieces
 
@@ -55,7 +60,7 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
 ## Password login and logout
 
 ```text
-login <user> <password>
+login [user] [password]
 logout
 ```
 
@@ -63,15 +68,27 @@ logout
 `ALL` on that user’s root (previous tokens dropped). Admin sessions also
 receive the power grant; other users get loader + queries without power.
 
+When the password (or, for bare `login`, the user name) is omitted, the
+shell prompts interactively. The password line echoes `*` only — never
+cleartext — so the COM1 console mirror cannot leak it. Esc or Ctrl-C
+cancels a prompt. Overlong input is rejected (no silent truncate).
+Inline `login <user> <password>` remains for scripts and older tests.
+
 `logout` clears tokens, sets `fs_root = none`, restores pre-login grants,
-and returns the shell to the login screen. The CLI form `login <user>
-<password>` still switches identity from an already-logged-in seat.
+and returns the shell to the login screen.
+
+After format, `admin` / `admin` is the default. A seat that logs in with
+that pair must run `passwd` before other shell commands (`help`,
+`whoami`, and `logout` remain available). Kernel-wide enforcement of the
+same gate is a follow-up.
 
 ```text
-useradd <name> <password>     # admin only
-passwd <name> <password>     # admin, or self with current session
-passwd <password>            # change own password
+useradd <name> [password]     # admin only; prompts if password omitted
+passwd [name]                 # always masked Password: + Confirm:
 ```
+
+`passwd` never takes an inline secret. Mismatched confirmations print
+`passwd: passwords do not match` and leave the hash unchanged.
 
 ## Access cards (tokens)
 
@@ -129,8 +146,11 @@ Tracked for review readiness in `TODO.md` Milestones 43–44 (auth +
 sealed disk). Until those land:
 
 - Disk encryption / sealed password store → Milestone 44
-- Real KDF, random salts, no-echo prompts, lockout, idle logout →
-  Milestone 43
+- No-echo CLI prompts, lockout, idle logout, must-change admin →
+  remaining Milestone 43 items (KDF + CSPRNG salts shipped)
 - PAM-style modules, MFA, networked IdP (still out of scope for review)
 - Removing the `crash` test seam from production images → Milestone 43
   (kept for supervisor e2e; omitted from `help`)
+
+**Note:** GALF **v5** refuses v4 images (CRC password hashes). Delete
+`galfs.img` or let format recreate admin after upgrading.

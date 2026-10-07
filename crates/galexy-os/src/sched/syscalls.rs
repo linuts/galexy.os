@@ -502,6 +502,7 @@ fn syscall_user(frame: &Context) -> SyscallResult {
             };
             let mut pass = [0u8; 64];
             let Some(p) = copy_user_str(frame.r8, frame.r9, &mut pass, false) else {
+                galexy_crypto::wipe_bytes(&mut pass);
                 return SyscallResult::err(SysError::BadValue);
             };
             let name = core::str::from_utf8(&raw[..n]).unwrap_or("");
@@ -511,6 +512,7 @@ fn syscall_user(frame: &Context) -> SyscallResult {
             } else {
                 crate::sched::task_login(name, password)
             };
+            galexy_crypto::wipe_bytes(&mut pass);
             match result {
                 Ok(()) => SyscallResult::ok(0),
                 Err(err) => SyscallResult::err(err),
@@ -528,9 +530,12 @@ fn syscall_user(frame: &Context) -> SyscallResult {
             };
             let mut pass = [0u8; 64];
             let Some(p) = copy_user_str(frame.r8, frame.r9, &mut pass, false) else {
+                galexy_crypto::wipe_bytes(&mut pass);
                 return SyscallResult::err(SysError::BadValue);
             };
-            match crate::sched::task_passwd(name, &pass[..p]) {
+            let result = crate::sched::task_passwd(name, &pass[..p]);
+            galexy_crypto::wipe_bytes(&mut pass);
+            match result {
                 Ok(()) => SyscallResult::ok(0),
                 Err(err) => SyscallResult::err(err),
             }

@@ -26,7 +26,9 @@ static KEYBOARD: Mutex<PS2Keyboard<layouts::Us104Key, ScancodeSet1>> =
     Mutex::new(PS2Keyboard::new(
         ScancodeSet1::new(),
         layouts::Us104Key,
-        HandleControl::Ignore,
+        // Deliver Ctrl+A..Z as U+0001..U+001A so shells can cancel
+        // password prompts with Ctrl-C.
+        HandleControl::MapLettersToUnicode,
     ));
 
 static KEY_QUEUES: [Mutex<Ring<char, QUEUE_CAPACITY>>; TTY_COUNT] =

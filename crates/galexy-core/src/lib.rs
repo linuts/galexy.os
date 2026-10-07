@@ -25,6 +25,6 @@ mod tar_test;
 
 pub use bitmap::Bitmap;
 pub use crc32::crc32;
-pub use password::{hash_eq, hash_password, salt_from_seed, HASH_LEN, SALT_LEN};
+pub use password::{HASH_LEN, SALT_LEN};
 pub use ring::Ring;
 pub use tar::TarCursor;

@@ -193,12 +193,17 @@ name = "galexy-core"
 version = "0.1.0"
 
 [[package]]
+name = "galexy-crypto"
+version = "0.1.0"
+
+[[package]]
 name = "galexy-os"
 version = "0.1.0"
 dependencies = [
  "bootloader_api",
  "galexy-abi",
  "galexy-core",
+ "galexy-crypto",
  "linked_list_allocator",
  "noto-sans-mono-bitmap",
  "pc-keyboard",
