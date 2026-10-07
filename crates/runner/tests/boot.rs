@@ -1996,7 +1996,7 @@ const COMMAND_CENTER_KEYS: &[(&str, &str)] = &[
     ("e", "e"),
     ("l", "l"),
     ("l", "l"),
-    ("period", "."),
+    ("dot", "."),
     ("h", "h"),
     ("i", "i"),
     ("s", "s"),
