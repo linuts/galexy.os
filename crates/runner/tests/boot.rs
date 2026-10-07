@@ -958,6 +958,20 @@ fn pipe_test_passes() {
 }
 
 #[test]
+fn proccap_test_passes() {
+    let (code, serial) = boot(&image("test-proccap"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-proccap should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-proccap] passed"),
+        "test-proccap success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn seek_test_passes() {
     let (code, serial) = boot(&image("test-seek"));
     assert_eq!(

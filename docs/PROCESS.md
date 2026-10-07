@@ -67,14 +67,14 @@ kill(child)                                → needs PROC_KILL
 give(peer, child)                          → needs PROC_TRANSFER
 ```
 
-| Today | Target (M47) |
+| Before | Now (M47 spawn Cap) |
 | --- | --- |
-| Wait by child **name** (`SPAWN_WAIT`) | Wait by **process Cap** |
-| Unique live names as collision control | Names stay labels; Caps are unique |
-| Shell scrapes names for supervision | Shell/init hold Caps |
+| Wait by child **name** (`SPAWN_WAIT`) | Wait by **process Cap** (`wait` / Cap slot) |
+| Unique live names as collision control | Names stay labels; Caps + `cap_gen` are unique |
+| Shell scrapes names for supervision | Shell holds Caps (`SPAWN_INHERIT` + `wait`) |
 
-`SPAWN_WAIT` migrates in the same window as Cap-wait — no permanent dual
-ABI (name wait *and* Cap wait).
+`SPAWN_WAIT` remains a convenience (park until exit; Cap still installed).
+There is no wait-by-name ABI.
 
 Bare vs utility spawn **galfs** policy is unchanged (`docs/AUTH.md`):
 utilities inherit tokens; bare programs get empty tokens. Process Caps

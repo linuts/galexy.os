@@ -58,7 +58,9 @@ pub fn spawn_program(name: &str, bytes: &[u8]) -> ProgramRegion {
         &[],
         0,
         crate::sched::galfs::admin_cred(),
+        0,
     )
+    .0
 }
 
 /// Like [`spawn_program`], with an explicit grant set, a startup argument,
@@ -73,8 +75,20 @@ pub(crate) fn spawn_launched(
     arg: &[u8],
     tty: u8,
     fs: crate::sched::galfs::FsCred,
-) -> ProgramRegion {
-    spawn_program_placed(name, bytes, None, false, grants, arg, tty, fs)
+    parent_slot: u8,
+) -> u8 {
+    spawn_program_placed(
+        name,
+        bytes,
+        None,
+        false,
+        grants,
+        arg,
+        tty,
+        fs,
+        parent_slot,
+    )
+    .1
 }
 
 /// Like [`spawn_program`], pinned to the BSP, and idle CPUs do not steal it.
@@ -93,6 +107,10 @@ pub fn spawn_program_bsp(name: &str, bytes: &[u8]) -> ProgramRegion {
 /// argument is a single byte: 1-based TTY index for the login banner.
 /// `login` installs the session; `logout` returns to the login screen.
 pub fn spawn_shell_on(name: &str, bytes: &[u8], tty: u8) -> ProgramRegion {
+    spawn_shell_on_slot(name, bytes, tty).0
+}
+
+fn spawn_shell_on_slot(name: &str, bytes: &[u8], tty: u8) -> (ProgramRegion, u8) {
     let tty_arg = [tty.wrapping_add(1)];
     spawn_program_placed(
         name,
@@ -103,6 +121,7 @@ pub fn spawn_shell_on(name: &str, bytes: &[u8], tty: u8) -> ProgramRegion {
         &tty_arg,
         tty,
         crate::sched::galfs::unauth_cred(),
+        0,
     )
 }
 
@@ -116,7 +135,8 @@ fn spawn_program_placed(
     arg: &[u8],
     tty: u8,
     fs: crate::sched::galfs::FsCred,
-) -> ProgramRegion {
+    parent_slot: u8,
+) -> (ProgramRegion, u8) {
     let elf = ElfFile::new(bytes).expect("spawn_program: invalid ELF");
     // Only static executables: relocatable/DYN would need relocation work.
     match elf.header.pt2.type_().as_type() {
@@ -235,7 +255,7 @@ fn spawn_program_placed(
         let kstack = vec![0u8; THREAD_STACK_SIZE];
         let kstack_top = (kstack.as_ptr() as u64 + kstack.len() as u64) & !0xF;
 
-        register_user_task(TaskInit {
+        let child_slot = register_user_task(TaskInit {
             name,
             ctx,
             kstack,
@@ -247,6 +267,7 @@ fn spawn_program_placed(
             grants,
             tty,
             fs,
+            parent_slot,
         });
         serial_println!(
             "[loader] program '{}' ready (own tree cr3={:#x}, entry {:#x})",
@@ -255,12 +276,15 @@ fn spawn_program_placed(
             entry.as_u64()
         );
 
-        ProgramRegion {
-            image,
-            entry,
-            scratch,
-            scratch_phys: scratch_frame.start_address(),
-        }
+        (
+            ProgramRegion {
+                image,
+                entry,
+                scratch,
+                scratch_phys: scratch_frame.start_address(),
+            },
+            child_slot,
+        )
     })
 }
 

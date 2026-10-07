@@ -227,9 +227,15 @@ pub const POWER_REBOOT: u64 = 1;
 /// Keyboard, the loader, and power stay with the shell.
 pub const SPAWN_GRANT_QUERY: u64 = 1;
 /// `spawn` grant bit (`r10`): park the caller until the child exits
-/// (not only until the ELF is loaded). Shell utilities use this so the
-/// prompt returns after `ls` / `mkdir` finish.
+/// (not only until the ELF is loaded). Convenience for Cap-wait; the
+/// child Cap is still installed. Prefer [`Syscall::Wait`] on the Cap
+/// once the caller needs the handle for kill/inspect as well.
 pub const SPAWN_WAIT: u64 = 2;
+/// `spawn` grant bit (`r10`): child inherits the parent's galfs session
+/// tokens (utility spawn). Bare programs omit this. Orthogonal to
+/// [`SPAWN_WAIT`] — Cap-wait utilities set inherit and call
+/// [`Syscall::Wait`] on the returned Cap.
+pub const SPAWN_INHERIT: u64 = 4;
 
 /// `grant` rights (`RDX`): read the object.
 pub const TOKEN_READ: u64 = 1;
@@ -286,6 +292,14 @@ pub const QUOTA_LEN: usize = 16;
 /// the calling task. File indexes are per-task (not a global fd table):
 /// task A's index 3 and task B's index 3 are different opens.
 pub const FILE_CAP_BASE: u64 = 3;
+
+/// Lowest index for a per-task **process Cap** (handle to a child task).
+///
+/// Lives above the file-open band (`FILE_CAP_BASE`…`FILE_CAP_BASE+7`) and
+/// below the high reserved band (`0x8000`…). Per-task, not global.
+pub const PROC_CAP_BASE: u64 = 0x40;
+/// Process Caps one task may hold at once (spawn children / transfers).
+pub const MAX_PROC_CAPS: u64 = 8;
 
 /* ---------------- address-space contract ---------------- */
 
@@ -354,12 +368,15 @@ pub enum Syscall {
     /// Args: `RDI = loader cap bits`, `RSI = user address of the name`,
     /// `RDX = byte count`. Optional: `R8 = user address of an argument`,
     /// `R9 = argument byte count` (at most 256; zero means none),
-    /// `R10 = grant bits` ([`SPAWN_GRANT_QUERY`], [`SPAWN_WAIT`], or both).
-    /// Returns: `SyscallResult` (rax = 0). Requires CapRights::EXEC on the
-    /// loader cap. The load itself runs on the kernel's page table
-    /// (main-loop drain). Without `SPAWN_WAIT` the caller is parked only
-    /// until that load finishes and the child keeps running; with it the
-    /// caller stays parked until the child exits.
+    /// `R10 = grant bits` ([`SPAWN_GRANT_QUERY`], [`SPAWN_WAIT`],
+    /// [`SPAWN_INHERIT`], or a combination).
+    /// Returns: `SyscallResult` — without [`SPAWN_WAIT`], `rax` is a
+    /// process Cap ([`PROC_CAP_BASE`] + slot) with [`CapRights::PROC_PARENT`];
+    /// with [`SPAWN_WAIT`], `rax` is the child's exit code (the Cap is still
+    /// installed on the caller for a later [`Syscall::Kill`] / inspect).
+    /// Requires CapRights::EXEC on the loader. Wait is by Cap/slot, not by
+    /// name (Milestone 47). [`SPAWN_INHERIT`] copies the parent's galfs
+    /// tokens onto the child (utilities); bare programs omit it.
     Spawn,
     /// `power(cap, op)` — shut down or reset the machine.
     ///
@@ -485,11 +502,22 @@ pub enum Syscall {
     /// Same layout as [`Syscall::Share`]. Removes `rights` from the
     /// matching share; an empty share slot is freed.
     Unshare,
+    /// `wait(cap)` — block until a process Cap's task exits; return status.
+    ///
+    /// Args: `RDI = process Cap bits`. Requires [`CapRights::PROC_WAIT`].
+    /// Returns: `SyscallResult` (rax = exit code). The Cap becomes stale
+    /// after a successful wait. Experimental until Phase 6.
+    Wait,
+    /// `kill(cap)` — stop a task addressed by a process Cap.
+    ///
+    /// Args: `RDI = process Cap bits`. Requires [`CapRights::PROC_KILL`].
+    /// Returns: `SyscallResult` (rax = 0). Experimental until Phase 6.
+    Kill,
 }
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (lifting the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 23] = [
+pub const SYSCALLS: [Syscall; 25] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -513,6 +541,8 @@ pub const SYSCALLS: [Syscall; 23] = [
     Syscall::Sync,
     Syscall::Share,
     Syscall::Unshare,
+    Syscall::Wait,
+    Syscall::Kill,
 ];
 
 /// `stat` kind: regular file.

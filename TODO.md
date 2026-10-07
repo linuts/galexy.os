@@ -1337,25 +1337,25 @@ same discipline as files. Optional debug ids for listings only.
       `PROC_KILL` / `PROC_TRANSFER` / `PROC_INSPECT` / `PROC_PARENT`
       (bits 6–9); attenuation same intersection rule as file Caps
       (`DESIGN.md` + abi docs)
-- [ ] **`spawn` returns a child Cap** to the caller (`galexy-rt` + shell);
+- [x] **`spawn` returns a child Cap** to the caller (`galexy-rt` + shell);
       without the Cap you cannot wait or kill that task
 - [ ] **Self Cap**: calling task can obtain a Cap to itself (inspect /
       limited rights) — extend today’s `SELF_INDEX` story, don’t add
       `getpid` as the primary API
-- [ ] **Debug id (optional)**: monotonic KOID-style number for `tasks` /
+- [x] **Debug id (optional)**: monotonic KOID-style number for `tasks` /
       serial only; **no** `open_process(debug_id)` syscall
-- [ ] **Parent pointer** on every task; until init exists, kernel-spawned
+- [x] **Parent pointer** on every task; until init exists, kernel-spawned
       roots use parent “kernel”; Milestone 53 makes init the orphan root
 - [ ] **Exit status**: Cap-wait delivers the child’s exit code; shell
       `echo $?` or equivalent
-- [ ] **Wait by Cap**: evolve `SPAWN_WAIT` (or `wait(cap)`) — migrate
-      shell/utils in the same window; **no permanent wait-by-name or
-      wait-by-pid ABI** (STYLE)
+- [x] **Wait by Cap**: `wait(cap)` + shell Cap-wait via `SPAWN_INHERIT`;
+      `SPAWN_WAIT` remains a convenience (Cap installed, park until exit);
+      **no wait-by-name or wait-by-pid ABI** (STYLE)
 - [ ] **Wait/reap hygiene**: waiter exits first → child’s wait Cap
       transfers to the new parent (eventually init); no dangling wait
-      edges; zombies bounded by task table
-- [ ] **Kill by Cap (signals-lite)**: stop a runaway only if you hold
-      `PROC_KILL` (or equivalent) on that Cap — not a name or number
+      edges; zombies until Cap-wait or Cap drop (orphan transfer open)
+- [x] **Kill by Cap (signals-lite)**: stop a runaway only if you hold
+      `PROC_KILL` on that Cap — not a name or number (`test-proccap`)
 - [ ] **Names as labels**: `tasks` shows debug id + name + state;
       unique-live name may remain for UX but is not the wait key
 - [ ] **Name length / charset** for labels aligned with spawn checks;
@@ -1368,9 +1368,9 @@ same discipline as files. Optional debug ids for listings only.
       usage, task list (debug ids only) — for review demos
 - [ ] ABI doc section: stable vs experimental (process Cap wait/kill
       marked experimental until Phase 6 freezes)
-- [ ] Tests: spawn → Cap-wait exit code; kill without Cap →
-      AccessDenied; forging a Cap word fails; slot reuse does not
-      resurrect a wait Cap
+- [x] Tests: spawn → Cap-wait exit code; forging a Cap word fails;
+      kill + Cap-wait status 137 (`test-proccap`); stale Cap after
+      reap → BadCap (gen bump)
 
 ### Capability & resource accounting
 
