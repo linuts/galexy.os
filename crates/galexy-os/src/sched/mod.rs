@@ -250,13 +250,24 @@ impl Grants {
         }
     }
 
-    /// Guest / logged-in seat without power (F2–F12 before/after login).
+    /// Logged-in non-admin seat: console, keyboard, loader, queries.
     pub(crate) const fn session() -> Self {
         Self {
             console: true,
             keyboard: true,
             loader: true,
             query: true,
+            power: false,
+        }
+    }
+
+    /// Pre-login seat: console + keyboard only (`login` / `help`).
+    pub(crate) const fn pre_login() -> Self {
+        Self {
+            console: true,
+            keyboard: true,
+            loader: false,
+            query: false,
             power: false,
         }
     }
@@ -1251,9 +1262,8 @@ fn ensure_one_shell(name: &str, tty: u8) {
 
 /// Loads every F-key shell that has exited.
 ///
-/// Other tasks are left alone. Each new shell starts at `/` with the
-/// launcher grants, on the console it had. A missing ramdisk entry does
-/// nothing.
+/// Other tasks are left alone. Each new shell starts logged out (pre-login
+/// grants) on the console it had. A missing ramdisk entry does nothing.
 pub fn ensure_shell() {
     for (tty, name) in SHELL_NAMES.iter().enumerate() {
         ensure_one_shell(name, tty as u8);
@@ -1847,11 +1857,48 @@ pub(crate) fn task_login(name: &str, password: &[u8]) -> Result<(), SysError> {
         if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
         }
-        caller.fs_root = target;
-        caller.fs_tokens = [galfs::Token::empty(); galfs::TOKEN_SLOTS];
-        galfs::push_token(&mut caller.fs_tokens, target, galfs::RIGHT_ALL)?;
+        install_session(caller, target)?;
         Ok(())
     })
+}
+
+/// Clear the caller's session (logged out / pre-login).
+pub(crate) fn task_logout() -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        clear_session(caller);
+        Ok(())
+    })
+}
+
+/// Install `ALL` on `target` and the grants that go with that actor.
+fn install_session(caller: &mut Thread, target: u16) -> Result<(), SysError> {
+    caller.fs_root = target;
+    caller.fs_tokens = [galfs::Token::empty(); galfs::TOKEN_SLOTS];
+    galfs::push_token(&mut caller.fs_tokens, target, galfs::RIGHT_ALL)?;
+    let admin = galfs::is_admin_root(target);
+    caller.born_admin = admin;
+    caller.grants = if admin {
+        Grants::launcher()
+    } else {
+        Grants::session()
+    };
+    Ok(())
+}
+
+fn clear_session(caller: &mut Thread) {
+    caller.fs_root = galfs::NO_OBJECT;
+    caller.fs_tokens = [galfs::Token::empty(); galfs::TOKEN_SLOTS];
+    caller.born_admin = false;
+    caller.grants = Grants::pre_login();
 }
 
 /// Sets a password. Admin may set any account; others only their own.
@@ -1970,9 +2017,7 @@ pub(crate) fn task_su(name: &str) -> Result<(), SysError> {
             return Err(SysError::AccessDenied);
         }
         let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-        caller.fs_root = target;
-        caller.fs_tokens = [galfs::Token::empty(); galfs::TOKEN_SLOTS];
-        galfs::push_token(&mut caller.fs_tokens, target, galfs::RIGHT_ALL)?;
+        install_session(caller, target)?;
         Ok(())
     })
 }

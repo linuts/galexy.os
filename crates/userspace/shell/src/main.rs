@@ -8,7 +8,8 @@
 //! again if it faults. The current directory lives here and starts over
 //! at `/` after a restart. Archive names stay at `/`. A path may begin
 //! with `/`, and the first component may be `owner@name` (`/dan@Desktop`).
-//! The prompt is `user@galexy>` (with `:/path` when cwd is not `/`).
+//! The prompt is `galexy>` when logged out, else `user@galexy>`
+//! (with `:/path` when cwd is not `/`).
 
 #![no_std]
 #![no_main]
@@ -16,8 +17,8 @@
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
     entry, files_cap, grant, keyboard_cap, read, reboot, revoke, shutdown, spawn_with, stats_cap,
-    tasks_cap, threads_cap, user, user_login, user_name, user_name_pass, user_passwd, write_console,
-    yield_now,
+    tasks_cap, threads_cap, user, user_login, user_logout, user_name, user_name_pass, user_passwd,
+    write_console, yield_now,
 };
 
 entry!(main);
@@ -94,10 +95,11 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) {
     if line == b"help" {
         write_console(b"commands: help, ls, echo, cat, touch, mkdir, cd, rm,\n");
         write_console(b"cp, mv, grant, revoke, whoami, users, useradd, userdel,\n");
-        write_console(b"login, passwd, su, stats, tasks, threads, about, clear\n");
+        write_console(b"login, logout, passwd, su, stats, tasks, threads, about, clear\n");
         write_console(b"login <user> <pass>  |  useradd <user> <pass>\n");
         write_console(b"grant/revoke: <rights> <path> <task>  (r w l c x a=all)\n");
         write_console(b"su <user> needs an access card; login uses a password\n");
+        write_console(b"every seat starts logged out; logout clears the session\n");
         write_console(b"power: shutdown, reboot\n");
         prompt(cwd);
         return;
@@ -183,6 +185,11 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) {
     }
     if let Some(rest) = arg_of(line, b"login") {
         user_pass_op(cwd, rest, galexy_abi::USER_LOGIN, b"login");
+        return;
+    }
+    if line == b"logout" {
+        let result = user_logout();
+        report_user(cwd, b"logout", result, true);
         return;
     }
     if let Some(rest) = arg_of(line, b"passwd") {
@@ -834,20 +841,19 @@ fn show(cap: Cap, cwd: &Cwd) {
 
 fn prompt(cwd: &Cwd) {
     // One write, so a kernel log on the serial mirror cannot land between
-    // the name and `> `. Shape: `user@galexy>` or `user@galexy:/path> `.
+    // the name and `> `. Logged in: `user@galexy>` or `user@galexy:/path> `.
+    // Logged out: `galexy>`.
     let mut name = [0u8; USER_MAX];
     let got = user(&mut name, galexy_abi::USER_WHOAMI);
-    let uname = if got.ok && got.value > 0 {
-        &name[..(got.value as usize).min(USER_MAX)]
-    } else {
-        b"?"
-    };
     let mut line = [0u8; USER_MAX + 1 + 6 + 2 + PATH_MAX + 2];
     let mut n = 0usize;
-    line[n..n + uname.len()].copy_from_slice(uname);
-    n += uname.len();
-    line[n] = b'@';
-    n += 1;
+    if got.ok && got.value > 0 {
+        let uname = &name[..(got.value as usize).min(USER_MAX)];
+        line[n..n + uname.len()].copy_from_slice(uname);
+        n += uname.len();
+        line[n] = b'@';
+        n += 1;
+    }
     line[n..n + 6].copy_from_slice(b"galexy");
     n += 6;
     if cwd.len > 0 {

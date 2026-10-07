@@ -23,8 +23,11 @@ real KDF later without changing the syscall shape.
 | Actor | Named account (`admin`, `eve`, …) with one root + Desktop |
 | Password | Proves control of that actor; stored as salt + hash on the actor |
 | Token | `(object, RIGHT_*)` on a task — the only way to touch galfs |
-| Session | Current `fs_root` + token table on the running task |
-| Guest | Unauthenticated seat: `fs_root = none`, empty tokens |
+| Session | Current `fs_root` + token table + grants on the running task |
+| Pre-login | Seat with no actor: `fs_root = none`, empty tokens, console+keyboard only |
+
+There is **no guest account**. A seat is either logged in as a real actor
+or logged out waiting for `login`.
 
 `RIGHT_ALL` on an actor’s **root** is both that actor’s home session and
 a shareable **login card**. Paths of the form `/eve@/` name that root for
@@ -33,21 +36,26 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
 ## Boot
 
 1. Format creates immortal `admin` with `Desktop/` and password `admin`.
-2. **F1 (`shell`)** starts already logged in as `admin` (physical console
-   trust at boot), with launcher grants including power, and `born_admin`.
-3. **F2–F12** start as **guest**: no root, no tokens, session grants
-   (console, keyboard, loader, queries — **no power**).
-4. `whoami` as guest prints `guest`.
+2. **Every F-key shell (F1–F12)** starts **logged out**: no root, no
+   tokens, grants = console + keyboard only (no loader, no queries, no
+   power). Prompt is `galexy>`.
+3. `login <user> <password>` is required before utilities, galfs, or
+   power. After login the prompt is `user@galexy>`.
+4. `whoami` while logged out fails (`AccessDenied`).
 
-## Password login
+## Password login and logout
 
 ```text
 login <user> <password>
+logout
 ```
 
-Kernel verifies the password and replaces the caller’s session with
-`ALL` on that user’s root (previous tokens dropped). Works from guest
-or from another session.
+`login` verifies the password and replaces the caller’s session with
+`ALL` on that user’s root (previous tokens dropped). Admin sessions also
+receive the power grant; other users get loader + queries without power.
+
+`logout` clears tokens, sets `fs_root = none`, restores pre-login grants,
+and resets the shell cwd. The seat is ready for the next `login`.
 
 ```text
 useradd <name> <password>     # admin only
@@ -74,13 +82,14 @@ revoke a /eve@/ shell2
 ```text
 su <name>     # only if caller holds ALL on that root (or is admin session)
 login …       # always password-checked identity switch
+logout        # return to pre-login (not a switch to another user)
 ```
 
 Admin may `su` to any actor without a password (operator seat). A session
 whose `fs_root` is admin also passes every token check (list/open/grant),
-so the F1 console can manage any tree without collecting cards. Returning
-to admin from a born-admin F1 seat still works via `su admin` or
-`login admin <pass>`.
+so an admin console can manage any tree without collecting cards.
+Returning to admin after `su` elsewhere uses `su admin` (if born-admin /
+card) or `login admin <pass>`.
 
 ## Spawn policy (least privilege)
 
@@ -89,8 +98,9 @@ to admin from a born-admin F1 seat still works via `su admin` or
 | Utility (`SPAWN_WAIT`) | Inherits the parent’s full session (short trusted tools) |
 | Bare program (`hello`, `linger`, …) | Parent’s `fs_root`, **empty tokens** |
 
-Ramdisk code is still trusted enough to run; empty tokens stop a runaway
-bare program from writing the caller’s tree. Utilities need create/open.
+Pre-login seats cannot spawn (no loader grant). Ramdisk code is still
+trusted enough to run once logged in; empty tokens stop a runaway bare
+program from writing the caller’s tree. Utilities need create/open.
 
 ## Console flood budget
 
@@ -105,7 +115,7 @@ Tracked for review readiness in `TODO.md` Milestones 43–44 (auth +
 sealed disk). Until those land:
 
 - Disk encryption / sealed password store → Milestone 44
-- Real KDF, random salts, no-echo prompts, sessions, least privilege →
+- Real KDF, random salts, no-echo prompts, lockout, idle logout →
   Milestone 43
 - PAM-style modules, MFA, networked IdP (still out of scope for review)
 - Removing the `crash` test seam from production images → Milestone 43

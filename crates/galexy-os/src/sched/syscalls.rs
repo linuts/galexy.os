@@ -475,6 +475,10 @@ fn syscall_user(frame: &Context) -> SyscallResult {
                 Err(err) => SyscallResult::err(err),
             }
         }
+        galexy_abi::USER_LOGOUT => match crate::sched::task_logout() {
+            Ok(()) => SyscallResult::ok(0),
+            Err(err) => SyscallResult::err(err),
+        },
         galexy_abi::USER_DEL | galexy_abi::USER_SU => {
             let mut raw = [0u8; MAX_NAME as usize];
             let Some(n) = copy_user_str(addr, len, &mut raw, true) else {

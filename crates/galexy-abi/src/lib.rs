@@ -249,6 +249,8 @@ pub const USER_LOGIN: u64 = 5;
 /// `user` op: set a password. `RDI`/`RSI` name the account (empty = self);
 /// `R8`/`R9` are the new password.
 pub const USER_PASSWD: u64 = 6;
+/// `user` op: clear the caller's session (logged out / pre-login seat).
+pub const USER_LOGOUT: u64 = 7;
 
 /// Lowest capability index a per-task file open may return. `0` is null,
 /// [`reserved::CONSOLE_INDEX`] is the console, [`reserved::SELF_INDEX`] is
@@ -404,11 +406,11 @@ pub enum Syscall {
     ///
     /// Args: `RDI`/`RSI` = name or buffer, `RDX` = op ([`USER_WHOAMI`],
     /// [`USER_USERS`], [`USER_ADD`], [`USER_DEL`], [`USER_SU`],
-    /// [`USER_LOGIN`], [`USER_PASSWD`]). Login/add/passwd also take a
-    /// password in `R8`/`R9`. Whoami/users write into the buffer.
-    /// Passwords authenticate identity; tokens authorize object access
-    /// (see `docs/AUTH.md`). Deleting admin, a non-empty tree, or an
-    /// actor a live task still uses is `Unsupported` / `NotFound`.
+    /// [`USER_LOGIN`], [`USER_PASSWD`], [`USER_LOGOUT`]). Login/add/passwd
+    /// also take a password in `R8`/`R9`. Whoami/users write into the
+    /// buffer. Passwords authenticate identity; tokens authorize object
+    /// access (see `docs/AUTH.md`). Deleting admin, a non-empty tree, or
+    /// an actor a live task still uses is `Unsupported` / `NotFound`.
     User,
 }
 

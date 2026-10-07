@@ -567,8 +567,10 @@ the table stays RAM-only. The table holds 16 actors, 64 objects, and
 corrupt newest slot still recovers from the older copy. Shell utilities
 use `SPAWN_WAIT` so the prompt returns after `ls` / `mkdir` exit.
 Auth is password for identity plus galfs tokens for authorization
-(see `docs/AUTH.md`). F1 boots logged in as `admin`; F2–F12 start as
-guest until `login` or an access card + `su`.
+(see `docs/AUTH.md`). Every F-key shell boots **logged out** (console +
+keyboard only); `login` installs a session and `logout` clears it. There
+is no guest account. Access cards + `su` still switch without a password
+when the caller holds ALL on the target root.
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing
@@ -593,9 +595,10 @@ User `spawn` rejects the F-key shell names (`shell`…`shell12`) and
 rejects a name that already has a live task (`NoResource`), so typing
 `shell` cannot start a second keyboard-less shell that spins. The child
 always receives the console, and it writes the console of the task that
-spawned it. Keyboard, the loader, and power stay with the shell. Boot starts one shell on each F-key, pinned to the BSP with the
-launcher grants and a full token on actor `admin`'s root. Spawn copies
-those tokens to the child. F1's shell is named `shell`; the others are
+spawned it. Keyboard, the loader, and power stay with the shell once it
+is logged in. Boot starts one shell on each F-key, pinned to the BSP,
+logged out (pre-login grants, no tokens). `login` restores loader/query
+(and power for admin). F1's shell is named `shell`; the others are
 `shell2` through `shell12`. F1–F12 select which cell grid is painted.
 The keyboard interrupt only records that index; the main loop paints
 it. Keys go to the visible console. COM1 mirrors only that console.

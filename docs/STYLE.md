@@ -121,7 +121,7 @@ Milestones 43+ land; until then treat them as the target.
   gets host `#[test]` in `galexy-core` / `galexy-abi` when possible.
 - Kernel-visible behavior gets a QEMU boot test (`bin/test-*`) or a
   typing e2e under `crates/runner/tests`.
-- Negative cases (AccessDenied, guest cannot spawn, bare spawn cannot
+- Negative cases (AccessDenied, pre-login cannot spawn, bare spawn cannot
   write) are first-class — not only the happy path (Milestone 51).
 - Anything touching hardware ports gets verified in QEMU; note the
   verification step in the PR/commit message.
