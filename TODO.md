@@ -5,8 +5,9 @@ Tracking document for concrete work items. Big-picture direction lives in
 
 Shipped through Milestone 42 (password auth + login screen). **Next
 focus:** Phase — Review readiness (Milestones **43–52**), then Phase 6 —
-process Caps / init / seats (**53–55**). Plan: `docs/PROCESS.md`. Style:
-`docs/STYLE.md`.
+process Caps / init / seats (**53–55**), then Phase 7 — scheduling
+complete (**56–58**). Plans: `docs/PROCESS.md` (process),
+`docs/SCHEDULING.md` (sched). Style: `docs/STYLE.md`.
 
 ## Milestone 1 — Boot skeleton ✅
 
@@ -1145,8 +1146,9 @@ Lockout and idle logout need a trustworthy clock source.
 - [ ] **Timeout helpers** in tests (QEMU accelerate / tick injection)
 - [x] **Tickless idle (MVP)**: LAPIC one-shot — preempt quantum when
       busy, next-second wake when idle (`arm_timer_for_load`); full
-      program-next-deadline / sleep queues remain later
+      program-next-deadline / sleep queues → **Milestone 56**
 - [ ] Docs: time model for reviewers (what is and is not synchronized)
+      — draft here if auth needs it; full freeze in **Milestone 56**/58
 
 ## Milestone 44 — Sealed GALF (disk encryption)
 
@@ -1628,6 +1630,8 @@ The “ready for review” checklist — not a feature dump.
       followed (short bullet list in the PR template or REVIEWER.md)
 - [ ] Phase 6 process/init milestones listed in ROADMAP (not required to
       tag `review-rc1`, but design notes from M47 must not contradict them)
+- [x] Phase 7 scheduling-complete milestones listed in ROADMAP (56–58;
+      implementation not required for `review-rc1`)
 
 ---
 
@@ -1747,6 +1751,109 @@ Enough structure for demos and Ctrl-C — still not POSIX.
 
 ---
 
+## Phase 7 — Scheduling complete
+
+Goal: finish the runtime half of scheduling — timed sleep, general
+block/wake, and a frozen policy — on top of Phase 2 (coop + preempt),
+M18–19 (per-CPU + steal), and the M43/M48 tickless-idle MVP. Process
+Caps / init stay Phase 6. Plan: `docs/SCHEDULING.md`. Direction:
+`docs/ROADMAP.md` Phase 7. Style: `docs/STYLE.md` → Scheduling.
+
+## Milestone 56 — Time & deadlines
+
+Turn “tickless idle MVP” into a real deadline timer.
+
+### Sleep and monotonic waits
+
+- [ ] **`sleep` syscall** (or `yield_until`): park the caller until
+      monotonic `timer_ticks()` reaches a deadline; wake with success /
+      interrupted (document which wake sources can cut sleep short)
+- [ ] **Sleep queue**: per-CPU or global ordered wake list; timer IRQ
+      (and steal-safe paths) move due sleepers to runnable
+- [ ] **No busy-spin sleep** in userspace demos — shell/`linger` helpers
+      use the syscall; tests assert the sleeper is not scheduled while
+      waiting
+- [ ] Cap / rights: sleep needs no special Cap (or a trivial Time Cap —
+      pick one in DESIGN and stick to it); document in `galexy-abi`
+- [ ] Tests: `bin/test-sleep` (duration within slack under TCG); sleep
+      + preempt co-existence; sleep across steal (if sleeper migrates)
+
+### Program-next-deadline
+
+- [ ] **`arm_timer_for_load` → next deadline**: when idle *or* when the
+      next sleep wake is sooner than the preempt quantum / next-second
+      tick, arm that earlier deadline (min of quantum, next sleeper,
+      next whole-second status update)
+- [ ] **Busy path unchanged**: IRQ still re-arms a preempt quantum so
+      boot / CPU-bound work keeps ~1 ms cadence
+- [ ] **`timer_ticks` honesty**: advancing by the armed window stays
+      correct when deadlines shrink for sleepers (no double-count /
+      skip under TCG)
+- [ ] Optional: TSC-deadline mode only if one-shot drift shows up —
+      waive with numbers otherwise (DESIGN already notes this)
+- [ ] Docs: reviewer time model (monotonic source, what is synchronized,
+      what audits may use) — close or absorb the M43 draft bullet
+
+## Milestone 57 — Block & wake
+
+General park/wake beyond spawn/wait-on-child.
+
+### Wait sources
+
+- [ ] **Unified blocked state**: one thread state (or clear enum) for
+      “not runnable until event”; sleep (M56), child wait, and I/O wait
+      share the wake path where practical
+- [ ] **Keyboard / console read block**: empty keyboard ring parks the
+      reader; IRQ wake (BSP remains the keyboard consumer)
+- [ ] **Pipe / channel block**: empty pipe `read` and full pipe `write`
+      park; peer close wakes with EOF / error — builds on existing pipe
+      Caps
+- [ ] **File read** that would busy-wait today becomes a park or stays
+      non-blocking with a DESIGN note (pick one; no silent spin)
+- [ ] Wake must be IRQ-safe / steal-safe: never free a stack while a
+      waiter still parks on it; same zombie IF=1 rule
+
+### Supervisor hygiene
+
+- [ ] Retire busy-poll “is name running?” loops in shell/init paths
+      where Cap-wait or an event wake can replace them (Phase 6 init
+      Cap-wait is the long-term supervisor; this milestone supplies the
+      kernel wake primitives)
+- [ ] Tests: blocked reader + writer; Ctrl-C / kill Cap unblocks with a
+      defined error; no lost wake under SMP stress
+
+## Milestone 58 — Scheduler policy freeze
+
+Write down what the scheduler *is*, so review does not invent CFS.
+
+### Document and freeze
+
+- [ ] **`SCHEDULING.md` + DESIGN policy section**: pin-at-spawn,
+      idle-pass steal + cooldown, per-CPU rotation, quantum =
+      `online()` ms share-split, tickless idle + deadline sleep (M56),
+      block/wake (M57) — keep SCHEDULING as the plan, DESIGN as the
+      wiring
+- [ ] **Numbers freeze**: quantum formula, steal cooldown (~100 ticks),
+      max threads / soft frame reserve — cited from code, not folklore
+- [ ] **ABI table**: sleep + any new wake-related errors marked stable
+      or explicitly experimental (same bar as M51/M55 process Caps)
+- [ ] **Lock-order / IRQ-gate** cross-check with Milestone 48 concurrency
+      bullets; sched-specific rules live next to the policy section
+- [ ] Reviewer one-pager: README / ROADMAP already point at
+      `SCHEDULING.md`; keep it current through freeze
+
+### Explicit non-goals (v1)
+
+- [ ] No multi-level feedback / CFS / weighted fair queueing
+- [ ] No POSIX `nice` / realtime priority classes
+- [ ] No per-task CPU affinity ABI (pin is kernel policy; steal remains
+      idle-only unless a later phase adds Caps)
+- [ ] No tickless *busy* (CPU-bound work stays quantum-paced)
+- [ ] Cooperative `run()` sweep fairness nits stay waived unless a bug
+      shows up (same as M48 note)
+
+---
+
 ## Known limitations / follow-ups
 
 Open bullets below are tracked by milestone id where planned. Waived
@@ -1792,7 +1899,8 @@ items stay here with rationale.
 - [ ] Keyboard queue overflow silently drops keys — **Milestone 49**
 - [ ] Cooperative-scheduler nits: `run()` sweep fairness mid-sweep;
       TaskCtx's 8 fixed u64 slots — **waive for review** (document in
-      Milestone 48 concurrency note) unless a bug shows up
+      Milestone 48 concurrency note / **Milestone 58** non-goals) unless
+      a bug shows up
 - [ ] TLB efficiency: every CR3 swap is a full flush (no PCID/GLOBAL
       kernel pages) — **Milestone 48** (implement or waive with numbers)
 - [ ] Auth hardening (crypto, prompts, sessions, least privilege) —
@@ -1809,3 +1917,7 @@ items stay here with rationale.
 - [ ] Init (orphan root) — **Milestone 53** (Phase 6)
 - [ ] Seats & service supervision — **Milestone 54**
 - [ ] Sessions & job Caps lite — **Milestone 55**
+- [ ] Time & deadlines (sleep / next-deadline arming) — **Milestone 56**
+      (Phase 7)
+- [ ] Block & wake — **Milestone 57**
+- [ ] Scheduler policy freeze — **Milestone 58**

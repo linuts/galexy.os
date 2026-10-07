@@ -12,6 +12,7 @@ galfs access cards), not global file descriptors or PIDs.
 | Passwords, login, access cards | [`docs/AUTH.md`](docs/AUTH.md) |
 | galfs trees, tokens, sealed disk | [`docs/GALFS.md`](docs/GALFS.md) |
 | Process Caps, init, seats (plan) | [`docs/PROCESS.md`](docs/PROCESS.md) |
+| Scheduler, time, block/wake (plan) | [`docs/SCHEDULING.md`](docs/SCHEDULING.md) |
 | How the kernel is wired | [`docs/DESIGN.md`](docs/DESIGN.md) |
 | Coding rules | [`docs/STYLE.md`](docs/STYLE.md) |
 | What’s next | [`docs/ROADMAP.md`](docs/ROADMAP.md) · [`TODO.md`](TODO.md) |
@@ -101,7 +102,7 @@ find target -name "galexy-os-*.img"
 ## Repo map
 
 ```
-docs/           STYLE, ROADMAP, DESIGN, AUTH, GALFS, PROCESS
+docs/           STYLE, ROADMAP, DESIGN, AUTH, GALFS, PROCESS, SCHEDULING
 TODO.md         milestone checkboxes
 crates/
   galexy-abi/     syscall numbers, Cap model, errors (host-tested)
