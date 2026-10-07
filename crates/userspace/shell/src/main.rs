@@ -465,6 +465,7 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
     }
     write_console(line);
     write_console(b": command not found\n");
+    write_console(b"\x07"); // BEL → PC speaker
     prompt(cwd);
     None
 }
@@ -1301,7 +1302,10 @@ fn spawn_and_prompt(cwd: &Cwd, program: &[u8], arg: &[u8], grants: u64, wait_exi
         match SysError::from_code(result.value) {
             SysError::NoResource => write_console(b"busy\n"),
             SysError::Unsupported => write_console(b"reserved\n"),
-            SysError::NotFound => write_console(b"command not found\n"),
+            SysError::NotFound => {
+                write_console(b"command not found\n");
+                write_console(b"\x07");
+            }
             _ => write_console(b"failed\n"),
         };
         // 127 ≈ command not found; other spawn failures are 1.

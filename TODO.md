@@ -1475,8 +1475,10 @@ Human-facing paths reviewers will exercise for an hour.
 - [ ] **Blinking text cursor** on the active TTY
 - [ ] **Keyboard overflow**: count drops; optional serial warning;
       document bound
+- [x] **PC speaker BEL**: console `write` of `0x07` beeps (`arch::speaker`);
+      shell emits BEL on command-not-found
 - [ ] **CSI / control policy**: list supported sequences; reject set
-      stays intentional
+      stays intentional (BEL handled as beep, not a CSI)
 - [ ] **Per-TTY scrollback** bound documented (cell grid size)
 - [ ] **Password star-prompt** integration with Milestone 43 secret prompts
 - [ ] **Ctrl-C / Ctrl-D** semantics documented (line cancel vs EOF)
