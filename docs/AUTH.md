@@ -143,7 +143,7 @@ card) or `login admin <pass>`.
 
 | Spawn kind | galfs credentials |
 | --- | --- |
-| Utility (`SPAWN_WAIT`) | Inherits the parent’s full session (short trusted tools) |
+| Utility (`SPAWN_INHERIT`, or legacy `SPAWN_WAIT`) | Inherits the parent’s full session (short trusted tools) |
 | Bare program (`hello`, `linger`, …) | Parent’s `fs_root`, **empty tokens** |
 
 Pre-login seats cannot spawn (no loader grant). Ramdisk code is still

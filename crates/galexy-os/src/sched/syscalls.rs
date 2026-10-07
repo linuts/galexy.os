@@ -160,6 +160,26 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, syscall_unshare(frame));
             Outcome::Resume
         }
+        n if n == Syscall::Wait as u64 => match crate::sched::task_wait(Cap::from_bits(frame.rdi))
+        {
+            Ok(None) => {
+                // Parked; exit code is stamped when the child exits.
+                stamp(frame, SyscallResult::ok(0));
+                Outcome::Handoff
+            }
+            Ok(Some(code)) => {
+                stamp(frame, SyscallResult::ok(code));
+                Outcome::Resume
+            }
+            Err(err) => {
+                stamp(frame, SyscallResult::err(err));
+                Outcome::Resume
+            }
+        },
+        n if n == Syscall::Kill as u64 => {
+            stamp(frame, syscall_kill(Cap::from_bits(frame.rdi)));
+            Outcome::Resume
+        }
         // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));
@@ -1061,7 +1081,12 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
     if len == 0 || len > MAX_NAME {
         return SyscallResult::err(SysError::BadValue);
     }
-    if frame.r10 & !(galexy_abi::SPAWN_GRANT_QUERY | galexy_abi::SPAWN_WAIT) != 0 {
+    if frame.r10
+        & !(galexy_abi::SPAWN_GRANT_QUERY
+            | galexy_abi::SPAWN_WAIT
+            | galexy_abi::SPAWN_INHERIT)
+        != 0
+    {
         return SyscallResult::err(SysError::BadValue);
     }
     let arg_len = frame.r9;
@@ -1106,7 +1131,16 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
     }
     let query = frame.r10 & galexy_abi::SPAWN_GRANT_QUERY != 0;
     let wait_exit = frame.r10 & galexy_abi::SPAWN_WAIT != 0;
-    match crate::sched::task_spawn(name, &arg[..arg_len as usize], query, wait_exit) {
+    let inherit = frame.r10 & galexy_abi::SPAWN_INHERIT != 0;
+    match crate::sched::task_spawn(name, &arg[..arg_len as usize], query, wait_exit, inherit)
+    {
+        Ok(()) => SyscallResult::ok(0),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_kill(cap: Cap) -> SyscallResult {
+    match crate::sched::task_kill(cap) {
         Ok(()) => SyscallResult::ok(0),
         Err(err) => SyscallResult::err(err),
     }

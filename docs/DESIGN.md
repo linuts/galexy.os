@@ -658,13 +658,15 @@ programs: the shell composes the path and `spawn`s them. `ls` and `rm`
 also receive the query grant, so they can read the files snapshot.
 `cd` stays in the shell, because that path lives there. A program name
 on its own is a launch: `spawn` on the loader cap (EXEC) parks the
-caller (`STATE_WAITING`) until the main loop has loaded the ELF
-(without `SPAWN_WAIT`) or until the child exits (with `SPAWN_WAIT`).
-Shell utilities set `SPAWN_WAIT` so the prompt returns after they
-finish; bare program names (`hello`, `linger`) do not. `r8`/`r9` are an
-optional argument, at most 256 bytes, copied onto the child's stack
-(`rdi` is the address, `rsi` the length). `r10` bits are
-`SPAWN_GRANT_QUERY` and/or `SPAWN_WAIT`. Any other bit is `BadValue`.
+caller (`STATE_WAITING`) until the main loop has loaded the ELF, then
+returns a **process Cap** (`PROC_CAP_BASE`…). Shell utilities set
+`SPAWN_INHERIT` (session tokens) and Cap-`wait` so the prompt returns
+after they finish; bare program names (`hello`, `linger`) drop the Cap
+(fire-and-forget). `SPAWN_WAIT` still parks until exit as a convenience
+(Cap remains installed). `r8`/`r9` are an optional argument, at most 256
+bytes, copied onto the child's stack (`rdi` is the address, `rsi` the
+length). `r10` bits are `SPAWN_GRANT_QUERY`, `SPAWN_WAIT`, and/or
+`SPAWN_INHERIT`. Any other bit is `BadValue`.
 User `spawn` rejects the F-key shell names (`shell`…`shell12`) and
 rejects a name that already has a live task (`NoResource`), so typing
 `shell` cannot start a second keyboard-less shell that spins. The child
@@ -685,7 +687,9 @@ so the new table does not inherit another task's user mappings. The
 load stays on the main loop because the loader allocates and a syscall
 runs with interrupts off.
 Without `SPAWN_WAIT`, the waiter is marked runnable when that load
-finishes. With it, the child's exit wakes the waiter. If one of those
+finishes (Cap bits in `rax`). With it, the child's exit wakes the
+waiter (exit code in `rax`). `wait(cap)` / `kill(cap)` are the Cap
+syscalls. If one of those
 shells is not running or waiting, the main loop loads that shell again
 with the launcher grants and admin's root token. Other tasks keep
 running. The new shell starts at `/`. `power` on the power cap (POWER right) shuts the
@@ -860,11 +864,13 @@ Attenuation on `grant`/`give` applies the same intersection rule as file
 Caps. Dropping the last wait Cap without a reaper is a bug path — orphans
 must land at init with wait rights once Milestone 53 lands.
 
-**Today → target.** Shell utilities still use `SPAWN_WAIT` (wait-by-name
-in the same window). Milestone 47 migrates to Cap-wait in one cut — no
-permanent dual ABI. `SELF_INDEX` grows toward a self Cap with inspect /
-limited rights; `getpid` is not the primary API. Args remain a single
-blob until argv/env layout freezes in abi.
+**Landed (spawn Cap slice).** `spawn` returns a process Cap
+(`PROC_CAP_BASE`…); `wait(cap)` / `kill(cap)` are syscalls. Shell
+utilities use `SPAWN_INHERIT` + Cap-wait; bare launches drop the Cap so
+zombies can reap. `SPAWN_WAIT` remains a park-until-exit convenience
+(Cap still installed). Wait is by Cap/slot generation, not by name.
+`SELF_INDEX` grows toward a self Cap next; `getpid` is not the primary
+API. Args remain a single blob until argv/env layout freezes in abi.
 
 **ABI stability.** Process Cap wait/kill stay **experimental** until
 Phase 6 freezes init and seat supervision. Numbers for `PROC_*` bits are

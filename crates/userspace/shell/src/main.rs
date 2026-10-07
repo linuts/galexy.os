@@ -1,8 +1,9 @@
 //! The interactive shell: a ring-3 program.
 //!
 //! Keys arrive through the keyboard capability. Utilities spawn with
-//! `SPAWN_WAIT` so the prompt returns after they exit; a bare program
-//! name returns once the load finishes and keeps running.
+//! `SPAWN_INHERIT`, then [`galexy_rt::wait`] on the child Cap so the
+//! prompt returns after they exit; a bare program name returns once the
+//! load finishes (Cap dropped) and keeps running.
 //! `echo`, `cat`, `touch`, `mkdir`, `rm`, and `ls` are those utilities.
 //! The kernel keeps the status bar and the screen, and loads this shell
 //! again if it faults. The current directory lives here and starts over
@@ -17,9 +18,10 @@
 
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
-    arg, entry, files_cap, grant, keyboard_cap, read, reboot, revoke, shutdown, spawn_with,
+    arg, close, entry, files_cap, grant, keyboard_cap, read, reboot, revoke, shutdown, spawn_with,
     share, stats_cap, sync, tasks_cap, threads_cap, unshare, user, user_login, user_logout,
-    user_name, user_name_pass, user_passwd, user_quota, user_setquota, write_console, yield_now,
+    user_name, user_name_pass, user_passwd, user_quota, user_setquota, wait, write_console,
+    yield_now,
 };
 
 entry!(main);
@@ -1253,20 +1255,20 @@ fn launch(cwd: &Cwd, name: &[u8]) {
         prompt(cwd);
         return;
     }
-    spawn_and_prompt(cwd, name, b"", 0);
+    spawn_and_prompt(cwd, name, b"", 0, false);
 }
 
 /// Spawns a utility with `arg`. `query` adds the files snapshot grant.
-/// Waits for the child to exit before the prompt returns.
+/// Inherits session tokens, Cap-waits for exit, then returns the prompt.
 fn launch_util(cwd: &Cwd, program: &[u8], arg: &[u8], query: bool) {
-    let mut grants = galexy_abi::SPAWN_WAIT;
+    let mut grants = galexy_abi::SPAWN_INHERIT;
     if query {
         grants |= galexy_abi::SPAWN_GRANT_QUERY;
     }
-    spawn_and_prompt(cwd, program, arg, grants);
+    spawn_and_prompt(cwd, program, arg, grants, true);
 }
 
-fn spawn_and_prompt(cwd: &Cwd, program: &[u8], arg: &[u8], grants: u64) {
+fn spawn_and_prompt(cwd: &Cwd, program: &[u8], arg: &[u8], grants: u64, wait_exit: bool) {
     let result = spawn_with(program, arg, grants);
     if !result.ok {
         write_console(program);
@@ -1277,6 +1279,11 @@ fn spawn_and_prompt(cwd: &Cwd, program: &[u8], arg: &[u8], grants: u64) {
             SysError::NotFound => write_console(b"command not found\n"),
             _ => write_console(b"failed\n"),
         };
+    } else if wait_exit {
+        let _ = wait(Cap::from_bits(result.value));
+    } else {
+        // Fire-and-forget: drop the Cap so an exited child can be reaped.
+        let _ = close(Cap::from_bits(result.value));
     }
     prompt(cwd);
 }

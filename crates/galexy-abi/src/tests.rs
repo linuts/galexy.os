@@ -108,6 +108,15 @@ fn reserved_caps_have_permanent_indexes() {
     assert!(matches!(SYSCALLS[20], Syscall::Sync));
     assert!(matches!(SYSCALLS[21], Syscall::Share));
     assert!(matches!(SYSCALLS[22], Syscall::Unshare));
+    assert!(matches!(SYSCALLS[23], Syscall::Wait));
+    assert!(matches!(SYSCALLS[24], Syscall::Kill));
+    assert_eq!(PROC_CAP_BASE, 0x40);
+    assert_eq!(MAX_PROC_CAPS, 8);
+    assert!(PROC_CAP_BASE > FILE_CAP_BASE + 7);
+    assert!(PROC_CAP_BASE < reserved::KEYBOARD_INDEX);
+    assert_eq!(SPAWN_GRANT_QUERY, 1);
+    assert_eq!(SPAWN_WAIT, 2);
+    assert_eq!(SPAWN_INHERIT, 4);
     assert_eq!(STAT_LEN, 48);
     assert_eq!(USER_TOKENS, 8);
     assert_eq!(STAT_FILE, 1);

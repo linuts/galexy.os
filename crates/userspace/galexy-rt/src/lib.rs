@@ -395,9 +395,24 @@ pub fn read(cap: Cap, buf: &mut [u8]) -> SyscallResult {
     )
 }
 
-/// Drops a file capability returned by [`open`].
+/// Drops a file or process capability.
 pub fn close(cap: Cap) -> SyscallResult {
     syscall(Syscall::Close as u64, cap.bits(), 0, 0)
+}
+
+/// Blocks until the process Cap's task exits; returns the exit code.
+///
+/// Requires [`CapRights::PROC_WAIT`]. The Cap is stale after a successful
+/// wait.
+pub fn wait(cap: Cap) -> SyscallResult {
+    syscall(Syscall::Wait as u64, cap.bits(), 0, 0)
+}
+
+/// Stops the task named by a process Cap.
+///
+/// Requires [`CapRights::PROC_KILL`].
+pub fn kill(cap: Cap) -> SyscallResult {
+    syscall(Syscall::Kill as u64, cap.bits(), 0, 0)
 }
 
 /// The keyboard capability (READ). `read` of zero bytes means no key is waiting.
@@ -463,11 +478,14 @@ pub fn spawn(name: &[u8]) -> SyscallResult {
     spawn_with(name, &[], 0)
 }
 
-/// Starts `name` with `arg` and `grants` (`SPAWN_GRANT_QUERY`, `SPAWN_WAIT`, or both).
+/// Starts `name` with `arg` and `grants` (`SPAWN_GRANT_QUERY`,
+/// `SPAWN_WAIT`, `SPAWN_INHERIT`, or a combination).
 ///
-/// Returns once the program is loaded, or — when `SPAWN_WAIT` is set — once
-/// the child exits. `r8`, `r9`, and `r10` are set explicitly so a leftover
-/// register is not an argument.
+/// Without `SPAWN_WAIT`, returns a process Cap once the program is loaded.
+/// With `SPAWN_WAIT`, parks until the child exits and returns its exit
+/// code (the Cap remains installed). Utilities that Cap-wait themselves
+/// pass `SPAWN_INHERIT` and call [`wait`] on the Cap. `r8`/`r9`/`r10` are
+/// set explicitly so a leftover register is not an argument.
 pub fn spawn_with(name: &[u8], arg: &[u8], grants: u64) -> SyscallResult {
     let value: u64;
     let ok: u64;
