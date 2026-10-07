@@ -165,7 +165,9 @@ fn help() {
 
 fn stats() {
     let (heap_start, heap_size) = mm::heap::stats();
+    let ticks = crate::arch::timer_ticks();
     out_lines(&[
+        alloc::format!("uptime: {}.{}s", ticks / 1000, (ticks / 100) % 10),
         alloc::format!("frames free: {}", mm::free_frames()),
         alloc::format!(
             "heap: {} used, {} free of {} KiB",
@@ -174,6 +176,11 @@ fn stats() {
             heap_size / 1024
         ),
         alloc::format!("heap at {:#x}", heap_start),
+        alloc::format!(
+            "galfs: {} / {} blocks",
+            crate::sched::galfs::blocks_used(),
+            crate::sched::galfs::BLOCK_SLOTS
+        ),
     ]);
 }
 

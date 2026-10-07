@@ -431,7 +431,8 @@ pub fn loader_cap() -> Cap {
     galexy_abi::reserved::loader(CapRights::EXEC)
 }
 
-/// The stats capability (READ). [`read`] returns a fresh frame and heap report.
+/// The stats capability (READ). [`read`] returns uptime, free frames, heap,
+/// and galfs block usage (fresh snapshot each call).
 pub fn stats_cap() -> Cap {
     galexy_abi::reserved::stats(CapRights::READ)
 }
