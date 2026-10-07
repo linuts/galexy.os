@@ -69,6 +69,29 @@ them as the target.
 - Ramdisk `SPAWN_WAIT` utilities inherit the caller's cards — treat those
   ELFs as privileged. New utils need a one-line trust note in the PR.
 
+## Scheduling
+
+Runtime rules for Phase 7 (Milestones **56–58**). Full plan:
+`docs/SCHEDULING.md`. Process Caps stay in `PROCESS.md` — this section is
+when tasks run, sleep, and block.
+
+- **RR + pin + idle steal.** Do not grow CFS / nice / realtime classes
+  without an explicit milestone. Pin-at-spawn and idle-pass steal are the
+  placement story.
+- **Deadline timer, not a 1 kHz metronome.** Busy CPUs re-arm a preempt
+  quantum; idle stretches to the next real deadline. Sleep queues shorten
+  that arm — they do not invent a second clock.
+- **Monotonic time is `timer_ticks`.** Auth cool-downs and `sleep` share
+  it. Do not add a wall-clock dependency to the scheduler path.
+- **Park, don't spin.** New waits (sleep, empty pipe/keyboard) park the
+  slot and wake from IRQ or peer close. Busy-poll “is name running?”
+  loops are transitional; Cap-wait / event wake replace them.
+- **No affinity ABI in v1.** Ownership is kernel policy; steal stays
+  idle-only unless a later phase adds Caps.
+- **ABI changes** for sleep / wake errors ship in `galexy-abi` + DESIGN +
+  callers in the **same PR**, marked experimental until Milestone 58
+  freezes them.
+
 ## Process model and init
 
 Clean-slate rules for Milestones **47** and **53–55**. Full plan:

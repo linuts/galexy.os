@@ -318,7 +318,7 @@ Init order: GDT/TSS (per-CPU slot 0) → per-CPU GS substrate → ACPI (MADT)
   uptime) or an earlier device IRQ. `timer_ticks` advances by the armed
   duration so uptime stays honest under tickless idle. Sleep queues and
   program-next-deadline arming (min of quantum / sleeper / next second)
-  are Phase 7 — Milestones 56–58 in `TODO.md` / `ROADMAP.md`.
+  are Phase 7 — see `docs/SCHEDULING.md` (Milestones 56–58).
 
 ### arch/ioapic — "external interrupt routing" (arch/)
 
@@ -422,6 +422,9 @@ on one CPU is stale in every other TLB until invalidated.
   them.
 
 ### sched — "the scheduler" (`sched/`)
+
+Runtime plan (time, block/wake, policy freeze): `docs/SCHEDULING.md`
+(Phase 7). Process Caps / init: `docs/PROCESS.md`.
 
 Two models, layered:
 

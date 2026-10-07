@@ -6,8 +6,8 @@ Tracking document for concrete work items. Big-picture direction lives in
 Shipped through Milestone 42 (password auth + login screen). **Next
 focus:** Phase — Review readiness (Milestones **43–52**), then Phase 6 —
 process Caps / init / seats (**53–55**), then Phase 7 — scheduling
-complete (**56–58**). Plans: `docs/PROCESS.md` (process), `docs/ROADMAP.md`
-Phase 7 (sched). Style: `docs/STYLE.md`.
+complete (**56–58**). Plans: `docs/PROCESS.md` (process),
+`docs/SCHEDULING.md` (sched). Style: `docs/STYLE.md`.
 
 ## Milestone 1 — Boot skeleton ✅
 
@@ -1756,7 +1756,8 @@ Enough structure for demos and Ctrl-C — still not POSIX.
 Goal: finish the runtime half of scheduling — timed sleep, general
 block/wake, and a frozen policy — on top of Phase 2 (coop + preempt),
 M18–19 (per-CPU + steal), and the M43/M48 tickless-idle MVP. Process
-Caps / init stay Phase 6. Direction: `docs/ROADMAP.md` Phase 7.
+Caps / init stay Phase 6. Plan: `docs/SCHEDULING.md`. Direction:
+`docs/ROADMAP.md` Phase 7. Style: `docs/STYLE.md` → Scheduling.
 
 ## Milestone 56 — Time & deadlines
 
@@ -1827,16 +1828,19 @@ Write down what the scheduler *is*, so review does not invent CFS.
 
 ### Document and freeze
 
-- [ ] **DESIGN.md policy section**: pin-at-spawn, idle-pass steal +
-      cooldown, per-CPU rotation, quantum = `online()` ms share-split,
-      tickless idle + deadline sleep (M56), block/wake (M57)
+- [ ] **`SCHEDULING.md` + DESIGN policy section**: pin-at-spawn,
+      idle-pass steal + cooldown, per-CPU rotation, quantum =
+      `online()` ms share-split, tickless idle + deadline sleep (M56),
+      block/wake (M57) — keep SCHEDULING as the plan, DESIGN as the
+      wiring
 - [ ] **Numbers freeze**: quantum formula, steal cooldown (~100 ticks),
       max threads / soft frame reserve — cited from code, not folklore
 - [ ] **ABI table**: sleep + any new wake-related errors marked stable
       or explicitly experimental (same bar as M51/M55 process Caps)
 - [ ] **Lock-order / IRQ-gate** cross-check with Milestone 48 concurrency
       bullets; sched-specific rules live next to the policy section
-- [ ] Reviewer one-pager pointer from ROADMAP Phase 7 / STYLE if useful
+- [ ] Reviewer one-pager: README / ROADMAP already point at
+      `SCHEDULING.md`; keep it current through freeze
 
 ### Explicit non-goals (v1)
 

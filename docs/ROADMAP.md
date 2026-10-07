@@ -281,7 +281,8 @@ block/wake, and a frozen policy. Phase 2 shipped cooperative +
 preemptive + lock discipline; M18–19 shipped per-CPU rotation and
 steal; M43/M48 shipped deadline one-shot idle. Process Caps / init
 (Phase 6) are the *process* story; this phase is the *time and wait*
-story. Concrete checkboxes: `TODO.md` Milestones **56–58**.
+story. Plan: `docs/SCHEDULING.md`. Concrete checkboxes: `TODO.md`
+Milestones **56–58**. Style: `docs/STYLE.md` → Scheduling.
 
 1. **56 Time & deadlines** — `sleep` (monotonic), sleep queues, arm the
    LAPIC to the next real deadline (min of preempt quantum, next sleep
