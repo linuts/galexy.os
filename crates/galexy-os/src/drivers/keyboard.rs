@@ -82,6 +82,11 @@ pub fn add_scancode(scancode: u8) {
         match decoded {
             Some(DecodedKey::Unicode(c)) => {
                 let tty = (ACTIVE.load(Ordering::Relaxed) as usize).min(TTY_COUNT - 1);
+                // Milestone 55: Ctrl-C stops the TTY foreground job Cap
+                // and is not delivered to the seat's keyboard ring.
+                if c == '\u{3}' && crate::sched::interrupt_foreground(tty as u8) {
+                    return;
+                }
                 // Overflow drops the key by design; not an error for the decoder.
                 let _ = KEY_QUEUES[tty].lock().push(c);
                 // Milestone 57: wake a reader parked on this TTY.

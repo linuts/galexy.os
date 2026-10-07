@@ -267,8 +267,8 @@ Style: `docs/STYLE.md` → Process model and init.
 2. **54 Seats & service supervision** ✅ — init spawns F-key seats and
    Cap-wait restarts them; kernel `ensure_shell` only without init;
    `svc` / non-seat services waived for v1
-3. **55 Sessions & job Caps (lite)** — session/job Caps; TTY foreground;
-   Ctrl-C to the foreground job Cap only
+3. **55 Sessions & job Caps (lite)** ✅ — per-TTY foreground job from
+   seat spawn; Ctrl-C kills that job Cap target (exit 137)
 
 Non-goals for this phase: systemd/dbus, full POSIX signals/job control,
 ambient PID/`waitpid` namespace, socket activation, cgroups.

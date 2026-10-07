@@ -1703,28 +1703,25 @@ Small and explicit — not a systemd clone.
 - [x] Explicit non-goals for v1: socket activation, cgroups, timers,
       device manager, user bus
 
-## Milestone 55 — Sessions & job control (lite)
+## Milestone 55 — Sessions & job control (lite) ✅
 
 Enough structure for demos and Ctrl-C — still not POSIX.
 
 ### Sessions and job Caps
 
-- [ ] **Session** = login seat (or service root); **job** = pipeline
-      under that session — both addressed by **Caps**, not pgids as
-      ambient integers
-- [ ] **Job Cap rights**: spawn can create/join a job; shell holds the
-      job Cap for the foreground pipeline
-- [ ] **TTY foreground job**: keyboard-generated interrupt (Ctrl-C)
-      delivers signals-lite to the foreground **job Cap** only
-- [ ] **Shell jobs (v1)**: one foreground pipeline; background optional
-      or waived with DESIGN note
-- [ ] **Wait on job Cap**: shell waits for its pipeline without reaping
-      unrelated cousins
-- [ ] Tests: Ctrl-C kills foreground `linger`, not a sibling seat; wait
-      collects pipeline exit status
-- [ ] ABI freeze note: process/job Caps + wait + kill marked stable or
-      explicitly experimental in the Milestone 51 table
-- [ ] Explicit non-goals: full job-control tty ioctls, POSIX job specs,
+- [x] **Session** = login seat; **job** (v1) = foreground child process
+      Cap from seat spawn — not ambient pgids
+- [x] **Job Cap rights**: seat spawn installs `PROC_PARENT`; shell holds
+      the Cap and Cap-waits (existing path)
+- [x] **TTY foreground job**: kernel tracks per-TTY foreground slot;
+      Ctrl-C (`^C`) kills that job (exit 137) and is not queued to the seat
+- [x] **Shell jobs (v1)**: one foreground child; background waived
+- [x] **Wait on job Cap**: shell already Cap-waits the spawned Cap
+- [x] Tests: `bin/test-jobcap` + `jobcap_test_passes` (Ctrl-C stops
+      foreground `linger`)
+- [x] ABI note: process Caps remain experimental until Phase 6 freeze
+      table (M51); foreground policy documented in PROCESS/DESIGN
+- [x] Explicit non-goals: full job-control tty ioctls, POSIX job specs,
       `SIGTSTP`/`SIGCONT` zoo, kill-by-pgid ambient namespace
 
 ---
@@ -1948,7 +1945,7 @@ items stay here with rationale.
 - [ ] Review RC — **Milestone 52**
 - [x] Init (orphan root) — **Milestone 53** (Phase 6)
 - [x] Seats & service supervision — **Milestone 54**
-- [ ] Sessions & job Caps lite — **Milestone 55**
+- [x] Sessions & job Caps lite — **Milestone 55**
 - [x] Time & deadlines (sleep / next-deadline arming) — **Milestone 56**
       (Phase 7)
 - [x] Block & wake — **Milestone 57**

@@ -1028,6 +1028,20 @@ fn init_test_passes() {
 }
 
 #[test]
+fn jobcap_test_passes() {
+    let (code, serial) = boot(&image("test-jobcap"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-jobcap should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-jobcap] passed"),
+        "test-jobcap success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn procgive_test_passes() {
     let (code, serial) = boot(&image("test-procgive"));
     assert_eq!(

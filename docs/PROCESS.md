@@ -149,15 +149,18 @@ every service by default.
 F1–F12 **console switching** stays in the kernel; only task lifecycle
 moves to init.
 
-## Sessions and jobs (Milestone 55)
+## Sessions and jobs (Milestone 55) ✅
 
-- **Session** ≈ login seat (or service root).
-- **Job** ≈ foreground pipeline; addressed by a **job Cap**, not an
-  ambient process-group id.
-- Ctrl-C delivers signals-lite to the TTY’s foreground **job Cap** only.
-- Shell waits on the job Cap for pipeline status.
+- **Session** ≈ login seat (init’s supervise Cap).
+- **Job** (v1) ≈ the seat’s foreground child; the process Cap from
+  `spawn` is the job Cap (no separate job object yet).
+- Kernel tracks per-TTY foreground slot (set on seat spawn drain).
+- Ctrl-C kills that foreground task (exit `137`) and is **not** delivered
+  into the seat’s keyboard ring; with no foreground, `^C` still cancels
+  prompts in the shell.
+- Shell Cap-waits the spawned Cap for pipeline status.
 
-v1: one foreground pipeline; background jobs optional or waived.
+v1: one foreground child; background jobs waived.
 
 ## Auth interaction
 
