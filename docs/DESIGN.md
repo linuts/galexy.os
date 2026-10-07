@@ -856,7 +856,7 @@ and a human **name**, but there is no `open_process(debug_id)` syscall.
 | --- | --- |
 | `PROC_WAIT` | Block until exit; receive status; reap |
 | `PROC_KILL` | Stop the task (signals-lite) |
-| `PROC_TRANSFER` | `give` the Cap to another task |
+| `PROC_TRANSFER` | `give` the Cap to another task (attenuates) |
 | `PROC_INSPECT` | Read debug id / name / state |
 | `PROC_PARENT` | Union granted to the spawner by default |
 

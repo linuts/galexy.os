@@ -181,9 +181,10 @@ pub fn pipe(out: &mut [u64; 2]) -> SyscallResult {
     syscall(Syscall::Pipe as u64, out.as_mut_ptr() as u64, 0, 0)
 }
 
-/// Moves an open file or pipe cap to another live user task.
+/// Moves an open file, pipe, or process Cap to another live user task.
 ///
-/// On success, `value` is the target's new capability bits.
+/// Process Caps need [`CapRights::PROC_TRANSFER`]. On success, `value`
+/// is the target's new capability bits (rights attenuated).
 pub fn give(cap: Cap, task: &[u8]) -> SyscallResult {
     syscall(
         Syscall::Give as u64,
