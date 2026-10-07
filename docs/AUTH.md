@@ -60,7 +60,7 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
 ## Password login and logout
 
 ```text
-login <user> <password>
+login [user] [password]
 logout
 ```
 
@@ -68,14 +68,19 @@ logout
 `ALL` on that user’s root (previous tokens dropped). Admin sessions also
 receive the power grant; other users get loader + queries without power.
 
+When the password (or, for bare `login`, the user name) is omitted, the
+shell prompts interactively. The password line echoes `*` only — never
+cleartext — so the COM1 console mirror cannot leak it. Esc or Ctrl-C
+cancels a prompt. Overlong input is rejected (no silent truncate).
+Inline `login <user> <password>` remains for scripts and older tests.
+
 `logout` clears tokens, sets `fs_root = none`, restores pre-login grants,
-and returns the shell to the login screen. The CLI form `login <user>
-<password>` still switches identity from an already-logged-in seat.
+and returns the shell to the login screen.
 
 ```text
-useradd <name> <password>     # admin only
-passwd <name> <password>     # admin, or self with current session
-passwd <password>            # change own password
+useradd <name> [password]     # admin only; prompts if password omitted
+passwd [name] [password]      # admin, or self; bare `passwd` prompts
+passwd <password>             # change own password (inline)
 ```
 
 ## Access cards (tokens)

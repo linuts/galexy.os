@@ -85,30 +85,50 @@ fn login_screen(kbd: Cap, tty: u8) -> bool {
         write_console(b")\n\n");
         write_console(b"Login as: ");
         let mut name = [0u8; USER_MAX];
-        let Some(nlen) = read_line(kbd, &mut name, false) else {
-            return false;
-        };
-        if nlen == 0 {
-            continue;
-        }
-        write_console(b"Password: ");
-        let mut pass = [0u8; PASS_MAX];
-        let Some(plen) = read_line(kbd, &mut pass, true) else {
-            return false;
-        };
-        let result = user_login(&name[..nlen], &pass[..plen]);
-        for b in pass.iter_mut() {
-            *b = 0;
-        }
-        if result.ok {
-            write_console(b"\n");
-            return true;
-        }
-        write_console(b"\nLogin incorrect\n");
-        for _ in 0..30 {
-            yield_now();
+        match read_line(kbd, &mut name, false) {
+            LineRead::Denied => return false,
+            LineRead::Cancel | LineRead::Overlong => continue,
+            LineRead::Line(0) => continue,
+            LineRead::Line(nlen) => {
+                write_console(b"Password: ");
+                let mut pass = [0u8; PASS_MAX];
+                let plen = match read_line(kbd, &mut pass, true) {
+                    LineRead::Denied => return false,
+                    LineRead::Cancel | LineRead::Overlong | LineRead::Line(0) => {
+                        wipe(&mut pass);
+                        continue;
+                    }
+                    LineRead::Line(n) => n,
+                };
+                let result = user_login(&name[..nlen], &pass[..plen]);
+                wipe(&mut pass);
+                if result.ok {
+                    write_console(b"\n");
+                    return true;
+                }
+                write_console(b"\nLogin incorrect\n");
+                for _ in 0..30 {
+                    yield_now();
+                }
+            }
         }
     }
+}
+
+fn wipe(buf: &mut [u8]) {
+    for b in buf.iter_mut() {
+        *b = 0;
+    }
+}
+
+enum LineRead {
+    Line(usize),
+    /// Esc or Ctrl-C — caller retries or abandons the prompt.
+    Cancel,
+    /// Paste longer than the buffer — rejected with a message.
+    Overlong,
+    /// Keyboard capability denied.
+    Denied,
 }
 
 fn write_tty_digits(tty: u8) {
@@ -119,15 +139,18 @@ fn write_tty_digits(tty: u8) {
     }
 }
 
-/// Reads a line. When `secret`, echoes `*` instead of the character.
-fn read_line(kbd: Cap, buf: &mut [u8], secret: bool) -> Option<usize> {
+/// Reads a line. When `secret`, echoes `*` (never cleartext) so the COM1
+/// mirror of `write_console` cannot leak the password.
+fn read_line(kbd: Cap, buf: &mut [u8], secret: bool) -> LineRead {
+    wipe(buf);
     let mut len = 0usize;
     loop {
         let mut chunk = [0u8; 8];
         let got = read(kbd, &mut chunk);
         if !got.ok {
             write_console(b"\nread: keyboard denied\n");
-            return None;
+            wipe(buf);
+            return LineRead::Denied;
         }
         if got.value == 0 {
             yield_now();
@@ -138,7 +161,13 @@ fn read_line(kbd: Cap, buf: &mut [u8], secret: bool) -> Option<usize> {
             match byte {
                 b'\n' | b'\r' => {
                     write_console(b"\n");
-                    return Some(len);
+                    return LineRead::Line(len);
+                }
+                // Esc or Ctrl-C cancels without submitting.
+                0x1b | 0x03 => {
+                    write_console(b"\n");
+                    wipe(buf);
+                    return LineRead::Cancel;
                 }
                 0x08 => {
                     if len > 0 {
@@ -147,7 +176,17 @@ fn read_line(kbd: Cap, buf: &mut [u8], secret: bool) -> Option<usize> {
                         write_console(&[0x08, b' ', 0x08]);
                     }
                 }
-                b if (b.is_ascii_graphic() || (!secret && b == b' ')) && len < buf.len() => {
+                b if b.is_ascii_graphic() || (!secret && b == b' ') => {
+                    if len >= buf.len() {
+                        write_console(b"\n");
+                        write_console(if secret {
+                            b"password too long\n"
+                        } else {
+                            b"input too long\n"
+                        });
+                        wipe(buf);
+                        return LineRead::Overlong;
+                    }
                     buf[len] = b;
                     len += 1;
                     if secret {
@@ -182,7 +221,7 @@ fn repl(kbd: Cap, cwd: &mut Cwd) -> ReplEnd {
             match byte {
                 b'\n' | b'\r' => {
                     write_console(b"\n");
-                    if let Some(end) = dispatch(trim(&line[..len]), cwd) {
+                    if let Some(end) = dispatch(kbd, trim(&line[..len]), cwd) {
                         return end;
                     }
                     len = 0;
@@ -205,7 +244,7 @@ fn repl(kbd: Cap, cwd: &mut Cwd) -> ReplEnd {
 }
 
 /// `Some` ends the REPL. `None` keeps reading.
-fn dispatch(line: &[u8], cwd: &mut Cwd) -> Option<ReplEnd> {
+fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd) -> Option<ReplEnd> {
     if line.is_empty() {
         prompt(cwd);
         return None;
@@ -221,7 +260,9 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) -> Option<ReplEnd> {
         write_console(b"commands: help, ls, echo, cat, touch, mkdir, cd, rm,\n");
         write_console(b"cp, mv, grant, revoke, whoami, users, useradd, userdel,\n");
         write_console(b"login, logout, passwd, su, stats, tasks, threads, about, clear\n");
-        write_console(b"login <user> <pass> switches identity; logout returns to login\n");
+        write_console(b"login [user] [pass] - omit pass for a masked Password: prompt\n");
+        write_console(b"passwd [name] [pass] / useradd <name> [pass] - same secret prompt\n");
+        write_console(b"logout returns to the login screen; Esc/Ctrl-C cancels a prompt\n");
         write_console(b"grant/revoke: <rights> <path> <task>  (r w l c x a=all)\n");
         write_console(b"su <user> needs an access card; login uses a password\n");
         write_console(b"power: shutdown, reboot\n");
@@ -302,7 +343,7 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) -> Option<ReplEnd> {
         return None;
     }
     if let Some(rest) = arg_of(line, b"useradd") {
-        user_pass_op(cwd, rest, galexy_abi::USER_ADD, b"useradd");
+        user_pass_op(kbd, cwd, rest, galexy_abi::USER_ADD, b"useradd");
         return None;
     }
     if let Some(rest) = arg_of(line, b"userdel") {
@@ -310,7 +351,7 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) -> Option<ReplEnd> {
         return None;
     }
     if let Some(rest) = arg_of(line, b"login") {
-        user_pass_op(cwd, rest, galexy_abi::USER_LOGIN, b"login");
+        user_pass_op(kbd, cwd, rest, galexy_abi::USER_LOGIN, b"login");
         return None;
     }
     if line == b"logout" {
@@ -323,7 +364,7 @@ fn dispatch(line: &[u8], cwd: &mut Cwd) -> Option<ReplEnd> {
         return Some(ReplEnd::Logout);
     }
     if let Some(rest) = arg_of(line, b"passwd") {
-        passwd_cmd(cwd, rest);
+        passwd_cmd(kbd, cwd, rest);
         return None;
     }
     if let Some(rest) = arg_of(line, b"su") {
@@ -636,34 +677,78 @@ fn user_op(cwd: &mut Cwd, rest: &[u8], op: u64, label: &[u8]) {
     report_user(cwd, label, result, op == galexy_abi::USER_SU);
 }
 
-fn user_pass_op(cwd: &mut Cwd, rest: &[u8], op: u64, label: &[u8]) {
+fn user_pass_op(kbd: Cap, cwd: &mut Cwd, rest: &[u8], op: u64, label: &[u8]) {
     let rest = trim(rest);
-    let Some(sp) = rest.iter().position(|b| *b == b' ') else {
-        write_console(b"usage: ");
-        write_console(label);
-        write_console(b" <name> <password>\n");
-        prompt(cwd);
-        return;
+    let mut name_buf = [0u8; USER_MAX];
+    let mut pass_buf = [0u8; PASS_MAX];
+
+    let (name_inline, pass_inline) = if let Some(sp) = rest.iter().position(|b| *b == b' ') {
+        (trim(&rest[..sp]), trim(&rest[sp + 1..]))
+    } else {
+        (rest, b"" as &[u8])
     };
-    let name = trim(&rest[..sp]);
-    let pass = trim(&rest[sp + 1..]);
+
+    let name = if name_inline.is_empty() {
+        if op != galexy_abi::USER_LOGIN {
+            write_console(b"usage: ");
+            write_console(label);
+            write_console(b" <name> [password]\n");
+            prompt(cwd);
+            return;
+        }
+        write_console(b"Login as: ");
+        match read_line(kbd, &mut name_buf, false) {
+            LineRead::Line(n) if n > 0 => &name_buf[..n],
+            LineRead::Denied => {
+                prompt(cwd);
+                return;
+            }
+            _ => {
+                prompt(cwd);
+                return;
+            }
+        }
+    } else {
+        name_inline
+    };
+
     if name.is_empty()
-        || pass.is_empty()
         || !name
             .iter()
             .all(|b| b.is_ascii_alphanumeric() || *b == b'.' || *b == b'_' || *b == b'-')
     {
         write_console(b"usage: ");
         write_console(label);
-        write_console(b" <name> <password>\n");
+        write_console(b" <name> [password]\n");
         prompt(cwd);
         return;
     }
+
+    let pass = if pass_inline.is_empty() {
+        write_console(b"Password: ");
+        match read_line(kbd, &mut pass_buf, true) {
+            LineRead::Line(n) if n > 0 => &pass_buf[..n],
+            LineRead::Denied => {
+                wipe(&mut pass_buf);
+                prompt(cwd);
+                return;
+            }
+            _ => {
+                wipe(&mut pass_buf);
+                prompt(cwd);
+                return;
+            }
+        }
+    } else {
+        pass_inline
+    };
+
     let result = if op == galexy_abi::USER_LOGIN {
         user_login(name, pass)
     } else {
         user_name_pass(name, pass, op)
     };
+    wipe(&mut pass_buf);
     report_user(
         cwd,
         label,
@@ -672,24 +757,39 @@ fn user_pass_op(cwd: &mut Cwd, rest: &[u8], op: u64, label: &[u8]) {
     );
 }
 
-fn passwd_cmd(cwd: &mut Cwd, rest: &[u8]) {
+fn passwd_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8]) {
     let rest = trim(rest);
-    if rest.is_empty() {
-        write_console(b"usage: passwd [name] <password>\n");
-        prompt(cwd);
-        return;
-    }
-    let (name, pass) = if let Some(sp) = rest.iter().position(|b| *b == b' ') {
+    let mut pass_buf = [0u8; PASS_MAX];
+    let (name, pass) = if rest.is_empty() {
+        write_console(b"Password: ");
+        let pass = match read_line(kbd, &mut pass_buf, true) {
+            LineRead::Line(n) if n > 0 => &pass_buf[..n],
+            LineRead::Denied => {
+                wipe(&mut pass_buf);
+                prompt(cwd);
+                return;
+            }
+            _ => {
+                wipe(&mut pass_buf);
+                prompt(cwd);
+                return;
+            }
+        };
+        (b"" as &[u8], pass)
+    } else if let Some(sp) = rest.iter().position(|b| *b == b' ') {
         (trim(&rest[..sp]), trim(&rest[sp + 1..]))
     } else {
+        // Single token: own password (inline).
         (b"" as &[u8], rest)
     };
     if pass.is_empty() {
-        write_console(b"usage: passwd [name] <password>\n");
+        write_console(b"usage: passwd [name] [password]\n");
+        wipe(&mut pass_buf);
         prompt(cwd);
         return;
     }
     let result = user_passwd(name, pass);
+    wipe(&mut pass_buf);
     report_user(cwd, b"passwd", result, false);
 }
 

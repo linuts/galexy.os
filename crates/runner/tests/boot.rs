@@ -659,6 +659,46 @@ fn with_login<'a>(keys: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
     LOGIN_ADMIN_KEYS.iter().chain(keys.iter()).copied().collect()
 }
 
+/// Every `Password: ` line in serial must show only `*` (no cleartext).
+fn assert_passwords_masked(serial: &str) {
+    let mut from = 0;
+    while let Some(rel) = serial[from..].find("Password: ") {
+        let start = from + rel + "Password: ".len();
+        let line_end = serial[start..]
+            .find('\n')
+            .map(|i| start + i)
+            .unwrap_or(serial.len());
+        let echoed = &serial[start..line_end];
+        assert!(
+            echoed.chars().all(|c| c == '*'),
+            "password cleartext leaked to serial after Password: ({echoed:?}); serial:\n{serial}"
+        );
+        from = line_end;
+    }
+}
+
+/// After the boot login screen, CLI `login admin` with a masked prompt.
+const LOGIN_CLI_PROMPT_KEYS: &[(&str, &str)] = &[
+    ("l", "l"),
+    ("o", "o"),
+    ("g", "g"),
+    ("i", "i"),
+    ("n", "n"),
+    ("spc", " "),
+    ("a", "a"),
+    ("d", "d"),
+    ("m", "m"),
+    ("i", "i"),
+    ("n", "n"),
+    ("ret", "Password: "),
+    ("a", "*"),
+    ("d", "*"),
+    ("m", "*"),
+    ("i", "*"),
+    ("n", "*"),
+    ("ret", "admin@galexy> "),
+];
+
 /// Qcode + expected-echo pairs for typing `hello` + Enter (typing
 /// E2E). Each key syncs on the shell's echo of it (console = screen +
 /// serial); the Enter key syncs on hello's program output (the write
@@ -974,6 +1014,26 @@ const SHELL_RESERVE_KEYS: &[(&str, &str)] = &[
     ("ret", "shell: reserved"),
 ];
 
+/// Boot login screen + CLI `login admin` both mask the password on COM1.
+#[test]
+fn shell_secret_prompt_typing_e2e() {
+    let keys = with_login(LOGIN_CLI_PROMPT_KEYS);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "admin@galexy> ",
+        Duration::from_millis(30),
+        Duration::from_secs(120),
+    );
+    assert_passwords_masked(&serial);
+    let prompts = serial.matches("Password: ").count();
+    assert!(
+        prompts >= 2,
+        "expected boot + CLI password prompts; serial:\n{serial}"
+    );
+}
+
 /// The ring-3 shell's query caps: typed `stats` / `threads` / `tasks` /
 /// `ls` come back as console text (screen + serial), including a live
 /// thread and the ramdisk's `banner.txt`.
@@ -988,6 +1048,7 @@ fn shell_query_typing_e2e() {
         Duration::from_millis(30),
         Duration::from_secs(90),
     );
+    assert_passwords_masked(&serial);
     assert!(
         serial.contains("frames free:"),
         "typed `stats` never produced the frame line; serial:\n{serial}"
@@ -1188,6 +1249,7 @@ fn shell_tty_switch_e2e() {
         serial[tty2 + hi + tty1..].contains('z'),
         "the first shell did not echo after F1; serial:\n{serial}"
     );
+    assert_passwords_masked(&serial);
 }
 
 #[test]

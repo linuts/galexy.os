@@ -1068,21 +1068,20 @@ Replace demo hashing before any other auth work depends on the on-disk shape.
 
 Passwords must not appear in the shell line, COM1 mirror, or argv.
 
-- [ ] **Shell secret read**: line editor mode that echoes `*` or nothing;
-      Backspace works; buffer never passed to `write_console` as cleartext
-- [ ] **`login` / `passwd` / `useradd`**: interactive prompts when args
+- [x] **Shell secret read**: `read_line(..., secret)` echoes `*`;
+      Backspace works; cleartext never passed to `write_console`
+- [x] **`login` / `passwd` / `useradd`**: interactive prompts when args
       omitted (`login eve` → `Password:`). Inline `login eve secret`
-      remains for tests only, or is removed once typing e2e covers prompts
-- [ ] **Kernel**: optional — accept password via a one-shot scratch buffer
-      syscall if keeping secrets out of the command string is cleaner;
-      document the chosen shape in `galexy-abi`
-- [ ] **Serial policy**: secret mode suppresses COM1 echo for that line
-      on the visible TTY path (required, not optional)
-- [ ] **Abort**: Esc or Ctrl-C cancels a password prompt without login
-- [ ] **Length cap**: overlong paste is rejected with a clear error; no
-      silent truncate of secrets
-- [ ] Typing e2e: F2 logs in without the password appearing in the
-      captured serial transcript
+      kept for scripts; typing e2e covers the masked prompt
+- [x] **Serial policy**: secret mode only writes `*` (COM1 mirrors
+      `write_console` on the visible TTY — no cleartext path)
+- [x] **Abort**: Esc or Ctrl-C cancels a password prompt (`MapLettersToUnicode`)
+- [x] **Length cap**: overlong input → `password too long` / `input too long`;
+      buffer wiped; no silent truncate
+- [x] Typing e2e: login screen + CLI `login admin` mask; serial has no
+      cleartext after `Password: `
+- [ ] **Kernel** (optional follow-up): one-shot scratch password syscall
+      if keeping secrets out of argv is needed beyond interactive prompts
 
 ### Session hygiene
 
