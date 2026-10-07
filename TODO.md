@@ -1200,28 +1200,24 @@ GALF **v8**: 32 actors / 128 objects / 256×512 block pool / 8 directs
 
 Fill semantic gaps reviewers expect from a small FS.
 
-- [ ] **`rename` / `mv` in-FS**: syscall or galfs op that moves a dirent
-      without read/copy/remove (same-actor and cross-directory); update
-      shell `mv` to prefer it when both paths are galfs
-- [ ] **`truncate` / set-size**: shrink or grow a file; free trailing
-      blocks; `create` replace flag stays
-- [ ] **`stat`-shaped query**: size, kind (file/dir), owner actor name,
-      rights the caller holds — via a small syscall or a `read` on a
-      path query cap. Shell `ls -l` or `stat` util
-- [ ] **Directory read**: either allow `open` on directories returning a
-      LIST cap stream, or keep snapshot-only and document it; pick one
-      and test it
-- [ ] **Write cursor**: `seek` affects write offset (today append-only
-      write ignores cursor) — or document append-only as permanent and
-      add `pwrite`-style flags
-- [ ] **Empty-dir rules / non-empty `userdel`**: recursive delete policy
-      documented (refuse vs `rm -r` util with REMOVE on the tree)
-- [ ] **Hard links / symlinks**: explicit non-goal for review; document
-      in `FS.md` (no link syscall)
-- [ ] **Sparse files**: non-goal or simple hole policy — decide in FS.md
-- [ ] **Name charset**: printable ASCII subset or full bytes except `/`
-      and NUL — document + reject tests
-- [ ] Tests for each new op; update `DESIGN.md` syscall table
+- [x] **`rename` / `mv` in-FS**: `Syscall::Rename`; shell `mv` tries rename
+      first (copy+remove fallback)
+- [x] **`truncate` / set-size**: `Syscall::Truncate` on a file cap; shrink
+      frees blocks; grow zero-fills; `create` replace flag unchanged
+- [x] **`stat`-shaped query**: `Syscall::Stat` → [`STAT_LEN`] buffer (kind,
+      size, owner, held rights); shell `stat` util
+- [x] **Directory read**: keep **files snapshot** only (`FILES` cap /
+      `ls`); `open` on a directory stays `Unsupported` (documented)
+- [x] **Write cursor**: **append-only** `write` is permanent for review;
+      `seek` moves the read cursor only (documented)
+- [x] **Empty-dir rules / non-empty `userdel`**: refuse non-empty delete
+      (unchanged); no recursive `rm -r` — document in `GALFS.md`
+- [x] **Hard links / symlinks**: non-goal for review (documented in
+      `GALFS.md`; no link syscall)
+- [x] **Sparse files**: non-goal — truncate grow allocates zeroed blocks
+- [x] **Name charset**: alphanumeric plus `.` `_` `-`; reject `.` / `..`
+      (documented; existing `component_ok`)
+- [x] Tests: `test-ops`; `DESIGN.md` / `GALFS.md` syscall notes updated
 
 ### galfs durability, sync, and recovery
 

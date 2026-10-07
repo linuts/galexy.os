@@ -37,6 +37,14 @@ name = "mv"
 path = "src/bin/mv.rs"
 
 [[bin]]
+name = "truncate"
+path = "src/bin/truncate.rs"
+
+[[bin]]
+name = "stat"
+path = "src/bin/stat.rs"
+
+[[bin]]
 name = "linger"
 path = "src/bin/linger.rs"
 

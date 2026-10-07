@@ -1557,6 +1557,94 @@ pub(crate) fn task_remove(name: &str) -> Result<(), SysError> {
     Ok(())
 }
 
+/// Moves a galfs dirent from `old` to `new`.
+pub(crate) fn task_rename(old: &str, new: &str) -> Result<(), SysError> {
+    let old_parsed = galfs::parse_path(old)?;
+    let new_parsed = galfs::parse_path(new)?;
+    if old_parsed.owner.is_none()
+        && old_parsed.n == 1
+        && crate::sched::ramdisk::find(old_parsed.comps[0]).is_some()
+    {
+        return Err(SysError::Unsupported);
+    }
+    if new_parsed.owner.is_none()
+        && new_parsed.n == 1
+        && crate::sched::ramdisk::find(new_parsed.comps[0]).is_some()
+    {
+        return Err(SysError::Unsupported);
+    }
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        galfs::rename(thread.fs_root, &thread.fs_tokens, old, new)
+    })?;
+    galfs::sync();
+    Ok(())
+}
+
+/// Sets the length of an open galfs file.
+pub(crate) fn task_truncate(cap: Cap, new_len: u64) -> Result<(), SysError> {
+    let index = file_slot(cap)?;
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    if new_len > galfs::FILE_BYTES as u64 {
+        return Err(SysError::BadValue);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
+        let effective = file.rights.intersection(cap.rights());
+        if !effective.contains(CapRights::WRITE) {
+            return Err(SysError::AccessDenied);
+        }
+        match file.body {
+            FileBody::Galfs(obj) => {
+                galfs::truncate(obj, new_len as usize)?;
+                if file.offset > new_len as usize {
+                    file.offset = new_len as usize;
+                }
+                Ok(())
+            }
+            FileBody::Archive(_) | FileBody::Pipe { .. } => Err(SysError::Unsupported),
+        }
+    })?;
+    galfs::sync();
+    Ok(())
+}
+
+/// Writes galfs metadata for `name` into `out`.
+pub(crate) fn task_stat(name: &str, out: &mut [u8]) -> Result<usize, SysError> {
+    let parsed = galfs::parse_path(name)?;
+    if parsed.owner.is_none()
+        && parsed.n == 1
+        && crate::sched::ramdisk::find(parsed.comps[0]).is_some()
+    {
+        return Err(SysError::Unsupported);
+    }
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        galfs::stat(thread.fs_root, &thread.fs_tokens, name, out)
+    })
+}
+
 /// Drops one file capability belonging to the current task.
 ///
 /// Close is possession of the slot, not a READ: the index names the open

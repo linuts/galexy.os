@@ -287,8 +287,9 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
     }
     if line == b"help" {
         write_console(b"commands: help, ls, echo, cat, touch, mkdir, cd, rm,\n");
-        write_console(b"cp, mv, grant, revoke, whoami, users, useradd, userdel,\n");
-        write_console(b"login, logout, passwd, su, stats, tasks, threads, about, clear\n");
+        write_console(b"cp, mv, truncate, stat, grant, revoke, whoami, users,\n");
+        write_console(b"useradd, userdel, login, logout, passwd, su,\n");
+        write_console(b"stats, tasks, threads, about, clear\n");
         write_console(b"login [user] [pass] - omit pass for a masked Password: prompt\n");
         write_console(b"passwd [name] - masked Password: + Confirm: (no inline secret)\n");
         write_console(b"useradd <name> [pass] - omit pass for a masked Password: prompt\n");
@@ -363,6 +364,14 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
     }
     if let Some(name) = arg_of(line, b"rm") {
         rm(cwd, name);
+        return None;
+    }
+    if let Some(name) = arg_of(line, b"stat") {
+        stat_cmd(cwd, name);
+        return None;
+    }
+    if let Some(rest) = arg_of(line, b"truncate") {
+        truncate_cmd(cwd, rest);
         return None;
     }
     if line == b"whoami" {
@@ -537,6 +546,54 @@ fn rm(cwd: &Cwd, name: &[u8]) {
         return;
     };
     launch_util(cwd, b"rm", &path[..n], true);
+}
+
+fn stat_cmd(cwd: &Cwd, name: &[u8]) {
+    let name = trim(name);
+    if !path_arg_ok(name) {
+        write_console(b"stat: usage: stat <name>\n");
+        prompt(cwd);
+        return;
+    }
+    let mut path = [0u8; PATH_MAX];
+    let Some(n) = compose(cwd, name, false, &mut path) else {
+        write_console(b"stat: path too long\n");
+        prompt(cwd);
+        return;
+    };
+    launch_util(cwd, b"stat", &path[..n], false);
+}
+
+fn truncate_cmd(cwd: &Cwd, rest: &[u8]) {
+    let rest = trim(rest);
+    let Some(sp) = rest.iter().position(|b| *b == b' ') else {
+        write_console(b"truncate: usage: truncate <name> <size>\n");
+        prompt(cwd);
+        return;
+    };
+    let name = trim(&rest[..sp]);
+    let size = trim(&rest[sp + 1..]);
+    if !path_arg_ok(name) || size.is_empty() || size.contains(&b' ') {
+        write_console(b"truncate: usage: truncate <name> <size>\n");
+        prompt(cwd);
+        return;
+    }
+    let mut path = [0u8; PATH_MAX];
+    let Some(n) = compose(cwd, name, false, &mut path) else {
+        write_console(b"truncate: path too long\n");
+        prompt(cwd);
+        return;
+    };
+    let mut arg = [0u8; PATH_MAX + 32];
+    if n + 1 + size.len() > arg.len() {
+        write_console(b"truncate: args too long\n");
+        prompt(cwd);
+        return;
+    }
+    arg[..n].copy_from_slice(&path[..n]);
+    arg[n] = 0;
+    arg[n + 1..n + 1 + size.len()].copy_from_slice(size);
+    launch_util(cwd, b"truncate", &arg[..n + 1 + size.len()], false);
 }
 
 /// `grant`/`revoke` `<rights> <path> <task>`. Rights: `r`/`w`/`l`/`c`/`x`.

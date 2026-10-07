@@ -196,10 +196,17 @@ markers are absent from the raw image.
   / `grant` / `revoke` via utilities + syscalls
 - Admin operator bypass still broad (narrow in Milestone 43 leftovers)
 
+### Ops (landed)
+
+- `rename` / `truncate` / `stat` syscalls; shell `mv` / `truncate` / `stat`
+- Directory listing stays the `FILES` snapshot (`ls`); no dir `open`
+- `write` is append-only; `seek` adjusts the read cursor only
+- No hard links, symlinks, or sparse holes (truncate grow zero-fills)
+- Names: ASCII alphanumeric plus `.` `_` `-`; `.` / `..` rejected
+
 ### Remaining (Milestone 45)
 
 - Indirect blocks / larger than 4 KiB; endian-safe shared fsck defs
-- rename / truncate / stat and the rest of the ops checklist
 - Actor quotas, durable shares, sync/fsck polish
 
 ### Target storage stack (Milestone 46)
@@ -209,8 +216,10 @@ markers are absent from the raw image.
 
 ## Explicit non-goals
 
-- POSIX VFS, mount table, device nodes, symlinks (unless later planned)
+- POSIX VFS, mount table, device nodes, hard links, symlinks
 - uid/gid / mode-bit authorization as the primary model
+- Sparse files (holes); truncate grow always allocates zeros
+- Recursive delete (`rm -r` / non-empty `userdel`) — refuse instead
 - Per-file keys, secure erase, TPM seal (until explicitly scheduled)
 - Network filesystems
 - Silent migration across incompatible GALF versions
@@ -221,7 +230,7 @@ markers are absent from the raw image.
 | Milestone | Delivers |
 | --- | --- |
 | **44** | Sealed GALF (volume key + AEAD); threat model; no plaintext in image |
-| **45** | Capacity & block store (v8); ops/fsck/quotas remain |
+| **45** | Capacity, block store, rename/truncate/stat; fsck/quotas remain |
 | **46** | Storage stack polish for demos / review |
 
 Until 45 lands, demo limits above are the shipped contract. New code

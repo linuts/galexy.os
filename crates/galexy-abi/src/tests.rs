@@ -93,6 +93,12 @@ fn reserved_caps_have_permanent_indexes() {
     assert!(matches!(SYSCALLS[14], Syscall::Give));
     assert!(matches!(SYSCALLS[15], Syscall::Seek));
     assert!(matches!(SYSCALLS[16], Syscall::User));
+    assert!(matches!(SYSCALLS[17], Syscall::Rename));
+    assert!(matches!(SYSCALLS[18], Syscall::Truncate));
+    assert!(matches!(SYSCALLS[19], Syscall::Stat));
+    assert_eq!(STAT_LEN, 48);
+    assert_eq!(STAT_FILE, 1);
+    assert_eq!(STAT_DIR, 2);
     assert_eq!(TOKEN_ALL, 31);
     assert_eq!(SEEK_SET, 0);
     assert_eq!(SEEK_CUR, 1);

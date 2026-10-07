@@ -215,6 +215,53 @@ pub fn create_replace(name: &[u8]) -> SyscallResult {
     )
 }
 
+/// Moves a galfs dirent from `old` to `new` without copying bytes.
+pub fn rename(old: &[u8], new: &[u8]) -> SyscallResult {
+    let value: u64;
+    let ok: u64;
+    // SAFETY: same syscall entry as [`grant`]; rdx/r8 carry the new path.
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") Syscall::Rename as u64 => value,
+            inlateout("rdx") new.as_ptr() as u64 => ok,
+            in("rdi") old.as_ptr() as u64,
+            in("rsi") old.len() as u64,
+            in("r8") new.len() as u64,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    SyscallResult { ok: ok != 0, value }
+}
+
+/// Sets the length of an open galfs file. Requires WRITE on `cap`.
+pub fn truncate(cap: Cap, size: u64) -> SyscallResult {
+    syscall(Syscall::Truncate as u64, cap.bits(), size, 0)
+}
+
+/// Writes galfs metadata for `path` into `buf` (at least [`galexy_abi::STAT_LEN`]).
+pub fn stat(path: &[u8], buf: &mut [u8]) -> SyscallResult {
+    let value: u64;
+    let ok: u64;
+    // SAFETY: same syscall entry as [`rename`]; rdx/r8 are the out buffer.
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") Syscall::Stat as u64 => value,
+            inlateout("rdx") buf.as_mut_ptr() as u64 => ok,
+            in("rdi") path.as_ptr() as u64,
+            in("rsi") path.len() as u64,
+            in("r8") buf.len() as u64,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    SyscallResult { ok: ok != 0, value }
+}
+
 /// Writes bytes to a capability (a scratch file, or the console).
 pub fn write(cap: Cap, bytes: &[u8]) -> SyscallResult {
     syscall(
