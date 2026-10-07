@@ -92,6 +92,26 @@ when tasks run, sleep, and block.
   callers in the **same PR**, marked experimental until Milestone 58
   freezes them.
 
+## Compiler (gxc)
+
+Rules for Phase 8 (Milestones **59–61**). Full plan: `docs/COMPILER.md`.
+Host `rustc` remains how real programs (`shell`, utils) are built.
+
+- **Subset, not rustc.** Document accepted syntax; reject the rest. Never
+  claim Rust/cargo compatibility for `gxc` output.
+- **Reuse the ABI.** Emit ELFs the existing loader accepts
+  (`USER_IMAGE_BASE`, W^X, `_start` / Write / Exit). Do not invent a
+  second userspace contract.
+- **Hello is the gate.** New language features need a milestone checkbox;
+  do not grow the subset to compile `shell` in the same breath as hello.
+- **Host first.** `gxc` lands as a Linux host tool; on-OS compile is
+  Milestone 62 only after 59–61 are boring.
+- **License-aware reuse.** Prefer MIT/Apache (Cranelift, rustc-lite
+  ideas, `object` / `iced-x86`). Vendored slices get attribution;
+  evaluate before copying large trees.
+- **Keep rustc `hello` green.** gxc demos use a distinct ramdisk name.
+
+
 ## Process model and init
 
 Clean-slate rules for Milestones **47** and **53–55**. Full plan:

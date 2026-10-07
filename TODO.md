@@ -5,9 +5,10 @@ Tracking document for concrete work items. Big-picture direction lives in
 
 Shipped through Milestone 42 (password auth + login screen). **Next
 focus:** Phase — Review readiness (Milestones **43–52**), then Phase 6 —
-process Caps / init / seats (**53–55**), then Phase 7 — scheduling
-complete (**56–58**). Plans: `docs/PROCESS.md` (process),
-`docs/SCHEDULING.md` (sched). Style: `docs/STYLE.md`.
+process Caps / init / seats (**53–55**). Parallel tracks after that:
+Phase 7 — scheduling complete (**56–58**, `docs/SCHEDULING.md`) and
+Phase 8 — mini Rust compiler (**59–61**, `docs/COMPILER.md`). Style:
+`docs/STYLE.md`.
 
 ## Milestone 1 — Boot skeleton ✅
 
@@ -1852,6 +1853,72 @@ Write down what the scheduler *is*, so review does not invent CFS.
 - [ ] Cooperative `run()` sweep fairness nits stay waived unless a bug
       shows up (same as M48 note)
 
+## Phase 8 — Mini Rust compiler (hello world)
+
+Goal: host tool `gxc` compiles a **tiny Rust subset** to a static ELF
+the existing Galexy loader runs — hello through the console Cap. Not
+full rustc. **Plan: `docs/COMPILER.md`.** Reuse `galexy-abi` /
+`galexy-rt` / loader / `hello` tests; Cranelift or hand x64 +
+`object`/`iced-x86` for emit; study rustc-lite for subset+Cranelift
+shape (MIT/Apache). Direction: `docs/ROADMAP.md` Phase 8.
+
+## Milestone 59 — Language slice + frontend
+
+Freeze what “hello-shaped Rust” means before codegen.
+
+- [ ] **`docs/COMPILER.md` language table** checked against a single
+      example `hello.gxr` (byte string + `main -> i32` + `write_console`)
+- [ ] **`crates/gxc`**: library + `gxc` bin scaffold in the workspace
+      (host `std` OK)
+- [ ] **Lex / parse / name-resolve** for gxr v0; reject everything else
+      with a clear error (no silent ignore)
+- [ ] **Type check**: `i32`, byte-string literals, known prelude calls
+      only
+- [ ] **Host unit tests**: parse+check golden files (pass + fail cases)
+- [ ] Docs: “Rust subset for Galexy” banner; no rustc-compatibility claim
+- [ ] Decision recorded: Cranelift vs hand x64 for Milestone 60 (hello
+      is small enough that either works; prefer reuse if deps stay light)
+
+## Milestone 60 — Codegen + ELF emit
+
+Produce something the loader already accepts.
+
+- [ ] **Prelude**: `_start` → `main` → `exit`; `write_console` via
+      `syscall` Write + console Cap bits from `galexy-abi` (inline or
+      tiny `gxc-prelude` object — not a full `galexy-rt` rlib link)
+- [ ] **Codegen**: x86_64 SysV for the v0 subset (Cranelift **or** hand
+      encoder; document the choice)
+- [ ] **ELF64 ET_EXEC** at `USER_IMAGE_BASE`, non-PIE, W^X `PT_LOAD`s
+      (RX text, R rodata); no external `ld` required if using `object`
+- [ ] **Host check**: `readelf`/`llvm-objdump` (or a small Rust probe)
+      asserts base, entry, no W|X
+- [ ] **Loader dry-run**: feed the ELF through the same validation the
+      kernel uses where practical (shared helper or `test-`-style boot)
+
+## Milestone 61 — Hello via gxc
+
+End-to-end proof without regressing rustc-built programs.
+
+- [ ] **`hello.gxr`** (or `hello-gxc.gxr`) in-tree; `gxc` builds the ELF
+      in `build.rs` / runner packing
+- [ ] Ramdisk name distinct from rustc `hello` (e.g. `hello-gxc`)
+- [ ] QEMU marker: program text on serial + clean exit (mirror
+      `test-realprogram` / shell launch path)
+- [ ] rustc-built `hello` suite cases stay green
+- [ ] README one-liner: how to run `gxc` hello; pointer to COMPILER.md
+- [ ] THIRD_PARTY / attribution note if any cranelift/rustc-lite slice
+      was vendored
+
+## Milestone 62 — On-OS compile (follow-on)
+
+Only after 59–61 are boring.
+
+- [ ] **no_std `gxc` core** (or ring-3 host with `alloc`) builds on Galexy
+- [ ] Read `.gxr` from galfs / scratch; write ELF; `spawn` it
+- [ ] Cranelift `no_std` path evaluated (upstream or rustc-lite forks) —
+      waive to hand x64 if weight is wrong
+- [ ] Explicit non-goal until then: compiling `shell` on-OS
+
 ---
 
 ## Known limitations / follow-ups
@@ -1921,3 +1988,7 @@ items stay here with rationale.
       (Phase 7)
 - [ ] Block & wake — **Milestone 57**
 - [ ] Scheduler policy freeze — **Milestone 58**
+- [ ] Mini Rust compiler frontend (gxr) — **Milestone 59** (Phase 8)
+- [ ] gxc codegen + ELF emit — **Milestone 60**
+- [ ] Hello via gxc in QEMU — **Milestone 61**
+- [ ] On-OS gxc (follow-on) — **Milestone 62**
