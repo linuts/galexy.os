@@ -117,6 +117,8 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(SPAWN_GRANT_QUERY, 1);
     assert_eq!(SPAWN_WAIT, 2);
     assert_eq!(SPAWN_INHERIT, 4);
+    assert_eq!(SPAWN_NAME_MAX, 64);
+    assert_eq!(SPAWN_ARG_MAX, 256);
     assert_eq!(STAT_LEN, 48);
     assert_eq!(USER_TOKENS, 8);
     assert_eq!(STAT_FILE, 1);

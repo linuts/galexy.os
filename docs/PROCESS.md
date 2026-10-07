@@ -85,10 +85,12 @@ abi explicitly says otherwise.
 
 1. Every task has a parent (kernel or another task).
 2. Parent normally holds the authoritative wait Cap from `spawn`.
-3. If the parent exits first, the kernel **transfers** wait/control Caps
-   (or equivalent rights) to **init**.
+3. If the parent exits first **today**: children are reparented to the
+   kernel (`parent_slot = 0`) and the parent's process Caps are dropped
+   with the parent. Milestone **53** upgrades this to **transfer**
+   wait/control Caps to **init**.
 4. Init Cap-waits / reaps; restart policy is userspace (Milestone 53–54).
-5. Zombies exist until waited; the table bound is the ceiling.
+5. Zombies exist until Cap-wait or Cap drop; the table bound is the ceiling.
 
 Init is distinguished by **role** (first ring-3 task / orphan root), not
 by a magic “PID 1” in the public ABI.

@@ -650,6 +650,16 @@ pub fn reap() {
                     threads[i].name()
                 );
             }
+            // Orphans: children that named this slot as parent become
+            // kernel roots (`parent_slot = 0`). Caps on those children die
+            // with this task — Milestone 53 will transfer wait Caps to init
+            // instead of dropping them.
+            let dead_slot = (i + 1) as u8;
+            for j in 0..n {
+                if threads[j].parent_slot == dead_slot {
+                    threads[j].parent_slot = 0;
+                }
+            }
             // File/process caps die with the task. Bump gen so foreign Caps fail.
             threads[i].files = [None; MAX_OPEN_FILES];
             threads[i].procs = [None; MAX_PROC_CAPS];
@@ -1278,6 +1288,21 @@ pub fn is_name_running(name: &str) -> bool {
             .lock()
             .iter()
             .any(|t| t.state.load(Ordering::Relaxed) == STATE_RUNNING && t.name() == name)
+    })
+}
+
+/// Parent slot (1-based; `0` = kernel) for a RUNNING or WAITING task named
+/// `name`. Integration tests use this to assert orphan reparenting.
+pub fn parent_slot_of(name: &str) -> Option<u8> {
+    interrupts::without_interrupts(|| {
+        THREADS.lock().iter().find_map(|t| {
+            let state = t.state.load(Ordering::Acquire);
+            if (state == STATE_RUNNING || state == STATE_WAITING) && t.name() == name {
+                Some(t.parent_slot)
+            } else {
+                None
+            }
+        })
     })
 }
 
