@@ -50,7 +50,11 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         galfs::sync_explicit().is_err(),
         "sync must refuse a corrupt volume"
     );
-    assert!(galfs::fsck_ok(), "empty table still structurally ok");
+    // validate_table requires a live admin — an unavailable volume stays empty.
+    assert!(
+        !galfs::fsck_ok(),
+        "unavailable empty table must not look like a valid volume"
+    );
 
     println!("[test-galfs-corrupt] refused silent format");
     serial_println!("[test-galfs-corrupt] passed");
