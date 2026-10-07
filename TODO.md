@@ -3,10 +3,9 @@
 Tracking document for concrete work items. Big-picture direction lives in
 `docs/ROADMAP.md`. Check items off as they land and are verified.
 
-Shipped through Milestone 42 (password auth). **Next focus:** Phase —
-Review readiness (Milestones **43–52**) — ten milestones covering auth,
-sealed GALF, galfs, storage, kernel solidifying, shell, docs/CI, and RC.
-Style rules: `docs/STYLE.md`.
+Shipped through Milestone 42 (password auth + login screen). **Next
+focus:** Phase — Review readiness (Milestones **43–52**), then Phase 6 —
+process model / init / seats (**53–55**). Style rules: `docs/STYLE.md`.
 
 ## Milestone 1 — Boot skeleton ✅
 
