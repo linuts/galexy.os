@@ -86,13 +86,23 @@ owner-qualified components from the syscall args.
 
 ## Tokens on a task
 
-Each user task holds a small fixed table of tokens (`TOKEN_SLOTS`).
+Each user task holds a small fixed table of tokens (`TOKEN_SLOTS` = **8**).
+A full table is `NoResource`; `revoke` / `revoke_token` frees a slot.
+Same-object grants merge rights into one slot.
 
 ```text
 grant lr /Desktop notes     # list+read on Desktop → task "notes"
 grant a /eve@/ shell2       # ALL on eve's root (login card)
 revoke a /eve@/ shell2
+share lr /Desktop eve       # durable; re-applied at eve's login
+unshare lr /Desktop eve
 ```
+
+Live `grant`/`revoke` target a **task name**. Durable `share`/`unshare`
+target an **actor name** (`SHARE_SLOTS` = **32**). Both require the
+caller to already hold every right being granted/shared
+(`resolve_and_check` — confused-deputy bar). LIST-only cannot mint
+WRITE; a path without a covering card is `AccessDenied`.
 
 | Spawn kind | galfs credentials (today) |
 | --- | --- |
@@ -100,12 +110,16 @@ revoke a /eve@/ shell2
 | Bare program | Parent’s `fs_root`, **empty** tokens |
 | Pre-login seat | No loader; cannot spawn |
 
-Password `login` replaces tokens with `ALL` on the actor’s root.
-`logout` clears tokens and `fs_root`. Card-based `su` installs `ALL` on
-the target when the caller already holds that card (see `AUTH.md`).
+Password `login` replaces tokens with `ALL` on the actor’s root, then
+applies durable home shares. `logout` clears tokens and `fs_root`.
+Card-based `su` installs `ALL` on the target when the caller already
+holds that card (see `AUTH.md`).
 
 Holding a **process Cap** to a child never grants galfs rights on that
 child’s files (`PROCESS.md`).
+
+`bin/test-cards` covers token/share slot exhaustion and the
+confused-deputy share rules.
 
 ## Table limits (today)
 
@@ -262,10 +276,17 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 - Max file 32 KiB (keeps on-disk `len` as u16); host fsck marks indirect
 - `bin/test-indirect`
 
+### Card limits & confused deputy (landed)
+
+- `TOKEN_SLOTS` = 8; `SHARE_SLOTS` = 32; full table → `NoResource`
+- `share` uses the same hold-every-right check as `grant`
+- `bin/test-cards`
+
 ### Remaining (Milestone 45)
 
 - Double-indirect / lengths beyond u16
 - Optional fsck repair into a new slot; durable-share disk e2e harness
+- Path canonicalization negative tests; crash/torn-write injection
 
 ### Target storage stack (Milestone 46)
 

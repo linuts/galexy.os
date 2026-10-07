@@ -523,6 +523,20 @@ fn indirect_test_passes() {
 }
 
 #[test]
+fn cards_test_passes() {
+    let (code, serial) = boot(&image("test-cards"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-cards should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-cards] passed"),
+        "test-cards success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn galfs_disk_persists_across_reboot() {
     let (code1, serial1, img, code2, serial2) = boot_with_galfs(&image("test-galfs-disk"));
     assert_eq!(
