@@ -1,4 +1,5 @@
-//! Integration test: galfs block store (GALF v8).
+//! Integration test: galfs block store (GALF v8+; pool fill uses current
+//! [`galfs::FILE_BYTES`], including single-indirect on v11).
 //!
 //! Writes a multi-block file, fills the block pool to exhaustion, frees
 //! on remove, and proves a block can be reused.
