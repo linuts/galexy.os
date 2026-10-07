@@ -103,8 +103,9 @@ fn main() -> i32 {
 | Unknown idents / attrs / block comments | |
 | Linking `galexy-rt` as an rlib | Prelude inlined at Milestone 60 |
 
-**Codegen plan (M60):** hand-written x86_64 (`gxc::CODEGEN_BACKEND_PLAN =
-"hand-x64"`). Cranelift deferred unless the subset grows.
+**Codegen (M60 ✅):** hand-written x86_64 (`gxc::CODEGEN_BACKEND_PLAN =
+"hand-x64"`). `gxc build` emits static ELF64 (R rodata + RX text) at
+`USER_IMAGE_BASE`. Cranelift deferred unless the subset grows.
 
 Claim carefully in docs: **“Rust subset for Galexy”**, not “Rust
 compatible.”

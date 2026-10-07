@@ -9,6 +9,9 @@ publish = false
 name = "gxc"
 path = "src/main.rs"
 
+[dependencies]
+galexy-abi = { path = "../galexy-abi" }
+
 [lib]
 name = "gxc"
 path = "src/lib.rs"
