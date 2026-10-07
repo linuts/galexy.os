@@ -1658,6 +1658,16 @@ pub fn shell_is_live() -> bool {
     named_is_live("shell")
 }
 
+/// True when every F-key seat name is live (Milestone 54 boot gate).
+pub fn seats_are_live() -> bool {
+    SHELL_NAMES.iter().all(|name| named_is_live(name))
+}
+
+/// True when a user `spawn` is queued (single-slot PENDING_SPAWN).
+pub fn spawn_is_pending() -> bool {
+    interrupts::without_interrupts(|| PENDING_SPAWN.lock().armed)
+}
+
 /// Loads one interactive shell on `tty` when that name is not already live.
 fn ensure_one_shell(name: &str, tty: u8) {
     if named_is_live(name) {
