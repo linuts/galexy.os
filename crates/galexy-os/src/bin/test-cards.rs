@@ -150,7 +150,6 @@ fn share_slot_exhaustion() {
     galfs::remove_user("eve").expect("userdel eve");
     galfs::remove_as_admin("Desktop/sxx").expect("rm sxx");
     for name in &names {
-        let label = core::str::from_utf8(name).unwrap();
         let mut path = [0u8; 16];
         path[..8].copy_from_slice(b"Desktop/");
         path[8..11].copy_from_slice(name);
