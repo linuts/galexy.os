@@ -262,11 +262,11 @@ named-task forever, not “PIDs because 1970”, not POSIX. Plan:
 `docs/PROCESS.md`. Concrete checkboxes: `TODO.md` Milestones **53–55**.
 Style: `docs/STYLE.md` → Process model and init.
 
-1. **53 Init (orphan root)** — userspace init; orphan Cap transfer;
-   retire kernel `ensure_shell` policy; ordered shutdown
-2. **54 Seats & service supervision** — getty/login seats as init
-   children (init keeps supervise Caps); small restart table;
-   capability-gated operator `svc`
+1. **53 Init (orphan root)** ✅ — userspace init; orphan Cap transfer;
+   immortal init; `MAX_PROC_CAPS` 16
+2. **54 Seats & service supervision** ✅ — init spawns F-key seats and
+   Cap-wait restarts them; kernel `ensure_shell` only without init;
+   `svc` / non-seat services waived for v1
 3. **55 Sessions & job Caps (lite)** — session/job Caps; TTY foreground;
    Ctrl-C to the foreground job Cap only
 

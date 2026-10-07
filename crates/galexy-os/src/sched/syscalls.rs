@@ -1255,7 +1255,13 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
     if !file_name_ok(name) {
         return SyscallResult::err(SysError::BadValue);
     }
-    let Some(bytes) = crate::sched::ramdisk::find(name) else {
+    // Milestone 54: F-key seat names share the ramdisk `shell` ELF.
+    let elf_name = if crate::sched::is_console_shell_name(name) {
+        "shell"
+    } else {
+        name
+    };
+    let Some(bytes) = crate::sched::ramdisk::find(elf_name) else {
         return SyscallResult::err(SysError::NotFound);
     };
     if !crate::sched::loader::looks_like_elf(bytes) {

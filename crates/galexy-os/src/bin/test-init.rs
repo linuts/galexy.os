@@ -56,6 +56,23 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         "init must be marked immortal to Cap-kill"
     );
 
+    // Milestone 54: init spawns twelve seats via the single PENDING_SPAWN
+    // slot — wait until seats are up so orphan-parent's linger spawn is
+    // not rejected with NoResource.
+    let mut elapsed = 0u64;
+    loop {
+        x86_64::instructions::hlt();
+        sched::drain_spawn();
+        sched::reap();
+        if sched::seats_are_live() && !sched::spawn_is_pending() {
+            break;
+        }
+        elapsed += 1;
+        if elapsed > TICK_TIMEOUT {
+            panic!("init never finished spawning seats");
+        }
+    }
+
     assert!(sched::ramdisk::find("linger").is_some());
 
     let (region, _) = sched::spawn_user_launcher("orphan-parent", |gr| {
@@ -66,7 +83,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     });
 
     let scratch: *const Report = mm::frame_virt(region.scratch_phys).as_ptr();
-    let mut elapsed = 0u64;
+    elapsed = 0;
     // Do not reap until the report is copied — parent exit frees scratch.
     let report = loop {
         x86_64::instructions::hlt();

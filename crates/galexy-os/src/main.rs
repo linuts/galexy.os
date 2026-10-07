@@ -43,11 +43,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // `shell`. The kernel loop paints a console switch, drains launches,
     // and keeps the status bar. Without that ELF, the in-kernel line
     // editor stays the consumer of TTY 0.
-    // Milestone 53: load userspace init as orphan root when present.
-    // Seats still come from the kernel until Milestone 54.
-    let _ = sched::spawn_init();
+    // Milestone 53/54: load userspace init as orphan root. When init is
+    // present it owns seat lifecycle (no kernel ensure_shell).
+    let have_init = sched::spawn_init();
     let user_shell = sched::ramdisk::find("shell").is_some();
-    if user_shell {
+    if have_init {
+        serial_println!("[boot] seats supervised by init");
+    } else if user_shell {
         sched::spawn_all_shells();
     } else {
         serial_println!("[boot] no shell program on the ramdisk; kernel shell stays");
@@ -64,14 +66,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
         // A queued launch loads on this loop (kernel page table). The
         // in-kernel editor only consumes keys when no ring-3 shell owns them.
-        // A faulted shell is loaded again; other tasks keep running.
         // F1–F12 only record a switch; this loop paints it.
         sched::drain_spawn();
         screen::apply_tty_switch();
-        if user_shell {
+        if user_shell && !have_init {
             sched::ensure_shell();
         }
-        if !user_shell {
+        if !user_shell && !have_init {
             shell::poll();
         }
         sched::reap();
