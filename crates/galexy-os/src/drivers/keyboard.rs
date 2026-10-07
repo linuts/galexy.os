@@ -95,6 +95,17 @@ pub fn add_scancode(scancode: u8) {
             Some(DecodedKey::RawKey(key)) => {
                 if let Some(tty) = tty_index(key) {
                     PENDING.store(tty, Ordering::Release);
+                } else if let Some(seq) = arrow_csi(key) {
+                    // Arrow keys become CSI so the ring-3 shell can browse
+                    // history (ESC [ A/B) without a custom scancode ABI.
+                    let tty = (ACTIVE.load(Ordering::Relaxed) as usize).min(TTY_COUNT - 1);
+                    {
+                        let mut q = KEY_QUEUES[tty].lock();
+                        for c in seq.chars() {
+                            let _ = q.push(c);
+                        }
+                    }
+                    crate::sched::wake_keyboard_waiters(tty as u8);
                 }
             }
             None => {}
@@ -120,6 +131,17 @@ fn tty_index(key: KeyCode) -> Option<u8> {
         _ => return None,
     };
     Some(index)
+}
+
+/// CSI sequences for cursor keys (`ESC [ A` … `D`).
+fn arrow_csi(key: KeyCode) -> Option<&'static str> {
+    match key {
+        KeyCode::ArrowUp => Some("\u{1b}[A"),
+        KeyCode::ArrowDown => Some("\u{1b}[B"),
+        KeyCode::ArrowRight => Some("\u{1b}[C"),
+        KeyCode::ArrowLeft => Some("\u{1b}[D"),
+        _ => None,
+    }
 }
 
 /// TTY that should receive typed characters.

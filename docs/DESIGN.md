@@ -798,11 +798,14 @@ until the program exits (`sched::is_name_running` polled by `poll`) —
 the program's output always lands on its own line, never on an input
 line. The ring-3 shell returns its prompt when the load finishes.
 The status bar (`render_status_bar`) redraws the bottom line
-in-place once per second (uptime + per-thread tick counts + frames free)
-via `screen::draw_status_bar` — it never moves the text cursor (hijacking
-`set_pos` for the bar could leave typing on the status row so input
-vanished on the next redraw). That row is not part of the text scroll,
-and the bar is drawn without feeding the CSI parser.
+in-place once per second: TTY, uptime, heap used/size, galfs blocks,
+active tasks, free frames, then abbreviated per-thread ticks when they
+fit — via `screen::draw_status_bar`. It never moves the text cursor
+(hijacking `set_pos` for the bar could leave typing on the status row so
+input vanished on the next redraw). That row is not part of the text
+scroll, and the bar is drawn without feeding the CSI parser. Arrow keys
+arrive as CSI (`ESC [ A`…`D`) on the keyboard Cap so the ring-3 shell
+can browse `shell.history`.
 
 ### sched/ramdisk — "the archive" (`sched/`)
 

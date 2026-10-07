@@ -232,14 +232,34 @@ fn render_status_bar_inner() {
         return;
     };
 
-    // Build the bar text. The F-key names the console on screen.
-    let mut text = alloc::format!("F{} | ", screen::shown_tty() + 1);
-    for (name, ticks) in crate::sched::thread_stats() {
-        text.push_str(&alloc::format!("{} {} | ", name, ticks));
+    // System strip first (command-center glance), then short thread ticks
+    // if the row still has room. Truncate to screen width.
+    let ticks = crate::arch::timer_ticks();
+    let (_, heap_size) = mm::heap::stats();
+    let mut text = alloc::format!(
+        "F{} | up {}.{}s | heap {}/{}K | fs {}/{} | tasks {} | frames {}",
+        screen::shown_tty() + 1,
+        ticks / 1000,
+        (ticks / 100) % 10,
+        mm::heap::used_bytes() / 1024,
+        heap_size / 1024,
+        crate::sched::galfs::blocks_used(),
+        crate::sched::galfs::BLOCK_SLOTS,
+        crate::sched::active_tasks(),
+        mm::free_frames(),
+    );
+    for (name, thread_ticks) in crate::sched::thread_stats() {
+        let short = short_thread_name(&name);
+        let piece = alloc::format!(" | {short} {thread_ticks}");
+        if text.len() + piece.len() > cols {
+            break;
+        }
+        text.push_str(&piece);
     }
-    text.push_str(&alloc::format!("main {} | ", crate::sched::main_ticks()));
-    text.push_str(&alloc::format!("frames {}", mm::free_frames()));
-    // Truncate to screen width.
+    let main_piece = alloc::format!(" | main {}", crate::sched::main_ticks());
+    if text.len() + main_piece.len() <= cols {
+        text.push_str(&main_piece);
+    }
     if text.len() > cols {
         text.truncate(cols);
     }
@@ -248,4 +268,14 @@ fn render_status_bar_inner() {
     // `screen::draw_status_bar`. Using set_pos/out_plain here could leave
     // the input cursor on the status row so typed keys never appear above it.
     screen::draw_status_bar(BAR_BG, BAR_FG, &text);
+}
+
+/// First character of a demo thread name (`thread-a` → `a`) for a dense bar.
+fn short_thread_name(name: &str) -> &str {
+    if let Some(rest) = name.strip_prefix("thread-") {
+        if !rest.is_empty() {
+            return rest;
+        }
+    }
+    name
 }

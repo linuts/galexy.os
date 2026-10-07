@@ -1963,6 +1963,81 @@ fn shell_echo_status_typing_e2e() {
     );
 }
 
+/// Login dashboard (command center) + up-arrow history from `shell.history`.
+const COMMAND_CENTER_KEYS: &[(&str, &str)] = &[
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("a", "a"),
+    ("a", "a"),
+    ("ret", "aa\n"),
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("b", "b"),
+    ("b", "b"),
+    ("ret", "bb\n"),
+    // ArrowUp recalls the newest line onto the prompt.
+    ("up", "echo bb"),
+    ("ret", "bb\n"),
+    ("up", "echo bb"),
+    ("up", "echo aa"),
+    ("ret", "aa\n"),
+    ("c", "c"),
+    ("a", "a"),
+    ("t", "t"),
+    ("spc", " "),
+    ("s", "s"),
+    ("h", "h"),
+    ("e", "e"),
+    ("l", "l"),
+    ("l", "l"),
+    ("dot", "."),
+    ("h", "h"),
+    ("i", "i"),
+    ("s", "s"),
+    ("t", "t"),
+    ("o", "o"),
+    ("r", "r"),
+    ("y", "y"),
+    ("ret", "echo aa\n"),
+];
+
+#[test]
+fn shell_command_center_typing_e2e() {
+    let keys = with_login(COMMAND_CENTER_KEYS);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "",
+        Duration::from_millis(30),
+        Duration::from_secs(120),
+    );
+    assert_passwords_masked(&serial);
+    assert!(
+        serial.contains("command center"),
+        "login dashboard missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("Uptime"),
+        "login dashboard missing uptime; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("Galfs"),
+        "login dashboard missing galfs; serial:\n{serial}"
+    );
+    // History file persisted the recalled commands (plus passwd from with_login).
+    assert!(
+        serial.contains("echo aa\n") && serial.contains("echo bb\n"),
+        "shell.history / recall missed echo lines; serial:\n{serial}"
+    );
+}
+
 /// True end-to-end: TYPES `hello` into the running kernel through
 /// QEMU's QMP `send-key` (real PS/2 IRQs into the keyboard driver) and
 /// asserts the user program's console output on COM1 (screen+serial
