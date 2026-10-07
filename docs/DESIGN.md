@@ -584,9 +584,11 @@ blocks back to the bitmap. `cargo run` attaches a persistent
 `galfs.img`. `bin/test-galfs-disk` proves multi-block persist and
 dual-slot recover; `test-galfs-corrupt` refuses format on a both-bad
 image; `test-fsck` runs live-table consistency after mutate;
-`test-quota` covers object/byte limits. `test-scratch` / `test-rm`
-fill objects to `NoResource`; `test-blocks` fills the block pool;
-`test-ops` covers rename/truncate/stat. Shell `tokens` /
+`test-quota` covers object/byte limits. Host `galfs-fsck` (crate
+`galexy-galf`) unlocks a sealed image and reports structural issues;
+the runner checks a guest-written `galfs.img` offline. `test-scratch` /
+`test-rm` fill objects to `NoResource`; `test-blocks` fills the block
+pool; `test-ops` covers rename/truncate/stat. Shell `tokens` /
 `USER_TOKENS` lists cards. Utilities use `SPAWN_WAIT` so the prompt
 returns after `ls` / `mkdir` exit.
 Auth is password for identity (PBKDF2-HMAC-SHA256 in `galexy-crypto`,

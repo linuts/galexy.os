@@ -35,8 +35,14 @@ pub const BLOCK_SIZE: usize = 512;
 pub const DIRECT_BLOCKS: usize = 8;
 /// Bytes one file can hold (`BLOCK_SIZE * DIRECT_BLOCKS`).
 pub const FILE_BYTES: usize = BLOCK_SIZE * DIRECT_BLOCKS;
-/// Shared block pool capacity (Milestone 45 / GALF v8).
+/// Shared block pool capacity (Milestone 45 / GALF v8+).
 pub const BLOCK_SLOTS: usize = 256;
+// Host fsck (`galexy-galf`) must stay byte-identical — STYLE: no forked magic.
+const _: () = assert!(OBJECT_SLOTS == galexy_galf::OBJECT_SLOTS);
+const _: () = assert!(ACTOR_SLOTS == galexy_galf::ACTOR_SLOTS);
+const _: () = assert!(BLOCK_SIZE == galexy_galf::BLOCK_SIZE);
+const _: () = assert!(DIRECT_BLOCKS == galexy_galf::DIRECT_BLOCKS);
+const _: () = assert!(BLOCK_SLOTS == galexy_galf::BLOCK_SLOTS);
 /// Tokens one task may hold.
 pub const TOKEN_SLOTS: usize = 8;
 /// Default object quota for a new non-admin actor (root + Desktop count).
@@ -249,6 +255,14 @@ const DISK_HEADER: usize = 128;
 /// used(1) + name_len(1) + name(32) + root(2) + salt(8) + hash(16)
 /// + max_objects(2) + max_bytes(4) = 66.
 const ACTOR_ON_DISK: usize = 66;
+const _: () = assert!(DISK_MAGIC[0] == galexy_galf::DISK_MAGIC[0]);
+const _: () = assert!(DISK_MAGIC[1] == galexy_galf::DISK_MAGIC[1]);
+const _: () = assert!(DISK_MAGIC[2] == galexy_galf::DISK_MAGIC[2]);
+const _: () = assert!(DISK_MAGIC[3] == galexy_galf::DISK_MAGIC[3]);
+const _: () = assert!(DISK_VERSION == galexy_galf::DISK_VERSION);
+const _: () = assert!(DISK_SECTORS == galexy_galf::DISK_SECTORS);
+const _: () = assert!(ACTOR_ON_DISK == galexy_galf::ACTOR_ON_DISK);
+const _: () = assert!(DISK_HEADER == galexy_galf::DISK_HEADER);
 /// kind+actor+name_len+pad + parent+len + name + direct block indexes.
 const OBJECT_ON_DISK: usize = 8 + NAME_CAP + DIRECT_BLOCKS * 2; // 88
 const PAYLOAD_LEN: usize = ACTOR_ON_DISK * ACTOR_SLOTS

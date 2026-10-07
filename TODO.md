@@ -1192,8 +1192,9 @@ GALF **v9**: 32 actors / 128 objects / 256×512 block pool / 8 directs
       `test-blocks` fill to exhaustion and reuse after remove
 - [x] **Free-block bitmap**: in-image bitmap; validate_table rejects
       leaks/duplicates (host fsck tool still open)
-- [ ] **Endian / packed structs**: explicit little-endian on disk;
-      `zerocopy`/`bytemuck`-style or manual to_le; host fsck shares defs
+- [x] **Shared on-disk defs**: `galexy-galf` holds layout constants +
+      decode/check; kernel asserts matching magic/version/sizes (explicit
+      little-endian encode already); fuller `zerocopy` share still open
 - [x] Suite growth: object + block capacity under QEMU; fragmentation
       smoke still light (no indirect yet)
 
@@ -1233,8 +1234,10 @@ Dual-slot CRC is a start; make failure modes explicit and operable.
 - [x] **Live `fsck` smoke**: `bin/test-fsck` runs `validate_table` after
       create / multi-block write / truncate / remove (host offline fsck
       tool still open)
-- [ ] **Host `fsck` tool**: walk a GALF image on the host, report orphans /
-      bad parents / leaked blocks; optional repair into a new slot
+- [x] **Host `fsck` tool**: `crates/galexy-galf` shared layout + unlock;
+      `galfs-fsck` CLI reports orphans / bad parents / leaked blocks /
+      both-corrupt (repair-into-new-slot still open); runner checks a
+      guest-written image
 - [x] **Corrupt-slot recovery**: runner breaks the newest slot's AEAD tag;
       verify boot recovers from the older sibling
 - [ ] **Crash injection**: runner helper that kills QEMU mid-mutate;

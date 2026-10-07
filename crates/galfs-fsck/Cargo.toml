@@ -1,0 +1,12 @@
+[package]
+name = "galfs-fsck"
+version = "0.1.0"
+edition = "2021"
+description = "Host offline checker for sealed GALF dual-slot images"
+
+[[bin]]
+name = "galfs-fsck"
+path = "src/main.rs"
+
+[dependencies]
+galexy-galf = { path = "../galexy-galf" }
