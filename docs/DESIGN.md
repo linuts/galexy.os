@@ -502,9 +502,11 @@ printable-ASCII staging; screen output **+ serial mirror** — console =
 screen + COM1, which is what makes userland output observable headless);
 `cap_info` echoes handles (dispatch proving ground). `open`/`read`/`close`
 are ramdisk files as capabilities (Milestone 20): each user task has a
-fixed table of 8 opens (no allocation on the IF=0 syscall path), indexes
-from `FILE_CAP_BASE` (3), authoritative grant intersected with the
-handle snapshot. `read` copies the next bytes of an open file
+fixed table of **8** opens (`MAX_OPEN_FILES` — kept small on purpose so
+`open` never heap-allocates on the IF=0 syscall path; a grow would force
+a shootdown ack from every CPU). Indexes from `FILE_CAP_BASE` (3),
+authoritative grant intersected with the handle snapshot. Raising the
+cap is a later change with a non-blocking allocation story. `read` copies the next bytes of an open file
 (short-read at 1 KiB, 0 at EOF);
 `close` drops the slot. `create(name, len, flags)` (syscall 9) puts a
 path in a fixed galfs table (128 objects, 32 actors with one root each,

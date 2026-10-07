@@ -145,6 +145,7 @@ Empty files cost an inode only; bytes live in direct/indirect blocks.
 | Block pool | 256 blocks |
 | Default user quota | 16 objects / 16 KiB |
 | Tokens per task | 8 |
+| Open files per task | 8 (IF=0: no heap on `open`) |
 | Path depth | 8 components |
 | Name length | 64 (object) / 32 (actor) |
 | Sectors per dual-slot image | 288 |
@@ -304,11 +305,22 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 - Guest loads the older sibling and logs `(recovered from bad sibling)`
 - Host fsck still accepts the intact sibling
 
+### Open-file budget (landed)
+
+- **8** opens per task by design (`MAX_OPEN_FILES`); IF=0 syscall path
+  must not allocate. Documented; raise needs a growth plan.
+
+### Idempotent mutate after recover (landed)
+
+- `bin/test-galfs-idempotent` + `boot_with_galfs_recover`
+- Duplicate create → `Unsupported`; remove+recreate advances generation
+
 ### Remaining (Milestone 45)
 
 - Double-indirect / lengths beyond u16
 - Optional fsck repair into a new slot
 - Crash injection (kill QEMU mid-mutate)
+- ATA error surfacing (no panic on I/O failure where possible)
 
 ### Target storage stack (Milestone 46)
 
