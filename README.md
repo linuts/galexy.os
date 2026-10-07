@@ -58,12 +58,17 @@ Login as: admin
 Password: *****
 ```
 
-Fresh format password is **`admin`** / **`admin`**. After login the
-prompt is `admin@galexy> `.
+Fresh format password is **`admin`** / **`admin`**. After login a
+fastfetch-style **command center** dashboard prints (OS / TTY / user /
+uptime / heap / galfs / tasks), then the prompt is `admin@galexy> `.
+The bottom status bar keeps a live strip (uptime, heap, galfs, tasks,
+frames). Up/down arrows recall `shell.history`.
 
 | Keys / command | What it does |
 | --- | --- |
 | F1–F12 | Switch consoles (each seat has its own login) |
+| ↑ / ↓ | Command history (`shell.history`) |
+| `fetch` | Re-show the login dashboard |
 | `help` | Commands |
 | `ls` / `echo hi` / `mkdir box` | Files under your tree |
 | `whoami` / `users` / `useradd` | Identity |

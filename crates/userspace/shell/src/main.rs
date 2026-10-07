@@ -1,17 +1,18 @@
-//! The interactive shell: a ring-3 program.
+//! The interactive shell: ring-3 command center.
 //!
-//! Keys arrive through the keyboard capability. Utilities spawn with
-//! `SPAWN_INHERIT`, then [`galexy_rt::wait`] on the child Cap so the
-//! prompt returns after they exit; a bare program name returns once the
-//! load finishes (Cap dropped) and keeps running.
+//! Keys arrive through the keyboard capability (arrow keys as CSI).
+//! Utilities spawn with `SPAWN_INHERIT`, then [`galexy_rt::wait`] on the
+//! child Cap so the prompt returns after they exit; a bare program name
+//! returns once the load finishes (Cap dropped) and keeps running.
 //! `echo`, `cat`, `touch`, `mkdir`, `rm`, and `ls` are those utilities.
 //! The kernel keeps the status bar and the screen, and loads this shell
 //! again if it faults. The current directory lives here and starts over
 //! at `/` after a restart. Archive names stay at `/`. A path may begin
 //! with `/`, and the first component may be `owner@name` (`/dan@Desktop`).
-//! Boot shows a login screen (`Galexy.OS v… (ttyN)`). After login the
-//! prompt is `user@galexy>` (with `:/path` when cwd is not `/`). `logout`
-//! returns to the login screen.
+//! Boot shows a login screen (`Galexy.OS v… (ttyN)`). After login a
+//! fastfetch-style dashboard prints, then the prompt is `user@galexy>`
+//! (with `:/path` when cwd is not `/`). Up/down arrows recall lines from
+//! the per-user galfs file `shell.history`. `logout` returns to login.
 
 #![no_std]
 #![no_main]
@@ -20,10 +21,10 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
-    arg, close, entry, files_cap, grant, keyboard_cap, read, reboot, revoke, shutdown, spawn_with,
-    share, stats_cap, sync, tasks_cap, threads_cap, unshare, user, user_login, user_logout,
-    user_name, user_name_pass, user_passwd, user_quota, user_setquota, wait, write_console,
-    yield_now,
+    arg, close, create, create_replace, entry, files_cap, grant, keyboard_cap, open, read, reboot,
+    revoke, shutdown, spawn_with, share, stats_cap, sync, tasks_cap, threads_cap, unshare, user,
+    user_login, user_logout, user_name, user_name_pass, user_passwd, user_quota, user_setquota,
+    wait, write, write_console, yield_now,
 };
 
 /// Exit status of the last Cap-waited utility (or spawn failure).
@@ -35,6 +36,9 @@ const LINE_MAX: usize = 80;
 const PATH_MAX: usize = 64;
 const USER_MAX: usize = 16;
 const PASS_MAX: usize = 64;
+/// Kept command lines in RAM and in `shell.history`.
+const HIST_MAX: usize = 32;
+const HIST_FILE: &[u8] = b"shell.history";
 /// Format-time admin password; seats that still use it must `passwd` first.
 const ADMIN_DEFAULT_PASS: &[u8] = b"admin";
 
@@ -43,9 +47,22 @@ struct Cwd {
     len: usize,
 }
 
+struct History {
+    lines: [[u8; LINE_MAX]; HIST_MAX],
+    lens: [usize; HIST_MAX],
+    count: usize,
+}
+
 enum ReplEnd {
     Logout,
     Die(i32),
+}
+
+/// ESC / CSI parser while editing a line (arrow keys → history).
+enum KeyParse {
+    Normal,
+    Esc,
+    Csi,
 }
 
 fn main() -> i32 {
@@ -63,13 +80,16 @@ fn main() -> i32 {
                 Some(change) => {
                     must_change = change;
                     cwd.len = 0;
+                    show_dashboard(tty);
                     if must_change {
                         write_console(b"passwd: change the default password\n");
                     }
                 }
             }
         }
-        match repl(kbd, &mut cwd, &mut must_change) {
+        let mut history = History::new();
+        history.load();
+        match repl(kbd, &mut cwd, &mut must_change, &mut history) {
             ReplEnd::Logout => {
                 must_change = false;
                 continue;
@@ -162,6 +182,173 @@ fn write_tty_digits(tty: u8) {
     }
 }
 
+impl History {
+    fn new() -> Self {
+        Self {
+            lines: [[0; LINE_MAX]; HIST_MAX],
+            lens: [0; HIST_MAX],
+            count: 0,
+        }
+    }
+
+    fn get(&self, i: usize) -> Option<&[u8]> {
+        if i < self.count {
+            Some(&self.lines[i][..self.lens[i]])
+        } else {
+            None
+        }
+    }
+
+    /// Append a non-empty line; skip if it matches the newest entry.
+    fn push(&mut self, line: &[u8]) {
+        let line = trim(line);
+        if line.is_empty() || line.len() > LINE_MAX {
+            return;
+        }
+        if self.count > 0 {
+            let last = self.count - 1;
+            if self.lens[last] == line.len() && &self.lines[last][..line.len()] == line {
+                return;
+            }
+        }
+        if self.count == HIST_MAX {
+            for i in 1..HIST_MAX {
+                self.lines[i - 1] = self.lines[i];
+                self.lens[i - 1] = self.lens[i];
+            }
+            self.count = HIST_MAX - 1;
+        }
+        let i = self.count;
+        self.lines[i][..line.len()].copy_from_slice(line);
+        self.lens[i] = line.len();
+        self.count += 1;
+        self.save();
+    }
+
+    fn load(&mut self) {
+        let opened = open(HIST_FILE);
+        if !opened.ok {
+            return;
+        }
+        let cap = Cap::from_bits(opened.value);
+        let mut buf = [0u8; HIST_MAX * (LINE_MAX + 1)];
+        let mut fill = 0usize;
+        loop {
+            if fill >= buf.len() {
+                break;
+            }
+            let got = read(cap, &mut buf[fill..]);
+            if !got.ok || got.value == 0 {
+                break;
+            }
+            fill += got.value as usize;
+        }
+        let _ = close(cap);
+        let mut start = 0usize;
+        while start < fill && self.count < HIST_MAX {
+            let rest = &buf[start..fill];
+            let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());
+            let line = trim(&rest[..end]);
+            if !line.is_empty() && line.len() <= LINE_MAX {
+                let i = self.count;
+                self.lines[i][..line.len()].copy_from_slice(line);
+                self.lens[i] = line.len();
+                self.count += 1;
+            }
+            start += end + 1;
+            if end == rest.len() {
+                break;
+            }
+        }
+    }
+
+    fn save(&self) {
+        let created = create_replace(HIST_FILE);
+        let bits = if created.ok {
+            created.value
+        } else {
+            let made = create(HIST_FILE);
+            if !made.ok {
+                return;
+            }
+            made.value
+        };
+        let cap = Cap::from_bits(bits);
+        for i in 0..self.count {
+            let _ = write(cap, &self.lines[i][..self.lens[i]]);
+            let _ = write(cap, b"\n");
+        }
+        let _ = close(cap);
+    }
+}
+
+/// Fastfetch-style system glance after login (also `fetch` / `dashboard`).
+fn show_dashboard(tty: u8) {
+    write_console(&[0x0c]);
+    write_console(b"Galexy.OS v");
+    write_console(galexy_abi::OS_VERSION.as_bytes());
+    write_console(b"\n");
+    write_console(b"================================\n");
+    write_console(b"command center\n\n");
+
+    write_console(b"OS       Galexy.OS ");
+    write_console(galexy_abi::OS_VERSION.as_bytes());
+    write_console(b"\n");
+    write_console(b"Host     galexy\n");
+    write_console(b"TTY      tty");
+    write_tty_digits(tty);
+    write_console(b"\n");
+
+    write_console(b"User     ");
+    let mut name = [0u8; USER_MAX];
+    let got = user(&mut name, galexy_abi::USER_WHOAMI);
+    if got.ok && got.value > 0 {
+        write_console(&name[..(got.value as usize).min(USER_MAX)]);
+    } else {
+        write_console(b"?");
+    }
+    write_console(b"\n");
+
+    // Relabel the query Cap snapshots into a dense glance.
+    let mut buf = [0u8; 1024];
+    let stats = read(stats_cap(), &mut buf);
+    if stats.ok && stats.value > 0 {
+        let n = (stats.value as usize).min(buf.len());
+        for_stat_line(&buf[..n], b"uptime:", b"Uptime   ");
+        for_stat_line(&buf[..n], b"frames free:", b"Frames   ");
+        for_stat_line(&buf[..n], b"heap:", b"Heap     ");
+        for_stat_line(&buf[..n], b"galfs:", b"Galfs    ");
+    }
+
+    let tasks = read(tasks_cap(), &mut buf);
+    if tasks.ok && tasks.value > 0 {
+        let n = (tasks.value as usize).min(buf.len());
+        for_stat_line(&buf[..n], b"cooperative tasks:", b"Tasks    ");
+    }
+
+    write_console(b"\nlive strip: status bar (bottom)  |  history: up/down\n\n");
+}
+
+fn for_stat_line(blob: &[u8], prefix: &[u8], label: &[u8]) {
+    let mut i = 0usize;
+    while i < blob.len() {
+        let rest = &blob[i..];
+        let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());
+        let line = &rest[..end];
+        if line.starts_with(prefix) {
+            write_console(label);
+            let val = trim(&line[prefix.len()..]);
+            write_console(val);
+            write_console(b"\n");
+            return;
+        }
+        i += end + 1;
+        if end == rest.len() {
+            break;
+        }
+    }
+}
+
 /// Reads a line. When `secret`, echoes `*` (never cleartext) so the COM1
 /// mirror of `write_console` cannot leak the password.
 fn read_line(kbd: Cap, buf: &mut [u8], secret: bool) -> LineRead {
@@ -224,9 +411,14 @@ fn read_line(kbd: Cap, buf: &mut [u8], secret: bool) -> LineRead {
     }
 }
 
-fn repl(kbd: Cap, cwd: &mut Cwd, must_change: &mut bool) -> ReplEnd {
+fn repl(kbd: Cap, cwd: &mut Cwd, must_change: &mut bool, history: &mut History) -> ReplEnd {
     let mut line = [0u8; LINE_MAX];
     let mut len = 0usize;
+    let mut draft = [0u8; LINE_MAX];
+    let mut draft_len = 0usize;
+    // Index into history while browsing; `None` means the draft line.
+    let mut hist_idx: Option<usize> = None;
+    let mut parse = KeyParse::Normal;
     prompt(cwd);
     loop {
         let mut buf = [0u8; 8];
@@ -241,28 +433,134 @@ fn repl(kbd: Cap, cwd: &mut Cwd, must_change: &mut bool) -> ReplEnd {
         }
         let n = got.value as usize;
         for &byte in &buf[..n.min(buf.len())] {
-            match byte {
-                b'\n' | b'\r' => {
-                    write_console(b"\n");
-                    if let Some(end) = dispatch(kbd, trim(&line[..len]), cwd, must_change) {
-                        return end;
+            match parse {
+                KeyParse::Normal => match byte {
+                    b'\n' | b'\r' => {
+                        write_console(b"\n");
+                        let cmd = trim(&line[..len]);
+                        history.push(cmd);
+                        hist_idx = None;
+                        draft_len = 0;
+                        if let Some(end) = dispatch(kbd, cmd, cwd, must_change, history) {
+                            return end;
+                        }
+                        len = 0;
                     }
-                    len = 0;
+                    0x1b => parse = KeyParse::Esc,
+                    0x08 => {
+                        if len > 0 {
+                            len -= 1;
+                            write_console(&[0x08, b' ', 0x08]);
+                            if hist_idx.is_some() {
+                                hist_idx = None;
+                                draft[..len].copy_from_slice(&line[..len]);
+                                draft_len = len;
+                            }
+                        }
+                    }
+                    b if (b.is_ascii_graphic() || b == b' ') && len < LINE_MAX => {
+                        if hist_idx.is_some() {
+                            hist_idx = None;
+                        }
+                        line[len] = b;
+                        len += 1;
+                        draft[..len].copy_from_slice(&line[..len]);
+                        draft_len = len;
+                        write_console(&[b]);
+                    }
+                    _ => {}
+                },
+                KeyParse::Esc => {
+                    parse = if byte == b'[' {
+                        KeyParse::Csi
+                    } else {
+                        KeyParse::Normal
+                    };
                 }
-                0x08 => {
-                    if len > 0 {
-                        len -= 1;
-                        write_console(&[0x08]);
+                KeyParse::Csi => {
+                    parse = KeyParse::Normal;
+                    match byte {
+                        b'A' => history_up(
+                            history,
+                            &mut line,
+                            &mut len,
+                            &mut draft,
+                            &mut draft_len,
+                            &mut hist_idx,
+                        ),
+                        b'B' => history_down(
+                            history,
+                            &mut line,
+                            &mut len,
+                            &mut draft,
+                            &mut draft_len,
+                            &mut hist_idx,
+                        ),
+                        _ => {}
                     }
                 }
-                b if (b.is_ascii_graphic() || b == b' ') && len < LINE_MAX => {
-                    line[len] = b;
-                    len += 1;
-                    write_console(&[b]);
-                }
-                _ => {}
             }
         }
+    }
+}
+
+fn history_up(
+    history: &History,
+    line: &mut [u8; LINE_MAX],
+    len: &mut usize,
+    draft: &mut [u8; LINE_MAX],
+    draft_len: &mut usize,
+    hist_idx: &mut Option<usize>,
+) {
+    if history.count == 0 {
+        return;
+    }
+    let next = match *hist_idx {
+        None => {
+            draft[..*len].copy_from_slice(&line[..*len]);
+            *draft_len = *len;
+            history.count - 1
+        }
+        Some(0) => return,
+        Some(i) => i - 1,
+    };
+    if let Some(text) = history.get(next) {
+        replace_input_line(line, len, text);
+        *hist_idx = Some(next);
+    }
+}
+
+fn history_down(
+    history: &History,
+    line: &mut [u8; LINE_MAX],
+    len: &mut usize,
+    draft: &mut [u8; LINE_MAX],
+    draft_len: &mut usize,
+    hist_idx: &mut Option<usize>,
+) {
+    let Some(i) = *hist_idx else {
+        return;
+    };
+    if i + 1 < history.count {
+        if let Some(text) = history.get(i + 1) {
+            replace_input_line(line, len, text);
+            *hist_idx = Some(i + 1);
+        }
+    } else {
+        replace_input_line(line, len, &draft[..*draft_len]);
+        *hist_idx = None;
+    }
+}
+
+fn replace_input_line(line: &mut [u8; LINE_MAX], len: &mut usize, new: &[u8]) {
+    for _ in 0..*len {
+        write_console(&[0x08, b' ', 0x08]);
+    }
+    let n = new.len().min(LINE_MAX);
+    line[..n].copy_from_slice(&new[..n]);
+    *len = n;
+    if n > 0 {
+        write_console(&line[..n]);
     }
 }
 
@@ -271,11 +569,20 @@ fn must_change_allowed(line: &[u8]) -> bool {
     line == b"help"
         || line == b"whoami"
         || line == b"logout"
+        || line == b"fetch"
+        || line == b"dashboard"
+        || line == b"about"
         || arg_of(line, b"passwd").is_some()
 }
 
 /// `Some` ends the REPL. `None` keeps reading.
-fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Option<ReplEnd> {
+fn dispatch(
+    kbd: Cap,
+    line: &[u8],
+    cwd: &mut Cwd,
+    must_change: &mut bool,
+    _history: &mut History,
+) -> Option<ReplEnd> {
     if line.is_empty() {
         prompt(cwd);
         return None;
@@ -293,11 +600,13 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
         return None;
     }
     if line == b"help" {
-        write_console(b"commands: help, ls, echo, cat, touch, mkdir, cd, rm,\n");
+        write_console(b"commands: help, fetch, ls, echo, cat, touch, mkdir, cd, rm,\n");
         write_console(b"cp, mv, truncate, stat, grant, revoke, share, unshare,\n");
         write_console(b"whoami, users, tokens, quota, useradd, userdel,\n");
         write_console(b"login, logout, passwd, su, sync, stats, tasks, threads,\n");
         write_console(b"about, clear, echo $?\n");
+        write_console(b"fetch / dashboard - system glance (also shown after login)\n");
+        write_console(b"up/down arrows - recall shell.history (per-user galfs file)\n");
         write_console(b"login [user] [pass] - omit pass for a masked Password: prompt\n");
         write_console(b"passwd [name] - masked Password: + Confirm: (no inline secret)\n");
         write_console(b"useradd <name> [pass] - omit pass for a masked Password: prompt\n");
@@ -312,11 +621,17 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
         prompt(cwd);
         return None;
     }
+    if line == b"fetch" || line == b"dashboard" {
+        show_dashboard(tty_number());
+        prompt(cwd);
+        return None;
+    }
     if line == b"about" {
         write_console(b"Galexy.OS v");
         write_console(galexy_abi::OS_VERSION.as_bytes());
         write_console(b" - a small Rust OS\n");
-        write_console(b"this shell is a ring-3 program\n");
+        write_console(b"this shell is the ring-3 command center\n");
+        write_console(b"type fetch for the login dashboard; up/down for history\n");
         prompt(cwd);
         return None;
     }

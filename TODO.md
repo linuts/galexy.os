@@ -1519,8 +1519,9 @@ Shell is the demo UI; make it less surprising under load.
 - [ ] **Background / foreground**: optional; at least document that all
       bare launches share the console
 - [ ] **Glob** (userspace): `*` expansion against the files snapshot
-- [ ] **Line editing**: history (even one previous line), Ctrl-C
-      semantics (kill foreground child if any)
+- [x] **Line editing**: `shell.history` + up/down CSI arrows (command
+      center); Ctrl-C kills the TTY foreground job Cap (M55)
+- [ ] **Line editing (more)**: left/right cursor, Ctrl-A/E, clear-line
 - [ ] **Prompt / cwd correctness** across login, logout, su, failed cd
 - [ ] Typing e2e for pipeline + glob smoke
 
