@@ -656,6 +656,7 @@ const LOGIN_ADMIN_KEYS: &[(&str, &str)] = &[
 ];
 
 /// After boot login with the format default, change it so other commands work.
+/// `passwd` always prompts: masked Password: then Confirm:.
 const CLEAR_DEFAULT_PASSWD: &[(&str, &str)] = &[
     ("p", "p"),
     ("a", "a"),
@@ -663,15 +664,24 @@ const CLEAR_DEFAULT_PASSWD: &[(&str, &str)] = &[
     ("s", "s"),
     ("w", "w"),
     ("d", "d"),
-    ("spc", " "),
-    ("t", "t"),
-    ("e", "e"),
-    ("s", "s"),
-    ("t", "t"),
-    ("p", "p"),
-    ("a", "a"),
-    ("s", "s"),
-    ("s", "s"),
+    ("ret", "Password: "),
+    ("t", "*"),
+    ("e", "*"),
+    ("s", "*"),
+    ("t", "*"),
+    ("p", "*"),
+    ("a", "*"),
+    ("s", "*"),
+    ("s", "*"),
+    ("ret", "Confirm: "),
+    ("t", "*"),
+    ("e", "*"),
+    ("s", "*"),
+    ("t", "*"),
+    ("p", "*"),
+    ("a", "*"),
+    ("s", "*"),
+    ("s", "*"),
     ("ret", "admin@galexy> "),
 ];
 

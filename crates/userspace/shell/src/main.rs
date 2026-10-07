@@ -290,7 +290,8 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
         write_console(b"cp, mv, grant, revoke, whoami, users, useradd, userdel,\n");
         write_console(b"login, logout, passwd, su, stats, tasks, threads, about, clear\n");
         write_console(b"login [user] [pass] - omit pass for a masked Password: prompt\n");
-        write_console(b"passwd [name] [pass] / useradd <name> [pass] - same secret prompt\n");
+        write_console(b"passwd [name] - masked Password: + Confirm: (no inline secret)\n");
+        write_console(b"useradd <name> [pass] - omit pass for a masked Password: prompt\n");
         write_console(b"logout returns to the login screen; Esc/Ctrl-C cancels a prompt\n");
         write_console(b"default admin/admin must passwd before other commands\n");
         write_console(b"grant/revoke: <rights> <path> <task>  (r w l c x a=all)\n");
@@ -806,36 +807,28 @@ fn user_pass_op(
 
 fn passwd_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8], must_change: &mut bool) {
     let rest = trim(rest);
-    let mut pass_buf = [0u8; PASS_MAX];
-    let (name, pass) = if rest.is_empty() {
-        write_console(b"Password: ");
-        let pass = match read_line(kbd, &mut pass_buf, true) {
-            LineRead::Line(n) if n > 0 => &pass_buf[..n],
-            LineRead::Denied => {
-                wipe(&mut pass_buf);
-                prompt(cwd);
-                return;
-            }
-            _ => {
-                wipe(&mut pass_buf);
-                prompt(cwd);
-                return;
-            }
-        };
-        (b"" as &[u8], pass)
-    } else if let Some(sp) = rest.iter().position(|b| *b == b' ') {
-        (trim(&rest[..sp]), trim(&rest[sp + 1..]))
-    } else {
-        // Single token: own password (inline).
-        (b"" as &[u8], rest)
-    };
-    if pass.is_empty() {
-        write_console(b"usage: passwd [name] [password]\n");
-        wipe(&mut pass_buf);
+    // Never accept an inline password — always prompt + confirm masked.
+    if rest.iter().any(|b| *b == b' ') {
+        write_console(b"usage: passwd [name]\n");
         prompt(cwd);
         return;
     }
-    let result = user_passwd(name, pass);
+    let name = rest;
+    if !name.is_empty()
+        && !name
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'.' || *b == b'_' || *b == b'-')
+    {
+        write_console(b"usage: passwd [name]\n");
+        prompt(cwd);
+        return;
+    }
+    let mut pass_buf = [0u8; PASS_MAX];
+    let Some(plen) = read_secret_confirmed(kbd, &mut pass_buf) else {
+        prompt(cwd);
+        return;
+    };
+    let result = user_passwd(name, &pass_buf[..plen]);
     wipe(&mut pass_buf);
     if result.ok {
         // Changing own password (empty name) clears the default-password gate.
@@ -844,6 +837,54 @@ fn passwd_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8], must_change: &mut bool) {
         }
     }
     report_user(cwd, b"passwd", result, false);
+}
+
+/// Masked `Password:` then `Confirm:`; returns length when both match.
+fn read_secret_confirmed(kbd: Cap, out: &mut [u8]) -> Option<usize> {
+    let mut first = [0u8; PASS_MAX];
+    let mut second = [0u8; PASS_MAX];
+    write_console(b"Password: ");
+    let n1 = match read_line(kbd, &mut first, true) {
+        LineRead::Line(n) if n > 0 => n,
+        LineRead::Denied => {
+            wipe(&mut first);
+            return None;
+        }
+        _ => {
+            wipe(&mut first);
+            return None;
+        }
+    };
+    write_console(b"Confirm: ");
+    let n2 = match read_line(kbd, &mut second, true) {
+        LineRead::Line(n) if n > 0 => n,
+        LineRead::Denied => {
+            wipe(&mut first);
+            wipe(&mut second);
+            return None;
+        }
+        _ => {
+            wipe(&mut first);
+            wipe(&mut second);
+            return None;
+        }
+    };
+    if n1 != n2 || first[..n1] != second[..n2] {
+        write_console(b"passwd: passwords do not match\n");
+        wipe(&mut first);
+        wipe(&mut second);
+        return None;
+    }
+    if n1 > out.len() {
+        write_console(b"password too long\n");
+        wipe(&mut first);
+        wipe(&mut second);
+        return None;
+    }
+    out[..n1].copy_from_slice(&first[..n1]);
+    wipe(&mut first);
+    wipe(&mut second);
+    Some(n1)
 }
 
 fn report_user(cwd: &mut Cwd, label: &[u8], result: SyscallResult, reset_cwd: bool) {

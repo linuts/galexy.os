@@ -84,9 +84,11 @@ same gate is a follow-up.
 
 ```text
 useradd <name> [password]     # admin only; prompts if password omitted
-passwd [name] [password]      # admin, or self; bare `passwd` prompts
-passwd <password>             # change own password (inline)
+passwd [name]                 # always masked Password: + Confirm:
 ```
+
+`passwd` never takes an inline secret. Mismatched confirmations print
+`passwd: passwords do not match` and leave the hash unchanged.
 
 ## Access cards (tokens)
 

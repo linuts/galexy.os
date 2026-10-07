@@ -1071,8 +1071,9 @@ Passwords must not appear in the shell line, COM1 mirror, or argv.
 - [x] **Shell secret read**: `read_line(..., secret)` echoes `*`;
       Backspace works; cleartext never passed to `write_console`
 - [x] **`login` / `passwd` / `useradd`**: interactive prompts when args
-      omitted (`login eve` → `Password:`). Inline `login eve secret`
-      kept for scripts; typing e2e covers the masked prompt
+      omitted (`login eve` → `Password:`). `passwd` always prompts
+      masked `Password:` + `Confirm:` (no inline secret). Inline
+      `login eve secret` kept for scripts; typing e2e covers masks
 - [x] **Serial policy**: secret mode only writes `*` (COM1 mirrors
       `write_console` on the visible TTY — no cleartext path)
 - [x] **Abort**: Esc or Ctrl-C cancels a password prompt (`MapLettersToUnicode`)
