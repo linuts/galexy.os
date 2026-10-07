@@ -78,11 +78,37 @@ pub(crate) fn spawn_launched(
     fs: crate::sched::galfs::FsCred,
     parent_slot: u8,
 ) -> u8 {
+    spawn_launched_placed(name, bytes, grants, arg, tty, fs, parent_slot, false)
+}
+
+/// Like [`spawn_launched`], but BSP-pinned and no-steal (login seats).
+pub(crate) fn spawn_launched_seat(
+    name: &str,
+    bytes: &[u8],
+    grants: Grants,
+    arg: &[u8],
+    tty: u8,
+    fs: crate::sched::galfs::FsCred,
+    parent_slot: u8,
+) -> u8 {
+    spawn_launched_placed(name, bytes, grants, arg, tty, fs, parent_slot, true)
+}
+
+fn spawn_launched_placed(
+    name: &str,
+    bytes: &[u8],
+    grants: Grants,
+    arg: &[u8],
+    tty: u8,
+    fs: crate::sched::galfs::FsCred,
+    parent_slot: u8,
+    seat: bool,
+) -> u8 {
     spawn_program_placed(
         name,
         bytes,
-        None,
-        false,
+        if seat { Some(0) } else { None },
+        seat,
         grants,
         arg,
         tty,

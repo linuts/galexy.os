@@ -1408,6 +1408,8 @@ struct PendingSpawn {
     wait_exit: bool,
     /// Console the child inherits from the task that asked.
     tty: u8,
+    /// Milestone 54: init spawning an F-key seat (`shell`…`shell12`).
+    seat: bool,
     /// Child inherits the waiter's galfs credentials.
     fs: galfs::FsCred,
     /// 1-based slot of the parked parent.
@@ -1423,6 +1425,7 @@ static PENDING_SPAWN: Mutex<PendingSpawn> = Mutex::new(PendingSpawn {
     query: false,
     wait_exit: false,
     tty: 0,
+    seat: false,
     fs: galfs::FsCred::none(),
     waiter_slot: 0,
     armed: false,
@@ -1445,11 +1448,6 @@ pub(crate) fn task_spawn(
     if name.len() > 64 || arg.len() > ARG_MAX {
         return Err(SysError::BadValue);
     }
-    // F-key consoles own these names; a user `spawn shell` would start a
-    // second task without the keyboard grant and spam "keyboard denied".
-    if is_console_shell_name(name) {
-        return Err(SysError::Unsupported);
-    }
     let slot = current_slot();
     if slot == 0 {
         return Err(SysError::BadCap);
@@ -1460,6 +1458,18 @@ pub(crate) fn task_spawn(
             return Err(SysError::NoResource);
         }
         let mut threads = THREADS.lock();
+        {
+            let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+            if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+                return Err(SysError::BadCap);
+            }
+            // F-key console names: only init may spawn seats (Milestone 54).
+            let seat = is_console_shell_name(name);
+            if seat && !thread.is_init {
+                return Err(SysError::Unsupported);
+            }
+        }
+        let seat = is_console_shell_name(name);
         // One live task per name: two `linger`s on one TTY would fight
         // the console. Wait/kill keys are Caps, not names.
         let name_busy = threads.iter().any(|thread| {
@@ -1469,35 +1479,41 @@ pub(crate) fn task_spawn(
         if name_busy {
             return Err(SysError::NoResource);
         }
-        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let parent_tty = threads[slot - 1].tty;
+        let parent_fs = galfs::FsCred {
+            root: threads[slot - 1].fs_root,
+            tokens: threads[slot - 1].fs_tokens,
+        };
         pending.name[..name.len()].copy_from_slice(name.as_bytes());
         pending.len = name.len() as u8;
         pending.arg[..arg.len()].copy_from_slice(arg);
         pending.arg_len = arg.len() as u16;
         pending.query = query;
         pending.wait_exit = wait_exit;
-        pending.tty = thread.tty;
+        // Seat TTY: 1-based index in arg[0] (same as kernel spawn_shell_on).
+        pending.tty = if seat {
+            arg.first().copied().unwrap_or(1).saturating_sub(1).min(11)
+        } else {
+            parent_tty
+        };
+        pending.seat = seat;
         pending.waiter_slot = slot as u8;
-        // Utilities inherit the full session. Bare programs keep the root
-        // for path context but hold no access cards. `SPAWN_WAIT` still
-        // implies inherit (legacy); Cap-wait utilities pass `SPAWN_INHERIT`.
-        pending.fs = if inherit || wait_exit {
-            galfs::FsCred {
-                root: thread.fs_root,
-                tokens: thread.fs_tokens,
-            }
+        // Seats start logged out (no cards). Utilities inherit the session.
+        // Bare programs keep the root for path context but hold no cards.
+        pending.fs = if seat {
+            galfs::unauth_cred()
+        } else if inherit || wait_exit {
+            parent_fs
         } else {
             galfs::FsCred {
-                root: thread.fs_root,
+                root: parent_fs.root,
                 tokens: [galfs::Token::empty(); galfs::TOKEN_SLOTS],
             }
         };
         pending.armed = true;
         // 0 = waiting for load; drain installs Cap then either wakes or
         // sets wait_child_slot to the new child for exit wait.
+        let thread = &mut threads[slot - 1];
         thread.wait_child_slot.store(0, Ordering::Relaxed);
         thread.wait_for_exit.store(wait_exit, Ordering::Relaxed);
         thread.state.store(STATE_WAITING, Ordering::Release);
@@ -1526,12 +1542,14 @@ pub fn drain_spawn() {
         let query = pending.query;
         let wait_exit = pending.wait_exit;
         let tty = pending.tty;
+        let seat = pending.seat;
         let fs = pending.fs;
         let waiter_slot = pending.waiter_slot;
         pending.armed = false;
-        Some((len, name, arg_len, arg, query, wait_exit, tty, fs, waiter_slot))
+        Some((len, name, arg_len, arg, query, wait_exit, tty, seat, fs, waiter_slot))
     });
-    let Some((len, name_raw, arg_len, arg, query, wait_exit, tty, fs, waiter_slot)) = queued
+    let Some((len, name_raw, arg_len, arg, query, wait_exit, tty, seat, fs, waiter_slot)) =
+        queued
     else {
         return;
     };
@@ -1553,21 +1571,37 @@ pub fn drain_spawn() {
         });
         return;
     }
-    let grants = if query {
+    let grants = if seat {
+        Grants::pre_login()
+    } else if query {
         Grants::console_query()
     } else {
         Grants::console()
     };
-    let child_slot = if let Some(bytes) = ramdisk::find(name) {
-        Some(loader::spawn_launched(
-            name,
-            bytes,
-            grants,
-            &arg[..arg_len],
-            tty,
-            fs,
-            waiter_slot,
-        ))
+    // Seats share the `shell` ELF under twelve reserved names.
+    let elf_name = if seat { "shell" } else { name };
+    let child_slot = if let Some(bytes) = ramdisk::find(elf_name) {
+        Some(if seat {
+            loader::spawn_launched_seat(
+                name,
+                bytes,
+                grants,
+                &arg[..arg_len],
+                tty,
+                fs,
+                waiter_slot,
+            )
+        } else {
+            loader::spawn_launched(
+                name,
+                bytes,
+                grants,
+                &arg[..arg_len],
+                tty,
+                fs,
+                waiter_slot,
+            )
+        })
     } else {
         serial_println!("[sched] spawn '{}' missing at drain; waking waiter", name);
         None
