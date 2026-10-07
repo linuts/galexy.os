@@ -12,6 +12,7 @@ members = [
     "crates/userspace/hello",
     "crates/userspace/shell",
     "crates/userspace/util",
+    "crates/gxc",
 ]
 default-members = ["crates/runner"]
 

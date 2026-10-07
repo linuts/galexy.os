@@ -1862,22 +1862,23 @@ full rustc. **Plan: `docs/COMPILER.md`.** Reuse `galexy-abi` /
 `object`/`iced-x86` for emit; study rustc-lite for subset+Cranelift
 shape (MIT/Apache). Direction: `docs/ROADMAP.md` Phase 8.
 
-## Milestone 59 — Language slice + frontend
+## Milestone 59 — Language slice + frontend ✅
 
 Freeze what “hello-shaped Rust” means before codegen.
 
-- [ ] **`docs/COMPILER.md` language table** checked against a single
-      example `hello.gxr` (byte string + `main -> i32` + `write_console`)
-- [ ] **`crates/gxc`**: library + `gxc` bin scaffold in the workspace
+- [x] **`docs/COMPILER.md` language table** checked against
+      `crates/gxc/examples/hello.gxr` (byte string + `main -> i32` +
+      `write_console`)
+- [x] **`crates/gxc`**: library + `gxc` bin scaffold in the workspace
       (host `std` OK)
-- [ ] **Lex / parse / name-resolve** for gxr v0; reject everything else
+- [x] **Lex / parse / name-resolve** for gxr v0; reject everything else
       with a clear error (no silent ignore)
-- [ ] **Type check**: `i32`, byte-string literals, known prelude calls
+- [x] **Type check**: `i32`, byte-string literals, known prelude calls
       only
-- [ ] **Host unit tests**: parse+check golden files (pass + fail cases)
-- [ ] Docs: “Rust subset for Galexy” banner; no rustc-compatibility claim
-- [ ] Decision recorded: Cranelift vs hand x64 for Milestone 60 (hello
-      is small enough that either works; prefer reuse if deps stay light)
+- [x] **Host unit tests**: parse+check golden cases in `gxc` tests
+- [x] Docs: “Rust subset for Galexy” banner; no rustc-compatibility claim
+- [x] Decision recorded: **hand-x64** for Milestone 60
+      (`gxc::CODEGEN_BACKEND_PLAN`)
 
 ## Milestone 60 — Codegen + ELF emit
 
@@ -1988,7 +1989,7 @@ items stay here with rationale.
       (Phase 7)
 - [ ] Block & wake — **Milestone 57**
 - [ ] Scheduler policy freeze — **Milestone 58**
-- [ ] Mini Rust compiler frontend (gxr) — **Milestone 59** (Phase 8)
+- [x] Mini Rust compiler frontend (gxr) — **Milestone 59** (Phase 8)
 - [ ] gxc codegen + ELF emit — **Milestone 60**
 - [ ] Hello via gxc in QEMU — **Milestone 61**
 - [ ] On-OS gxc (follow-on) — **Milestone 62**

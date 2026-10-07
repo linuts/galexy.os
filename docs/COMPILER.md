@@ -71,32 +71,40 @@ Prefer **Apache-2.0 / MIT** dependencies. Any vendored slice gets a
 `THIRD_PARTY` note and stays behind a clear crate boundary
 (`crates/gxc/` or similar).
 
-## Language slice (gxr v0)
+## Language slice (gxr v0) — frozen (Milestone 59)
 
 Enough to express today's hello — nothing more until that works.
+Canonical example: `crates/gxc/examples/hello.gxr`.
 
 ```rust
-// hello.gxr — illustrative; exact sugar freezes in Milestone 59
+// hello.gxr — frozen gxr v0
+#![no_std]
+#![no_main]
 fn main() -> i32 {
     write_console(b"Hello from gxc!\n");
     0
 }
 ```
 
-Accepted in v0 (checklist freezes in M59):
+| Allowed | Notes |
+| --- | --- |
+| `#![no_std]` / `#![no_main]` | Optional; ignored for codegen (entry injected) |
+| `fn main() -> i32 { ... }` | Exactly one function; name must be `main` |
+| `write_console(b"...");` | Only prelude call; non-empty byte-string ≤ 4096 |
+| Byte-string escapes | `\n` `\t` `\r` `\\` `\"` `\0` |
+| Trailing `i32` literal | Return value (optional `;` before `}`); default `0` if omitted… actually required path returns explicit or defaults to 0 when body ends at `}` with only statements — today parser defaults `ret` to `0` |
+| `//` line comments | Yes |
+| Host CLI | `gxc check <file.gxr>` |
 
-- `fn` items, `main() -> i32`, integer literals, byte-string literals
-- Calls to a **fixed** runtime prelude (`write_console`, later `exit` only
-  via return-from-main)
-- `#![no_std]` / `#![no_main]` optional — `gxc` may inject entry
+| Rejected in v0 | |
+| --- | --- |
+| Other `fn` items, `let`, control flow, types besides `i32` | |
+| `std`, traits, generics, macros, `unsafe`, floats, `alloc` | |
+| Unknown idents / attrs / block comments | |
+| Linking `galexy-rt` as an rlib | Prelude inlined at Milestone 60 |
 
-Rejected until later milestones:
-
-- `std`, traits, generics, macros (beyond what `gxc` injects), `unsafe`,
-  floats, threads, `alloc`, modules, crates as dependencies
-- Linking arbitrary Rust crates (including full `galexy-rt` as rlib) —
-  v0 **inlines or ships a tiny object prelude** that performs the same
-  syscalls as `galexy-rt::{write_console,exit}`
+**Codegen plan (M60):** hand-written x86_64 (`gxc::CODEGEN_BACKEND_PLAN =
+"hand-x64"`). Cranelift deferred unless the subset grows.
 
 Claim carefully in docs: **“Rust subset for Galexy”**, not “Rust
 compatible.”
