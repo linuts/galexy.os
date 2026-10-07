@@ -29,12 +29,22 @@ pub fn init() {
     }
 }
 
-/// Called by the timer interrupt handler for every tick.
-pub fn tick() {
-    TICKS.fetch_add(1, Ordering::Relaxed);
+/// Advances the monotonic tick counter by `n` milliseconds of machine time.
+///
+/// Under tickless idle a single LAPIC one-shot may cover many ms; the IRQ
+/// path reports the armed duration here so uptime / `stats` stay honest.
+pub fn tick_by(n: u64) {
+    if n > 0 {
+        TICKS.fetch_add(n, Ordering::Relaxed);
+    }
 }
 
-/// Number of timer ticks since boot (monotonic, ~1 kHz resolution).
+/// One millisecond of machine time (legacy name for the IRQ path).
+pub fn tick() {
+    tick_by(1);
+}
+
+/// Number of timer ticks since boot (monotonic, 1 tick ≈ 1 ms).
 pub fn ticks() -> u64 {
     TICKS.load(Ordering::Relaxed)
 }

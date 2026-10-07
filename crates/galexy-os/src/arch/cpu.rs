@@ -638,9 +638,10 @@ extern "C" fn ap_main(rank: u64) -> ! {
     crate::arch::apic::arm_timer();
 
     // Per-CPU idle loop (SMP M18): reap THIS CPU's dead, sleep until the
-    // local timer; the naked timer switch rotates this CPU's tasks and
-    // returns into this main loop whenever its slot 0 is served.
+    // local one-shot deadline; the naked timer switch rotates this CPU's
+    // tasks and returns into this main loop whenever its slot 0 is served.
     loop {
+        crate::sched::arm_timer_for_load();
         x86_64::instructions::interrupts::enable_and_hlt();
         crate::sched::reap();
     }

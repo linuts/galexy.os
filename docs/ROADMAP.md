@@ -243,7 +243,8 @@ checklist). Style: `docs/STYLE.md`.
    ring-3 DS/ES reload, forge battery, soft frame reserve, enriched
    `stats` sysinfo). Init itself is Phase 6.
 6. **48 Memory, safety & concurrency** — user-map W^X + ELF W|X
-   refuse (`test-wx`); scrub + lock-order freeze remain
+   refuse (`test-wx`); stack wipe; tickless-idle LAPIC one-shots;
+   scrub + lock-order freeze remain
 7. **49 Console, audit & UX** — cursor, overflow, auth/grant audit log
 8. **50 Shell for real demos** — pipes, glob, line editing
 9. **51 Docs, tests, CI & soak** — THREAT/FS, negative suite, review-smoke,

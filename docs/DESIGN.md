@@ -312,7 +312,11 @@ Init order: GDT/TSS (per-CPU slot 0) → per-CPU GS substrate → ACPI (MADT)
   against a PIT channel-2 one-shot (~10 ms window, ratio math only — no
   wall-clock assumptions, TCG safe); EVERY CPU arms its own (`arm_timer`)
   PERIODIC on vector 32 with the SHARE-SPLIT ICR (ticks-per-ms × online
-  count) — N cores × 1/N kHz keeps the machine-wide tick rate ~1 kHz.
+  count). Timer delivery is **deadline one-shot** (not a free-running
+  1 kHz periodic): busy CPUs re-arm a preempt quantum (`online()` ms
+  share-split); idle CPUs sleep until the next whole second (status bar /
+  uptime) or an earlier device IRQ. `timer_ticks` advances by the armed
+  duration so uptime stays honest under tickless idle.
 
 ### arch/ioapic — "external interrupt routing" (arch/)
 

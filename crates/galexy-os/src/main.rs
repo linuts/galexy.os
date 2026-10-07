@@ -73,6 +73,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
         sched::reap();
         sched::run();
+        // Tickless idle: one-shot until next second (or quantum if busy).
+        sched::arm_timer_for_load();
         x86_64::instructions::hlt();
     }
 }
