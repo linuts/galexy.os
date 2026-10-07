@@ -298,11 +298,17 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 - `bin/test-share-disk` + runner `boot_with_galfs`: share survives reboot
 - Host decode sees a used share slot; plaintext file marker absent
 
+### Torn-write recovery (landed)
+
+- Host tears the newest slot mid-payload-sector (`boot_with_galfs_torn`)
+- Guest loads the older sibling and logs `(recovered from bad sibling)`
+- Host fsck still accepts the intact sibling
+
 ### Remaining (Milestone 45)
 
 - Double-indirect / lengths beyond u16
 - Optional fsck repair into a new slot
-- Crash / torn-write injection
+- Crash injection (kill QEMU mid-mutate)
 
 ### Target storage stack (Milestone 46)
 
