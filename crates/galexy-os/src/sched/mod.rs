@@ -2598,7 +2598,7 @@ pub(crate) fn task_login(name: &str, password: &[u8]) -> Result<(), SysError> {
         if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
         }
-        install_session(caller, target)?;
+        install_session(caller, target, true)?;
         Ok(())
     })
 }
@@ -2621,13 +2621,19 @@ pub(crate) fn task_logout() -> Result<(), SysError> {
 }
 
 /// Install `ALL` on `target`, durable home shares, and grants for that actor.
-fn install_session(caller: &mut Thread, target: u16) -> Result<(), SysError> {
+///
+/// `from_login` sets [`Thread::born_admin`] from the target (password
+/// identity). `su` passes `false` so switching to a non-admin actor does
+/// **not** clear born-admin — the seat can `su admin` to return (AUTH.md).
+fn install_session(caller: &mut Thread, target: u16, from_login: bool) -> Result<(), SysError> {
     caller.fs_root = target;
     caller.fs_tokens = [galfs::Token::empty(); galfs::TOKEN_SLOTS];
     galfs::push_token(&mut caller.fs_tokens, target, galfs::RIGHT_ALL)?;
     galfs::apply_shares(target, &mut caller.fs_tokens)?;
     let admin = galfs::is_admin_root(target);
-    caller.born_admin = admin;
+    if from_login {
+        caller.born_admin = admin;
+    }
     caller.grants = if admin {
         Grants::launcher()
     } else {
@@ -2793,7 +2799,7 @@ pub(crate) fn task_su(name: &str) -> Result<(), SysError> {
             return Err(SysError::AccessDenied);
         }
         let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-        install_session(caller, target)?;
+        install_session(caller, target, false)?;
         Ok(())
     })
 }

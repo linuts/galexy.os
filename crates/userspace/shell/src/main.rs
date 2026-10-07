@@ -306,8 +306,9 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
         write_console(b"default admin/admin must passwd before other commands\n");
         write_console(b"grant/revoke: <rights> <path> <task>  (r w l c x a=all)\n");
         write_console(b"share/unshare: <rights> <path> <user> (durable; login reapplies)\n");
-        write_console(b"su <user> needs an access card; login uses a password\n");
-        write_console(b"power: shutdown, reboot\n");
+        write_console(b"su <user>: admin or ALL card (no password); login uses a password\n");
+        write_console(b"su admin returns a born-admin seat; others need login admin\n");
+        write_console(b"power: shutdown, reboot (admin / launcher grant only)\n");
         prompt(cwd);
         return None;
     }
@@ -336,15 +337,11 @@ fn dispatch(kbd: Cap, line: &[u8], cwd: &mut Cwd, must_change: &mut bool) -> Opt
         return None;
     }
     if line == b"shutdown" {
-        let _ = shutdown();
-        write_console(b"shutdown: the machine stayed up\n");
-        prompt(cwd);
+        report_power(cwd, b"shutdown", shutdown());
         return None;
     }
     if line == b"reboot" {
-        let _ = reboot();
-        write_console(b"reboot: the machine stayed up\n");
-        prompt(cwd);
+        report_power(cwd, b"reboot", reboot());
         return None;
     }
     if line == b"clear" {
@@ -1204,6 +1201,23 @@ fn report_user(cwd: &mut Cwd, label: &[u8], result: SyscallResult, reset_cwd: bo
         };
     } else if reset_cwd {
         cwd.len = 0;
+    }
+    prompt(cwd);
+}
+
+/// Power Cap missing → access denied; success that returns is a QEMU quirk.
+fn report_power(cwd: &Cwd, label: &[u8], result: SyscallResult) {
+    if !result.ok {
+        write_console(label);
+        write_console(b": ");
+        match SysError::from_code(result.value) {
+            SysError::AccessDenied => write_console(b"access denied\n"),
+            SysError::BadCap => write_console(b"bad capability\n"),
+            _ => write_console(b"failed\n"),
+        };
+    } else {
+        write_console(label);
+        write_console(b": the machine stayed up\n");
     }
     prompt(cwd);
 }
