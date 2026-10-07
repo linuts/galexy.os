@@ -1292,7 +1292,7 @@ What a non-toy program and a forged Cap will hit. This milestone lays the
 **clean-slate process foundation**: tasks are kernel objects addressed by
 **process Caps** (wait / kill / transfer), not global PIDs. Userspace
 **init** and seat supervision are Phase 6 (Milestones 53–55).
-Style: `docs/STYLE.md` → Process model and init.
+Plan: `docs/PROCESS.md`. Style: `docs/STYLE.md` → Process model and init.
 
 ### Process identity (Cap foundation)
 
@@ -1586,8 +1586,9 @@ The “ready for review” checklist — not a feature dump.
 Goal: a **modern, clean-slate** capability process architecture —
 process Caps, real hierarchy via Cap transfer, userspace init as orphan
 root, seats/services supervised in userspace — without a Unix PID ABI or
-POSIX claim. Builds on Milestone 47. Style: `docs/STYLE.md` → Process
-model and init. Direction: `docs/ROADMAP.md` Phase 6.
+POSIX claim. **Plan: `docs/PROCESS.md`.** Builds on Milestone 47. Style:
+`docs/STYLE.md` → Process model and init. Direction: `docs/ROADMAP.md`
+Phase 6.
 
 ## Milestone 53 — Init (orphan root)
 

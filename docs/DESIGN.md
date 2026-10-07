@@ -567,11 +567,13 @@ the table stays RAM-only. The table holds 16 actors, 64 objects, and
 corrupt newest slot still recovers from the older copy. Shell utilities
 use `SPAWN_WAIT` so the prompt returns after `ls` / `mkdir` exit.
 Auth is password for identity plus galfs tokens for authorization
-(see `docs/AUTH.md`). Every F-key shell boots **logged out** (console +
-keyboard only) on a login screen (`Galexy.OS v… (ttyN)`); password login
-installs a session and `logout` returns to that screen. There is no
-guest account. Access cards + `su` still switch without a password when
-the caller holds ALL on the target root.
+(see `docs/AUTH.md`). Process wait/kill/supervise use **process Caps**,
+not global PIDs (plan: `docs/PROCESS.md`; Milestone 47 + Phase 6).
+Every F-key shell boots **logged out** (console + keyboard only) on a
+login screen (`Galexy.OS v… (ttyN)`); password login installs a session
+and `logout` returns to that screen. There is no guest account. Access
+cards + `su` still switch without a password when the caller holds ALL
+on the target root.
 User buffers must be `USER_ACCESSIBLE` in the active tree (a destination
 must also be writable) — a kernel address is present but not a user
 buffer. `read` on the keyboard cap copies waiting keystrokes (0 = nothing

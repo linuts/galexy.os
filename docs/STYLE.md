@@ -71,9 +71,10 @@ them as the target.
 
 ## Process model and init
 
-Clean-slate rules for Milestones **47** and **53–55**. Galexy is a
-capability OS — do **not** make global integers the process API just
-because Unix did in 1970. Do not grow a POSIX layer beside these rules.
+Clean-slate rules for Milestones **47** and **53–55**. Full plan:
+`docs/PROCESS.md`. Galexy is a capability OS — do **not** make global
+integers the process API just because Unix did in 1970. Do not grow a
+POSIX layer beside these rules.
 
 - **Spawn, not fork.** New tasks are created by `spawn` (load ELF + args
   + attenuated caps/tokens). No `fork`/`clone` that duplicates an address
@@ -175,7 +176,7 @@ because Unix did in 1970. Do not grow a POSIX layer beside these rules.
 
 - When behavior changes, update in this order: code → doc comment →
   `TODO.md` checkbox → `README.md` feature list → relevant deep doc
-  (`DESIGN.md`, `AUTH.md`, later `FS.md` / `THREAT.md`).
+  (`DESIGN.md`, `AUTH.md`, `PROCESS.md`, later `FS.md` / `THREAT.md`).
 - `ROADMAP.md` only for direction shifts or new phases.
 - `TODO.md` checkboxes are only checked after the item is *verified
   working* (e.g. seen in QEMU), never when "written".

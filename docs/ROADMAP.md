@@ -252,9 +252,9 @@ explicit waivers in the threat/FS docs over half-landed features.
 ## Phase 6 — Process model, init & supervised seats
 
 Goal: finish the clean-slate **capability** process architecture — not
-named-task forever, not “PIDs because 1970”, not POSIX. Concrete
-checkboxes: `TODO.md` Milestones **53–55**. Style: `docs/STYLE.md` →
-Process model and init.
+named-task forever, not “PIDs because 1970”, not POSIX. Plan:
+`docs/PROCESS.md`. Concrete checkboxes: `TODO.md` Milestones **53–55**.
+Style: `docs/STYLE.md` → Process model and init.
 
 1. **53 Init (orphan root)** — userspace init; orphan Cap transfer;
    retire kernel `ensure_shell` policy; ordered shutdown

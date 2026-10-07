@@ -112,6 +112,10 @@ Pre-login seats cannot spawn (no loader grant). Ramdisk code is still
 trusted enough to run once logged in; empty tokens stop a runaway bare
 program from writing the caller’s tree. Utilities need create/open.
 
+Process identity and wait/kill are a separate layer: spawn will return a
+**process Cap** (see `docs/PROCESS.md`). Holding that Cap does not grant
+galfs rights on the child’s files.
+
 ## Console flood budget
 
 Each task may write a fixed number of console bytes per timer tick.
