@@ -6,7 +6,7 @@ mod common;
 use common::{
     boot, boot_and_type, boot_and_type_uefi, boot_liveness, boot_uefi, boot_with_galfs,
     boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_recover,
-    boot_with_galfs_torn, image, GalfsDiskCache, QEMU_EXIT_SUCCESS,
+    boot_with_galfs_torn, boot_with_galfs_virtio, image, GalfsDiskCache, QEMU_EXIT_SUCCESS,
 };
 use std::time::Duration;
 
@@ -573,6 +573,18 @@ fn galfs_disk_persists_none_cache() {
         boot_with_galfs_cache(&image("test-galfs-disk"), GalfsDiskCache::None),
         "none",
     );
+}
+
+/// Persistence via virtio-blk-pci (legacy) instead of the IDE slave.
+#[test]
+fn galfs_disk_persists_virtio_blk() {
+    let (code1, serial1, img, code2, serial2) =
+        boot_with_galfs_virtio(&image("test-galfs-disk"));
+    assert!(
+        serial1.contains("[virtio-blk] ready"),
+        "guest must bind virtio-blk; serial:\n{serial1}"
+    );
+    assert_galfs_disk_persists((code1, serial1, img, code2, serial2), "virtio-pci");
 }
 
 fn assert_galfs_disk_persists(

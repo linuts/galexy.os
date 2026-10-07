@@ -176,8 +176,8 @@ pub fn pop_key_tty(tty: u8) -> Option<char>
 ### block — `BlockDevice` (`drivers/block.rs`)
 
 galfs talks only to this trait (present / capacity / read / write /
-flush). ATA PIO primary slave is the first impl; virtio-blk can plug in
-later without rewriting the filesystem.
+flush). Impls: `virtio_blk::VirtioBlk` (preferred when present) and
+`ata::PrimarySlave`.
 
 ```rust
 pub trait BlockDevice: Sync {
@@ -200,7 +200,8 @@ capacity. `flush()` issues FLUSH CACHE after a committed GALF slot
 write. The runner attaches a second raw image at `if=ide,index=1`
 without a snapshot (`cargo run` and the persistence tests) so writes
 survive across QEMU processes. Default `cache=writethrough`; the flush
-matrix also boots with `writeback` and `none`.
+matrix also boots with `writeback` and `none`. `cargo run` prefers
+virtio-blk; set `GALEXY_GALFS_IDE=1` for this path.
 
 ```rust
 pub struct PrimarySlave; // impl BlockDevice
@@ -209,6 +210,17 @@ pub fn capacity_sectors() -> u64
 pub fn read_sectors(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError>
 pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError>
 pub fn flush() -> Result<(), SysError>
+```
+
+### virtio_blk — virtio-blk legacy PCI (`drivers/`)
+
+Transitional virtio-blk with a legacy I/O BAR (`disable-modern=on`,
+`queue-size=128`). PCI scan via `drivers/pci`; one polled request queue;
+FLUSH via `VIRTIO_BLK_T_FLUSH`. galfs selects this over ATA when probe
+succeeds.
+
+```rust
+pub struct VirtioBlk; // impl BlockDevice
 ```
 
 The keyboard handler never takes the screen lock. Locks are tiny and
