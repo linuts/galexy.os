@@ -58,28 +58,28 @@ Milestones 43+ land; until then treat them as the target.
 
 - **Authentication ≠ authorization.** Passwords change `fs_root` / session;
   galfs tokens are the only way to touch objects (except a documented,
-  audited admin path — and Milestone 46 removes the blanket bypass).
+  audited admin path — and Milestone 43 removes the blanket bypass).
 - Tokens name an **object id + rights**, not a path string. Path parse is
   lookup only; rights come from the card.
 - `grant` may only install rights the caller already holds on that object
   (or an ancestor). `revoke` clears exact-object rights the caller names.
 - Live-task grants die with the task unless a durable-share feature is
-  explicitly designed (Milestone 51). Do not silently persist cards.
+  explicitly designed (Milestone 45). Do not silently persist cards.
 - Ramdisk `SPAWN_WAIT` utilities inherit the caller's cards — treat those
   ELFs as privileged. New utils need a one-line trust note in the PR.
 
 ## Secrets and passwords
 
 - **Never log, serial-mirror, or `write_console` cleartext passwords.**
-  Secret line mode suppresses echo (Milestone 44).
+  Secret line mode suppresses echo (Milestone 43).
 - Password material lives in **stack buffers**, zeroed with an explicit
   wipe helper after use (`zeroize`-style; volatile or equivalent). Do not
   leave hashes/passwords in reaped scratch pages without wipe.
 - Compare password hashes in **constant time** (`hash_eq` or the KDF
   crate's verify). No early-out memcmp on secrets.
-- Inline `login user pass` is a test convenience until Milestone 44 e2e
+- Inline `login user pass` is a test convenience until Milestone 43 e2e
   lands; production UX is interactive prompts.
-- Default `admin`/`admin` is for format bring-up only; Milestone 45 forces
+- Default `admin`/`admin` is for format bring-up only; Milestone 43 forces
   change before general use.
 
 ## On-disk formats (GALF and friends)
@@ -89,7 +89,7 @@ Milestones 43+ land; until then treat them as the target.
   of bytes is a bug.
 - Dual-slot (or later journal) commits: write inactive → checksum/AEAD →
   flush → publish generation. Readers pick the newest valid slot only.
-- Encryption (Milestone 47): plaintext file bytes and password hashes must
+- Encryption (Milestone 44): plaintext file bytes and password hashes must
   not appear in a raw image dump. Tests may assert that.
 - Host tools that parse GALF (`fsck`, inspect) live under `crates/` or
   `scripts/` and share structs with the kernel via `galexy-core` when
@@ -122,7 +122,7 @@ Milestones 43+ land; until then treat them as the target.
 - Kernel-visible behavior gets a QEMU boot test (`bin/test-*`) or a
   typing e2e under `crates/runner/tests`.
 - Negative cases (AccessDenied, guest cannot spawn, bare spawn cannot
-  write) are first-class — not only the happy path (Milestone 58).
+  write) are first-class — not only the happy path (Milestone 51).
 - Anything touching hardware ports gets verified in QEMU; note the
   verification step in the PR/commit message.
 - Do not check in `galfs.img` or other stateful disk images.
@@ -137,7 +137,7 @@ Milestones 43+ land; until then treat them as the target.
   working* (e.g. seen in QEMU), never when "written".
 - ABI changes: `galexy-abi` + DESIGN syscall section + shell/`galexy-rt`
   wrappers in the **same PR**. Mark stable vs experimental in the ABI
-  table (Milestone 57).
+  table (Milestone 51).
 
 ## Git
 

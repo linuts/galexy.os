@@ -226,30 +226,22 @@ first real program landed in Milestone 13:
 
 Goal: auth that survives a stolen disk image, a filesystem usable beyond
 demos, and kernel edges a reviewer will poke. Concrete checkboxes live in
-`TODO.md` Milestones 43–67. Style rules for secrets, GALF versions,
-caps, and IF=0 paths: `docs/STYLE.md`. Dependency-aware order:
+`TODO.md` Milestones **43–52** (ten milestones; subsections keep the full
+checklist). Style: `docs/STYLE.md`.
 
-1. **Auth crypto & sessions** (43–46) — CSPRNG + real KDF + random salts;
-   no-echo password prompts; logout / lockout / force admin change;
-   remove production `crash`; guest without loader; narrow admin
-   operator bypass; spawn token attenuation.
-2. **Sealed GALF** (47) — volume key + AEAD over dual slots; boot unlock;
-   stolen-`galfs.img` threat addressed.
-3. **galfs for real usage** (48–51) — block/extent store and capacity;
-   rename / truncate / stat; sync + fsck + crash injection; quotas and
-   card UX (list tokens, durable shares decision).
-4. **Storage stack** (52) — `BlockDevice` abstraction; virtio-blk or
-   primary IDE; flush discipline; capacity reporting.
-5. **Kernel / ABI review items** (53–56) — user segment reload; exit
-   status; PCID/GLOBAL or waive with numbers; demand-paging policy;
-   console cursor + keyboard overflow; auth/grant audit log.
-6. **Docs, hardening, shell, RC** (57–60) — `THREAT.md` + `FS.md` + ABI
-   table; negative tests + ramdisk measurement; pipelines/glob; release
-   candidate gates (`login_required`, KDF, encryption on when disk
-   present, tag `review-rc1`).
-7. **Solidifying pass** (61–67) — cap/resource accounting; monotonic
-   time for lockout/idle; W^X and scrub; lock-order freeze; CI/repro
-   tooling; soak/perf budgets; explicit non-goals freeze.
+1. **43 Auth hardening** — KDF/CSPRNG, no-echo prompts, logout/lockout,
+   guest without loader, narrow admin bypass, monotonic time for cool-downs
+2. **44 Sealed GALF** — volume key + AEAD; boot unlock
+3. **45 galfs for real usage** — extents/capacity, rename/truncate/stat,
+   sync/fsck, quotas & cards
+4. **46 Storage stack** — BlockDevice; virtio or primary IDE; flush
+5. **47 Process, ABI & caps** — segments, exit status, forge/ceiling tests
+6. **48 Memory, safety & concurrency** — W^X, scrub, lock-order freeze
+7. **49 Console, audit & UX** — cursor, overflow, auth/grant audit log
+8. **50 Shell for real demos** — pipes, glob, line editing
+9. **51 Docs, tests, CI & soak** — THREAT/FS, negative suite, review-smoke,
+   non-goals freeze
+10. **52 Review RC** — default secure build; tag `review-rc1`
 
 Standing rule unchanged: each milestone leaves the suite green; prefer
 explicit waivers in the threat/FS docs over half-landed features.
