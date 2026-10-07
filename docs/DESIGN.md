@@ -18,7 +18,7 @@ crates/
 │       ├── bin/         # test kernels: one bin per QEMU integration test
 │       ├── shell.rs     # the "shell": consumes driver input, produces screen output
 │       ├── arch/        # THE PORT WALL: x86_64 hardware code lives only here
-│       ├── drivers/     # device drivers (screen, serial, keyboard, ata, ...)
+│       ├── drivers/     # device drivers (screen, serial, keyboard, block/ata, ...)
 │       └── sched/       # scheduler + syscall dispatch table (policy layer)
 ├── galexy-abi/          # THE SYSCALL ABI: numbers, capability model, error
 │                        #   codes. The ONLY kernel<->userspace shared surface.
@@ -173,26 +173,46 @@ pub fn pop_key() -> Option<char>    // drains TTY 0
 pub fn pop_key_tty(tty: u8) -> Option<char>
 ```
 
-### ata — "the galfs disk" (`drivers/`)
+### block — `BlockDevice` (`drivers/block.rs`)
 
-PIO LBA28 on the primary IDE slave (drive index 1). The boot image is
-the master and is never touched. `present()` probes once via IDENTIFY;
-when the slave is absent every read/write returns `Unsupported` and
-galfs stays RAM-only. `flush()` issues FLUSH CACHE after a committed
-GALF slot write. The runner attaches a second raw image at
-`if=ide,index=1` without a snapshot (`cargo run` and the persistence
-tests) so writes survive across QEMU processes.
+galfs talks only to this trait (present / capacity / read / write /
+flush). ATA PIO primary slave is the first impl; virtio-blk can plug in
+later without rewriting the filesystem.
 
 ```rust
+pub trait BlockDevice: Sync {
+    fn present(&self) -> bool;
+    fn capacity_sectors(&self) -> u64;
+    fn read_sectors(&self, lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError>;
+    fn write_sectors(&self, lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError>;
+    fn flush(&self) -> Result<(), SysError>;
+}
+```
+
+### ata — primary IDE slave (`drivers/`)
+
+PIO LBA28 on the primary IDE slave (drive index 1), exposed as
+`PrimarySlave: BlockDevice`. The boot image is the master and is never
+touched. `present()` probes once via IDENTIFY (words 60–61 / 100–103 →
+`capacity_sectors()`); when the slave is absent or too small for both
+GALF dual slots, galfs stays RAM-only. Reads/writes reject LBAs past
+capacity. `flush()` issues FLUSH CACHE after a committed GALF slot
+write. The runner attaches a second raw image at `if=ide,index=1`
+without a snapshot (`cargo run` and the persistence tests) so writes
+survive across QEMU processes.
+
+```rust
+pub struct PrimarySlave; // impl BlockDevice
 pub fn present() -> bool
+pub fn capacity_sectors() -> u64
 pub fn read_sectors(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError>
 pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError>
 pub fn flush() -> Result<(), SysError>
 ```
 
-The handler never takes the screen lock. Locks are tiny and never nested
-(decode under one lock, push under another), so IRQ context is safe.
-Queue overflow drops the newest key (documented).
+The keyboard handler never takes the screen lock. Locks are tiny and
+never nested (decode under one lock, push under another), so IRQ
+context is safe. Queue overflow drops the newest key (documented).
 
 ### arch — "the plumbing"
 

@@ -4,6 +4,7 @@
 //! each other through `kcore` primitives — never directly to another driver.
 
 pub mod ata;
+pub mod block;
 pub mod console;
 pub mod keyboard;
 pub mod screen;
