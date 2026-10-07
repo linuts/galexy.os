@@ -1894,19 +1894,18 @@ Produce something the loader already accepts.
       window, no W|X) + unit tests
 - [x] **CLI**: `gxc build [-o out.elf] <file.gxr>`
 
-## Milestone 61 — Hello via gxc
+## Milestone 61 — Hello via gxc ✅
 
 End-to-end proof without regressing rustc-built programs.
 
-- [ ] **`hello.gxr`** (or `hello-gxc.gxr`) in-tree; `gxc` builds the ELF
-      in `build.rs` / runner packing
-- [ ] Ramdisk name distinct from rustc `hello` (e.g. `hello-gxc`)
-- [ ] QEMU marker: program text on serial + clean exit (mirror
-      `test-realprogram` / shell launch path)
-- [ ] rustc-built `hello` suite cases stay green
-- [ ] README one-liner: how to run `gxc` hello; pointer to COMPILER.md
-- [ ] THIRD_PARTY / attribution note if any cranelift/rustc-lite slice
-      was vendored
+- [x] **`crates/gxc/examples/hello.gxr`**; runner `build.rs` compiles it
+      with `gxc::compile_elf`
+- [x] Ramdisk name **`hello-gxc`** (rustc `hello` untouched)
+- [x] QEMU: `bin/test-hellogxc` + `hellogxc_test_passes` (serial line +
+      exit + reap)
+- [x] rustc-built `hello` suite cases stay green (separate name/test)
+- [x] README one-liner for `gxc build` / COMPILER.md
+- [x] No vendored cranelift/rustc-lite (hand-x64) — nothing to attribute
 
 ## Milestone 62 — On-OS compile (follow-on)
 
@@ -1989,5 +1988,5 @@ items stay here with rationale.
 - [ ] Scheduler policy freeze — **Milestone 58**
 - [x] Mini Rust compiler frontend (gxr) — **Milestone 59** (Phase 8)
 - [x] gxc codegen + ELF emit — **Milestone 60**
-- [ ] Hello via gxc in QEMU — **Milestone 61**
+- [x] Hello via gxc in QEMU — **Milestone 61**
 - [ ] On-OS gxc (follow-on) — **Milestone 62**

@@ -85,6 +85,17 @@ fn main() {
             b"galexy ramdisk plumbing works".to_vec(),
         ));
 
+        // Milestone 61: host `gxc` compiles the frozen gxr example into a
+        // distinct ramdisk name so rustc-built `hello` stays untouched.
+        {
+            let gxr = Path::new(env!("CARGO_MANIFEST_DIR")).join("../gxc/examples/hello.gxr");
+            println!("cargo:rerun-if-changed={}", gxr.display());
+            let src = std::fs::read_to_string(&gxr)
+                .unwrap_or_else(|e| panic!("ramdisk: read {}: {e}", gxr.display()));
+            let elf = gxc::compile_elf(&src).unwrap_or_else(|e| panic!("gxc compile hello.gxr: {e}"));
+            entries.push(("hello-gxc".into(), elf));
+        }
+
         let mut tar = tar::Builder::new(std::fs::File::create(&ramdisk_path).unwrap());
         for (name, bytes) in &entries {
             let mut header = tar::Header::new_gnu();

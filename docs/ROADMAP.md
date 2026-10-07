@@ -313,12 +313,12 @@ Reuse before inventing: `galexy-abi` + `galexy-rt` + ELF loader + existing
 study [rustc-lite](https://github.com/suhteevah/rustc-lite) (MIT/Apache)
 for a Cranelift-backed subset shape. Not mrustc, not full rustc-in-tree.
 
-1. **59 Language slice + frontend** — freeze gxr v0; `crates/gxc` lex /
+1. **59 Language slice + frontend** ✅ — freeze gxr v0; `crates/gxc` lex /
    parse / check with host unit tests
-2. **60 Codegen + ELF** — x64 (hand or Cranelift) + static ELF at
-   `USER_IMAGE_BASE`; syscall prelude matching `write` / `exit`
-3. **61 Hello via gxc** — `hello.gxr` → ramdisk ELF passes QEMU markers;
-   rustc-built `hello` stays green beside it
+2. **60 Codegen + ELF** ✅ — hand-x64 + static ELF at `USER_IMAGE_BASE`;
+   syscall prelude matching `write` / `exit`
+3. **61 Hello via gxc** ✅ — `hello.gxr` → ramdisk `hello-gxc` +
+   `test-hellogxc`; rustc-built `hello` stays green beside it
 4. **62 On-OS gxc** *(follow-on)* — ring-3 compile from galfs when the
    host path is boring
 
