@@ -453,6 +453,20 @@ fn galfs_test_passes() {
 }
 
 #[test]
+fn blocks_test_passes() {
+    let (code, serial) = boot(&image("test-blocks"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-blocks should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-blocks] passed"),
+        "test-blocks success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn galfs_disk_persists_across_reboot() {
     let (code1, serial1, img, code2, serial2) = boot_with_galfs(&image("test-galfs-disk"));
     assert_eq!(
@@ -465,8 +479,8 @@ fn galfs_disk_persists_across_reboot() {
         "write marker missing; serial:\n{serial1}"
     );
     assert!(
-        !img.windows(b"persist-ok".len())
-            .any(|w| w == b"persist-ok"),
+        !img.windows(b"persist-ok-block-store".len())
+            .any(|w| w == b"persist-ok-block-store"),
         "sealed galfs.img must not contain plaintext file bytes"
     );
     assert_eq!(

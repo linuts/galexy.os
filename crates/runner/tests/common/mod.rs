@@ -143,7 +143,7 @@ fn boot_with_galfs_inner(
             .expect("clock")
             .as_nanos()
     ));
-    // 1 MiB zeroed IDE slave — covers both 160-sector GALF v7 slots.
+    // 1 MiB zeroed IDE slave — covers both 288-sector GALF v8 slots.
     std::fs::write(&galfs_path, vec![0u8; 1024 * 1024]).expect("create galfs.img");
 
     let (code1, serial1) = boot_once_with_galfs(&image.bios, &galfs_path, &image.name);
@@ -159,8 +159,8 @@ fn boot_with_galfs_inner(
     (code1, serial1, img_after_write, code2, serial2)
 }
 
-/// Dual-slot layout must match `galfs::DISK_SECTORS` (160 × 512).
-const GALFS_SLOT_SECTORS: usize = 160;
+/// Dual-slot layout must match `galfs::DISK_SECTORS` (288 × 512).
+const GALFS_SLOT_SECTORS: usize = 288;
 const GALFS_SECTOR: usize = 512;
 
 fn corrupt_newest_galfs_slot(path: &PathBuf) {

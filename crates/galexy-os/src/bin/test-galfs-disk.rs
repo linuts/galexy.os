@@ -16,7 +16,16 @@ use galexy_os::{
 
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
-const MARKER: &[u8] = b"persist-ok";
+/// Unique plaintext the host asserts is absent from the sealed image.
+const PLAIN_TAG: &[u8] = b"persist-ok-block-store";
+
+fn multi_block_payload() -> [u8; 600] {
+    let mut buf = [0u8; 600];
+    for (i, b) in buf.iter_mut().enumerate() {
+        *b = PLAIN_TAG.get(i % PLAIN_TAG.len()).copied().unwrap_or(b'x');
+    }
+    buf
+}
 
 fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galexy_os::init();
@@ -47,18 +56,24 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert_ne!(admin, galfs::NO_OBJECT, "admin must exist");
 
     let desktop = galfs::find_under(admin, "Desktop").expect("admin Desktop");
+    let want = multi_block_payload();
     if let Some(file) = galfs::find_under(desktop, "persist") {
-        let mut buf = [0u8; 32];
+        let mut buf = [0u8; 600];
         let n = galfs::read_file_bytes(file, &mut buf).expect("read persist");
-        assert_eq!(&buf[..n], MARKER, "persist file must hold {MARKER:?}");
+        assert_eq!(&buf[..n], &want[..], "persist file must hold multi-block marker");
+        assert!(
+            galfs::blocks_used() >= 2,
+            "multi-block persist must keep allocated blocks"
+        );
         println!("[test-galfs-disk] loaded persist across reboot");
         serial_println!("[test-galfs-disk] passed");
         exit_qemu(QemuExitCode::Success);
     }
 
     let file = galfs::create_file_under(desktop, "persist").expect("persist");
-    let n = galfs::append_file(file, MARKER).expect("append");
-    assert_eq!(n, MARKER.len());
+    let n = galfs::append_file(file, &want).expect("append");
+    assert_eq!(n, want.len());
+    assert!(galfs::blocks_used() >= 2, "append must span two blocks");
     galfs::sync();
 
     println!("[test-galfs-disk] wrote persist to disk");

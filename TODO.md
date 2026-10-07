@@ -1174,29 +1174,27 @@ Capacity, operations, durability, and multi-user sharing.
 
 ### galfs capacity & on-disk layout
 
-Interim table bump (32 actors / 128 objects / 512-byte inline files) is
-GALF **v7**. Block/extent store and larger files remain.
+GALF **v8**: 32 actors / 128 objects / 256×512 block pool / 8 directs
+(4 KiB max file). Indirect blocks and ops checklist remain.
 
 - [x] **Sizing plan** in `DESIGN.md` / `GALFS.md`: 32 actors, 128 objects,
-      512-byte inline files, depth 8 — still no heap on the IF=0 path;
-      block store is the next raise
-- [x] **GALF version bump**: v7 header carries actor/object counts;
-      refuses older images (including sealed v6)
-- [ ] **Block/extent store**: replace inline 512-byte buffers with a
-      block allocator on the disk image (fixed block size, extent list or
-      single-indirect). Empty files cost one inode, not a full buffer
-- [ ] **Larger files**: multi-block read/write with seek; append stays
-      correct across block boundaries
+      256 blocks × 512, 8 directs/file, depth 8 — still no heap on IF=0
+- [x] **GALF version bump**: v8 header carries actor/object/block counts;
+      refuses older images (including sealed v7)
+- [x] **Block store (direct)**: shared pool + per-file direct pointers;
+      empty files cost one inode; sealed payload includes bitmap+blocks
+- [x] **Larger files (to 4 KiB)**: multi-block append/read with seek
+      across block boundaries; indirect / bigger files still open
 - [ ] **More opens**: raise per-task file table above 8, or justify 8 in
       DESIGN as intentional
-- [x] **Stress test (objects)**: `test-scratch` / `test-rm` fill to
-      `NoResource` and reuse after remove (actor/block fill with the
-      block store)
-- [ ] **Free-block bitmap** (or equivalent) with leak detector in fsck
+- [x] **Stress test (objects + blocks)**: `test-scratch` / `test-rm` /
+      `test-blocks` fill to exhaustion and reuse after remove
+- [x] **Free-block bitmap**: in-image bitmap; validate_table rejects
+      leaks/duplicates (host fsck tool still open)
 - [ ] **Endian / packed structs**: explicit little-endian on disk;
       `zerocopy`/`bytemuck`-style or manual to_le; host fsck shares defs
-- [x] Suite growth: object-capacity fill under QEMU (`test-scratch` /
-      `test-rm`); fragmentation smoke waits on the block store
+- [x] Suite growth: object + block capacity under QEMU; fragmentation
+      smoke still light (no indirect yet)
 
 ### galfs operations for real usage
 
