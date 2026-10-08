@@ -512,6 +512,63 @@ fn negative_test_passes() {
     );
 }
 
+/// Soak: rounds of pipe + galfs + spawn(hello, wait) + sleep with idle
+/// gaps; frames, pipe slots, thread slots, and galfs blocks return to
+/// baseline exactly after every round.
+#[test]
+fn soak_test_passes() {
+    let (code, serial) = boot(&image("test-soak"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-soak should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("no leak in frames / pipes / threads / blocks"),
+        "soak summary missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-soak] passed"),
+        "test-soak success marker missing; serial:\n{serial}"
+    );
+}
+
+/// Steal fairness under load: both CPUs do work, and once the AP's
+/// rotation drains it steals a BSP-pinned worker (`steal_count` moves).
+#[test]
+fn fairness_test_passes() {
+    let (code, serial) = boot(&image("test-fairness"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-fairness should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-fairness] cpu0="),
+        "fairness counters missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-fairness] passed"),
+        "test-fairness success marker missing; serial:\n{serial}"
+    );
+}
+
+/// Pathological input: a tight ring-3 console write loop never exceeds
+/// the 512 B/tick budget, never errors, and the timer keeps ticking.
+#[test]
+fn pathological_test_passes() {
+    let (code, serial) = boot(&image("test-pathological"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-pathological should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-pathological] passed"),
+        "test-pathological success marker missing; serial:\n{serial}"
+    );
+}
+
 #[test]
 fn rm_test_passes() {
     let (code, serial) = boot(&image("test-rm"));
@@ -1565,6 +1622,7 @@ fn assert_passwords_masked(serial: &str) {
                     || line.starts_with("Password:")
                     || line.starts_with("Confirm:")
                     || line.starts_with("passwd:")
+                    || line.starts_with("password too long")
                 {
                     break;
                 }
@@ -2001,6 +2059,40 @@ fn shell_must_change_typing_e2e() {
     assert_passwords_masked(&serial);
 }
 
+/// Pathological input at the password prompt: a paste longer than the
+/// 64-byte password buffer is refused with `password too long`, nothing
+/// but `*` reaches the console, the seat returns to `Login as:`, and a
+/// normal login still works afterwards.
+#[test]
+fn shell_password_paste_typing_e2e() {
+    let mut keys: Vec<(&str, &str)> = vec![
+        ("a", "a"),
+        ("d", "d"),
+        ("m", "m"),
+        ("i", "i"),
+        ("n", "n"),
+        ("ret", "Password: "),
+    ];
+    // 64 keys fill the buffer (each echoes a star); the 65th overflows.
+    keys.extend(core::iter::repeat_n(("x", "*"), 64));
+    keys.push(("x", "password too long"));
+    keys.push(("a", "a"));
+    keys.extend(LOGIN_ADMIN_KEYS.iter().skip(1).copied());
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "admin@galexy> ",
+        Duration::from_millis(30),
+        Duration::from_secs(150),
+    );
+    assert!(
+        serial.contains("password too long"),
+        "overlong paste was not refused; serial:\n{serial}"
+    );
+    assert_passwords_masked(&serial);
+}
+
 /// Boot login screen + CLI `login admin` both mask the password on COM1.
 #[test]
 fn shell_secret_prompt_typing_e2e() {
@@ -2089,6 +2181,37 @@ fn shell_nested_spawn_refused_e2e() {
     assert!(
         !serial.contains("keyboard denied"),
         "typed `shell` started a keyboard-less shell; serial:\n{serial}"
+    );
+}
+
+/// Default-build audit (Milestone 52): the main image's shell has no
+/// `crash` command — that seam lives only in the `galexy-os-crashseam`
+/// ramdisk. Typing it is `command not found` and the seat stays up.
+#[test]
+fn default_image_has_no_crash_seam_e2e() {
+    let keys = with_login(&[
+        ("c", "c"),
+        ("r", "r"),
+        ("a", "a"),
+        ("s", "s"),
+        ("h", "h"),
+        ("ret", "crash: command not found"),
+    ]);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "admin@galexy> ",
+        Duration::from_millis(30),
+        Duration::from_secs(60),
+    );
+    assert!(
+        serial.contains("crash: command not found"),
+        "default shell accepted `crash`; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("task 'shell' exited (page fault)"),
+        "default shell faulted on `crash`; serial:\n{serial}"
     );
 }
 

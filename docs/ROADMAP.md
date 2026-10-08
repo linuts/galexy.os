@@ -14,7 +14,7 @@ what is true today and which milestone closes the gap.
 | **Fast** | Deadline one-shot LAPIC, tickless idle, idle steal, park/wake for sleep / keyboard / pipe; IF=0 syscall path never allocates; console budget | Nothing is measured; suite is TCG at `opt-level = 0`; no release profile or LTO; virtio-blk spins 10 M polls; ATA is PIO; pipeline children `yield_now`-poll until `give` → **64** |
 | **Modern only** | x2APIC-aware LAPIC, I/O APIC, ACPI MADT / FADT / XSDT, UEFI first-class, GOP framebuffer, virtio-blk, FSGSBASE per-CPU, SMP | Legacy is the only path for timer calibration (PIT), 8259 remap, PS/2 keyboard, PIO IDE, legacy virtio IO BAR, port PCI config, `-M pc`; no TSC-deadline, no ECAM, no MSI-X → **65** |
 | **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, one pipeline, glob; 12 utilities; galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; gxc hello | No user heap, argv, clock read, or IPC beyond pipes; one pipeline shape; no background jobs → **66**. Shutdown bypasses init; no service table → **67**. Network and USB → **Phase 10** |
-| **Ready** | 70 QEMU test kernels, 91 runner boots, host suites green; CI workflow (`host` + `qemu` jobs); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Soak / fairness / pathological-input runs and the Milestone 52 checklist → **51**, **52**, then the **v1.0 gate** in 67 |
+| **Ready** | 73 QEMU test kernels, 96 runner boots, host suites green; CI workflow (`host` + `qemu` jobs); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 closed (soak, steal fairness, pathological input, default-build audit landed; `review-rc1` tag is the owner's call). Next: the **v1.0 gate** via **63 → 67** |
 
 Order of work: **51 → 52** (`review-rc1`), then **63 → 64 → 65 → 66 →
 67** (`v1.0`). Security first because every later change should land
@@ -278,11 +278,14 @@ checklist). Style: `docs/STYLE.md`.
    path sweep and token / slot property tests, ramdisk measurement;
    GitHub Actions, clippy / fmt baseline, pinned nightly;
    `LICENSE` (MIT) / `SECURITY.md` / `CHANGELOG.md` / PR template /
-   `review-smoke.sh`; non-goals frozen in `THREAT.md`. Remaining: soak,
-   steal fairness, pathological input. Waived for now: a ramdisk
-   allowlist (hash only; trusted input)
-10. **52 Review RC** — default secure build audit, full suite BIOS+UEFI,
-    freeze-window rule; the `review-rc1` tag itself waits for the owner
+   `review-smoke.sh`; non-goals frozen in `THREAT.md`; soak
+   (`test-soak`, exact table closure per round), steal fairness
+   (`test-fairness`), pathological input (console flood kernel,
+   password-paste e2e). ✅ Waived: a ramdisk allowlist (hash only;
+   trusted input)
+10. **52 Review RC** ✅ — default-build audit (`crash` absent, KDF live,
+    sealed disk), full suite BIOS+UEFI, freeze-window rule in `ABI.md`;
+    the `review-rc1` tag itself is the owner's call
 
 Standing rule unchanged: each milestone leaves the suite green; prefer
 explicit waivers in the threat/FS docs over half-landed features.

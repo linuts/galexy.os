@@ -10,11 +10,11 @@ programs.
 Not a Linux clone. No POSIX claim. Authority is **capabilities** (and
 galfs access cards), not global file descriptors or PIDs.
 
-**Status (October 2026):** Milestones 1–50 and 53–61 are merged; the
-QEMU suite is 91 boots plus host tests, all green. The next two
-milestones (51–52) produce `review-rc1`; Phase 9 (63–67) is the
-hardening, performance, modern-platform, and userland work toward
-`v1.0`. The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md)
+**Status (October 2026):** Milestones 1–61 and 69 are merged (62 was
+superseded); the QEMU suite is 96 boots plus host tests, all green. The
+Milestone 52 review checklist is complete except the `review-rc1` tag,
+which is the owner's call; Phase 9 (63–67) is the hardening,
+performance, modern-platform, and userland work toward `v1.0`. The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md)
 → Where we stand. Known gaps today: no SMEP/SMAP/UMIP/KASLR, nothing
 profiled, legacy device paths (PIT, 8259, PS/2, PIO IDE, legacy virtio)
 are the only paths, no user heap or argv, no network.
@@ -117,13 +117,13 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 ```sh
 cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxc -p gxld   # host suites
 cargo test -p runner --test audit_strings   # no "password" in any serial line
-cargo test -p runner --test boot -- --test-threads=1   # QEMU suite (91 boots, -smp 2)
+cargo test -p runner --test boot -- --test-threads=1   # QEMU suite (96 boots, -smp 2)
 ```
 
 UEFI cases need `OVMF_FD` if the default firmware path is absent. Disk
 and typing cases want `--test-threads=1`; the suite runs under TCG
 (no KVM yet — Milestone 64) so a full pass takes a while. Test kernels
-live under `crates/galexy-os/src/bin/` (70 today); the runner builds
+live under `crates/galexy-os/src/bin/` (73 today); the runner builds
 one image per binary and checks exit codes + serial.
 
 ### CI

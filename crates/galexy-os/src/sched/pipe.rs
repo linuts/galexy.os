@@ -61,6 +61,11 @@ impl Pipe {
 
 static PIPES: Mutex<[Pipe; PIPE_SLOTS]> = Mutex::new([const { Pipe::empty() }; PIPE_SLOTS]);
 
+/// Pipes currently allocated (test kernels assert this returns to zero).
+pub fn in_use() -> usize {
+    PIPES.lock().iter().filter(|p| p.used).count()
+}
+
 /// Allocates a pipe and marks one reader and one writer open.
 pub fn alloc() -> Result<u8, SysError> {
     let mut pipes = PIPES.lock();

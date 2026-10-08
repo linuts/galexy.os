@@ -39,6 +39,9 @@ pub const SD_VECTOR: u8 = 0xF8;
 pub const SLOT_VAS: usize = 16;
 /// Concurrent mailbox slots (broadcasts in flight at once).
 const SLOT_N: usize = 8;
+/// Spin count between stall reports while waiting for a target's ack
+/// (2^26 pause-loads: a few seconds under TCG, well under one on metal).
+const STALL_REPORT_MASK: u64 = (1 << 26) - 1;
 
 /// One broadcast mailbox: VAs + the publishing sequence number.
 struct SdSlot {
@@ -121,8 +124,25 @@ pub fn shootdown_others(vas: &[VirtAddr]) -> u64 {
         if c == me || cpu::apic_id_of(c).is_none() {
             continue;
         }
+        let mut spins: u64 = 0;
         while row[slot_index].load(Ordering::Acquire) < seq {
             core::hint::spin_loop();
+            spins += 1;
+            // A target that has not acked after this many spins (seconds,
+            // even under TCG) is wedged IF=0 somewhere. Say so once per
+            // period so a hung boot's serial names the missing CPU; the
+            // print takes only the serial lock, which the deadlock rule
+            // already forbids holding while IF=0 on a target.
+            if spins & STALL_REPORT_MASK == 0 {
+                serial_println!(
+                    "[shootdown] cpu {} waiting on cpu {} (seq {}, slot {}, seen {})",
+                    me,
+                    c,
+                    seq,
+                    slot_index,
+                    row[slot_index].load(Ordering::Relaxed)
+                );
+            }
         }
     }
 
