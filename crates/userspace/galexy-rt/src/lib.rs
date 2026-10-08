@@ -269,6 +269,17 @@ pub fn user_logout() -> SyscallResult {
     user_name_pass(&[], &[], galexy_abi::USER_LOGOUT)
 }
 
+/// True when the disk volume is locked and waiting for [`user_unlock`].
+pub fn volume_locked() -> bool {
+    let got = user_name_pass(&[], &[], galexy_abi::USER_UNLOCK);
+    got.ok && got.value == 1
+}
+
+/// Mount the sealed volume. An empty slice is the locked-state query.
+pub fn user_unlock(passphrase: &[u8]) -> SyscallResult {
+    user_name_pass(&[], passphrase, galexy_abi::USER_UNLOCK)
+}
+
 /// Set password for `name` (empty name = self).
 pub fn user_passwd(name: &[u8], password: &[u8]) -> SyscallResult {
     user_name_pass(name, password, galexy_abi::USER_PASSWD)

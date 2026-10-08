@@ -342,16 +342,39 @@ const _: () = assert!(FILE_BYTES <= u16::MAX as usize);
 const DISK_MIN_SECTORS: u64 = (DISK_SECTORS * DISK_SLOT_COUNT) as u64;
 /// Default password for the immortal admin account at format.
 pub const ADMIN_DEFAULT_PASSWORD: &str = "admin";
-/// Bring-up volume passphrase (wraps the disk key). Interactive unlock is
-/// a follow-up; tests and `cargo run` use this constant for now.
+/// Bring-up volume passphrase (wraps the disk key). Test kernels and the
+/// disk harness auto-unlock with this. Production `galexy-os` prompts.
 pub const VOLUME_PASSPHRASE: &[u8] = b"galfs";
+/// Max bytes accepted by [`unlock_volume`] (matches the syscall staging cap).
+const PASSPHRASE_MAX: usize = 64;
 
 static DISK_BUF: Mutex<[[u8; block::SECTOR]; DISK_SECTORS]> =
     Mutex::new([[0u8; block::SECTOR]; DISK_SECTORS]);
 /// First LBA of slot 0 (partition offset). Default 0; set before [`init`].
 static LBA_BASE: AtomicU32 = AtomicU32::new(0);
-/// Unwrapped volume key while the disk is mounted. `None` when locked / RAM-only.
+/// Unwrapped volume key while the disk is mounted. `None` when locked.
 static VOLUME_KEY: Mutex<Option<[u8; KEY_LEN]>> = Mutex::new(None);
+/// Passphrase that wraps the volume key on the next seal. Wiped with the key.
+struct VolumePass {
+    bytes: [u8; PASSPHRASE_MAX],
+    len: usize,
+}
+static VOLUME_PASS: Mutex<VolumePass> = Mutex::new(VolumePass {
+    bytes: [0; PASSPHRASE_MAX],
+    len: 0,
+});
+/// When false, [`init`] leaves a usable disk locked until [`unlock_volume`].
+/// Default true so disk tests mount with [`VOLUME_PASSPHRASE`].
+static AUTO_UNLOCK: AtomicBool = AtomicBool::new(true);
+
+/// Production boot calls this before [`init`]. Test kernels leave the default.
+pub fn set_auto_unlock(on: bool) {
+    AUTO_UNLOCK.store(on, Ordering::Release);
+}
+
+fn auto_unlock() -> bool {
+    AUTO_UNLOCK.load(Ordering::Acquire)
+}
 
 /// Sets the absolute LBA of GALF slot 0. Call before [`init`].
 pub fn set_disk_lba_base(lba: u32) {
@@ -425,9 +448,14 @@ pub fn init() {
             need,
             disk_lba_base(),
         );
+    } else if disk_usable() && !auto_unlock() {
+        format_ram_table();
+        crate::serial_println!("[galfs] volume locked; passphrase required");
+        return;
     } else if disk_usable() {
-        match load_from_disk() {
+        match load_from_disk(VOLUME_PASSPHRASE) {
             DiskLoad::Loaded { recovered } => {
+                store_passphrase(VOLUME_PASSPHRASE);
                 let slot = ACTIVE_SLOT.load(Ordering::Relaxed);
                 let gen = ACTIVE_GEN.load(Ordering::Relaxed);
                 if recovered {
@@ -457,7 +485,8 @@ pub fn init() {
     format_fresh();
 }
 
-fn format_fresh() {
+/// In-RAM admin tree. Does not install a volume key or touch the disk.
+fn format_ram_table() {
     let mut table = TABLE.lock();
     let admin = add_actor(&mut table, ADMIN_NAME, ADMIN_DEFAULT_PASSWORD.as_bytes())
         .expect("galfs: admin");
@@ -467,11 +496,16 @@ fn format_fresh() {
     ACTIVE_SLOT.store(0, Ordering::Relaxed);
     ACTIVE_GEN.store(0, Ordering::Relaxed);
     DISK_CORRUPT.store(false, Ordering::Release);
+}
+
+fn format_fresh() {
+    format_ram_table();
     // Fresh volume key for a sealed format (bring-up passphrase).
     let mut vk = [0u8; KEY_LEN];
     crate::arch::rand::fill_bytes(&mut vk);
     *VOLUME_KEY.lock() = Some(vk);
     wipe_bytes(&mut vk);
+    store_passphrase(VOLUME_PASSPHRASE);
     if sync_to_disk() {
         crate::serial_println!(
             "[galfs] formatted sealed disk (LBA base {})",
@@ -503,6 +537,119 @@ pub fn disk_slot_info() -> (u32, u64) {
         ACTIVE_SLOT.load(Ordering::Relaxed),
         ACTIVE_GEN.load(Ordering::Relaxed),
     )
+}
+
+/// True when a usable disk is present and no volume key is installed.
+///
+/// A corrupt image is not "locked" — unlock stays [`SysError::Unsupported`].
+/// No disk means RAM-only, which is not locked.
+pub fn volume_locked() -> bool {
+    disk_usable() && !disk_corrupt() && VOLUME_KEY.lock().is_none()
+}
+
+/// Mount the sealed disk with `passphrase`, or format an empty image with it.
+///
+/// A wrong passphrase on a current-version GALF image does **not** set
+/// [`disk_corrupt`]: the RAM table stays, disk sync fails, and a later
+/// passphrase can retry. Already-unlocked and diskless boots succeed.
+pub fn unlock_volume(passphrase: &[u8]) -> Result<(), SysError> {
+    if passphrase.is_empty() || passphrase.len() > PASSPHRASE_MAX {
+        return Err(SysError::BadValue);
+    }
+    if disk_corrupt() {
+        return Err(SysError::Unsupported);
+    }
+    if !disk_usable() {
+        return Ok(());
+    }
+    if VOLUME_KEY.lock().is_some() {
+        return Ok(());
+    }
+    match load_from_disk(passphrase) {
+        DiskLoad::Loaded { recovered } => {
+            store_passphrase(passphrase);
+            let (slot, gen) = disk_slot_info();
+            if recovered {
+                RECOVERIES.fetch_add(1, Ordering::Relaxed);
+                crate::serial_println!(
+                    "[galfs] unlocked slot {} gen {} (recovered from bad sibling)",
+                    slot,
+                    gen,
+                );
+            } else {
+                crate::serial_println!("[galfs] unlocked slot {} gen {}", slot, gen);
+            }
+            Ok(())
+        }
+        DiskLoad::Empty => {
+            store_passphrase(passphrase);
+            let mut vk = [0u8; KEY_LEN];
+            crate::arch::rand::fill_bytes(&mut vk);
+            *VOLUME_KEY.lock() = Some(vk);
+            wipe_bytes(&mut vk);
+            if sync_to_disk() {
+                crate::serial_println!(
+                    "[galfs] formatted sealed disk (LBA base {})",
+                    disk_lba_base()
+                );
+                Ok(())
+            } else {
+                crate::serial_println!("[galfs] unlock format failed");
+                Err(SysError::Unsupported)
+            }
+        }
+        DiskLoad::Corrupt => {
+            crate::serial_println!("[galfs] unlock failed; RAM-only");
+            Err(SysError::AccessDenied)
+        }
+    }
+}
+
+/// Flush a dirty unlocked volume, then zero the key and passphrase.
+///
+/// No-op without a usable disk. Called when the last session logs out.
+pub fn seal_and_lock() {
+    if !disk_usable() {
+        return;
+    }
+    if VOLUME_KEY.lock().is_some() {
+        sync_if_dirty();
+    }
+    wipe_volume_key();
+}
+
+/// Zero the volume key and stored passphrase. Disk image is left as last synced.
+///
+/// Residual RAM remanence after this wipe is an accepted cold-boot risk.
+pub fn wipe_volume_key() {
+    let mut had = false;
+    {
+        let mut key = VOLUME_KEY.lock();
+        if let Some(bytes) = key.as_mut() {
+            wipe_bytes(bytes);
+            had = true;
+        }
+        *key = None;
+    }
+    {
+        let mut pass = VOLUME_PASS.lock();
+        if pass.len > 0 {
+            wipe_bytes(&mut pass.bytes);
+            pass.len = 0;
+            had = true;
+        }
+    }
+    if had {
+        crate::serial_println!("[galfs] volume key wiped");
+    }
+}
+
+fn store_passphrase(pass: &[u8]) {
+    let mut slot = VOLUME_PASS.lock();
+    wipe_bytes(&mut slot.bytes);
+    let n = pass.len().min(PASSPHRASE_MAX);
+    slot.bytes[..n].copy_from_slice(&pass[..n]);
+    slot.len = n;
 }
 
 /// Writes the in-RAM table to the block device. No-op when RAM-only.
@@ -539,17 +686,16 @@ fn sync_to_disk() -> bool {
     if !disk_usable() || DISK_CORRUPT.load(Ordering::Acquire) {
         return false;
     }
-    if VOLUME_KEY.lock().is_none() {
-        crate::serial_println!("[galfs] sync skipped: volume locked");
-        return false;
-    }
     let next_gen = ACTIVE_GEN.load(Ordering::Relaxed).wrapping_add(1);
     let next_slot = 1 - ACTIVE_SLOT.load(Ordering::Relaxed);
     let lba = slot_lba(next_slot);
     let mut buf = DISK_BUF.lock();
     {
         let table = TABLE.lock();
-        encode_table(&table, next_gen, &mut buf);
+        if !encode_table(&table, next_gen, &mut buf) {
+            crate::serial_println!("[galfs] sync skipped: volume locked");
+            return false;
+        }
     }
     let d = disk();
     if d.write_sectors(lba, &*buf).is_err() {
@@ -573,7 +719,7 @@ enum DiskLoad {
     Corrupt,
 }
 
-fn load_from_disk() -> DiskLoad {
+fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
     let mut best_gen = 0u64;
     let mut best_slot: Option<u32> = None;
     // True when a slot had GALF magic at the current DISK_VERSION but
@@ -604,7 +750,7 @@ fn load_from_disk() -> DiskLoad {
             );
             continue;
         }
-        let Some(gen) = decode_table(&mut buf, &mut cand) else {
+        let Some(gen) = decode_table(&mut buf, &mut cand, passphrase) else {
             if magic && version == DISK_VERSION {
                 saw_corrupt_current = true;
                 bad_with_magic += 1;
@@ -667,10 +813,25 @@ fn refresh_roots(table: &Table) {
     ADMIN_ROOT.store(admin, Ordering::Relaxed);
 }
 
-fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; block::SECTOR]; DISK_SECTORS]) {
-    let vk = VOLUME_KEY
-        .lock()
-        .expect("galfs: encode requires unlocked volume");
+fn encode_table(
+    table: &Table,
+    generation: u64,
+    sectors: &mut [[u8; block::SECTOR]; DISK_SECTORS],
+) -> bool {
+    // KEY then PASS (same order as [`wipe_volume_key`]).
+    let (mut vk, mut pass_buf, pass_len) = {
+        let key_guard = VOLUME_KEY.lock();
+        let Some(key) = *key_guard else {
+            return false;
+        };
+        let pass = VOLUME_PASS.lock();
+        let mut buf = [0u8; PASSPHRASE_MAX];
+        let n = pass.len.min(PASSPHRASE_MAX);
+        if n > 0 {
+            buf[..n].copy_from_slice(&pass.bytes[..n]);
+        }
+        (key, buf, n)
+    };
     let flat = sectors_flat_mut(sectors);
     flat.fill(0);
     flat[0..4].copy_from_slice(&DISK_MAGIC);
@@ -732,7 +893,8 @@ fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; block::SECTO
 
     let aad = seal_aad(generation);
 
-    // Wrap volume key with KEK from the bring-up passphrase.
+    // Re-wrap with the passphrase that unlocked this boot (bring-up constant
+    // when nothing was stored).
     let mut kdf_salt = [0u8; SALT_LEN];
     let mut wrap_nonce = [0u8; NONCE_LEN];
     let mut data_nonce = [0u8; NONCE_LEN];
@@ -740,7 +902,13 @@ fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; block::SECTO
     crate::arch::rand::fill_bytes(&mut wrap_nonce);
     crate::arch::rand::fill_bytes(&mut data_nonce);
     let mut kek = [0u8; KEY_LEN];
-    derive_key(VOLUME_PASSPHRASE, &kdf_salt, &mut kek);
+    let phrase: &[u8] = if pass_len == 0 {
+        VOLUME_PASSPHRASE
+    } else {
+        &pass_buf[..pass_len]
+    };
+    derive_key(phrase, &kdf_salt, &mut kek);
+    wipe_bytes(&mut pass_buf);
     let mut wrapped = vk;
     let mut wrap_tag = [0u8; TAG_LEN];
     seal(&kek, &wrap_nonce, &aad, &mut wrapped, &mut wrap_tag);
@@ -766,6 +934,8 @@ fn encode_table(table: &Table, generation: u64, sectors: &mut [[u8; block::SECTO
 
     let sum = crc32(&flat[DISK_HEADER..DISK_HEADER + PAYLOAD_LEN]);
     flat[24..28].copy_from_slice(&sum.to_le_bytes());
+    wipe_bytes(&mut vk);
+    true
 }
 
 fn seal_aad(generation: u64) -> [u8; 14] {
@@ -781,6 +951,7 @@ fn seal_aad(generation: u64) -> [u8; 14] {
 fn decode_table(
     sectors: &mut [[u8; block::SECTOR]; DISK_SECTORS],
     table: &mut Table,
+    passphrase: &[u8],
 ) -> Option<u64> {
     let flat = sectors_flat_mut(sectors);
     if flat[0..4] != DISK_MAGIC {
@@ -815,7 +986,7 @@ fn decode_table(
     let data_tag: [u8; TAG_LEN] = flat[112..128].try_into().ok()?;
 
     let mut kek = [0u8; KEY_LEN];
-    derive_key(VOLUME_PASSPHRASE, &kdf_salt, &mut kek);
+    derive_key(passphrase, &kdf_salt, &mut kek);
     if !open(&kek, &wrap_nonce, &aad, &mut wrapped, &wrap_tag) {
         wipe_bytes(&mut kek);
         wipe_bytes(&mut wrapped);

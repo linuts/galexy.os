@@ -437,6 +437,28 @@ fn boot_once_with_galfs(
     (code, serial)
 }
 
+/// One boot with a fresh zeroed GALF image on the IDE slave.
+pub fn boot_galfs_once(image: &Image) -> (Option<i32>, String) {
+    let galfs_path = std::env::temp_dir().join(format!(
+        "galexy-galfs-once-{}-{}.img",
+        image.name.replace('-', "_"),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::write(&galfs_path, vec![0u8; GALFS_IMG_BYTES]).expect("create galfs.img");
+    let result = boot_once_with_galfs(
+        &image.bios,
+        &galfs_path,
+        &image.name,
+        GalfsDiskCache::Writethrough,
+        GalfsBackend::IdeSlave,
+    );
+    let _ = std::fs::remove_file(&galfs_path);
+    result
+}
+
 /// Boots `image` headless until it exits or the timeout elapses.
 ///
 /// Returns the QEMU exit code (see [`QEMU_EXIT_SUCCESS`] / [`QEMU_EXIT_FAILED`];

@@ -753,6 +753,22 @@ fn syscall_user(frame: &Context) -> SyscallResult {
             Ok(()) => SyscallResult::ok(0),
             Err(err) => SyscallResult::err(err),
         },
+        galexy_abi::USER_UNLOCK => {
+            if frame.r9 == 0 {
+                return SyscallResult::ok(u64::from(crate::sched::galfs::volume_locked()));
+            }
+            let mut pass = [0u8; 64];
+            let Some(p) = copy_user_str(frame.r8, frame.r9, &mut pass, false) else {
+                galexy_crypto::wipe_bytes(&mut pass);
+                return SyscallResult::err(SysError::BadValue);
+            };
+            let result = crate::sched::galfs::unlock_volume(&pass[..p]);
+            galexy_crypto::wipe_bytes(&mut pass);
+            match result {
+                Ok(()) => SyscallResult::ok(0),
+                Err(err) => SyscallResult::err(err),
+            }
+        }
         galexy_abi::USER_DEL | galexy_abi::USER_SU => {
             let mut raw = [0u8; MAX_NAME as usize];
             let Some(n) = copy_user_str(addr, len, &mut raw, true) else {
@@ -1312,6 +1328,7 @@ fn syscall_power(cap: Cap, op: u64) -> SyscallResult {
     }
     // Durability before the machine goes away (write-back may still be dirty).
     crate::sched::galfs::sync();
+    crate::sched::galfs::wipe_volume_key();
     match op {
         galexy_abi::POWER_SHUTDOWN => crate::arch::power::shutdown(),
         galexy_abi::POWER_REBOOT => crate::arch::power::reboot(),

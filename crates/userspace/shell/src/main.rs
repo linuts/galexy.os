@@ -25,7 +25,7 @@ use galexy_rt::{
     arg, close, create, create_replace, entry, files_cap, grant, keyboard_cap, open, read, reboot,
     revoke, share, shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, user,
     user_login, user_logout, user_name, user_name_pass, user_passwd, user_quota, user_setquota,
-    wait, write, write_console, yield_now,
+    user_unlock, volume_locked, wait, write, write_console, yield_now,
 };
 
 /// Exit status of the last Cap-waited utility (or spawn failure).
@@ -119,6 +119,7 @@ fn session_logged_in() -> bool {
 /// Returns `Some(must_change)` — `must_change` is set when `admin` still
 /// uses the format default password.
 fn login_screen(kbd: Cap, tty: u8) -> Option<bool> {
+    prompt_volume(kbd);
     loop {
         write_console(&[0x0c]);
         write_console(b"Galexy.OS v");
@@ -159,6 +160,43 @@ fn login_screen(kbd: Cap, tty: u8) -> Option<bool> {
                 for _ in 0..30 {
                     yield_now();
                 }
+            }
+        }
+    }
+}
+
+/// Ask for the volume passphrase when the disk is locked.
+///
+/// An empty line skips to the RAM-only login. A wrong passphrase retries.
+fn prompt_volume(kbd: Cap) {
+    if !volume_locked() {
+        return;
+    }
+    loop {
+        write_console(b"Volume passphrase: ");
+        let mut pass = [0u8; PASS_MAX];
+        match read_line(kbd, &mut pass, true) {
+            LineRead::Denied => {
+                wipe(&mut pass);
+                return;
+            }
+            LineRead::Cancel | LineRead::Overlong => {
+                wipe(&mut pass);
+                continue;
+            }
+            LineRead::Line(0) => {
+                wipe(&mut pass);
+                write_console(b"\nVolume stays locked (RAM-only)\n");
+                return;
+            }
+            LineRead::Line(n) => {
+                let result = user_unlock(&pass[..n]);
+                wipe(&mut pass);
+                if result.ok {
+                    write_console(b"\n");
+                    return;
+                }
+                write_console(b"\nVolume unlock failed\n");
             }
         }
     }

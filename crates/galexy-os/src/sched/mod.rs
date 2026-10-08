@@ -3117,26 +3117,34 @@ pub(crate) fn task_login(name: &str, password: &[u8]) -> Result<(), SysError> {
 }
 
 /// Clear the caller's session (logged out / pre-login).
+///
+/// The last live session also seals and wipes the volume key so the next
+/// login screen prompts again.
 pub(crate) fn task_logout() -> Result<(), SysError> {
     let slot = current_slot();
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    interrupts::without_interrupts(|| {
+    let seal = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
         if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
         }
         let tty = caller.tty;
+        let was_in = caller.fs_root != galfs::NO_OBJECT;
         let gen = clear_session(caller);
         serial_println!(
             "[auth] session logout gen={} tty={}",
             gen,
             tty.saturating_add(1)
         );
-        Ok(())
-    })
+        Ok(was_in && !sessions_open(&threads))
+    })?;
+    if seal {
+        galfs::seal_and_lock();
+    }
+    Ok(())
 }
 
 /// Install `ALL` on `target`, durable home shares, and grants for that actor.
@@ -3199,6 +3207,17 @@ pub(crate) fn task_unshare(path: &str, rights: u8, grantee: &str) -> Result<(), 
         Ok((caller.fs_root, caller.fs_tokens))
     })?;
     galfs::remove_share(fs_root, &fs_tokens, path, rights, grantee)
+}
+
+/// Another user task still holds a logged-in root.
+fn sessions_open(threads: &[Thread]) -> bool {
+    threads.iter().any(|t| {
+        if !t.is_user || t.fs_root == galfs::NO_OBJECT {
+            return false;
+        }
+        let state = t.state.load(Ordering::Acquire);
+        state == STATE_RUNNING || state == STATE_WAITING
+    })
 }
 
 fn clear_session(caller: &mut Thread) -> u64 {
@@ -3379,9 +3398,10 @@ pub fn note_tty_input(tty: u8) {
 /// blob can trip the same path.
 fn idle_scan(all_tasks: bool) {
     let now = crate::arch::timer_ticks();
-    interrupts::without_interrupts(|| {
+    let seal = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let n = threads.len();
+        let mut cleared = false;
         for i in 0..n {
             if !threads[i].is_user {
                 continue;
@@ -3411,6 +3431,7 @@ fn idle_scan(all_tasks: bool) {
                 tty.saturating_add(1)
             );
             let _ = clear_session(&mut threads[i]);
+            cleared = true;
             if state == STATE_WAITING {
                 interrupt_io_waiter(&mut threads, i);
             }
@@ -3419,7 +3440,11 @@ fn idle_scan(all_tasks: bool) {
                 .store(EXIT_KILLED, Ordering::Release);
             threads[i].state.store(STATE_EXITED, Ordering::Release);
         }
+        cleared && !sessions_open(&threads)
     });
+    if seal {
+        galfs::seal_and_lock();
+    }
 }
 
 /// Main-loop idle logout for F-key shells.

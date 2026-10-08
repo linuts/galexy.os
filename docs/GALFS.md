@@ -211,17 +211,25 @@ scope initially.
 4. AAD binds magic + version + generation (slot splice rejected).
 5. CRC of ciphertext is a cheap reject before AEAD open.
 
-Bring-up unlock uses a fixed volume passphrase (`galfs` today).
-Interactive unlock is a follow-up. Details: `AUTH.md` → Sealed GALF.
+Test kernels auto-unlock with the fixed passphrase `galfs`. Production
+boot leaves the volume locked and the F1 login screen prompts before
+`Login as:`. A wrong passphrase refuses disk sync and keeps the RAM
+table (not a corrupt image). The last logout and power-off zero the
+volume key in RAM; cold-boot remanence is accepted. The MAC stays
+HMAC-SHA256 (Poly1305 needs a versioned cutover). Per-file keys,
+secure erase, and TPM seal are non-goals. Details: `AUTH.md` → Sealed GALF.
 
 v11 refuses older images; delete `galfs.img` or let format recreate.
 
 ## Boot and format
 
-1. If a `BlockDevice` with capacity ≥ dual-slot image is present → try
-   load newest valid sealed slot.
+1. If a `BlockDevice` with capacity ≥ dual-slot image is present and
+   auto-unlock is on → try load newest valid sealed slot with `galfs`.
+   Production boot (auto-unlock off) builds a RAM admin table and waits
+   for `USER_UNLOCK` instead of reading the image.
 2. Empty zeros (no GALF magic) → format: immortal `admin` + `Desktop/`,
    default password `admin`, new volume key, sync sealed image.
+   Interactive unlock of an empty image formats with the typed passphrase.
 3. Both slots carry GALF magic but fail decode/validate → **refuse
    silent format**; galfs stays unavailable (`Unsupported` on sync /
    mutates that need a mount). Serial: `disk corrupt; refusing silent
