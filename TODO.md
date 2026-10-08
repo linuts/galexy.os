@@ -1166,7 +1166,7 @@ Lockout and idle logout need a trustworthy clock source.
 - [x] Docs: time model for reviewers — SCHEDULING.md (M56); policy freeze
       **Milestone 58** ✅
 
-## Milestone 44 — Sealed GALF (disk encryption)
+## Milestone 44 — Sealed GALF (disk encryption) ✅
 
 Protect the ATA image at rest (password hashes and file bytes).
 
@@ -1182,13 +1182,24 @@ Protect the ATA image at rest (password hashes and file bytes).
       (`galfs`); sync refused while locked
 - [x] **Test**: `test-galfs-disk` round-trip; host asserts `persist-ok`
       is absent from raw `galfs.img` bytes
-- [ ] **Interactive unlock**: prompt on F1 (or runner flag) before
-      mounting; wrong passphrase → refuse mutate / RAM-only fallback
-- [ ] **Key wipe**: volume key zeroed on logout/shutdown path where held
-      in RAM; document residual cold-boot risk as accepted
-- [ ] **Poly1305 follow-up**: swap HMAC tag for RFC 8439 Poly1305 without
-      resizing the v6 header (same key/nonce/tag widths)
-- [ ] Explicit non-goal until later: per-file keys, secure erase, TPM seal
+- [x] **Interactive unlock**: production boot leaves the volume locked
+      (`set_auto_unlock(false)`). The login screen prompts
+      `Volume passphrase:` and calls `USER_UNLOCK` before `Login as:`.
+      A wrong passphrase logs `[galfs] unlock failed; RAM-only`, does
+      not mark the disk corrupt, and `sync` returns `Unsupported`.
+      RAM login still works. An empty line skips to that fallback.
+      Test kernels and disk harnesses keep auto-unlock with
+      `VOLUME_PASSPHRASE` (`galfs`). `bin/test-unlock`
+- [x] **Key wipe**: last logout and the power path sync, then zero the
+      volume key and stored passphrase (`[galfs] volume key wiped`).
+      The next login screen prompts again. Residual cold-boot RAM
+      remanence is accepted (`AUTH.md`)
+- [x] **Poly1305 follow-up**: waived. The v6 tag is already 16 bytes,
+      but the MAC is HMAC-SHA256, not RFC 8439 Poly1305. Swapping the
+      MAC without a version bump would fail `open` on every sealed
+      image and look like corruption. A later layout bump can cut over
+- [x] Explicit non-goal: per-file keys, secure erase, TPM seal
+      (documented in `AUTH.md` / `GALFS.md`)
 
 ## Milestone 45 — galfs for real usage
 
@@ -1951,7 +1962,7 @@ items stay here with rationale.
       kernel pages) — **Milestone 48** (implement or waive with numbers)
 - [ ] Auth hardening (crypto, prompts, sessions, least privilege) —
       **Milestone 43**
-- [ ] Sealed GALF — **Milestone 44**
+- [x] Sealed GALF — **Milestone 44**
 - [ ] galfs for real usage — **Milestone 45**
 - [x] Storage stack — **Milestone 46**
 - [ ] Process/ABI/caps (process-Cap foundation) — **Milestone 47**

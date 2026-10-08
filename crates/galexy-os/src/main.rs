@@ -36,6 +36,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     galexy_os::arch::mm::init(boot_info); // frames + paging + heap
     galexy_os::arch::init(boot_info); // interrupts last to init: handlers depend on drivers
+    // Production seats prompt for the volume passphrase. Test kernels
+    // leave auto-unlock on and keep using `VOLUME_PASSPHRASE`.
+    sched::galfs::set_auto_unlock(false);
     sched::init();
     sched::demo::spawn_all(); // silent preemptive threads
     banner::show();

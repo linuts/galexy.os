@@ -658,7 +658,13 @@ cross-actor rename return `NoResource` when exceeded (`USER_QUOTA` /
 that actor and clears tokens and durable shares that named its objects.
 Empty zeros format; both slots with GALF magic that fail checks leave
 galfs unavailable (no silent format). Without a slave the table stays
-RAM-only. Empty files allocate no blocks; append grows through direct
+RAM-only. Production boot does not auto-unlock: the seat prompts for
+the volume passphrase (`USER_UNLOCK`) before mounting. A wrong
+passphrase keeps the RAM table and refuses disk sync. The last logout
+and power-off zero the volume key (cold-boot remanence accepted). The
+payload MAC stays HMAC-SHA256; RFC 8439 Poly1305 waits for a versioned
+cutover. `bin/test-unlock` covers wipe, a rejected guess, and remount.
+Empty files allocate no blocks; append grows through direct
 then single-indirect pointers (32 KiB max); remove frees blocks back to
 the bitmap. `cargo run` attaches a persistent `galfs.img`.
 `bin/test-galfs-disk` proves multi-block persist and dual-slot recover;

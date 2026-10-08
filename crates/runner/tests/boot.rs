@@ -4,7 +4,8 @@
 mod common;
 
 use common::{
-    boot, boot_and_type, boot_and_type_uefi, boot_liveness, boot_uefi, boot_with_galfs,
+    boot, boot_and_type, boot_and_type_uefi, boot_galfs_once, boot_liveness, boot_uefi,
+    boot_with_galfs,
     boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_part,
     boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio, image,
     GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
@@ -1126,6 +1127,32 @@ fn mustchange_test_passes() {
     assert!(
         serial.contains("[test-mustchange] passed"),
         "test-mustchange success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn unlock_test_passes() {
+    let (code, serial) = boot_galfs_once(&image("test-unlock"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-unlock should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[galfs] unlock failed; RAM-only"),
+        "wrong passphrase must stay RAM-only; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[galfs] volume key wiped"),
+        "key wipe missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[galfs] unlocked slot"),
+        "correct passphrase must remount; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-unlock] passed"),
+        "test-unlock success marker missing; serial:\n{serial}"
     );
 }
 

@@ -232,7 +232,8 @@ checklist). Style: `docs/STYLE.md`.
 1. **43 Auth hardening** ✅ — KDF/CSPRNG, no-echo prompts, lockout, idle
    logout, kernel must-change, session generation, narrow admin bypass,
    spawn rights mask. Monotonic time only (no wall clock). Argon2id waived
-2. **44 Sealed GALF** — volume key + AEAD; boot unlock
+2. **44 Sealed GALF** ✅ — volume key + AEAD; interactive unlock; key
+   wipe on last logout / power. Poly1305 waived (HMAC tag stays)
 3. **45 galfs for real usage** — extents/capacity, rename/truncate/stat,
    sync/refuse-format, quotas, host fsck, durable shares, single-indirect
    (M45 polish / double-indirect remain)

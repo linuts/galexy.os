@@ -299,6 +299,10 @@ pub const USER_QUOTA: u64 = 9;
 /// `user` op: set an actor's object/byte limits (admin only).
 /// `RDI`/`RSI` name the actor; `R8 = max_objects`, `R9 = max_bytes`.
 pub const USER_SETQUOTA: u64 = 10;
+/// `user` op: volume passphrase. `R9 = 0` queries (`rax = 1` when the
+/// disk volume is locked). Otherwise `R8`/`R9` are the passphrase; a
+/// wrong passphrase leaves the RAM table and refuses disk sync.
+pub const USER_UNLOCK: u64 = 11;
 
 /// Bytes written by [`USER_QUOTA`]: four little-endian `u32` fields —
 /// objects_used, objects_max, bytes_used, bytes_max.
@@ -478,10 +482,12 @@ pub enum Syscall {
     /// Args: `RDI`/`RSI` = name or buffer, `RDX` = op ([`USER_WHOAMI`],
     /// [`USER_USERS`], [`USER_ADD`], [`USER_DEL`], [`USER_SU`],
     /// [`USER_LOGIN`], [`USER_PASSWD`], [`USER_LOGOUT`], [`USER_TOKENS`],
-    /// [`USER_QUOTA`], [`USER_SETQUOTA`]). Login/add/passwd take a
-    /// password in `R8`/`R9`; quota get takes an optional actor name
-    /// there; setquota takes max_objects/max_bytes. Whoami/users/tokens/
-    /// quota write into the buffer. Passwords authenticate identity;
+    /// [`USER_QUOTA`], [`USER_SETQUOTA`], [`USER_UNLOCK`]). Login/add/passwd
+    /// take a password in `R8`/`R9`; quota get takes an optional actor name
+    /// there; setquota takes max_objects/max_bytes. [`USER_UNLOCK`] with
+    /// `R9 = 0` reports whether the volume is locked; a passphrase in
+    /// `R8`/`R9` tries to mount. Whoami/users/tokens/quota write into the
+    /// buffer. Passwords authenticate identity;
     /// tokens authorize object access (see `docs/AUTH.md`). A login
     /// inside a cool-down is `Locked` and does not check the password.
     /// Deleting admin, a non-empty tree, or an actor a live task still

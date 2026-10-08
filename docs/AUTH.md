@@ -37,8 +37,26 @@ block pool — see `GALFS.md`):
    via PBKDF2; the volume key is wrapped with ChaCha20-HMAC-SHA256.
 3. Actor/object payload is encrypted under the volume key (same AEAD);
    AAD binds magic + version + generation so slots cannot be spliced.
-4. Boot unlocks with the bring-up passphrase automatically today;
-   interactive unlock is a follow-up.
+4. Test kernels and the disk harness auto-unlock with the bring-up
+   passphrase (`galfs`). Production `galexy-os` calls
+   `set_auto_unlock(false)` before `galfs::init`, so a usable disk stays
+   locked until the seat submits a passphrase (`USER_UNLOCK`, prompted
+   on the login screen as `Volume passphrase:`). An empty line skips
+   the prompt and keeps the RAM table. A wrong passphrase logs
+   `[galfs] unlock failed; RAM-only`, does **not** mark the disk
+   corrupt (a later passphrase can retry), and `sync` returns
+   `Unsupported`. Login against the RAM admin still works; disk
+   mutates are not committed until unlock. An empty image is formatted
+   under the typed passphrase.
+5. The volume key and stored passphrase are wiped (`[galfs] volume key
+   wiped`) after the last session logs out and after a power sync.
+   The next login screen prompts again. Wiping the key does not
+   guarantee destruction of RAM remnants: cold-boot extraction is an
+   **accepted** residual risk.
+6. The v6 tag is 16 bytes, but the MAC is HMAC-SHA256, not RFC 8439
+   Poly1305. Swapping the MAC without a version bump would fail open
+   on every sealed image. Poly1305 waits for a versioned cutover.
+7. Non-goals: per-file keys, secure erase, TPM seal.
 
 Older images (including sealed v7) are refused (format recreates admin).
 
@@ -69,11 +87,14 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
    ```text
    Galexy.OS v0.1.0 (tty1)
 
+   Volume passphrase: ********
    Login as: _
    Password: ********
    ```
 
-   Wrong password prints `Login incorrect` and repeats the screen.
+   `Volume passphrase:` appears only when a disk volume is locked.
+   The bring-up passphrase is `galfs`. Wrong password prints
+   `Login incorrect` and repeats the screen.
    A cool-down prints `Login locked` (see below).
 3. After a successful password login the prompt is `user@galexy>`.
 4. `whoami` while logged out fails (`AccessDenied`).
