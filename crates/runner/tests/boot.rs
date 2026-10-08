@@ -1523,9 +1523,10 @@ const QUERY_AFTER_LOGIN: &[(&str, &str)] = &[
 ];
 
 /// `cat`, redirection, `mkdir` / `cd` / `ls`. Enter syncs on text that
-/// appears only after the command runs. Utilities use `SPAWN_WAIT`, so a
+/// appears only after the command runs. Utilities Cap-wait, so a
 /// redirected `echo`, `mkdir`, and a successful `rm` finish before the
-/// prompt returns; syncs still use the exit line or command output.
+/// prompt returns. Sync on the prompt (or command output) — not on
+/// `[sched] …` lines, which `typing_visible` strips as uptime logs.
 const UTIL_KEYS: &[(&str, &str)] = &[
     ("c", "c"),
     ("a", "a"),
@@ -1564,7 +1565,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("o", "o"),
     ("t", "t"),
     ("e", "e"),
-    ("ret", "[sched] task 'echo' exited"),
+    ("ret", "admin@galexy> "),
     ("c", "c"),
     ("a", "a"),
     ("t", "t"),
@@ -1591,7 +1592,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("o", "o"),
     ("t", "t"),
     ("e", "e"),
-    ("ret", "[sched] task 'echo' exited"),
+    ("ret", "admin@galexy> "),
     ("c", "c"),
     ("a", "a"),
     ("t", "t"),
@@ -1610,7 +1611,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("b", "b"),
     ("o", "o"),
     ("x", "x"),
-    ("ret", "[sched] task 'mkdir' exited"),
+    ("ret", "admin@galexy> "),
     ("c", "c"),
     ("d", "d"),
     ("spc", " "),
@@ -1635,7 +1636,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("e", "e"),
     ("a", "a"),
     ("f", "f"),
-    ("ret", "[sched] task 'echo' exited"),
+    ("ret", "admin@galexy:/box> "),
     ("l", "l"),
     ("s", "s"),
     ("ret", "leaf\n"),
@@ -1695,7 +1696,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("o", "o"),
     ("t", "t"),
     ("e", "e"),
-    ("ret", "[sched] task 'rm' exited"),
+    ("ret", "admin@galexy> "),
     ("c", "c"),
     ("a", "a"),
     ("t", "t"),
@@ -1726,7 +1727,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("e", "e"),
     ("a", "a"),
     ("f", "f"),
-    ("ret", "[sched] task 'rm' exited"),
+    ("ret", "admin@galexy:/box> "),
     ("c", "c"),
     ("d", "d"),
     ("spc", " "),
@@ -1739,7 +1740,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("b", "b"),
     ("o", "o"),
     ("x", "x"),
-    ("ret", "[sched] task 'rm' exited"),
+    ("ret", "admin@galexy> "),
 ];
 
 /// Typing `shell` must not start a nested console (reserved name).
