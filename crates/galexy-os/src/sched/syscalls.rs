@@ -988,6 +988,7 @@ fn query_kind(index: u64) -> Option<Query> {
         galexy_abi::reserved::TASKS_INDEX => Some(Query::Tasks),
         galexy_abi::reserved::THREADS_INDEX => Some(Query::Threads),
         galexy_abi::reserved::FILES_INDEX => Some(Query::Files),
+        galexy_abi::reserved::DMESG_INDEX => Some(Query::Dmesg),
         _ => None,
     }
 }
@@ -997,6 +998,7 @@ enum Query {
     Tasks,
     Threads,
     Files,
+    Dmesg,
 }
 
 fn syscall_read_query(cap: Cap, kind: Query, addr: u64, len: u64) -> SyscallResult {
@@ -1025,6 +1027,9 @@ fn syscall_read_query(cap: Cap, kind: Query, addr: u64, len: u64) -> SyscallResu
         Query::Tasks => render_tasks(&mut out),
         Query::Threads => render_threads(&mut out),
         Query::Files => render_files(&mut out),
+        Query::Dmesg => {
+            out.n = crate::drivers::dmesg::snapshot(out.dst);
+        }
     }
     let n = out.n;
     if n > 0 {

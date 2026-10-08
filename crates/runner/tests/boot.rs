@@ -216,6 +216,24 @@ fn screen_test_passes() {
 }
 
 #[test]
+fn audit_console_test_passes() {
+    let (code, serial) = boot(&image("test-audit"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-audit should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-audit] passed"),
+        "test-audit success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[kbd] queue full"),
+        "keyboard overflow must warn on serial; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn sched_test_passes() {
     let (code, serial) = boot(&image("test-sched"));
     assert_eq!(
@@ -2435,7 +2453,7 @@ fn smpstress_test_passes() {
         "test-smpstress success marker missing; serial:\n{serial}"
     );
     assert!(
-        serial.contains("stole 'spinner'"),
+        serial.contains("[test-smpstress] phase A: steal proven"),
         "the steal proof must show the owner flip; serial:\n{serial}"
     );
 }

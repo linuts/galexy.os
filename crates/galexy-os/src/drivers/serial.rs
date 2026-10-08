@@ -77,10 +77,12 @@ macro_rules! serial_println {
     () => ($crate::serial_print!("\n"));
     ($fmt:expr) => {{
         let secs = $crate::arch::timer_ticks() / 1000;
+        $crate::drivers::dmesg::record(format_args!(concat!("{}s: ", $fmt), secs));
         $crate::serial_print!(concat!("{}s: ", $fmt, "\n"), secs);
     }};
     ($fmt:expr, $($arg:tt)*) => {{
         let secs = $crate::arch::timer_ticks() / 1000;
+        $crate::drivers::dmesg::record(format_args!(concat!("{}s: ", $fmt), secs, $($arg)*));
         $crate::serial_print!(concat!("{}s: ", $fmt, "\n"), secs, $($arg)*);
     }};
 }

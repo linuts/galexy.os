@@ -247,7 +247,8 @@ checklist). Style: `docs/STYLE.md`.
 6. **48 Memory, safety & concurrency** ✅ — W^X, stack wipe, fixed
    user maps (demand paging waived), heap policy, FSGSBASE required,
    lock-order table, secret scrub. PCID and ASLR waived
-7. **49 Console, audit & UX** — cursor, overflow, auth/grant audit log
+7. **49 Console, audit & UX** ✅ — blink cursor, keyboard overflow,
+   auth/grant audit lines, dmesg cap, `verbose-sched` steal trace
 8. **50 Shell for real demos** — pipes, glob, line editing
 9. **51 Docs, tests, CI & soak** — THREAT/FS, negative suite, review-smoke,
    non-goals freeze

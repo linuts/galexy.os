@@ -86,8 +86,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
         sched::reap();
         sched::run();
-        // Tickless idle: one-shot until next second (or quantum if busy).
-        sched::arm_timer_for_load();
+        screen::blink_cursor();
+        // Tickless idle: one-shot until the next blink edge (500 ms) or
+        // the next second, whichever is sooner. A busy CPU stays on the
+        // preempt quantum.
+        let into = (galexy_os::arch::timer_ticks() % 500) as u32;
+        sched::arm_timer_capped((500 - into).max(1));
         x86_64::instructions::hlt();
     }
 }

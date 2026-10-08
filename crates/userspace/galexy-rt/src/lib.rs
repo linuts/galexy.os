@@ -483,6 +483,12 @@ pub fn files_cap() -> Cap {
     galexy_abi::reserved::files(CapRights::READ)
 }
 
+/// The dmesg capability (READ). [`read`] returns the newest kernel log
+/// lines that fit in the buffer. Requires the query grant (logged-in seat).
+pub fn dmesg_cap() -> Cap {
+    galexy_abi::reserved::dmesg(CapRights::READ)
+}
+
 /// The power capability. [`shutdown`] and [`reboot`] do not return when the
 /// machine honors them.
 pub fn power_cap() -> Cap {

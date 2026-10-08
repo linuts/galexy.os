@@ -17,6 +17,7 @@ galfs access cards), not global file descriptors or PIDs.
 | How the kernel is wired | [`docs/DESIGN.md`](docs/DESIGN.md) |
 | Coding rules | [`docs/STYLE.md`](docs/STYLE.md) |
 | What’s next | [`docs/ROADMAP.md`](docs/ROADMAP.md) · [`TODO.md`](TODO.md) |
+| Reviewer demo (login, card, two TTYs) | [`docs/DEMO.md`](docs/DEMO.md) |
 
 ## Try it
 
@@ -74,6 +75,7 @@ frames). Up/down arrows recall session history (written to
 | `ls` / `echo hi` / `mkdir box` | Files under your tree |
 | `whoami` / `users` / `useradd` | Identity |
 | `grant` / `revoke` / `su` | Access cards (see AUTH.md) |
+| `dmesg` | Recent kernel log (after login) |
 | `logout` | Back to the login screen |
 | `hello` | Sample user program (keeps running) |
 | `shutdown` / `reboot` | Power (admin) |

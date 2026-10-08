@@ -216,6 +216,30 @@ logged-in F-key shell with no keystrokes for 60 s (`IDLE_LOGOUT_MS` on
 `timer_ticks`) is exited; init respawns a logged-out seat
 (`[auth] idle logout`).
 
+COM1 audit lines name the actor, path, rights mask, or target task.
+They never include password bytes. Rights are the raw mask
+(`0x1` read, `0x2` write, `0x4` list, `0x8` create, `0x10` remove,
+`0x80` one-shot). `dmesg` (query cap `0x8007`) shows the same lines
+after login. Repeated `login fail` lines collapse in that ring.
+
+```text
+[auth] session login user=admin gen=1 tty=1
+[auth] session logout gen=2 tty=1
+[auth] session su user=eve gen=3 tty=1
+[auth] passwd user=admin
+[auth] passwd fail user=admin err=2
+[auth] useradd user=eve
+[auth] useradd fail user=eve err=2
+[auth] userdel user=eve
+[auth] userdel fail user=eve err=4
+[auth] grant actor=admin path=/Desktop rights=0x1 target=shell2
+[auth] revoke actor=admin path=/Desktop rights=0x1 target=shell2
+```
+
+A secret prompt (`login`, volume unlock, `passwd`, confirm) echoes `*`
+and the COM1 mirror of that write is stars, not the secret. Esc or
+Ctrl-C cancels the prompt. Ctrl-D is ignored; it is not end-of-file.
+
 While `admin`’s password is still `admin`, the actor carries a
 must-change flag (bit 15 of the on-disk object quota; the quota value
 itself masks that bit off). Password login copies it onto the task.

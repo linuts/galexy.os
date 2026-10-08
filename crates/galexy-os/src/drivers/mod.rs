@@ -6,6 +6,7 @@
 pub mod ata;
 pub mod block;
 pub mod console;
+pub mod dmesg;
 pub mod keyboard;
 pub mod pci;
 pub mod screen;

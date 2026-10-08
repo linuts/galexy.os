@@ -173,11 +173,33 @@ struct ScreenWriter {
     focus: usize,
     /// TTY currently painted on the framebuffer.
     shown: usize,
+    /// Underscore phase. The main loop toggles this every 500 ms.
+    blink_on: bool,
+    /// `apply_blink` has run at least once (so the first phase paints).
+    blink_seen: bool,
+    /// An underscore is drawn at [`Self::mark_x`] / [`Self::mark_y`].
+    mark_shown: bool,
+    mark_x: usize,
+    mark_y: usize,
 }
 
 impl ScreenWriter {
     /// Writes one character, including tab, CR, and CSI sequences.
+    ///
+    /// The blink mark is cleared before the glyph and redrawn after, so
+    /// a block cannot stick on a cell the cursor has left.
     fn write_char(&mut self, c: char) {
+        let paint = self.focus == self.shown;
+        if paint {
+            self.hide_mark();
+        }
+        self.dispatch_char(c);
+        if paint && self.blink_on {
+            self.show_mark();
+        }
+    }
+
+    fn dispatch_char(&mut self, c: char) {
         match self.ansi.state {
             AnsiState::Esc => {
                 self.feed_esc(c);
@@ -485,6 +507,11 @@ impl ScreenWriter {
     /// because drawing a space glyph writes nothing (zero-intensity skip).
     fn clear_cell(&mut self) {
         self.store_cell('\0');
+        self.blank_cell_pixels();
+    }
+
+    /// Blacks out the cell at the cursor. Does not change the cell grid.
+    fn blank_cell_pixels(&mut self) {
         if !self.paint_pixels() {
             return;
         }
@@ -623,6 +650,9 @@ impl ScreenWriter {
     /// The framebuffer changes only when that TTY is the one on screen, so
     /// a background clear leaves the visible console alone.
     fn clear(&mut self) {
+        if self.focus == self.shown {
+            self.mark_shown = false;
+        }
         self.clear_all_cells();
         if self.focus == self.shown {
             let buffer = &mut *self.fb.buffer;
@@ -757,6 +787,120 @@ impl ScreenWriter {
         self.fg = saved_fg;
         self.ansi = saved_ansi;
     }
+
+    fn shown_cursor(&self) -> (usize, usize) {
+        if self.focus == self.shown {
+            (self.char_x, self.char_y)
+        } else {
+            let grids = GRIDS.lock();
+            let i = self.shown.min(super::keyboard::TTY_COUNT - 1);
+            (grids.x[i], grids.y[i])
+        }
+    }
+
+    /// Restores the cell under the blink mark so the underscore cannot stick.
+    fn hide_mark(&mut self) {
+        if !self.mark_shown {
+            return;
+        }
+        let x = self.mark_x;
+        let y = self.mark_y;
+        self.mark_shown = false;
+        self.redraw_shown_cell(x, y);
+    }
+
+    fn show_mark(&mut self) {
+        let (x, y) = self.shown_cursor();
+        let cols = self.max_char_x();
+        let rows = self.text_rows();
+        if cols == 0 || rows == 0 || x >= cols || y >= rows {
+            return;
+        }
+        self.draw_underscore(x, y);
+        self.mark_x = x;
+        self.mark_y = y;
+        self.mark_shown = true;
+    }
+
+    fn apply_blink(&mut self, on: bool) {
+        self.blink_on = on;
+        self.blink_seen = true;
+        self.hide_mark();
+        if on {
+            self.show_mark();
+        }
+    }
+
+    /// Two-pixel bar at the bottom of a cell. Does not change the grid.
+    fn draw_underscore(&mut self, x: usize, y: usize) {
+        let x_origin = x * self.char_width;
+        let y_origin = y * LINE_HEIGHT + FONT_HEIGHT.val().saturating_sub(2);
+        let buffer = &mut *self.fb.buffer;
+        let info = self.fb.info;
+        let pixel = DEFAULT_FG;
+        for row in 0..2 {
+            let py = y_origin + row;
+            if py >= info.height {
+                break;
+            }
+            for col in 0..self.char_width {
+                let px = x_origin + col;
+                if px >= info.width {
+                    break;
+                }
+                let idx = (py * info.stride + px) * info.bytes_per_pixel;
+                Self::write_pixel(buffer, idx, info, pixel);
+            }
+        }
+    }
+
+    fn redraw_shown_cell(&mut self, x: usize, y: usize) {
+        if y >= TTY_ROWS || x >= TTY_COLS || self.shown >= super::keyboard::TTY_COUNT {
+            return;
+        }
+        let cell = GRIDS.lock().cells[self.shown][y][x];
+        let saved_x = self.char_x;
+        let saved_y = self.char_y;
+        let saved_fg = self.fg;
+        let saved_focus = self.focus;
+        self.focus = self.shown;
+        self.char_x = x;
+        self.char_y = y;
+        self.blank_cell_pixels();
+        if cell.ch != '\0' && cell.ch != ' ' {
+            self.fg = cell.fg;
+            self.draw_glyph(cell.ch);
+        }
+        self.char_x = saved_x;
+        self.char_y = saved_y;
+        self.fg = saved_fg;
+        self.focus = saved_focus;
+    }
+
+    fn underscore_ink(&self, x: usize, y: usize) -> bool {
+        let x_origin = x * self.char_width;
+        let y_origin = y * LINE_HEIGHT + FONT_HEIGHT.val().saturating_sub(2);
+        let buffer = &*self.fb.buffer;
+        let info = self.fb.info;
+        for row in 0..2 {
+            let py = y_origin + row;
+            if py >= info.height {
+                continue;
+            }
+            for col in 0..self.char_width {
+                let px = x_origin + col;
+                if px >= info.width {
+                    continue;
+                }
+                let idx = (py * info.stride + px) * info.bytes_per_pixel;
+                let end = idx + info.bytes_per_pixel;
+                if buffer.get(idx..end).is_some_and(|px| px.iter().any(|b| *b != 0)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 impl fmt::Write for ScreenWriter {
@@ -808,6 +952,11 @@ pub fn init(boot_info: &mut bootloader_api::info::BootInfo) {
         ansi: AnsiParser::ground(),
         focus: 0,
         shown: 0,
+        blink_on: false,
+        blink_seen: false,
+        mark_shown: false,
+        mark_x: 0,
+        mark_y: 0,
     };
     writer.clear();
     *SCREEN.lock() = Some(writer);
@@ -847,10 +996,52 @@ pub fn pos() -> (usize, usize) {
 /// area — use [`draw_status_bar`] for the status row.
 pub fn set_pos(char_x: usize, char_y: usize) {
     with_lock(|screen| {
+        if screen.focus == screen.shown {
+            screen.hide_mark();
+        }
         screen.char_x = char_x;
         screen.char_y = char_y;
         screen.clamp_to_text();
+        if screen.focus == screen.shown && screen.blink_on {
+            screen.show_mark();
+        }
     });
+}
+
+/// Toggles the shown TTY's underscore from the main loop.
+///
+/// Phase is `timer_ticks / 500`. Typing clears the mark before the next
+/// glyph, so a block cannot remain on a cell the cursor has left.
+pub fn blink_cursor() {
+    let on = (crate::arch::timer_ticks() / 500).is_multiple_of(2);
+    with_lock(|screen| {
+        if screen.blink_seen && screen.blink_on == on {
+            return;
+        }
+        screen.apply_blink(on);
+    });
+}
+
+/// Draws the underscore and reports whether those pixels are lit.
+/// Test kernels call this; production uses [`blink_cursor`].
+pub fn test_cursor_bar_lit() -> bool {
+    let mut ink = false;
+    with_lock(|screen| {
+        screen.apply_blink(true);
+        ink = screen.mark_shown && screen.underscore_ink(screen.mark_x, screen.mark_y);
+    });
+    ink
+}
+
+/// Clears the underscore and reports that the cursor cell's bar is dark.
+pub fn test_cursor_bar_clear() -> bool {
+    let mut dark = false;
+    with_lock(|screen| {
+        let (x, y) = screen.shown_cursor();
+        screen.apply_blink(false);
+        dark = !screen.mark_shown && !screen.underscore_ink(x, y);
+    });
+    dark
 }
 
 /// Fills one text line's pixels with a solid color without moving the
@@ -941,9 +1132,13 @@ pub fn show_tty(index: u8) {
     let index = (index as usize).min(super::keyboard::TTY_COUNT - 1);
     super::keyboard::set_active(index as u8);
     with_lock(|screen| {
+        screen.mark_shown = false;
         screen.focus_on(index);
         screen.shown = index;
         screen.repaint_text();
+        if screen.blink_on {
+            screen.show_mark();
+        }
     });
     serial_println!("[tty] {}", index + 1);
 }
@@ -963,15 +1158,26 @@ pub fn apply_tty_switch() {
 /// [`draw_status_bar`] for the bottom status row.
 pub fn out_plain(s: &str) {
     with_lock(|screen| {
+        if screen.focus == screen.shown {
+            screen.hide_mark();
+        }
         for c in s.chars() {
             screen.put_glyph(c);
+        }
+        if screen.focus == screen.shown && screen.blink_on {
+            screen.show_mark();
         }
     });
 }
 
 /// Clears the screen.
 pub fn clear_screen() {
-    with_lock(|screen| screen.clear());
+    with_lock(|screen| {
+        screen.clear();
+        if screen.blink_on {
+            screen.show_mark();
+        }
+    });
 }
 
 /// Changes the foreground color for subsequent output.
@@ -981,7 +1187,15 @@ pub fn set_color(color: Color) {
 
 /// Erases the character left of the cursor (within the current line only).
 pub fn backspace() {
-    with_lock(|screen| screen.backspace());
+    with_lock(|screen| {
+        if screen.focus == screen.shown {
+            screen.hide_mark();
+        }
+        screen.backspace();
+        if screen.focus == screen.shown && screen.blink_on {
+            screen.show_mark();
+        }
+    });
 }
 
 /// Returns the framebuffer layout the screen renders into, if initialized.

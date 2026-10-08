@@ -22,7 +22,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
-    arg, close, create, create_replace, entry, files_cap, grant, keyboard_cap, open, read, reboot,
+    arg, close, create, create_replace, dmesg_cap, entry, files_cap, grant, keyboard_cap, open, read,
+    reboot,
     revoke, share, shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, user,
     user_login, user_logout, user_name, user_name_pass, user_passwd, user_quota, user_setquota,
     user_unlock, volume_locked, wait, write, write_console, yield_now,
@@ -443,6 +444,7 @@ fn show_help() {
     help_section(b"system");
     help_row(b"fetch", b"dashboard (alias: dashboard)");
     help_row(b"stats", b"uptime / frames / heap / galfs");
+    help_row(b"dmesg", b"recent kernel log lines");
     help_row(b"tasks", b"cooperative tasks");
     help_row(b"threads", b"preemptive thread ticks");
     help_row(b"about", b"version blurb");
@@ -454,6 +456,7 @@ fn show_help() {
     help_section(b"keys");
     help_row(b"up / down", b"history (saved on logout)");
     help_row(b"Esc / Ctrl-C", b"cancel a prompt");
+    help_row(b"Ctrl-D", b"ignored (not end of input)");
     help_row(b"F1-F12", b"switch consoles");
     write_console(b"\n");
 
@@ -758,6 +761,10 @@ fn dispatch(
     }
     if line == b"stats" {
         show(stats_cap(), cwd);
+        return None;
+    }
+    if line == b"dmesg" {
+        show(dmesg_cap(), cwd);
         return None;
     }
     if line == b"tasks" {
