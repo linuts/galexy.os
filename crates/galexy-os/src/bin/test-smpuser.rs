@@ -96,18 +96,17 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let scratch_phys = [region_a.scratch_phys, region_b.scratch_phys];
     let mut state = [Phase::Running; 2];
 
-    // Main loop: rotate while both complete; peek each scratch page.
+    // Spin-peek both scratches before any local reap. The AP reaps its own
+    // task independently and wipes frames — hlt would lose the race. IRQs
+    // stay on so BSP-pinned work still rotates.
+    x86_64::instructions::interrupts::enable();
+    let deadline = arch::timer_ticks() + 5_000;
     loop {
-        x86_64::instructions::hlt();
-        sched::reap();
         for idx in 0..2 {
             if state[idx] == Phase::Marked {
                 continue;
             }
-            // SAFETY: the scratch page stays mapped until the task's OWN
-            // reap frees its tree; the marking happens BEFORE reap-process
-            // on the owner, and the peek runs on the kernel tree — the
-            // phys map is present in every address space.
+            // SAFETY: phys map is present in every address space.
             let ptr: *const u32 = arch::mm::frame_virt(scratch_phys[idx]).as_ptr();
             let mark = unsafe { core::ptr::read_volatile(ptr) };
             if mark == DONE_MARK {
@@ -118,6 +117,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         if state[0] == Phase::Marked && state[1] == Phase::Marked {
             break;
         }
+        if arch::timer_ticks() > deadline {
+            panic!("smpuser: timed out waiting for DONE marks");
+        }
+        core::hint::spin_loop();
     }
     println!("[test-smpuser] both ring-3 tasks completed on their owners");
 

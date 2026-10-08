@@ -78,6 +78,9 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let n = galfs::append_file(file, &want).expect("append");
     assert_eq!(n, want.len());
     assert!(galfs::blocks_used() >= 2, "append must span two blocks");
+    // Two commits so both dual slots hold the persist bytes — corrupt-
+    // newest recover tests must find the file in the older sibling.
+    galfs::sync();
     galfs::sync();
 
     println!("[test-galfs-disk] wrote persist to disk");

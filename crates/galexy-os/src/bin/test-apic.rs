@@ -1,6 +1,5 @@
 //! Integration test kernel: LAPIC bring-up — detection, register roundtrip,
-//! mode/ID sanity. The timer is still PIC/PIT-delivered at this stage; this
-//! only proves the LAPIC is ON and its registers behave.
+//! mode/ID sanity, and one-shot timer arming (tickless / deadline path).
 
 #![no_std]
 #![no_main]
@@ -45,8 +44,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     // just require a plausible linear range (never some huge garbage).
     assert!(id <= 0x0F, "LAPIC id must be a small logical id, got {id}");
 
-    // 3. The LAPIC timer is LIVE: periodic mode on vector 32, calibrated
-    //    (ticks-per-ms sane), and actually ticking through the LAPIC.
+    // 3. The LAPIC timer is LIVE: one-shot (bit 17 clear) on vector 32,
+    //    calibrated, and actually firing through the LAPIC delivery path.
     const REG_LVT_TIMER: u32 = 0x320;
     let lvt = apic::reg(REG_LVT_TIMER);
     serial_println!("[test-apic] LVT timer: {:#x}", lvt);
@@ -56,17 +55,20 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         "timer must deliver on vector 32"
     );
     assert_eq!(lvt & (1 << 16), 0, "the timer LVT must be unmasked");
-    assert_ne!(lvt & (1 << 17), 0, "the timer LVT must be periodic");
+    assert_eq!(lvt & (1 << 17), 0, "the timer LVT must be one-shot");
     let tpm = apic::ticks_per_ms();
     serial_println!("[test-apic] calibrated: {} ticks/ms", tpm);
     assert!(tpm >= 1, "calibration must yield at least 1 tick/ms");
 
     // 4. Timer liveness: ticks accrue through the LAPIC delivery path.
+    //    Re-arm a short deadline so we do not depend on a prior quantum
+    //    that may already have expired between `arch::init` and here.
+    apic::arm_oneshot_ms(2);
     let t0 = arch::timer_ticks();
     while arch::timer_ticks() == t0 {
         x86_64::instructions::hlt();
     }
-    serial_println!("[test-apic] timer ticking (LAPIC-delivered)");
+    serial_println!("[test-apic] timer ticking (LAPIC one-shot)");
 
     println!("[test-apic] lapic registers verified");
     println!("[test-apic] all assertions passed");

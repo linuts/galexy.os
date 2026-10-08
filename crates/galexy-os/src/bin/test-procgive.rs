@@ -77,20 +77,41 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     });
 
     let hold: *const HolderReport = mm::frame_virt(holder_region.scratch_phys).as_ptr();
+    let peer: *const PeerReport = mm::frame_virt(peer_region.scratch_phys).as_ptr();
+    // Poll both scratches in one loop — either CPU may reap its blob first.
+    x86_64::instructions::interrupts::enable();
+    let mut href: Option<HolderReport> = None;
+    let mut pref: Option<PeerReport> = None;
     let mut elapsed = 0u64;
-    let href = loop {
-        x86_64::instructions::hlt();
+    loop {
         sched::drain_spawn();
-        sched::reap();
-        let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*hold).done)) };
-        if done == DONE {
-            break unsafe { core::ptr::read_volatile(hold) };
+        if href.is_none() {
+            let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*hold).done)) };
+            if done == DONE {
+                href = Some(unsafe { core::ptr::read_volatile(hold) });
+            }
         }
+        if pref.is_none() {
+            let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*peer).done)) };
+            if done == DONE {
+                pref = Some(unsafe { core::ptr::read_volatile(peer) });
+            }
+        }
+        if href.is_some() && pref.is_some() {
+            break;
+        }
+        core::hint::spin_loop();
         elapsed += 1;
-        if elapsed > TICK_TIMEOUT {
-            panic!("holder never finished");
+        if elapsed > TICK_TIMEOUT.saturating_mul(10_000) {
+            panic!(
+                "procgive reports incomplete (holder={}, peer={})",
+                href.is_some(),
+                pref.is_some()
+            );
         }
-    };
+    }
+    let href = href.unwrap();
+    let pref = pref.unwrap();
     assert_eq!(href.spawn_ok, 1, "spawn hello");
     assert_eq!(href.deny_ok, 0, "give without TRANSFER must fail");
     assert_eq!(
@@ -105,22 +126,6 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         SysError::BadCap as u64,
         "given-away Cap is BadCap"
     );
-
-    let peer: *const PeerReport = mm::frame_virt(peer_region.scratch_phys).as_ptr();
-    elapsed = 0;
-    let pref = loop {
-        x86_64::instructions::hlt();
-        sched::drain_spawn();
-        sched::reap();
-        let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*peer).done)) };
-        if done == DONE {
-            break unsafe { core::ptr::read_volatile(peer) };
-        }
-        elapsed += 1;
-        if elapsed > TICK_TIMEOUT {
-            panic!("peer never finished");
-        }
-    };
     assert_eq!(pref.wait_ok, 1, "peer Cap-wait must succeed");
     assert_eq!(pref.wait_code, 0, "hello exits 0");
 

@@ -384,7 +384,7 @@ fn show_help() {
     help_row(b"quota set ...", b"quota set <user> <objs> <bytes>");
     help_row(b"login [user]", b"password prompt (or inline pass)");
     help_row(b"logout", b"return to login screen");
-    help_row(b"passwd [name]", b"masked Password: + Confirm:");
+    help_row(b"passwd [name]", b"masked password + confirm prompts");
     help_row(b"useradd <name>", b"create account (optional pass)");
     help_row(b"userdel <name>", b"delete empty account");
     help_row(b"su <user>", b"switch via admin / ALL card");

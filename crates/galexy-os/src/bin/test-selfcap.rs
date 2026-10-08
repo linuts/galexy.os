@@ -48,15 +48,17 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     let scratch: *const Report = mm::frame_virt(region.scratch_phys).as_ptr();
     let mut elapsed = 0u64;
+    // Spin-poll DONE before any reap (wipe + AP steal/reap race). IRQs on so
+    // a BSP-owned blob still gets timer quantums.
+    x86_64::instructions::interrupts::enable();
     let report = loop {
-        x86_64::instructions::hlt();
-        sched::reap();
         let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*scratch).done)) };
         if done == DONE {
             break unsafe { core::ptr::read_volatile(scratch) };
         }
+        core::hint::spin_loop();
         elapsed += 1;
-        if elapsed > TICK_TIMEOUT {
+        if elapsed > TICK_TIMEOUT.saturating_mul(10_000) {
             panic!("selfcap blob never finished");
         }
     };

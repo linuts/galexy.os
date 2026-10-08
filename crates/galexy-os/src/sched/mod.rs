@@ -927,11 +927,14 @@ pub fn spawn_user_task(name: &str, build: impl FnOnce(UserRegion) -> Vec<u8>) ->
 }
 
 /// Like [`spawn_user_task`], with shell-grade grants (loader, queries, …).
+///
+/// Pinned to the BSP so the BIOS harness can peek scratch before any
+/// remote reap wipes DONE marks (`test-procgive`, Cap batteries).
 pub fn spawn_user_launcher(
     name: &str,
     build: impl FnOnce(UserRegion) -> Vec<u8>,
 ) -> (UserRegion, u8) {
-    spawn_user_with_grants(name, galfs::admin_cred(), Grants::launcher(), build)
+    spawn_user_with_grants(name, galfs::admin_cred(), Grants::launcher(), build, Some(0))
 }
 
 /// Like [`spawn_user_task`], with explicit galfs credentials (token tests).
@@ -940,15 +943,18 @@ pub fn spawn_user_with(
     fs: galfs::FsCred,
     build: impl FnOnce(UserRegion) -> Vec<u8>,
 ) -> (UserRegion, u8) {
-    spawn_user_with_grants(name, fs, Grants::console(), build)
+    spawn_user_with_grants(name, fs, Grants::console(), build, None)
 }
 
 /// Like [`spawn_user_with`], with an explicit grant set.
+///
+/// `owner = None` → pin-at-spawn round-robin; `Some(cpu)` forces that CPU.
 pub(crate) fn spawn_user_with_grants(
     name: &str,
     fs: galfs::FsCred,
     grants: Grants,
     build: impl FnOnce(UserRegion) -> Vec<u8>,
+    owner: Option<u8>,
 ) -> (UserRegion, u8) {
     interrupts::without_interrupts(|| {
         // The loader allocates. A syscall runs with interrupts off, so the
@@ -1087,7 +1093,7 @@ pub(crate) fn spawn_user_with_grants(
         let kstack_top = (kstack.as_ptr() as u64 + kstack.len() as u64) & !0xF;
 
         let fx = Box::into_raw(Box::new(FxArea::new()));
-        let owner = next_cpu();
+        let owner = owner.unwrap_or_else(next_cpu);
         let (name_bytes, name_len) = pack_name(name);
         let _slot = push_thread(Thread {
             name_bytes,
@@ -1106,7 +1112,9 @@ pub(crate) fn spawn_user_with_grants(
             stolen_at: AtomicU64::new(0),
             files: [None; MAX_OPEN_FILES],
             procs: [None; MAX_PROC_CAPS],
-            no_steal: false,
+            // Hand-rolled test blobs coordinate via yield races; keep them
+            // on their spawn CPU so idle steal cannot starve a waiter.
+            no_steal: true,
             wait_child_slot: AtomicU8::new(0),
             wait_for_exit: AtomicBool::new(false),
             sleep_deadline: AtomicU64::new(0),
@@ -2542,6 +2550,33 @@ pub(crate) fn task_kill(cap: Cap) -> Result<(), SysError> {
         );
         wake_exit_waiters(&mut threads, handle.child_slot, EXIT_KILLED);
         Ok(())
+    })
+}
+
+/// Test helper: install `rights` on `object` for a live user task by name.
+/// Callable from the kernel main loop (slot 0) — no caller-card check.
+pub fn test_push_token(target: &str, object: u16, rights: u8) -> Result<(), SysError> {
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let Some(ti) = threads.iter().position(|t| {
+            t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
+        }) else {
+            return Err(SysError::NotFound);
+        };
+        galfs::push_token(&mut threads[ti].fs_tokens, object, rights)
+    })
+}
+
+/// Test helper: drop `rights` on `object` for a live user task by name.
+pub fn test_revoke_token(target: &str, object: u16, rights: u8) -> Result<(), SysError> {
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let Some(ti) = threads.iter().position(|t| {
+            t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
+        }) else {
+            return Err(SysError::NotFound);
+        };
+        galfs::revoke_token(&mut threads[ti].fs_tokens, object, rights)
     })
 }
 
