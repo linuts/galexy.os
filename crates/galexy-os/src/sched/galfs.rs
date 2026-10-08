@@ -65,9 +65,9 @@ pub const DEFAULT_MAX_OBJECTS: u16 = 16;
 /// Default byte quota for a new non-admin actor (sum of file lengths).
 pub const DEFAULT_MAX_BYTES: u32 = 16 * 1024;
 /// Path components after the optional owner.
-pub const MAX_DEPTH: usize = 8;
+pub const MAX_DEPTH: usize = galexy_core::MAX_DEPTH;
 /// One path-component name.
-const NAME_CAP: usize = 64;
+const NAME_CAP: usize = galexy_core::NAME_CAP;
 /// Actor name length.
 const ACTOR_NAME: usize = 32;
 
@@ -1812,14 +1812,9 @@ fn free_object(table: &Table) -> Option<usize> {
     table.objects.iter().position(|o| o.kind == KIND_EMPTY)
 }
 
+/// Single-component rule; the grammar lives in `galexy_core::path`.
 fn component_ok(name: &str) -> bool {
-    !name.is_empty()
-        && name != "."
-        && name != ".."
-        && name.len() <= NAME_CAP
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
+    galexy_core::component_ok(name)
 }
 
 fn place_name(obj: &mut Object, name: &str) {
@@ -1829,75 +1824,12 @@ fn place_name(obj: &mut Object, name: &str) {
 }
 
 /// A path after the optional leading `/` and `owner@` on the first component.
-pub(crate) struct ParsedPath<'a> {
-    pub(crate) owner: Option<&'a str>,
-    pub(crate) comps: [&'a str; MAX_DEPTH],
-    pub(crate) n: usize,
-    pub(crate) dir: bool,
-}
+pub(crate) type ParsedPath<'a> = galexy_core::ParsedPath<'a>;
 
-/// Splits `name`. A trailing slash marks a directory. The first component
-/// may be `owner@leaf`. `owner@/` (empty leaf, directory) names that
-/// actor's root object — the login/grant path. `.` and `..` are rejected.
+/// Splits `name` per the galfs path grammar (`galexy_core::parse_path`);
+/// anything outside the grammar is `BadValue`.
 pub(crate) fn parse_path(name: &str) -> Result<ParsedPath<'_>, SysError> {
-    let name = name.strip_prefix('/').unwrap_or(name);
-    let (body, dir) = if let Some(stripped) = name.strip_suffix('/') {
-        if stripped.is_empty() || stripped.ends_with('/') {
-            return Err(SysError::BadValue);
-        }
-        (stripped, true)
-    } else {
-        (name, false)
-    };
-    if body.is_empty() {
-        return Err(SysError::BadValue);
-    }
-    let mut comps = [""; MAX_DEPTH];
-    let mut n = 0usize;
-    let mut owner = None;
-    for (i, comp) in body.split('/').enumerate() {
-        if comp.is_empty() || n >= MAX_DEPTH {
-            return Err(SysError::BadValue);
-        }
-        if i == 0 {
-            if let Some((own, leaf)) = comp.split_once('@') {
-                if own.is_empty() || leaf.contains('@') || !component_ok(own) {
-                    return Err(SysError::BadValue);
-                }
-                // `eve@/` → actor root (no components under the root).
-                if leaf.is_empty() {
-                    if !dir || body.contains('/') {
-                        return Err(SysError::BadValue);
-                    }
-                    owner = Some(own);
-                    break;
-                }
-                if !component_ok(leaf) {
-                    return Err(SysError::BadValue);
-                }
-                owner = Some(own);
-                comps[n] = leaf;
-                n += 1;
-                continue;
-            }
-        } else if comp.contains('@') {
-            return Err(SysError::BadValue);
-        }
-        if !component_ok(comp) {
-            return Err(SysError::BadValue);
-        }
-        comps[n] = comp;
-        n += 1;
-    }
-    if n == 0 && owner.is_none() {
-        return Err(SysError::BadValue);
-    }
-    Ok(ParsedPath {
-        owner,
-        comps,
-        n,
-        dir,
-    })
+    galexy_core::parse_path(name).ok_or(SysError::BadValue)
 }
 
 fn find_actor_root(table: &Table, name: &str) -> Result<u16, SysError> {
