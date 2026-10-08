@@ -85,19 +85,7 @@ pub fn add_scancode(scancode: u8) {
             }
         };
         match decoded {
-            Some(DecodedKey::Unicode(c)) => {
-                let tty = (ACTIVE.load(Ordering::Relaxed) as usize).min(TTY_COUNT - 1);
-                // Milestone 55: Ctrl-C stops the TTY foreground job Cap
-                // and is not delivered to the seat's keyboard ring.
-                if c == '\u{3}' && crate::sched::interrupt_foreground(tty as u8) {
-                    return;
-                }
-                // Overflow drops the newest key. The queue lock is not held
-                // across the serial warning.
-                enqueue(tty, c);
-                // Milestone 57: wake a reader parked on this TTY.
-                crate::sched::wake_keyboard_waiters(tty as u8);
-            }
+            Some(DecodedKey::Unicode(c)) => push_char(c),
             Some(DecodedKey::RawKey(key)) => {
                 if let Some(tty) = tty_index(key) {
                     PENDING.store(tty, Ordering::Release);
@@ -113,6 +101,25 @@ pub fn add_scancode(scancode: u8) {
             }
             None => {}
         }
+    });
+}
+
+/// Delivers one character to the active TTY, the same way a decoded
+/// PS/2 key does. COM1 receive uses this too, so a headless terminal and
+/// the framebuffer keyboard share one queue. Ctrl-C stops the foreground
+/// job and is not queued.
+pub fn push_char(c: char) {
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| {
+        let tty = (ACTIVE.load(Ordering::Relaxed) as usize).min(TTY_COUNT - 1);
+        if c == '\u{3}' && crate::sched::interrupt_foreground(tty as u8) {
+            return;
+        }
+        // Overflow drops the newest key. The queue lock is not held
+        // across the serial warning.
+        enqueue(tty, c);
+        // Milestone 57: wake a reader parked on this TTY.
+        crate::sched::wake_keyboard_waiters(tty as u8);
     });
 }
 

@@ -11,7 +11,7 @@ Not a Linux clone. No POSIX claim. Authority is **capabilities** (and
 galfs access cards), not global file descriptors or PIDs.
 
 **Status (October 2026):** Milestones 1–61 and 69 are merged (62 was
-superseded); the QEMU suite is 96 boots plus host tests, all green. The
+superseded); the QEMU suite is 97 boots plus host tests, all green. The
 Milestone 52 review checklist is complete except the `review-rc1` tag,
 which is the owner's call; Phase 9 (63–67) is the hardening,
 performance, modern-platform, and userland work toward `v1.0`. The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md)
@@ -42,7 +42,8 @@ UEFI an OVMF image.
 # Arch example
 sudo pacman -S --needed qemu-desktop ovmf
 
-cargo run                 # BIOS (default); COM1 on your terminal
+cargo run                 # BIOS, headless; type on this terminal
+cargo run -- --display    # also open the framebuffer window (F1–F12)
 cargo run -- --uefi       # UEFI — set OVMF_FD if the default path is missing
 ```
 
@@ -64,7 +65,12 @@ OVMF_FD=/usr/share/ovmf/OVMF.fd cargo run -- --uefi
 
 ### First boot
 
-You should see a login screen on tty1 (serial mirrors the visible console):
+You should see a login screen on this terminal (tty1; the serial line is
+the console). Quit with **Ctrl-A** then **X**. **Ctrl-A** then **C** is
+the QEMU monitor, so Ctrl-A does not reach the shell in this mode (the
+window's keyboard still sends it). F1–F12 need the window
+(`--display`); they are PS/2 keys and have no UART equivalent. Kernel
+log lines share this stream with the console.
 
 ```text
 Galexy.OS v0.1.0 (tty1)
@@ -117,7 +123,7 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 ```sh
 cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxc -p gxld   # host suites
 cargo test -p runner --test audit_strings   # no "password" in any serial line
-cargo test -p runner --test boot -- --test-threads=1   # QEMU suite (96 boots, -smp 2)
+cargo test -p runner --test boot -- --test-threads=1   # QEMU suite (97 boots, -smp 2)
 ```
 
 UEFI cases need `OVMF_FD` if the default firmware path is absent. Disk
@@ -174,7 +180,8 @@ OVMF image for UEFI. Nothing else.
 
 ```sh
 cargo build -p runner                       # every image under target/
-cargo run                                   # BIOS, -smp 2 -cpu max, COM1 on stdout
+cargo run                                   # BIOS, headless, -smp 2 -cpu max; type on COM1
+cargo run -- --display                      # same, plus the framebuffer window
 OVMF_FD=/usr/share/ovmf/OVMF.fd cargo run -- --uefi   # UEFI; path varies per distro
 scripts/review-smoke.sh                     # focused subset: host suites + 11 boots (~10 min TCG)
 ```
@@ -198,7 +205,7 @@ is logged in at boot. `useradd`, `grant`, `share`, `su` are in
 
 | What | Where |
 | --- | --- |
-| Kernel and audit log | COM1 (your terminal under `cargo run`); the same lines via `dmesg` after login |
+| Kernel log and the console | COM1 (this terminal under `cargo run`; type here). The same kernel lines via `dmesg` after login. `--display` adds the framebuffer window |
 | Runner serial logs | `$TMPDIR/galexy-serial-<image>-<n>.log` (`/tmp` on Linux), one per boot; uploaded as a CI artifact on failure |
 | Ramdisk measurement | `cargo:warning=ramdisk.tar sha256=…` at build; `[test-ramdisk] sha256 …` at boot |
 | Images | `target/debug/build/runner-*/out/galexy-os-{bios,uefi}.img` is the main kernel; `galexy-os-gxld-*.img` carries the `gxld`-linked ramdisk; `galexy-os-crashseam-*.img` the `crash-seam` shell; `galexy-os-test-*-*.img` one per test kernel |

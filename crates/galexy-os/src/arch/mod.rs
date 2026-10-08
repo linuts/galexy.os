@@ -54,9 +54,13 @@ pub fn init(boot_info: &BootInfo) {
     idt::init();
     apic::init(acpi::madt().lapic_base());
     // Legacy PICs remapped + fully masked (APIC delivers from here on);
-    // then the I/O APIC wires the keyboard line onto its vector.
+    // then the I/O APIC wires the keyboard and COM1 onto their vectors.
     pics::init();
     ioapic::init();
+    // Bytes that arrived before the route was unmasked sit in the FIFO
+    // with the line already high; an edge-triggered RTE will not deliver
+    // that first assertion. Drain once so the next byte is a rising edge.
+    crate::drivers::serial::drain_rx();
     // Shootdown IPI machinery (lazy until the first broadcast; the IDT gate
     // is registered in idt::init).
     mm::shootdown::init();

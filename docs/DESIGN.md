@@ -159,12 +159,18 @@ Ctrl-C (`U+0003`) cancels a shell prompt, or, when a TTY foreground job
 Cap is live, kills that job and is not queued. Ctrl-D (`U+0004`) is
 not end-of-file; the line editor ignores it. Esc cancels a prompt.
 
-### serial — "the side channel" (`drivers/`)
+### serial — "the console on a wire" (`drivers/`)
 
-`uart_16550` at COM1. Used for panics, boot info, and debug output. **Rule:**
-nothing user-facing ever prints here; it's invisible to the OS user by
-design. The serial writer shares no lock with the screen, so interrupt
-handlers can log through it safely. `serial_println!` also appends the
+`uart_16550` at COM1. Panics, boot info, and debug output go here, and
+the console policy also mirrors the **visible** TTY's bytes here so a
+headless boot is readable. Receive is the other direction: IRQ4 (vector
+36) drains the FIFO and `keyboard::push_char` delivers each byte to the
+active TTY. `\r` is Enter, a following `\n` is swallowed (CRLF is one
+key), DEL and BS are backspace, and bytes above ASCII are dropped. The
+UART lock is dropped before that delivery. One `_print` holds the lock
+for the whole line, so two CPUs cannot tear it, and transmit harvests
+pending receive bytes while the FIFO is busy so a paste during that hold
+cannot overrun the 16-byte FIFO. `serial_println!` also appends the
 line to a 32×96 dmesg ring. `read` of reserved cap `0x8007` (query
 grant, same rule as `stats`) returns the newest lines that fit.
 Consecutive lines containing `login fail` collapse to one ring entry
@@ -183,9 +189,11 @@ re-asserts the line (the first real keystroke would black-hole). This is
 controller work, not interrupt-controller work — it runs on every boot path.
 
 IRQ1 handler (LAPIC-delivered via the I/O APIC) → `pc_keyboard` (US layout,
-scancode set 1). Unicode characters are pushed into the active TTY's
-`kcore::Ring` (twelve rings, one per F-key). F1–F12 do not become input:
-the handler stores the TTY index and the main loop paints that grid.
+scancode set 1). Unicode characters, and COM1 bytes via
+`keyboard::push_char`, are pushed into the active TTY's `kcore::Ring`
+(twelve rings, one per F-key). F1–F12 do not become input and have no
+UART equivalent: the handler stores the TTY index and the main loop
+paints that grid.
 The in-kernel editor drains TTY 0 via `keyboard::pop_key()`. A ring-3
 shell `read`s the keyboard capability (`reserved::KEYBOARD_INDEX`, READ)
 and gets the queue of the TTY it was started on. A zero-length success
@@ -197,6 +205,7 @@ A full queue drops the newest character, counts the drop, and prints
 
 ```rust
 pub fn add_scancode(scancode: u8)   // called from the IRQ handler only
+pub fn push_char(c: char)           // PS/2 Unicode and COM1 bytes
 pub fn pop_key() -> Option<char>    // drains TTY 0
 pub fn pop_key_tty(tty: u8) -> Option<char>
 ```
@@ -357,10 +366,12 @@ Init order: GDT/TSS (per-CPU slot 0) → per-CPU GS substrate → ACPI (MADT)
   page's sibling); IOREGSEL/IOWIN pair indexes the register space.
 - Bring-up (BSP-only, once): version sanity (I/O APICVER ≥ 0x11), ALL
   redirection entries masked first (inherited state is firmware's), then
-  exactly ONE wiring: the keyboard — ISA IRQ1 → GSI (MADT override or
-  identity) → RTE pin, vector 33, edge-triggered, active-high, physical
-  destination = the BSP's LAPIC ID. Masked-by-default is the rule: mask
-  what you don't use.
+  two wirings, both edge-triggered, active-high, physical destination =
+  the BSP's LAPIC ID: the keyboard (ISA IRQ1 → GSI → vector 33) and COM1
+  (ISA IRQ4 → GSI → vector 36). Masked-by-default is the rule: mask what
+  you don't use. `arch::init` drains the UART once after the route is
+  unmasked so a byte that arrived early (line already high) is not stuck
+  waiting for an edge.
 
 ### arch/mm — "physical memory" (arch/)
 
@@ -1012,6 +1023,7 @@ IRQ that already has IF=0) around the acquire.
 | Screen `SCREEN` / `GRIDS` | nothing else | BSP; IRQ handlers do not take it |
 | Keyboard queue | nothing else (drop warning takes `DMESG` after the queue lock drops) | IRQ may push; readers gate |
 | `DMESG` | nothing else | with `serial_println!`; never acquired before `THREADS` |
+| COM1 `SERIAL1` | nothing (received bytes are delivered after it drops) | TX path gates; the receive IRQ takes it |
 | `SCHED`, `RAMDISK`, `PIPES`, `PENDING_SPAWN` | not `THREADS` | yes when called from preemptable code |
 | Shootdown handler | **no lock** | runs at IPI; initiator holds none across the broadcast |
 
@@ -1119,7 +1131,7 @@ main image and are listed at the end.
 | `test-hellogxc` | `hellogxc_test_passes` | M61 hello via `gxc`, M69 `gxld` link |
 | `test-badelf`, `test-negative` | `badelf_test_passes`, `negative_test_passes` | M51 hostile ELF oracle and negative suite (loader hardening itself: M63) |
 | `test-soak`, `test-fairness`, `test-pathological` | `soak_test_passes`, `fairness_test_passes`, `pathological_test_passes` | M51 soak (exact table closure per round), steal fairness under load, console-budget flood |
-| main image | `main_kernel_boots_and_timer_ticks`, `uefi_image_boots_and_timer_ticks`, `shell_*_typing_e2e`, `shell_run_hello_typing_e2e_uefi`, `shell_tty_switch_e2e`, `util_typing_e2e_on`, `assert_passwords_masked` | M21 / M29 / M33 / M40 / M43 / M50 / M54 seats, shell, utilities, masked prompts; `shell_password_paste_typing_e2e` (M51 pathological input) and `default_image_has_no_crash_seam_e2e` (M52 default-build audit) |
+| main image | `main_kernel_boots_and_timer_ticks`, `uefi_image_boots_and_timer_ticks`, `shell_*_typing_e2e`, `shell_run_hello_typing_e2e_uefi`, `shell_tty_switch_e2e`, `util_typing_e2e_on`, `assert_passwords_masked`, `uart_console_login_e2e` | M21 / M29 / M33 / M40 / M43 / M50 / M54 seats, shell, utilities, masked prompts; `shell_password_paste_typing_e2e` (M51 pathological input), `default_image_has_no_crash_seam_e2e` (M52 default-build audit), `uart_console_login_e2e` (COM1 is the console: DEL, CR, masked password) |
 | `gxld` image | `gxld_image_run_hello_typing_e2e`, `gxld_image_util_typing_e2e` | M69 linker differential |
 
 Host suites (no QEMU): `galexy-abi` (table integrity), `galexy-core`

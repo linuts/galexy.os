@@ -7,7 +7,7 @@ use x86_64::VirtAddr;
 
 use super::apic;
 use super::gdt;
-use super::pics::{KEYBOARD_INTERRUPT_ID, TIMER_INTERRUPT_ID};
+use super::pics::{KEYBOARD_INTERRUPT_ID, SERIAL_INTERRUPT_ID, TIMER_INTERRUPT_ID};
 use crate::drivers::keyboard;
 
 /// The IDT sits behind a mutex so tests (and later, demand paging) can
@@ -31,6 +31,9 @@ static IDT: LazyLock<Mutex<InterruptDescriptorTable>> = LazyLock::new(|| {
     // installed by raw address.
     // Keyboard (IRQ1) stays a regular x86-interrupt handler.
     idt[KEYBOARD_INTERRUPT_ID].set_handler_fn(keyboard_handler);
+    // COM1 receive (IRQ4). Same rule as the keyboard: a short handler,
+    // LAPIC EOI, no screen lock.
+    idt[SERIAL_INTERRUPT_ID].set_handler_fn(crate::drivers::serial::rx_handler);
     // The LAPIC's spurious vector MUST have an IDT entry once the LAPIC is
     // enabled by `arch::apic::init` (vector 0xFF): an unhandled stray
     // spurious would hit an empty gate and triple-fault. EOI a real spurious;
