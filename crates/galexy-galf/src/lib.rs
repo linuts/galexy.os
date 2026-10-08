@@ -7,9 +7,15 @@
 #![no_std]
 #![deny(clippy::all)]
 
+pub mod cards;
+#[cfg(test)]
+mod cards_test;
+#[cfg(test)]
+mod slots_test;
+
 use galexy_core::crc32;
 use galexy_crypto::{
-    derive_key, open, wipe_bytes, HASH_LEN, KEY_LEN, NONCE_LEN, SALT_LEN, TAG_LEN,
+    derive_key, open, seal, wipe_bytes, HASH_LEN, KEY_LEN, NONCE_LEN, SALT_LEN, TAG_LEN,
 };
 
 /// ATA / GALF sector size.
@@ -315,6 +321,118 @@ fn seal_aad(generation: u64) -> [u8; 14] {
     aad[4..6].copy_from_slice(&DISK_VERSION.to_le_bytes());
     aad[6..14].copy_from_slice(&generation.to_le_bytes());
     aad
+}
+
+/// Randomness one sealed slot consumes. The kernel draws these from
+/// `arch::rand`; tests pass fixed bytes so images reproduce.
+#[derive(Clone, Copy)]
+pub struct SealNonces {
+    pub kdf_salt: [u8; SALT_LEN],
+    pub wrap_nonce: [u8; NONCE_LEN],
+    pub data_nonce: [u8; NONCE_LEN],
+}
+
+/// Serialises and seals `table` at `generation` into `flat` (one slot,
+/// at least `DISK_HEADER + PAYLOAD_LEN` bytes; the rest is zeroed).
+///
+/// Mirror of the kernel's live encoder (`sched::galfs::encode_table`):
+/// header, actors, objects, shares, bitmap, blocks; volume key wrapped
+/// under the passphrase-derived KEK; payload sealed under the volume key;
+/// CRC over the sealed payload. [`decode_slot`] inverts it. Returns
+/// `false` when `flat` is too short.
+pub fn encode_slot(
+    table: &Table,
+    generation: u64,
+    passphrase: &[u8],
+    volume_key: &[u8; KEY_LEN],
+    nonces: &SealNonces,
+    flat: &mut [u8],
+) -> bool {
+    if flat.len() < DISK_HEADER + PAYLOAD_LEN {
+        return false;
+    }
+    flat.fill(0);
+    flat[0..4].copy_from_slice(&DISK_MAGIC);
+    flat[4..6].copy_from_slice(&DISK_VERSION.to_le_bytes());
+    flat[6..8].copy_from_slice(&(ACTOR_SLOTS as u16).to_le_bytes());
+    flat[8..10].copy_from_slice(&(OBJECT_SLOTS as u16).to_le_bytes());
+    flat[10..12].copy_from_slice(&(FILE_BYTES as u16).to_le_bytes());
+    flat[12] = 1; // sealed
+    flat[14..16].copy_from_slice(&(BLOCK_SLOTS as u16).to_le_bytes());
+    flat[16..24].copy_from_slice(&generation.to_le_bytes());
+
+    let mut off = DISK_HEADER;
+    for actor in &table.actors {
+        flat[off] = u8::from(actor.used);
+        flat[off + 1] = actor.name_len;
+        flat[off + 2..off + 2 + ACTOR_NAME].copy_from_slice(&actor.name);
+        flat[off + 2 + ACTOR_NAME..off + 4 + ACTOR_NAME].copy_from_slice(&actor.root.to_le_bytes());
+        let salt_off = off + 4 + ACTOR_NAME;
+        flat[salt_off..salt_off + SALT_LEN].copy_from_slice(&actor.salt);
+        flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN].copy_from_slice(&actor.pass_hash);
+        let qoff = salt_off + SALT_LEN + HASH_LEN;
+        flat[qoff..qoff + 2].copy_from_slice(&actor.max_objects.to_le_bytes());
+        flat[qoff + 2..qoff + 6].copy_from_slice(&actor.max_bytes.to_le_bytes());
+        off += ACTOR_ON_DISK;
+    }
+    for obj in &table.objects {
+        flat[off] = obj.kind;
+        flat[off + 1] = obj.actor;
+        flat[off + 2] = obj.name_len;
+        flat[off + 4..off + 6].copy_from_slice(&obj.parent.to_le_bytes());
+        flat[off + 6..off + 8].copy_from_slice(&obj.len.to_le_bytes());
+        flat[off + 8..off + 8 + NAME_CAP].copy_from_slice(&obj.name);
+        let boff = off + 8 + NAME_CAP;
+        for (i, blk) in obj.blocks.iter().enumerate() {
+            flat[boff + i * 2..boff + i * 2 + 2].copy_from_slice(&blk.to_le_bytes());
+        }
+        let ioff = boff + DIRECT_BLOCKS * 2;
+        flat[ioff..ioff + 2].copy_from_slice(&obj.indirect.to_le_bytes());
+        off += OBJECT_ON_DISK;
+    }
+    for share in &table.shares {
+        flat[off] = u8::from(share.used);
+        flat[off + 1] = share.rights;
+        flat[off + 2] = share.grantee;
+        flat[off + 3] = 0;
+        flat[off + 4..off + 6].copy_from_slice(&share.object.to_le_bytes());
+        off += SHARE_ON_DISK;
+    }
+    flat[off..off + BITMAP_BYTES].copy_from_slice(&table.bitmap);
+    off += BITMAP_BYTES;
+    for block in &table.blocks {
+        flat[off..off + BLOCK_SIZE].copy_from_slice(block);
+        off += BLOCK_SIZE;
+    }
+    debug_assert_eq!(off, DISK_HEADER + PAYLOAD_LEN);
+
+    let aad = seal_aad(generation);
+    let mut kek = [0u8; KEY_LEN];
+    derive_key(passphrase, &nonces.kdf_salt, &mut kek);
+    let mut wrapped = *volume_key;
+    let mut wrap_tag = [0u8; TAG_LEN];
+    seal(&kek, &nonces.wrap_nonce, &aad, &mut wrapped, &mut wrap_tag);
+    wipe_bytes(&mut kek);
+    flat[32..40].copy_from_slice(&nonces.kdf_salt);
+    flat[40..52].copy_from_slice(&nonces.wrap_nonce);
+    flat[52..84].copy_from_slice(&wrapped);
+    flat[84..100].copy_from_slice(&wrap_tag);
+    wipe_bytes(&mut wrapped);
+
+    let mut data_tag = [0u8; TAG_LEN];
+    seal(
+        volume_key,
+        &nonces.data_nonce,
+        &aad,
+        &mut flat[DISK_HEADER..DISK_HEADER + PAYLOAD_LEN],
+        &mut data_tag,
+    );
+    flat[100..112].copy_from_slice(&nonces.data_nonce);
+    flat[112..128].copy_from_slice(&data_tag);
+
+    let sum = crc32(&flat[DISK_HEADER..DISK_HEADER + PAYLOAD_LEN]);
+    flat[24..28].copy_from_slice(&sum.to_le_bytes());
+    true
 }
 
 /// Decrypt one slot buffer into `table`. Returns generation on success.

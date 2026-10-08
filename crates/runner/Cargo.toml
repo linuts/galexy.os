@@ -9,6 +9,7 @@ galexy-galf = { path = "../galexy-galf" }
 [build-dependencies]
 bootloader = "0.11"
 tar = "0.4"
+galexy-crypto = { path = "../galexy-crypto" }
 gxc = { path = "../gxc" }
 galexy-os = { path = "../galexy-os", artifact = "bin", target = "x86_64-unknown-none" }
 hello = { path = "../userspace/hello", artifact = "bin", target = "x86_64-unknown-none" }

@@ -9,5 +9,6 @@ name = "galexy_galf"
 path = "src/lib.rs"
 
 [dependencies]
+galexy-abi = { path = "../galexy-abi" }
 galexy-core = { path = "../galexy-core" }
 galexy-crypto = { path = "../galexy-crypto" }

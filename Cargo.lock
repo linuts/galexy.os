@@ -200,6 +200,7 @@ version = "0.1.0"
 name = "galexy-galf"
 version = "0.1.0"
 dependencies = [
+ "galexy-abi",
  "galexy-core",
  "galexy-crypto",
 ]
@@ -447,6 +448,7 @@ name = "runner"
 version = "0.1.0"
 dependencies = [
  "bootloader",
+ "galexy-crypto",
  "galexy-galf",
  "galexy-os",
  "gxc",

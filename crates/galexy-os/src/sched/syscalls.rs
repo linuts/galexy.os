@@ -1286,8 +1286,10 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
     let Some(bytes) = crate::sched::ramdisk::find(elf_name) else {
         return SyscallResult::err(SysError::NotFound);
     };
-    if !crate::sched::loader::looks_like_elf(bytes) {
-        return SyscallResult::err(SysError::Unsupported);
+    // Hostile-ELF gate: refuse with a code before the loader touches a
+    // page table (the loader itself still asserts; see `test-badelf`).
+    if let Err(err) = crate::sched::loader::validate_elf(bytes) {
+        return SyscallResult::err(err);
     }
     let query = frame.r10 & galexy_abi::SPAWN_GRANT_QUERY != 0;
     let wait_exit = frame.r10 & galexy_abi::SPAWN_WAIT != 0;

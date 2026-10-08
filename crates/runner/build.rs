@@ -144,6 +144,35 @@ fn main() {
         );
     }
 
+    // Ramdisk measurement (Milestone 51): the SHA-256 of each packed tar is
+    // printed at build time and handed to the tests, which compare it with
+    // what the kernel measures at boot (`test-ramdisk`). The ramdisk is
+    // TRUSTED input — the kernel loads whatever the build packed; this hash
+    // is how a reviewer checks that is what they built, not an allowlist.
+    for (label, path, env_name) in [
+        ("ramdisk", &ramdisk_path, "GALEXY_RAMDISK_SHA256"),
+        (
+            "ramdisk-crash",
+            &crash_ramdisk,
+            "GALEXY_RAMDISK_CRASH_SHA256",
+        ),
+        ("ramdisk-gxld", &gxld_ramdisk, "GALEXY_RAMDISK_GXLD_SHA256"),
+    ] {
+        let bytes = std::fs::read(path).unwrap();
+        let hex = hex_digest(&galexy_crypto::sha256(&bytes));
+        let files = count_tar_files(&bytes);
+        println!(
+            "cargo:warning={label}.tar sha256={hex} ({} bytes, {files} files)",
+            bytes.len()
+        );
+        println!("cargo:rustc-env={env_name}={hex}");
+        std::fs::write(
+            path.with_extension("sha256"),
+            format!("{hex}  {label}.tar\n"),
+        )
+        .unwrap();
+    }
+
     for (name, kernel) in &bins {
         let bios_path = out_dir.join(format!("{}-bios.img", name));
         let uefi_path = out_dir.join(format!("{}-uefi.img", name));
@@ -241,6 +270,37 @@ fn write_ramdisk_variant(
         tar.append_data(&mut header, name, body as &[u8]).unwrap();
     }
     tar.finish().unwrap();
+}
+
+fn hex_digest(digest: &[u8; 32]) -> String {
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    hex
+}
+
+/// Regular-file entries in a USTAR archive (header walk, no extraction).
+fn count_tar_files(tar: &[u8]) -> usize {
+    let mut count = 0usize;
+    let mut off = 0usize;
+    while off + 512 <= tar.len() {
+        let header = &tar[off..off + 512];
+        if header.iter().all(|&b| b == 0) {
+            break;
+        }
+        let size_field = &header[124..136];
+        let size_str = std::str::from_utf8(size_field)
+            .unwrap_or("")
+            .trim_end_matches(['\0', ' '])
+            .trim_start_matches(' ');
+        let size = usize::from_str_radix(size_str.trim_end_matches('\0'), 8).unwrap_or(0);
+        if header[156] == b'0' || header[156] == 0 {
+            count += 1;
+        }
+        off += 512 + size.div_ceil(512) * 512;
+    }
+    count
 }
 
 /// A nested `cargo` with this build script's package-specific environment

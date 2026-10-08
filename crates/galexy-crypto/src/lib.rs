@@ -15,6 +15,7 @@ mod aead;
 mod sha256;
 
 pub use aead::{open, seal, KEY_LEN, NONCE_LEN, TAG_LEN};
+pub use sha256::hash as sha256;
 
 /// Salt length stored on each actor (CSPRNG-filled at set-password).
 pub const SALT_LEN: usize = 8;

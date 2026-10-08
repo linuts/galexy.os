@@ -964,6 +964,16 @@ pub fn spawn_user_launcher(
     )
 }
 
+/// Like [`spawn_user_launcher`], with explicit galfs credentials — a
+/// logged-out seat is `galfs::unauth_cred()` (`test-negative`).
+pub fn spawn_user_launcher_with(
+    name: &str,
+    fs: galfs::FsCred,
+    build: impl FnOnce(UserRegion) -> Vec<u8>,
+) -> (UserRegion, u8) {
+    spawn_user_with_grants(name, fs, Grants::launcher(), build, Some(0))
+}
+
 /// Like [`spawn_user_task`], with explicit galfs credentials (token tests).
 pub fn spawn_user_with(
     name: &str,
@@ -1542,6 +1552,12 @@ pub(crate) fn task_spawn(
             root: threads[slot - 1].fs_root,
             tokens: threads[slot - 1].fs_tokens,
         };
+        // Pre-login seats launch nothing: a task without a session root
+        // (logged out, or never logged in) may only be init spawning a
+        // seat. The shell refuses earlier; this is the kernel's answer.
+        if !seat && parent_fs.root == galfs::NO_OBJECT {
+            return Err(SysError::AccessDenied);
+        }
         if inherit || wait_exit {
             galfs::attenuate_tokens(&mut parent_fs.tokens, rights_mask);
         }

@@ -19,6 +19,9 @@ mod lockout;
 #[cfg(test)]
 mod lockout_test;
 mod password;
+mod path;
+#[cfg(test)]
+mod path_test;
 mod ring;
 #[cfg(test)]
 mod ring_test;
@@ -33,5 +36,6 @@ pub use lockout::{
     LOCKOUT_TTYS,
 };
 pub use password::{HASH_LEN, SALT_LEN};
+pub use path::{component_ok, parse_path, ParsedPath, MAX_DEPTH, NAME_CAP};
 pub use ring::Ring;
 pub use tar::TarCursor;

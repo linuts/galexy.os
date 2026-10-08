@@ -26,6 +26,20 @@ pub fn init(bytes: &'static [u8]) {
     serial_println!("[ramdisk] set: {} byte(s)", bytes.len());
 }
 
+/// SHA-256 of the whole archive — the same bytes `crates/runner/build.rs`
+/// hashes when it packs the tar, so a boot can prove it runs the ramdisk
+/// the build measured. Costs one pass over the archive; call it from a
+/// test kernel, not from the boot path.
+pub fn measure() -> Option<[u8; 32]> {
+    let archive = (*RAMDISK.lock())?;
+    Some(galexy_crypto::sha256(archive))
+}
+
+/// Total archive length in bytes, once set.
+pub fn len() -> Option<usize> {
+    (*RAMDISK.lock()).map(|archive| archive.len())
+}
+
 /// Calls `f` with each regular file's name, in archive order.
 ///
 /// The walk does not allocate. `f` runs while the ramdisk lock is held,

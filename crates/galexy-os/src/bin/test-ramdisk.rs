@@ -60,6 +60,25 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     }
     assert!(found_banner, "banner.txt missing from the ramdisk tar");
 
+    // Measurement: the boot-time SHA-256 must match what build.rs printed
+    // when it packed this tar (the runner compares the two).
+    galexy_os::sched::ramdisk::init(archive);
+    let before = galexy_os::arch::timer_ticks();
+    let digest = galexy_os::sched::ramdisk::measure().expect("ramdisk set");
+    let after = galexy_os::arch::timer_ticks();
+    let mut hex = [0u8; 64];
+    for (i, byte) in digest.iter().enumerate() {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        hex[i * 2] = DIGITS[(byte >> 4) as usize];
+        hex[i * 2 + 1] = DIGITS[(byte & 0xF) as usize];
+    }
+    serial_println!(
+        "[test-ramdisk] sha256 {} ({} bytes, {} tick(s))",
+        core::str::from_utf8(&hex).unwrap(),
+        ramdisk_len,
+        after - before
+    );
+
     println!("[test-ramdisk] tar roundtrip through the phys map works");
     println!("[test-ramdisk] all assertions passed");
     serial_println!("[test-ramdisk] passed");
