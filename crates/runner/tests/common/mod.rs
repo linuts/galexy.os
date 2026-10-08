@@ -48,10 +48,20 @@ pub const QEMU_EXIT_SUCCESS: i32 = 33;
 const TEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Unique per-call serial log file path.
+///
+/// The counter restarts with every test process, so a name can collide
+/// with a log left by an earlier run. QEMU truncates the file only when
+/// its chardev opens, some hundred milliseconds after `spawn()`, and the
+/// harnesses that poll the serial while the guest runs (crash injection,
+/// typing) would act on the stale contents in that window. Remove it up
+/// front so every poll sees only this boot's output.
 fn serial_log_path(name: &str) -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    std::env::temp_dir().join(format!("galexy-serial-{}-{n}.log", name.replace('-', "_")))
+    let path =
+        std::env::temp_dir().join(format!("galexy-serial-{}-{n}.log", name.replace('-', "_")));
+    let _ = std::fs::remove_file(&path);
+    path
 }
 
 /// Builds the QEMU command for `img_path`: headless, COM1 to `serial_path`,

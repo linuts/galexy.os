@@ -2492,7 +2492,13 @@ items stay here with rationale.
       shootdown; every re-run (10× soak, 3× pipeline) passed. Suspect
       the idle-AP tickless wake / exit-handoff window. Needs a watchdog
       that dumps per-CPU state to serial when the rotation stalls —
-      **Milestone 63**
+      **Milestone 63**. (The pipeline case may instead have been the
+      stale-serial-log harness bug fixed on the M51 close: the polling
+      harnesses could read the previous run's log in the window before
+      QEMU truncated it — `crash_injection_picks_consistent_slot`
+      alternated pass/fail for that reason. `serial_log_path` now removes
+      the file before QEMU starts. The soak hangs are not explained by
+      it; `boot()` reads the log only after the guest exits.)
 - [ ] No network stack, no USB — **Phase 10** (after `v1.0`)
 - [x] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
