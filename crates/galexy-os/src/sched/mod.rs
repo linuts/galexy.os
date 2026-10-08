@@ -170,6 +170,13 @@ struct ProcHandle {
 
 /// Monotonic debug id (listings / serial only — never an open-by-id key).
 static NEXT_DEBUG_ID: AtomicU64 = AtomicU64::new(1);
+/// Bumped on login, `su`, and logout. Audits quote it; it is not a Cap.
+static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+/// Test kernels shrink the idle window. `0` means [`IDLE_LOGOUT_MS`].
+static IDLE_LIMIT_OVERRIDE: AtomicU64 = AtomicU64::new(0);
+/// Logged-in console with no keystrokes for this long is logged out.
+/// Same clock as lockout (`timer_ticks`, ~1 ms).
+pub const IDLE_LOGOUT_MS: u64 = 60_000;
 
 /// Magic word painted at the very bottom of each thread's stack (lowest
 /// address). A stack that overflows far enough to corrupt the heap walks
@@ -402,6 +409,13 @@ struct Thread {
     /// Set when the task was created as admin. Survives [`task_su`] so the
     /// seat can return to admin after switching to another actor.
     born_admin: bool,
+    /// Default admin password is still in force. Mutating galfs syscalls fail
+    /// until `passwd`. Shell-only gates cannot skip this.
+    must_change: bool,
+    /// Login/logout generation for audits (not a handle).
+    session_gen: u64,
+    /// `timer_ticks` of the last key delivered to this TTY, or 0 if none.
+    last_input_tick: u64,
     /// Timer tick when [`console_budget_used`] was last reset.
     console_budget_tick: u64,
     /// Console bytes written during [`console_budget_tick`].
@@ -809,6 +823,9 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
             fs_root: init.fs.root,
             fs_tokens: init.fs.tokens,
             born_admin: galfs::is_admin_root(init.fs.root),
+            must_change: false,
+            session_gen: 0,
+            last_input_tick: 0,
             console_budget_tick: 0,
             console_budget_used: 0,
         })
@@ -870,6 +887,9 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             fs_root: galfs::NO_OBJECT,
             fs_tokens: [galfs::Token::empty(); galfs::TOKEN_SLOTS],
             born_admin: false,
+            must_change: false,
+            session_gen: 0,
+            last_input_tick: 0,
             console_budget_tick: 0,
             console_budget_used: 0,
         });
@@ -1135,6 +1155,9 @@ pub(crate) fn spawn_user_with_grants(
             fs_root: fs.root,
             fs_tokens: fs.tokens,
             born_admin: galfs::is_admin_root(fs.root),
+            must_change: false,
+            session_gen: 0,
+            last_input_tick: 0,
             console_budget_tick: 0,
             console_budget_used: 0,
         });
@@ -1435,6 +1458,10 @@ struct PendingSpawn {
     seat: bool,
     /// Child inherits the waiter's galfs credentials.
     fs: galfs::FsCred,
+    /// Non-zero: AND inherited token rights with this mask.
+    rights_mask: u8,
+    /// Child must change the default password before mutating galfs.
+    must_change: bool,
     /// 1-based slot of the parked parent.
     waiter_slot: u8,
     armed: bool,
@@ -1450,6 +1477,8 @@ static PENDING_SPAWN: Mutex<PendingSpawn> = Mutex::new(PendingSpawn {
     tty: 0,
     seat: false,
     fs: galfs::FsCred::none(),
+    rights_mask: 0,
+    must_change: false,
     waiter_slot: 0,
     armed: false,
 });
@@ -1458,8 +1487,9 @@ static PENDING_SPAWN: Mutex<PendingSpawn> = Mutex::new(PendingSpawn {
 ///
 /// `arg` is handed to the child. `query` adds the query grant on top of
 /// the console. `wait_exit` keeps the caller parked until the child
-/// exits. `inherit` copies the parent's galfs tokens (utilities). The
-/// caller must already be a running user task. Lock order: this takes
+/// exits. `inherit` copies the parent's galfs tokens (utilities).
+/// `rights_mask` ANDs those rights when non-zero. The caller must
+/// already be a running user task. Lock order: this takes
 /// `PENDING_SPAWN`, then `THREADS`.
 pub(crate) fn task_spawn(
     name: &str,
@@ -1467,6 +1497,7 @@ pub(crate) fn task_spawn(
     query: bool,
     wait_exit: bool,
     inherit: bool,
+    rights_mask: u8,
 ) -> Result<(), SysError> {
     if name.len() > 64 || arg.len() > ARG_MAX {
         return Err(SysError::BadValue);
@@ -1503,10 +1534,14 @@ pub(crate) fn task_spawn(
             return Err(SysError::NoResource);
         }
         let parent_tty = threads[slot - 1].tty;
-        let parent_fs = galfs::FsCred {
+        let parent_must = threads[slot - 1].must_change;
+        let mut parent_fs = galfs::FsCred {
             root: threads[slot - 1].fs_root,
             tokens: threads[slot - 1].fs_tokens,
         };
+        if inherit || wait_exit {
+            galfs::attenuate_tokens(&mut parent_fs.tokens, rights_mask);
+        }
         pending.name[..name.len()].copy_from_slice(name.as_bytes());
         pending.len = name.len() as u8;
         pending.arg[..arg.len()].copy_from_slice(arg);
@@ -1520,6 +1555,8 @@ pub(crate) fn task_spawn(
             parent_tty
         };
         pending.seat = seat;
+        pending.rights_mask = rights_mask;
+        pending.must_change = parent_must && (inherit || wait_exit) && !seat;
         pending.waiter_slot = slot as u8;
         // Seats start logged out (no cards). Utilities inherit the session.
         // Bare programs keep the root for path context but hold no cards.
@@ -1567,12 +1604,36 @@ pub fn drain_spawn() {
         let tty = pending.tty;
         let seat = pending.seat;
         let fs = pending.fs;
+        let must_change = pending.must_change;
         let waiter_slot = pending.waiter_slot;
         pending.armed = false;
-        Some((len, name, arg_len, arg, query, wait_exit, tty, seat, fs, waiter_slot))
+        Some((
+            len,
+            name,
+            arg_len,
+            arg,
+            query,
+            wait_exit,
+            tty,
+            seat,
+            fs,
+            must_change,
+            waiter_slot,
+        ))
     });
-    let Some((len, name_raw, arg_len, arg, query, wait_exit, tty, seat, fs, waiter_slot)) =
-        queued
+    let Some((
+        len,
+        name_raw,
+        arg_len,
+        arg,
+        query,
+        wait_exit,
+        tty,
+        seat,
+        fs,
+        must_change,
+        waiter_slot,
+    )) = queued
     else {
         return;
     };
@@ -1640,6 +1701,11 @@ pub fn drain_spawn() {
             wake_spawn_waiter(&mut threads, waiter_slot, SyscallResult::err(SysError::NotFound));
             return;
         };
+        if must_change {
+            if let Some(child) = threads.get_mut(child_slot as usize - 1) {
+                child.must_change = true;
+            }
+        }
         let Some(cap_bits) = install_proc_cap(&mut threads, waiter_slot, child_slot) else {
             wake_spawn_waiter(
                 &mut threads,
@@ -2158,6 +2224,7 @@ pub(crate) fn task_write_ex(cap: Cap, src: &[u8]) -> Result<IoOp, SysError> {
     let (op, galfs_wrote, wake_pipe) = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        let must_change = thread.must_change;
         let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
         let effective = file.rights.intersection(cap.rights());
         if !effective.contains(CapRights::WRITE) {
@@ -2165,6 +2232,9 @@ pub(crate) fn task_write_ex(cap: Cap, src: &[u8]) -> Result<IoOp, SysError> {
         }
         if src.is_empty() {
             return Ok((IoOp::Ready(0), false, None));
+        }
+        if must_change && matches!(file.body, FileBody::Galfs(_)) {
+            return Err(SysError::AccessDenied);
         }
         match file.body {
             FileBody::Galfs(obj) => {
@@ -2221,6 +2291,7 @@ pub(crate) fn task_create(name: &str, replace: bool) -> Result<Cap, SysError> {
         if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
         }
+        deny_must_change(thread)?;
         let file_index = thread.files.iter().position(|slot| slot.is_none());
         let created = galfs::create(thread.fs_root, &thread.fs_tokens, name, replace)?;
         match created {
@@ -2268,6 +2339,7 @@ pub(crate) fn task_remove(name: &str) -> Result<(), SysError> {
             if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
                 return Err(SysError::BadCap);
             }
+            deny_must_change(thread)?;
         }
         let (fs_root, fs_tokens) = {
             let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
@@ -2317,6 +2389,7 @@ pub(crate) fn task_rename(old: &str, new: &str) -> Result<(), SysError> {
         if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
         }
+        deny_must_change(thread)?;
         galfs::rename(thread.fs_root, &thread.fs_tokens, old, new)
     })?;
     galfs::mark_dirty();
@@ -2336,6 +2409,7 @@ pub(crate) fn task_truncate(cap: Cap, new_len: u64) -> Result<(), SysError> {
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        deny_must_change(thread)?;
         let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
         let effective = file.rights.intersection(cap.rights());
         if !effective.contains(CapRights::WRITE) {
@@ -2597,9 +2671,14 @@ pub(crate) fn task_grant(path: &str, rights: u8, target: &str) -> Result<(), Sys
             if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
                 return Err(SysError::BadCap);
             }
+            deny_must_change(caller)?;
             (caller.fs_root, caller.fs_tokens)
         };
-        let object = galfs::resolve_and_check(fs_root, &fs_tokens, path, rights)?;
+        let need = rights & galfs::RIGHT_ALL;
+        if need == 0 {
+            return Err(SysError::BadValue);
+        }
+        let object = galfs::resolve_and_check(fs_root, &fs_tokens, path, need)?;
         let Some(ti) = threads.iter().position(|t| {
             t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
         }) else {
@@ -2622,9 +2701,14 @@ pub(crate) fn task_revoke(path: &str, rights: u8, target: &str) -> Result<(), Sy
             if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
                 return Err(SysError::BadCap);
             }
+            deny_must_change(caller)?;
             (caller.fs_root, caller.fs_tokens)
         };
-        let object = galfs::resolve_and_check(fs_root, &fs_tokens, path, rights)?;
+        let need = rights & galfs::RIGHT_ALL;
+        if need == 0 {
+            return Err(SysError::BadValue);
+        }
+        let object = galfs::resolve_and_check(fs_root, &fs_tokens, path, need)?;
         let Some(ti) = threads.iter().position(|t| {
             t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
         }) else {
@@ -2838,6 +2922,15 @@ fn admin_caller(fs_root: u16, _tokens: &[galfs::Token; galfs::TOKEN_SLOTS]) -> b
     galfs::is_admin_root(fs_root)
 }
 
+/// Filesystem and account mutations stay closed until `passwd` clears the flag.
+fn deny_must_change(thread: &Thread) -> Result<(), SysError> {
+    if thread.must_change {
+        Err(SysError::AccessDenied)
+    } else {
+        Ok(())
+    }
+}
+
 /// Writes the current actor name into `out`.
 pub(crate) fn task_whoami(out: &mut [u8]) -> Result<usize, SysError> {
     let slot = current_slot();
@@ -2947,6 +3040,7 @@ pub(crate) fn task_setquota(
         if !admin_caller(thread.fs_root, &thread.fs_tokens) {
             return Err(SysError::AccessDenied);
         }
+        deny_must_change(thread)?;
         Ok(())
     })?;
     galfs::set_actor_quota(name, max_objects, max_bytes)
@@ -2967,6 +3061,7 @@ pub(crate) fn task_useradd(name: &str, password: &[u8]) -> Result<(), SysError> 
         if !admin_caller(thread.fs_root, &thread.fs_tokens) {
             return Err(SysError::AccessDenied);
         }
+        deny_must_change(thread)?;
         let _ = galfs::add_user(name, password)?;
         Ok(())
     })?;
@@ -3008,7 +3103,13 @@ pub(crate) fn task_login(name: &str, password: &[u8]) -> Result<(), SysError> {
         if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
         }
-        install_session(caller, target, true)?;
+        let gen = install_session(caller, target, true)?;
+        serial_println!(
+            "[auth] session login user={} gen={} tty={}",
+            name,
+            gen,
+            tty.saturating_add(1)
+        );
         Ok(())
     })?;
     lockout::record_success(name, tty);
@@ -3027,7 +3128,13 @@ pub(crate) fn task_logout() -> Result<(), SysError> {
         if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
         }
-        clear_session(caller);
+        let tty = caller.tty;
+        let gen = clear_session(caller);
+        serial_println!(
+            "[auth] session logout gen={} tty={}",
+            gen,
+            tty.saturating_add(1)
+        );
         Ok(())
     })
 }
@@ -3037,7 +3144,7 @@ pub(crate) fn task_logout() -> Result<(), SysError> {
 /// `from_login` sets [`Thread::born_admin`] from the target (password
 /// identity). `su` passes `false` so switching to a non-admin actor does
 /// **not** clear born-admin — the seat can `su admin` to return (AUTH.md).
-fn install_session(caller: &mut Thread, target: u16, from_login: bool) -> Result<(), SysError> {
+fn install_session(caller: &mut Thread, target: u16, from_login: bool) -> Result<u64, SysError> {
     caller.fs_root = target;
     caller.fs_tokens = [galfs::Token::empty(); galfs::TOKEN_SLOTS];
     galfs::push_token(&mut caller.fs_tokens, target, galfs::RIGHT_ALL)?;
@@ -3046,12 +3153,16 @@ fn install_session(caller: &mut Thread, target: u16, from_login: bool) -> Result
     if from_login {
         caller.born_admin = admin;
     }
+    caller.must_change = galfs::actor_must_change(target);
+    caller.last_input_tick = crate::arch::timer_ticks();
+    let gen = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
+    caller.session_gen = gen;
     caller.grants = if admin {
         Grants::launcher()
     } else {
         Grants::session()
     };
-    Ok(())
+    Ok(gen)
 }
 
 /// Durable home share for actor `grantee` (survives logout; reapplied at login).
@@ -3066,6 +3177,7 @@ pub(crate) fn task_share(path: &str, rights: u8, grantee: &str) -> Result<(), Sy
         if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
         }
+        deny_must_change(caller)?;
         Ok((caller.fs_root, caller.fs_tokens))
     })?;
     galfs::add_share(fs_root, &fs_tokens, path, rights, grantee)
@@ -3083,16 +3195,22 @@ pub(crate) fn task_unshare(path: &str, rights: u8, grantee: &str) -> Result<(), 
         if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
         }
+        deny_must_change(caller)?;
         Ok((caller.fs_root, caller.fs_tokens))
     })?;
     galfs::remove_share(fs_root, &fs_tokens, path, rights, grantee)
 }
 
-fn clear_session(caller: &mut Thread) {
+fn clear_session(caller: &mut Thread) -> u64 {
     caller.fs_root = galfs::NO_OBJECT;
     caller.fs_tokens = [galfs::Token::empty(); galfs::TOKEN_SLOTS];
     caller.born_admin = false;
+    caller.must_change = false;
+    caller.last_input_tick = 0;
+    let gen = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
+    caller.session_gen = gen;
     caller.grants = Grants::pre_login();
+    gen
 }
 
 /// Sets a password. Admin may set any account; others only their own.
@@ -3129,7 +3247,19 @@ pub(crate) fn task_passwd(name: Option<&str>, password: &[u8]) -> Result<(), Sys
         }
     })?;
     let name_str = core::str::from_utf8(&name_buf[..name_len]).map_err(|_| SysError::BadValue)?;
-    galfs::set_password(name_str, password)
+    galfs::set_password(name_str, password)?;
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        let mut self_name = [0u8; 32];
+        let Ok(n) = galfs::name_of_root(thread.fs_root, &mut self_name) else {
+            return Ok(());
+        };
+        if &self_name[..n] == name_str.as_bytes() {
+            thread.must_change = galfs::actor_must_change(thread.fs_root);
+        }
+        Ok(())
+    })
 }
 
 /// Deletes an empty actor. Refuses admin and roots still in use.
@@ -3150,6 +3280,7 @@ pub(crate) fn task_userdel(name: &str) -> Result<(), SysError> {
         if !admin_caller(thread.fs_root, &thread.fs_tokens) {
             return Err(SysError::AccessDenied);
         }
+        deny_must_change(thread)?;
         let root = galfs::root_named(name)?;
         let live = threads.iter().any(|t| {
             t.is_user && t.fs_root == root && {
@@ -3201,20 +3332,152 @@ pub(crate) fn task_su(name: &str) -> Result<(), SysError> {
             if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
                 return Err(SysError::BadCap);
             }
+            deny_must_change(caller)?;
             (caller.fs_root, caller.fs_tokens, caller.born_admin)
         };
         let target = galfs::root_named(name)?;
         let to_admin = galfs::is_admin_root(target);
-        let allowed = galfs::is_admin_root(fs_root)
-            || (born_admin && to_admin)
-            || galfs::holds_all(fs_root, &fs_tokens, target);
+        let operator = galfs::is_admin_root(fs_root) || (born_admin && to_admin);
+        let allowed = operator || galfs::holds_all(fs_root, &fs_tokens, target);
         if !allowed {
             return Err(SysError::AccessDenied);
         }
+        if !operator {
+            let mut cards = fs_tokens;
+            if galfs::consume_once(&mut cards, target) {
+                serial_println!("[auth] card once user={} revoked", name);
+            }
+        }
         let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-        install_session(caller, target, false)?;
+        let tty = caller.tty;
+        let gen = install_session(caller, target, false)?;
+        serial_println!(
+            "[auth] session su user={} gen={} tty={}",
+            name,
+            gen,
+            tty.saturating_add(1)
+        );
         Ok(())
     })
+}
+
+/// Records a keystroke on `tty` so idle logout starts from now.
+pub fn note_tty_input(tty: u8) {
+    let now = crate::arch::timer_ticks();
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        for thread in threads.iter_mut() {
+            if thread.is_user && thread.tty == tty {
+                thread.last_input_tick = now;
+            }
+        }
+    });
+}
+
+/// Logged-in console shells with no keys for [`IDLE_LOGOUT_MS`] are exited
+/// (init respawns a logged-out seat). Test kernels pass `all_tasks` so a
+/// blob can trip the same path.
+fn idle_scan(all_tasks: bool) {
+    let now = crate::arch::timer_ticks();
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let n = threads.len();
+        for i in 0..n {
+            if !threads[i].is_user {
+                continue;
+            }
+            let state = threads[i].state.load(Ordering::Acquire);
+            if state != STATE_RUNNING && state != STATE_WAITING {
+                continue;
+            }
+            if threads[i].fs_root == galfs::NO_OBJECT || threads[i].is_init {
+                continue;
+            }
+            if !all_tasks && !is_console_shell_name(threads[i].name()) {
+                continue;
+            }
+            let last = threads[i].last_input_tick;
+            if !idle_due(last, now) {
+                continue;
+            }
+            let tty = threads[i].tty;
+            let mut raw = [0u8; NAME_CAP];
+            let name_len = threads[i].name_len as usize;
+            raw[..name_len].copy_from_slice(&threads[i].name_bytes[..name_len]);
+            let name = core::str::from_utf8(&raw[..name_len]).unwrap_or("?");
+            serial_println!(
+                "[auth] idle logout user={} tty={}",
+                name,
+                tty.saturating_add(1)
+            );
+            let _ = clear_session(&mut threads[i]);
+            if state == STATE_WAITING {
+                interrupt_io_waiter(&mut threads, i);
+            }
+            threads[i]
+                .exit_code
+                .store(EXIT_KILLED, Ordering::Release);
+            threads[i].state.store(STATE_EXITED, Ordering::Release);
+        }
+    });
+}
+
+/// Main-loop idle logout for F-key shells.
+pub fn poll_idle_logouts() {
+    idle_scan(false);
+}
+
+/// Same scan, including non-shell tasks. Test kernels only.
+pub fn test_poll_idle_all() {
+    idle_scan(true);
+}
+
+/// Moves `name`'s last keystroke `ticks` into the past (test tick injection).
+pub fn test_backdate_input(name: &str, ticks: u64) {
+    let now = crate::arch::timer_ticks();
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        if let Some(thread) = threads.iter_mut().find(|t| t.is_user && t.name() == name) {
+            thread.last_input_tick = now.saturating_sub(ticks);
+        }
+    });
+}
+
+/// `(session_gen, must_change)` for a live user task named `name`.
+pub fn test_auth_flags(name: &str) -> Option<(u64, bool)> {
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        threads.iter().find_map(|t| {
+            let state = t.state.load(Ordering::Acquire);
+            if t.is_user
+                && t.name() == name
+                && (state == STATE_RUNNING || state == STATE_WAITING)
+            {
+                Some((t.session_gen, t.must_change))
+            } else {
+                None
+            }
+        })
+    })
+}
+
+fn idle_limit() -> u64 {
+    let over = IDLE_LIMIT_OVERRIDE.load(Ordering::Relaxed);
+    if over == 0 {
+        IDLE_LOGOUT_MS
+    } else {
+        over
+    }
+}
+
+/// Shrinks the idle window for tests. `0` restores [`IDLE_LOGOUT_MS`].
+pub fn test_set_idle_limit(ms: u64) {
+    IDLE_LIMIT_OVERRIDE.store(ms, Ordering::Relaxed);
+}
+
+/// True when `last` is set and `now` is at least the idle limit later.
+pub fn idle_due(last: u64, now: u64) -> bool {
+    last != 0 && now.saturating_sub(last) >= idle_limit()
 }
 
 /// Console bytes a task may emit per timer tick before further writes
@@ -3739,7 +4002,7 @@ fn park_io(
 /// pending read into their user buffer when keys are available.
 pub fn wake_keyboard_waiters(tty: u8) {
     interrupts::without_interrupts(|| {
-        let threads = THREADS.lock();
+        let mut threads = THREADS.lock();
         for i in 0..threads.len() {
             if threads[i].state.load(Ordering::Acquire) != STATE_WAITING {
                 continue;
@@ -3769,6 +4032,7 @@ pub fn wake_keyboard_waiters(tty: u8) {
                 // Still empty (spurious wake) — stay parked.
                 continue;
             }
+            threads[i].last_input_tick = crate::arch::timer_ticks();
             clear_wait_fields(&threads[i]);
             stamp_waiter_frame(&threads[i], SyscallResult::ok(n as u64));
             threads[i].state.store(STATE_RUNNING, Ordering::Release);

@@ -485,7 +485,9 @@ fn syscall_grant(frame: &Context) -> SyscallResult {
     if task_len == 0 || task_len > MAX_NAME {
         return SyscallResult::err(SysError::BadValue);
     }
-    if rights == 0 || rights & !galexy_abi::TOKEN_ALL != 0 {
+    if rights & !(galexy_abi::TOKEN_ALL | galexy_abi::TOKEN_ONCE) != 0
+        || rights & galexy_abi::TOKEN_ALL == 0
+    {
         return SyscallResult::err(SysError::BadValue);
     }
     if user_buffer(path_addr, path_len, false).is_err() {
@@ -532,7 +534,9 @@ fn syscall_revoke(frame: &Context) -> SyscallResult {
     if task_len == 0 || task_len > MAX_NAME {
         return SyscallResult::err(SysError::BadValue);
     }
-    if rights == 0 || rights & !galexy_abi::TOKEN_ALL != 0 {
+    if rights & !(galexy_abi::TOKEN_ALL | galexy_abi::TOKEN_ONCE) != 0
+        || rights & galexy_abi::TOKEN_ALL == 0
+    {
         return SyscallResult::err(SysError::BadValue);
     }
     if user_buffer(path_addr, path_len, false).is_err() {
@@ -1188,6 +1192,7 @@ fn syscall_read_keyboard_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
             Err(err) => IoResult::Done(SyscallResult::err(err)),
         };
     }
+    crate::sched::note_tty_input(tty);
     // SAFETY: the destination was accepted as present, user, writable.
     unsafe {
         core::ptr::copy_nonoverlapping(
@@ -1218,7 +1223,8 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
     if frame.r10
         & !(galexy_abi::SPAWN_GRANT_QUERY
             | galexy_abi::SPAWN_WAIT
-            | galexy_abi::SPAWN_INHERIT)
+            | galexy_abi::SPAWN_INHERIT
+            | galexy_abi::SPAWN_RIGHTS_BITS)
         != 0
     {
         return SyscallResult::err(SysError::BadValue);
@@ -1272,8 +1278,16 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
     let query = frame.r10 & galexy_abi::SPAWN_GRANT_QUERY != 0;
     let wait_exit = frame.r10 & galexy_abi::SPAWN_WAIT != 0;
     let inherit = frame.r10 & galexy_abi::SPAWN_INHERIT != 0;
-    match crate::sched::task_spawn(name, &arg[..arg_len as usize], query, wait_exit, inherit)
-    {
+    let rights_mask = ((frame.r10 & galexy_abi::SPAWN_RIGHTS_BITS) >> galexy_abi::SPAWN_RIGHTS_SHIFT)
+        as u8;
+    match crate::sched::task_spawn(
+        name,
+        &arg[..arg_len as usize],
+        query,
+        wait_exit,
+        inherit,
+        rights_mask,
+    ) {
         Ok(()) => SyscallResult::ok(0),
         Err(err) => SyscallResult::err(err),
     }

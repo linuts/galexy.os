@@ -1112,6 +1112,42 @@ fn users_test_passes() {
 }
 
 #[test]
+fn mustchange_test_passes() {
+    let (code, serial) = boot(&image("test-mustchange"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-mustchange should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[auth] session login user=admin"),
+        "session generation line missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-mustchange] passed"),
+        "test-mustchange success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn idle_test_passes() {
+    let (code, serial) = boot(&image("test-idle"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-idle should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[auth] idle logout user=idle1 tty=1"),
+        "idle logout line missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-idle] passed"),
+        "test-idle success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn lockout_test_passes() {
     let (code, serial) = boot(&image("test-lockout"));
     assert_eq!(
@@ -2162,7 +2198,7 @@ fn shell_run_hello_typing_e2e() {
     keys.extend(LOGIN_ADMIN_TESTPASS_KEYS.iter().copied());
     keys.extend([("x", "x"), ("y", "beat\n")]);
     let serial = boot_and_type(
-        &image("galexy-os"),
+        &image("galexy-os-crashseam"),
         &keys,
         "[boot] main loop ready",
         "beat\n",

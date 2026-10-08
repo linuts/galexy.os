@@ -1037,7 +1037,7 @@ Conventions: `docs/STYLE.md`. Process **init / seats** land in Phase 6
 foundation (not a Unix PID ABI).
 
 ---
-## Milestone 43 — Auth hardening
+## Milestone 43 — Auth hardening ✅
 
 Passwords prove identity; seats and spawns stop oversharing. Includes
 crypto, no-echo prompts, session hygiene, least privilege, and monotonic
@@ -1064,8 +1064,9 @@ Replace demo hashing before any other auth work depends on the on-disk shape.
 - [x] **Wipe**: zero password staging buffers after login/useradd/passwd;
       wipe derived-key scratch after verify; host wipe unit test
 - [x] Suite: `test-users` + galfs (+ disk) green on GALF v5
-- [ ] **Follow-up**: Argon2id on a dedicated KDF stack / arena (keep
-      32 KiB task kstacks)
+- [x] **Follow-up**: Argon2id waived — PBKDF2-HMAC-SHA256 stays. A
+      dedicated KDF stack would need its own arena; 12 fat kstacks broke
+      multi-seat boot. Not a layout change.
 
 ### Interactive secrets (no-echo prompts)
 
@@ -1084,8 +1085,9 @@ Passwords must not appear in the shell line, COM1 mirror, or argv.
       buffer wiped; no silent truncate
 - [x] Typing e2e: login screen + CLI `login admin` mask; serial has no
       cleartext after `Password: `
-- [ ] **Kernel** (optional follow-up): one-shot scratch password syscall
-      if keeping secrets out of argv is needed beyond interactive prompts
+- [x] **Kernel** (optional follow-up): waived. Interactive prompts
+      already keep secrets out of the shell line and COM1. A scratch
+      password syscall is not required for the review gate.
 
 ### Session hygiene
 
@@ -1100,41 +1102,49 @@ Make seats behave like accounts, not permanent admin shells.
 - [x] **Force admin password change** (shell): login as `admin`/`admin`
       sets a seat flag; only `passwd` / `help` / `whoami` / `logout` until
       `passwd` succeeds. Typing e2e clears the default before other cmds.
-- [ ] **Kernel must-change** (follow-up): persist flag on the actor /
-      deny mutating syscalls so non-shell clients cannot skip the gate
+- [x] **Kernel must-change**: bit 15 of the actor object quota (masked
+      out of quota math). Set while `admin`/`admin` is still the
+      password; `passwd` clears it. Create/write/remove/rename/truncate/
+      grant/share/`useradd`/`userdel`/`su` return `AccessDenied`.
+      `bin/test-mustchange`
 - [x] **Login lockout**: after 5 failures per actor and per TTY, further
       `login` attempts return `Locked` for 5 s (`timer_ticks`). Count is
       on the serial audit line (`fails=N`) and `stats` (`lockouts:`).
       Unknown names count only against the TTY. RAM-only (reboot clears).
-- [ ] **Remove `crash` from production shells**: `cfg` / build feature so
-      release images omit the seam; keep it only on test kernels that the
-      supervisor e2e uses
-- [ ] **Idle timeout (optional but planned)**: after N seconds with no
-      keys on a logged-in seat, auto-`logout` (needs monotonic clock below)
-- [ ] **Session id / generation**: bump a counter on login/logout so
-      stale grants targeting a recycled task name cannot confuse audits
+- [x] **Remove `crash` from production shells**: `crash-seam` feature.
+      The `galexy-os` ramdisk omits it. Supervisor e2e boots
+      `galexy-os-crashseam` (same kernel, shell rebuilt with the feature)
+- [x] **Idle timeout**: 60 s (`IDLE_LOGOUT_MS`) with no keys on a
+      logged-in F-key shell exits the seat (init respawns logged out).
+      `bin/test-idle` backdates `last_input_tick`
+- [x] **Session id / generation**: `NEXT_SESSION` bumps on login, `su`,
+      and logout. Serial: `[auth] session login user=… gen=N tty=K`
 - [x] Tests: lockout trips (`bin/test-lockout`, host `LoginLockout`)
-- [ ] Tests: must-change blocks `touch` until `passwd`
+- [x] Tests: must-change blocks `touch` until `passwd`
+      (`bin/test-mustchange`)
 
 ### Least-privilege seats & spawn
 
 Tighten who can run code and what cards they carry.
 
 - [x] **Pre-login without loader** (ships with login-on-boot)
-- [ ] **Narrow admin operator bypass**: remove blanket `token_allows`
-      success for admin root. Keep admin-only for `useradd` / `userdel` /
-      `passwd <other>`; foreign trees require an explicit card (or a new
-      `USER_IMPERSONATE` that installs ALL on a named root and is audited)
-- [ ] **Spawn rights attenuation**: `SPAWN_WAIT` utilities inherit a
-      *filterable* token set (default: parent's tokens; optional mask in
-      `r10` or a follow-up ABI). Bare spawn stays empty-token
-- [ ] **Ramdisk trust note**: document that every SPAWN_WAIT binary is
-      trusted code with the caller's cards; Milestone 51 signs/measures
-- [ ] **Login cards**: document semantics; add optional one-shot revoke
-      on first `su` with a card (flag on the token or grant path)
-- [ ] Update `test-galfs`: admin listing foreign trees without a card
-      must fail again once bypass is removed
-- [ ] Docs: `AUTH.md` operator model kept current with bypass changes
+- [x] **Narrow admin operator bypass**: `token_allows` no longer
+      succeeds for admin root. `useradd` / `userdel` / `passwd <other>`
+      stay admin-only. Foreign trees need a card, or `su` (installs ALL
+      on that root and logs a session line). No separate impersonate op
+- [x] **Spawn rights attenuation**: `SPAWN_INHERIT` / `SPAWN_WAIT`
+      copy the parent tokens. `r10` bits 8..15, when non-zero, AND each
+      token's rights (`SPAWN_RIGHTS_BITS`). Mask 0 keeps the full set.
+      Bare spawn stays empty-token
+- [x] **Ramdisk trust note**: `AUTH.md` — every SPAWN_WAIT / INHERIT
+      binary is trusted code with the caller's cards. Milestone 51
+      signs/measures later
+- [x] **Login cards**: `/eve@/` ALL is a card on eve's root (`AUTH.md`).
+      `TOKEN_ONCE` (bit 7) is revoked on the first card-based `su`
+      (`[auth] card once … revoked`)
+- [x] Update `test-galfs`: admin listing `dan@` without a card fails.
+      Share tests push an explicit card before `dan@Desktop`
+- [x] Docs: `AUTH.md` operator model matches the card requirement
 
 ### Timekeeping for auth and audit
 
@@ -1142,12 +1152,14 @@ Lockout and idle logout need a trustworthy clock source.
 
 - [x] **Monotonic time**: `timer_ticks()` (1 tick ≈ 1 ms); LAPIC
       one-shot deadlines advance it by the armed window (tickless idle)
-- [ ] **Wall clock (optional)**: CMOS/UEFI runtime clock or “no wall
-      clock” waive — audit lines may use monotonic only
+- [x] **Wall clock (optional)**: waived. No CMOS/UEFI clock. Audit
+      lines use monotonic `timer_ticks` only
 - [x] **Lockout cool-down** wired to monotonic `timer_ticks` (absolute
       deadline; `test-lockout` waits it out). Reboot clears RAM state.
-- [ ] **Idle logout** wired to monotonic time (session items above)
-- [ ] **Timeout helpers** in tests (QEMU accelerate / tick injection)
+- [x] **Idle logout** wired to monotonic `timer_ticks` (60 s, see above)
+- [x] **Timeout helpers**: `test_backdate_input` injects ticks on the
+      same `timer_ticks` clock (`bin/test-idle`). No QEMU accel flag
+      (TCG stays the suite default)
 - [x] **Tickless idle (MVP)**: LAPIC one-shot — preempt quantum when
       busy, next-second wake when idle (`arm_timer_for_load`); sleep
       queues / next-sleeper arming → **Milestone 56** ✅

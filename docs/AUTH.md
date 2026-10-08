@@ -158,7 +158,13 @@ revoke a /eve@/ shell2
 
 - **Apps** receive cards via `grant`, or inherit nothing (see spawn).
 - **Users** receive cards the same way; possession of `/eve@/` ALL lets
-  them `su eve` **without** eve’s password (card-based switch).
+  them `su eve` **without** eve’s password (card-based switch). The
+  path is only a lookup: the card is `ALL` on eve’s root object.
+- `grant` may set the one-shot flag (`TOKEN_ONCE`, rights bit 7, shell
+  letter not required). The first card-based `su` that token authorizes
+  logs `[auth] card once user=… revoked` and drops that token. `su` as
+  admin, or `su admin` on a born-admin seat, does not consume a card.
+  Durable shares are not one-shot; they are re-applied at the next login.
 - Password login is always available as `login eve <pass>` when you do
   not hold a card.
 
@@ -168,25 +174,46 @@ login …       # always password-checked identity switch
 logout        # return to pre-login (not a switch to another user)
 ```
 
-Admin may `su` to any actor without a password (operator seat). A session
-whose `fs_root` is admin also passes every token check (list/open/grant),
-so an admin console can manage any tree without collecting cards.
+Admin may `su` to any actor without a password (operator seat). That
+installs `ALL` on the named root and is the way an operator touches a
+foreign tree. Admin `fs_root` does **not** pass token checks on other
+actors’ objects: list, open, grant, and share of `/eve@/…` need a card
+(or `su eve` first). `useradd`, `userdel`, and `passwd <other>` stay
+admin-only.
+
 Returning to admin after `su` elsewhere uses `su admin` when the seat
 was born/logged-in as admin (`born_admin` survives `su` away — it is
 only cleared by `logout` or a password `login` as a non-admin), or
 `login admin <pass>`. Non-admin sessions have no Power grant: `shutdown`
 / `reboot` return access denied.
 
+Login and logout bump a session generation (`[auth] session login
+user=… gen=N tty=K`). It is an audit counter, not a capability. A
+logged-in F-key shell with no keystrokes for 60 s (`IDLE_LOGOUT_MS` on
+`timer_ticks`) is exited; init respawns a logged-out seat
+(`[auth] idle logout`).
+
+While `admin`’s password is still `admin`, the actor carries a
+must-change flag (bit 15 of the on-disk object quota; the quota value
+itself masks that bit off). Password login copies it onto the task.
+Create, write, remove, rename, truncate, grant, share, `useradd`,
+`userdel`, and `su` return `AccessDenied` until `passwd`. Reboot keeps
+the flag because it lives in the sealed actor record.
+
 ## Spawn policy (least privilege)
 
 | Spawn kind | galfs credentials |
 | --- | --- |
-| Utility (`SPAWN_INHERIT`, or legacy `SPAWN_WAIT`) | Inherits the parent’s full session (short trusted tools) |
-| Bare program (`hello`, `linger`, …) | Parent’s `fs_root`, **empty tokens** |
+| Utility (`SPAWN_INHERIT`, or legacy `SPAWN_WAIT`) | Parent’s tokens, optionally ANDed with the `r10` rights mask (bits 8..15). Mask `0` keeps the full set |
+| Bare program (`hello`, `linger`, …) | Parent’s `fs_root`, **empty tokens** (the mask does not apply) |
 
-Pre-login seats cannot spawn (no loader grant). Ramdisk code is still
-trusted enough to run once logged in; empty tokens stop a runaway bare
-program from writing the caller’s tree. Utilities need create/open.
+Every `SPAWN_WAIT` / `SPAWN_INHERIT` ramdisk binary is trusted code
+running with the caller’s cards. Milestone 51 signs and measures those
+ELFs; until then, a hostile utility is a hostile operator.
+
+Pre-login seats cannot spawn (no loader grant). Empty tokens stop a
+runaway bare program from writing the caller’s tree. Utilities need
+create/open.
 
 Process identity and wait/kill are a separate layer: spawn will return a
 **process Cap** (see `docs/PROCESS.md`). Holding that Cap does not grant
@@ -201,13 +228,14 @@ within budget; a tight write loop cannot pin COM1.
 
 ## Explicit non-goals (for now)
 
-Tracked for review readiness in `TODO.md` Milestones 43–44:
-
 - Interactive volume unlock (replace bring-up passphrase) → Milestone 44
-- Idle logout, kernel must-change → remaining Milestone 43
-- PAM-style modules, MFA, networked IdP (still out of scope for review)
-- Removing the `crash` test seam from production images → Milestone 43
-  (kept for supervisor e2e; omitted from `help`)
+- Argon2id (PBKDF2 stays; a dedicated KDF stack is deferred)
+- One-shot scratch password syscall (interactive prompts already hide secrets)
+- Wall clock. Audit lines use monotonic `timer_ticks` only
+- PAM-style modules, MFA, networked IdP
+- `crash` on production images. The command exists only in the
+  `crash-seam` shell packed into `galexy-os-crashseam` for the
+  supervisor typing test. `help` never lists it
 
 **Note:** GALF **v8** refuses older images (including sealed v7). Delete
 `galfs.img` or let format recreate a sealed volume after upgrading.

@@ -55,17 +55,15 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galfs::push_token(&mut eve_toks, eve, galfs::RIGHT_ALL).expect("eve home");
     galfs::apply_shares(eve, &mut eve_toks).expect("apply empty");
     assert!(
-        !has_share_card(
-            &eve_toks,
-            desk,
-            galfs::RIGHT_LIST | galfs::RIGHT_READ
-        ),
+        !has_share_card(&eve_toks, desk, galfs::RIGHT_LIST | galfs::RIGHT_READ),
         "eve must not receive dan Desktop without a share"
     );
 
+    let mut share_toks = admin_cred.tokens;
+    galfs::push_token(&mut share_toks, dan, galfs::RIGHT_ALL).expect("card for dan");
     galfs::add_share(
         admin,
-        &admin_cred.tokens,
+        &share_toks,
         "dan@Desktop",
         galfs::RIGHT_LIST | galfs::RIGHT_READ,
         "eve",
@@ -77,17 +75,13 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galfs::push_token(&mut eve_toks, eve, galfs::RIGHT_ALL).expect("eve home again");
     galfs::apply_shares(eve, &mut eve_toks).expect("apply shares");
     assert!(
-        has_share_card(
-            &eve_toks,
-            desk,
-            galfs::RIGHT_LIST | galfs::RIGHT_READ
-        ),
+        has_share_card(&eve_toks, desk, galfs::RIGHT_LIST | galfs::RIGHT_READ),
         "login must install the durable share card"
     );
 
     galfs::remove_share(
         admin,
-        &admin_cred.tokens,
+        &share_toks,
         "dan@Desktop",
         galfs::RIGHT_LIST | galfs::RIGHT_READ,
         "eve",
@@ -98,23 +92,13 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galfs::push_token(&mut eve_toks, eve, galfs::RIGHT_ALL).expect("eve home post-unshare");
     galfs::apply_shares(eve, &mut eve_toks).expect("apply after unshare");
     assert!(
-        !has_share_card(
-            &eve_toks,
-            desk,
-            galfs::RIGHT_LIST | galfs::RIGHT_READ
-        ),
+        !has_share_card(&eve_toks, desk, galfs::RIGHT_LIST | galfs::RIGHT_READ),
         "unshare must stop login re-apply"
     );
 
     // userdel clears durable shares naming the deleted actor.
-    galfs::add_share(
-        admin,
-        &admin_cred.tokens,
-        "dan@Desktop",
-        galfs::RIGHT_READ,
-        "eve",
-    )
-    .expect("re-share for userdel");
+    galfs::add_share(admin, &share_toks, "dan@Desktop", galfs::RIGHT_READ, "eve")
+        .expect("re-share for userdel");
     galfs::remove_user("eve").expect("userdel eve");
     galfs::add_user("eve", b"eve-pass").expect("re-add eve");
     let eve2 = galfs::root_named("eve").expect("eve root again");

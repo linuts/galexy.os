@@ -79,7 +79,9 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let secret = galfs::create_file_under(desk, "secret").expect("secret");
     let _ = galfs::append_file(secret, b"share-disk-marker").expect("write");
 
-    galfs::add_share(admin, &admin_cred.tokens, "dan@Desktop", rights, "eve")
+    let mut share_toks = admin_cred.tokens;
+    galfs::push_token(&mut share_toks, dan, galfs::RIGHT_ALL).expect("card for dan");
+    galfs::add_share(admin, &share_toks, "dan@Desktop", rights, "eve")
         .expect("share Desktop to eve");
     galfs::sync();
 

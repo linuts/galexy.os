@@ -58,8 +58,8 @@ them as the target.
 ## Capabilities and tokens
 
 - **Authentication ≠ authorization.** Passwords change `fs_root` / session;
-  galfs tokens are the only way to touch objects (except a documented,
-  audited admin path — and Milestone 43 removes the blanket bypass).
+  galfs tokens are the only way to touch objects. Admin `su` installs
+  `ALL` on a named root; there is no blanket token bypass.
 - Tokens name an **object id + rights**, not a path string. Path parse is
   lookup only; rights come from the card.
 - `grant` may only install rights the caller already holds on that object

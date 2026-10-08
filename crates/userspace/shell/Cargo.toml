@@ -8,6 +8,11 @@ description = "The galexy.os interactive shell, as a ring-3 program."
 name = "shell"
 path = "src/main.rs"
 
+[features]
+# Supervisor e2e only. Release ramdisk images leave this off so `crash`
+# is not a command. See runner `galexy-os-crashseam`.
+crash-seam = []
+
 [dependencies]
 galexy-rt = { path = "../galexy-rt" }
 galexy-abi = { path = "../../galexy-abi" }
