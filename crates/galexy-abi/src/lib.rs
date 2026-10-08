@@ -632,8 +632,10 @@ pub const MAX_SYSCALL: u64 = SYSCALLS.len() as u64 - 1;
 
 /// A syscall's return value: OK carries one u64, Err carries one code.
 ///
-/// Mirrored into registers by each arch's entry/exit shim — RAX = code,
-/// RDX = payload (single register, no struct packing at this ABI level).
+/// Mirrored into registers by each arch's entry/exit shim — on x86_64,
+/// RAX = payload or error code and RDX = ok flag (`1` success, `0`
+/// failure); single registers, no struct packing at this ABI level.
+/// `docs/ABI.md` is the stability table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyscallResult {
     /// `true` = success (`rdx` = payload); `false` = failure (`rdx` = code).
