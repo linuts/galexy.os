@@ -67,15 +67,20 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         let scratch_virt: *const u32 =
             galexy_os::arch::mm::frame_virt(region.scratch_phys).as_ptr();
 
-        // Peek then reap (the reaper frees the scratch frame).
+        // Spin-peek before reap — an AP-pinned churn is reaped remotely.
+        x86_64::instructions::interrupts::enable();
+        let deadline = galexy_os::arch::timer_ticks() + 5_000;
         loop {
-            x86_64::instructions::hlt();
-            // SAFETY: mapped until the reaper frees it; peek precedes reap.
+            // SAFETY: phys map; peek before any local reap.
             let mark = unsafe { core::ptr::read_volatile(scratch_virt) };
             if mark == 0xBEEF {
                 break;
             }
-            sched::reap();
+            assert!(
+                galexy_os::arch::timer_ticks() < deadline,
+                "cycle {cycle}: scratch mark never appeared"
+            );
+            core::hint::spin_loop();
         }
         // Sweep until the rotation is empty.
         loop {

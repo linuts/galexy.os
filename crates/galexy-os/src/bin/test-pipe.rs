@@ -71,16 +71,18 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     });
 
     let prod: *const ProducerReport = mm::frame_virt(producer_region.scratch_phys).as_ptr();
+    let cons: *const ConsumerReport = mm::frame_virt(consumer_region.scratch_phys).as_ptr();
+    // Spin-poll before reap — the other CPU may reap its own blob and wipe.
+    x86_64::instructions::interrupts::enable();
     let mut elapsed = 0u64;
     let pref = loop {
-        x86_64::instructions::hlt();
         let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*prod).done)) };
         if done == DONE {
             break unsafe { core::ptr::read_volatile(prod) };
         }
-        sched::reap();
+        core::hint::spin_loop();
         elapsed += 1;
-        if elapsed > TICK_TIMEOUT {
+        if elapsed > TICK_TIMEOUT.saturating_mul(10_000) {
             panic!("producer never finished");
         }
     };
@@ -88,17 +90,15 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert_eq!(pref.give_ok, 1, "give must succeed");
     assert_eq!(pref.write_n, 4, "wrote 4 bytes");
 
-    let cons: *const ConsumerReport = mm::frame_virt(consumer_region.scratch_phys).as_ptr();
     elapsed = 0;
     let cref = loop {
-        x86_64::instructions::hlt();
         let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*cons).done)) };
         if done == DONE {
             break unsafe { core::ptr::read_volatile(cons) };
         }
-        sched::reap();
+        core::hint::spin_loop();
         elapsed += 1;
-        if elapsed > TICK_TIMEOUT {
+        if elapsed > TICK_TIMEOUT.saturating_mul(10_000) {
             panic!("consumer never finished");
         }
     };
