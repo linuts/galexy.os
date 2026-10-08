@@ -737,12 +737,14 @@ fn dispatch(
         return None;
     }
     if line == b"logout" {
+        // Persist while the session still holds galfs tokens — after
+        // logout the seat is pre-login and create/write would fail.
+        history.save();
         let result = user_logout();
         if !result.ok {
             report_user(cwd, b"logout", result, false);
             return None;
         }
-        history.save();
         cwd.len = 0;
         *must_change = false;
         return Some(ReplEnd::Logout);
