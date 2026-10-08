@@ -57,7 +57,7 @@ const _: () = assert!(BLOCK_SLOTS == galexy_galf::BLOCK_SLOTS);
 const _: () = assert!(MAX_DATA_BLOCKS <= DIRECT_BLOCKS + INDIRECT_PTRS);
 const _: () = assert!(FILE_BYTES <= u16::MAX as usize);
 /// Tokens one task may hold.
-pub const TOKEN_SLOTS: usize = 8;
+pub use galexy_galf::cards::TOKEN_SLOTS;
 /// Durable home shares recorded in the sealed image (re-applied at login).
 pub const SHARE_SLOTS: usize = 32;
 /// Default object quota for a new non-admin actor (root + Desktop count).
@@ -77,42 +77,19 @@ pub(crate) const KIND_DIR: u8 = 2;
 
 /// Parent of an actor root.
 const NO_PARENT: u16 = 0xffff;
-/// No object / empty token.
-pub const NO_OBJECT: u16 = 0xffff;
+pub use galexy_galf::cards::NO_OBJECT;
 /// Unused direct-block pointer.
 const NO_BLOCK: u16 = 0xffff;
 const BITMAP_BYTES: usize = BLOCK_SLOTS / 8;
 
-pub const RIGHT_READ: u8 = 1;
-pub const RIGHT_WRITE: u8 = 2;
-pub const RIGHT_LIST: u8 = 4;
-pub const RIGHT_CREATE: u8 = 8;
-pub const RIGHT_REMOVE: u8 = 16;
-pub const RIGHT_ALL: u8 = RIGHT_READ | RIGHT_WRITE | RIGHT_LIST | RIGHT_CREATE | RIGHT_REMOVE;
-/// Task-local flag: revoke this card on the first card-based `su` it authorizes.
-pub const RIGHT_ONCE: u8 = 128;
+pub use galexy_galf::cards::{
+    RIGHT_ALL, RIGHT_CREATE, RIGHT_LIST, RIGHT_ONCE, RIGHT_READ, RIGHT_REMOVE, RIGHT_WRITE,
+};
 /// Stored in bit 15 of `Actor::max_objects` (quotas use the low 15 bits).
 /// Set while `admin`'s password is still the default. Not a GALF version bump.
 const MUST_CHANGE_BIT: u16 = 0x8000;
 
-#[derive(Clone, Copy)]
-pub struct Token {
-    pub object: u16,
-    pub rights: u8,
-}
-
-impl Token {
-    pub const fn empty() -> Self {
-        Self {
-            object: NO_OBJECT,
-            rights: 0,
-        }
-    }
-
-    pub const fn is_live(self) -> bool {
-        self.object != NO_OBJECT
-    }
-}
+pub use galexy_galf::cards::Token;
 
 /// Credentials copied onto a task at spawn.
 #[derive(Clone, Copy)]
@@ -1258,14 +1235,7 @@ pub fn collect_actor_objects(root: u16, out: &mut [u16]) -> usize {
     n
 }
 
-/// Drops every token whose object is in `objects`.
-pub fn drop_tokens_on(tokens: &mut [Token; TOKEN_SLOTS], objects: &[u16]) {
-    for token in tokens.iter_mut() {
-        if objects.contains(&token.object) {
-            *token = Token::empty();
-        }
-    }
-}
+pub use galexy_galf::cards::drop_tokens_on;
 
 /// Credentials for the default boot actor.
 pub fn admin_cred() -> FsCred {
@@ -1546,36 +1516,7 @@ pub fn actor_must_change(root: u16) -> bool {
         .any(|a| a.used && a.root == root && a.max_objects & MUST_CHANGE_BIT != 0)
 }
 
-/// AND inherited token rights with `mask`. `mask == 0` keeps every right.
-/// A token whose rights fall to zero is dropped.
-pub fn attenuate_tokens(tokens: &mut [Token; TOKEN_SLOTS], mask: u8) {
-    if mask == 0 {
-        return;
-    }
-    let mask = mask & RIGHT_ALL;
-    for token in tokens.iter_mut() {
-        if !token.is_live() {
-            continue;
-        }
-        let once = token.rights & RIGHT_ONCE;
-        token.rights = (token.rights & RIGHT_ALL & mask) | once;
-        if token.rights & RIGHT_ALL == 0 {
-            *token = Token::empty();
-        }
-    }
-}
-
-/// Drops a one-shot card that names `object` exactly. Returns whether one was removed.
-pub fn consume_once(tokens: &mut [Token; TOKEN_SLOTS], object: u16) -> bool {
-    let mut hit = false;
-    for token in tokens.iter_mut() {
-        if token.is_live() && token.object == object && token.rights & RIGHT_ONCE != 0 {
-            *token = Token::empty();
-            hit = true;
-        }
-    }
-    hit
-}
+pub use galexy_galf::cards::{attenuate_tokens, consume_once};
 
 /// Adds an actor and an empty root. Test and boot only.
 pub fn add_actor_named(name: &str, password: &[u8]) -> Result<u16, SysError> {
@@ -1883,22 +1824,16 @@ fn start_root(table: &Table, cred: &FsCred, parsed: &ParsedPath<'_>) -> Result<u
 }
 
 /// True when `ancestor` is `object` or a parent of it.
-fn covers_object(table: &Table, ancestor: u16, object: u16) -> bool {
-    let mut cur = object;
-    for _ in 0..OBJECT_SLOTS {
-        if cur == ancestor {
-            return true;
-        }
-        if cur as usize >= OBJECT_SLOTS {
-            return false;
-        }
-        let parent = table.objects[cur as usize].parent;
-        if parent == NO_PARENT {
-            return cur == ancestor;
-        }
-        cur = parent;
+/// Parent lookup for the card algebra: `None` past the table or at a root.
+fn parent_link(table: &Table) -> impl Fn(u16) -> Option<u16> + '_ {
+    move |cur| {
+        let parent = table.objects.get(cur as usize)?.parent;
+        (parent != NO_PARENT).then_some(parent)
     }
-    false
+}
+
+fn covers_object(table: &Table, ancestor: u16, object: u16) -> bool {
+    galexy_galf::cards::covers(parent_link(table), ancestor, object, OBJECT_SLOTS)
 }
 
 /// Whether `cred` holds `need` on `object` or an ancestor.
@@ -1907,19 +1842,7 @@ fn covers_object(table: &Table, ancestor: u16, object: u16) -> bool {
 /// another account stay admin-only via [`is_admin_root`]. Foreign trees
 /// need an explicit card (or `su`, which installs `ALL` on that root).
 fn token_allows(table: &Table, cred: &FsCred, object: u16, need: u8) -> bool {
-    let need = need & RIGHT_ALL;
-    if need == 0 {
-        return false;
-    }
-    for token in &cred.tokens {
-        if !token.is_live() || token.rights & RIGHT_ALL & need != need {
-            continue;
-        }
-        if covers_object(table, token.object, object) {
-            return true;
-        }
-    }
-    false
+    galexy_galf::cards::allows(parent_link(table), &cred.tokens, object, need, OBJECT_SLOTS)
 }
 
 fn cred_from_tokens(root: u16, tokens: &[Token; TOKEN_SLOTS]) -> FsCred {
@@ -2697,42 +2620,4 @@ pub(crate) fn resolve_and_check(
     Ok(index)
 }
 
-/// Installs a token into a fixed slot array. Same object merges rights.
-pub fn push_token(
-    tokens: &mut [Token; TOKEN_SLOTS],
-    object: u16,
-    rights: u8,
-) -> Result<(), SysError> {
-    if object == NO_OBJECT || rights == 0 {
-        return Err(SysError::BadValue);
-    }
-    if let Some(slot) = tokens.iter_mut().find(|t| t.object == object) {
-        slot.rights |= rights;
-        return Ok(());
-    }
-    if let Some(slot) = tokens.iter_mut().find(|t| !t.is_live()) {
-        *slot = Token { object, rights };
-        Ok(())
-    } else {
-        Err(SysError::NoResource)
-    }
-}
-
-/// Clears `rights` from the token that names `object` exactly.
-pub fn revoke_token(
-    tokens: &mut [Token; TOKEN_SLOTS],
-    object: u16,
-    rights: u8,
-) -> Result<(), SysError> {
-    if object == NO_OBJECT || rights == 0 {
-        return Err(SysError::BadValue);
-    }
-    let Some(slot) = tokens.iter_mut().find(|t| t.object == object) else {
-        return Err(SysError::NotFound);
-    };
-    slot.rights &= !rights;
-    if slot.rights == 0 {
-        *slot = Token::empty();
-    }
-    Ok(())
-}
+pub use galexy_galf::cards::{push_token, revoke_token};

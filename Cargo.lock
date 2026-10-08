@@ -200,6 +200,7 @@ version = "0.1.0"
 name = "galexy-galf"
 version = "0.1.0"
 dependencies = [
+ "galexy-abi",
  "galexy-core",
  "galexy-crypto",
 ]
