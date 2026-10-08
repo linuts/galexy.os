@@ -336,7 +336,7 @@ const PAYLOAD_LEN: usize = ACTOR_ON_DISK * ACTOR_SLOTS
     + BITMAP_BYTES
     + BLOCK_SLOTS * BLOCK_SIZE;
 const _: () = assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * block::SECTOR);
-const _: () = assert!(BLOCK_SLOTS % 8 == 0);
+const _: () = assert!(BLOCK_SLOTS.is_multiple_of(8));
 const _: () = assert!(FILE_BYTES <= u16::MAX as usize);
 /// Sectors both dual slots need past the LBA base (capacity gate).
 const DISK_MIN_SECTORS: u64 = (DISK_SECTORS * DISK_SLOT_COUNT) as u64;
@@ -488,8 +488,8 @@ pub fn init() {
 /// In-RAM admin tree. Does not install a volume key or touch the disk.
 fn format_ram_table() {
     let mut table = TABLE.lock();
-    let admin = add_actor(&mut table, ADMIN_NAME, ADMIN_DEFAULT_PASSWORD.as_bytes())
-        .expect("galfs: admin");
+    let admin =
+        add_actor(&mut table, ADMIN_NAME, ADMIN_DEFAULT_PASSWORD.as_bytes()).expect("galfs: admin");
     ADMIN_ROOT.store(admin, Ordering::Relaxed);
     mkdir_locked(&mut table, admin, "Desktop").expect("galfs: admin Desktop");
     drop(table);
@@ -769,7 +769,7 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
             best_gen = gen;
             best_slot = Some(slot);
             // Avoid `*best = *cand` — that materializes a Table on the stack.
-            copy_table(&*cand, &mut *best);
+            copy_table(&cand, &mut best);
         }
     }
     let Some(slot) = best_slot else {
@@ -780,7 +780,7 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
         };
     };
     let mut table = TABLE.lock();
-    copy_table(&*best, &mut *table);
+    copy_table(&best, &mut table);
     refresh_roots(&table);
     ACTIVE_SLOT.store(slot, Ordering::Release);
     ACTIVE_GEN.store(best_gen, Ordering::Release);
@@ -849,12 +849,10 @@ fn encode_table(
         flat[off] = u8::from(actor.used);
         flat[off + 1] = actor.name_len;
         flat[off + 2..off + 2 + ACTOR_NAME].copy_from_slice(&actor.name);
-        flat[off + 2 + ACTOR_NAME..off + 4 + ACTOR_NAME]
-            .copy_from_slice(&actor.root.to_le_bytes());
+        flat[off + 2 + ACTOR_NAME..off + 4 + ACTOR_NAME].copy_from_slice(&actor.root.to_le_bytes());
         let salt_off = off + 4 + ACTOR_NAME;
         flat[salt_off..salt_off + SALT_LEN].copy_from_slice(&actor.salt);
-        flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN]
-            .copy_from_slice(&actor.pass_hash);
+        flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN].copy_from_slice(&actor.pass_hash);
         let qoff = salt_off + SALT_LEN + HASH_LEN;
         flat[qoff..qoff + 2].copy_from_slice(&actor.max_objects.to_le_bytes());
         flat[qoff + 2..qoff + 6].copy_from_slice(&actor.max_bytes.to_le_bytes());
@@ -1013,14 +1011,13 @@ fn decode_table(
         *actor = Actor::empty();
         actor.used = flat[off] != 0;
         actor.name_len = flat[off + 1].min(ACTOR_NAME as u8);
-        actor.name
+        actor
+            .name
             .copy_from_slice(&flat[off + 2..off + 2 + ACTOR_NAME]);
-        actor.root = u16::from_le_bytes([
-            flat[off + 2 + ACTOR_NAME],
-            flat[off + 3 + ACTOR_NAME],
-        ]);
+        actor.root = u16::from_le_bytes([flat[off + 2 + ACTOR_NAME], flat[off + 3 + ACTOR_NAME]]);
         let salt_off = off + 4 + ACTOR_NAME;
-        actor.salt
+        actor
+            .salt
             .copy_from_slice(&flat[salt_off..salt_off + SALT_LEN]);
         actor
             .pass_hash
@@ -1042,8 +1039,7 @@ fn decode_table(
         obj.name_len = flat[off + 2].min(NAME_CAP as u8);
         obj.parent = u16::from_le_bytes([flat[off + 4], flat[off + 5]]);
         obj.len = u16::from_le_bytes([flat[off + 6], flat[off + 7]]);
-        obj.name
-            .copy_from_slice(&flat[off + 8..off + 8 + NAME_CAP]);
+        obj.name.copy_from_slice(&flat[off + 8..off + 8 + NAME_CAP]);
         let boff = off + 8 + NAME_CAP;
         for (i, blk) in obj.blocks.iter_mut().enumerate() {
             *blk = u16::from_le_bytes([flat[boff + i * 2], flat[boff + i * 2 + 1]]);
@@ -1184,7 +1180,7 @@ fn validate_object_blocks(table: &Table, obj: &Object, seen: &mut [bool; BLOCK_S
         if obj.len as usize > FILE_BYTES {
             return false;
         }
-        (obj.len as usize + BLOCK_SIZE - 1) / BLOCK_SIZE
+        (obj.len as usize).div_ceil(BLOCK_SIZE)
     } else if obj.len != 0 || obj.indirect != NO_BLOCK {
         return false;
     } else {
@@ -1372,9 +1368,7 @@ pub fn set_password(name: &str, password: &[u8]) -> Result<(), SysError> {
 
 fn password_ok(password: &[u8]) -> bool {
     (1..=64).contains(&password.len())
-        && password
-            .iter()
-            .all(|b| b.is_ascii_graphic() || *b == b' ')
+        && password.iter().all(|b| b.is_ascii_graphic() || *b == b' ')
 }
 
 /// Deletes an actor whose tree is only an empty root (and optional empty Desktop).
@@ -1438,7 +1432,11 @@ pub fn add_share(
     }
     let object = resolve_and_check(root, tokens, path, rights)?;
     let mut table = TABLE.lock();
-    let Some(gi) = table.actors.iter().position(|a| a.used && a.name_is(grantee)) else {
+    let Some(gi) = table
+        .actors
+        .iter()
+        .position(|a| a.used && a.name_is(grantee))
+    else {
         return Err(SysError::NotFound);
     };
     // Merge into an existing share on the same object+grantee when present.
@@ -1477,7 +1475,11 @@ pub fn remove_share(
     }
     let object = resolve_and_check(root, tokens, path, rights)?;
     let mut table = TABLE.lock();
-    let Some(gi) = table.actors.iter().position(|a| a.used && a.name_is(grantee)) else {
+    let Some(gi) = table
+        .actors
+        .iter()
+        .position(|a| a.used && a.name_is(grantee))
+    else {
         return Err(SysError::NotFound);
     };
     let mut found = false;
@@ -1538,9 +1540,10 @@ pub fn actor_must_change(root: u16) -> bool {
         return false;
     }
     let table = TABLE.lock();
-    table.actors.iter().any(|a| {
-        a.used && a.root == root && a.max_objects & MUST_CHANGE_BIT != 0
-    })
+    table
+        .actors
+        .iter()
+        .any(|a| a.used && a.root == root && a.max_objects & MUST_CHANGE_BIT != 0)
 }
 
 /// AND inherited token rights with `mask`. `mask == 0` keeps every right.
@@ -1584,10 +1587,7 @@ pub fn add_actor_named(name: &str, password: &[u8]) -> Result<u16, SysError> {
 }
 
 fn admin_quota_limits() -> (u16, u32) {
-    (
-        OBJECT_SLOTS as u16,
-        (BLOCK_SLOTS * BLOCK_SIZE) as u32,
-    )
+    (OBJECT_SLOTS as u16, (BLOCK_SLOTS * BLOCK_SIZE) as u32)
 }
 
 fn actor_usage(table: &Table, ai: usize) -> (u32, u32) {
@@ -1699,12 +1699,7 @@ pub fn actor_quota(name: &str) -> Result<(u32, u32, u32, u32), SysError> {
     };
     let (used_o, used_b) = actor_usage(&table, ai);
     let actor = &table.actors[ai];
-    Ok((
-        used_o,
-        actor.object_limit(),
-        used_b,
-        actor.max_bytes,
-    ))
+    Ok((used_o, actor.object_limit(), used_b, actor.max_bytes))
 }
 
 /// Quota for the actor that owns `root`, or `NotFound` if unset.
@@ -1719,12 +1714,7 @@ pub fn root_quota(root: u16) -> Result<(u32, u32, u32, u32), SysError> {
     }
     let (used_o, used_b) = actor_usage(&table, ai);
     let actor = &table.actors[ai];
-    Ok((
-        used_o,
-        actor.object_limit(),
-        used_b,
-        actor.max_bytes,
-    ))
+    Ok((used_o, actor.object_limit(), used_b, actor.max_bytes))
 }
 
 /// Packs a quota record into `out` (at least [`galexy_abi::QUOTA_LEN`] bytes).
@@ -2330,11 +2320,7 @@ pub fn read_file_bytes(index: u16, out: &mut [u8]) -> Option<usize> {
 /// How many blocks are currently allocated in the pool (test helper).
 pub fn blocks_used() -> usize {
     let table = TABLE.lock();
-    table
-        .bitmap
-        .iter()
-        .map(|b| b.count_ones() as usize)
-        .sum()
+    table.bitmap.iter().map(|b| b.count_ones() as usize).sum()
 }
 
 /// Moves a dirent as admin. Test helper.
@@ -2466,7 +2452,7 @@ pub(crate) fn truncate(index: u16, new_len: usize) -> Result<(), SysError> {
         let keep = if new_len == 0 {
             0
         } else {
-            (new_len + BLOCK_SIZE - 1) / BLOCK_SIZE
+            new_len.div_ceil(BLOCK_SIZE)
         };
         for slot in keep..MAX_DATA_BLOCKS {
             let b = data_block(&table, i, slot);
@@ -2516,13 +2502,15 @@ pub(crate) fn truncate(index: u16, new_len: usize) -> Result<(), SysError> {
             // Roll back newly allocated data / indirect blocks.
             for s in 0..MAX_DATA_BLOCKS {
                 let now = data_block(&table, i, s);
-                let was = if s < DIRECT_BLOCKS {
-                    saved_directs[s]
-                } else if let Some(bytes) = saved_indirect_bytes {
-                    let ii = s - DIRECT_BLOCKS;
-                    u16::from_le_bytes([bytes[ii * 2], bytes[ii * 2 + 1]])
-                } else {
-                    NO_BLOCK
+                let was = match saved_directs.get(s) {
+                    Some(&direct) => direct,
+                    None => match saved_indirect_bytes {
+                        Some(bytes) => {
+                            let ii = s - DIRECT_BLOCKS;
+                            u16::from_le_bytes([bytes[ii * 2], bytes[ii * 2 + 1]])
+                        }
+                        None => NO_BLOCK,
+                    },
                 };
                 if now != was && now != NO_BLOCK {
                     free_block(&mut table, now);

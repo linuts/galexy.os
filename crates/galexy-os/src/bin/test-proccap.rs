@@ -90,7 +90,11 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     assert_eq!(report.spawn_ok, 1, "spawn hello must succeed");
     let cap = Cap::from_bits(report.cap_bits);
-    assert_eq!(cap.index(), PROC_CAP_BASE, "first process Cap is PROC_CAP_BASE");
+    assert_eq!(
+        cap.index(),
+        PROC_CAP_BASE,
+        "first process Cap is PROC_CAP_BASE"
+    );
     assert!(cap.rights().contains(CapRights::PROC_WAIT));
     assert!(cap.rights().contains(CapRights::PROC_KILL));
 

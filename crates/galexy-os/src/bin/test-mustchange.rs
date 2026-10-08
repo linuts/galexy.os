@@ -16,7 +16,7 @@ use galexy_os::{
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
 const DONE: u64 = 0x10C0_0C43;
-const TRIPPED: u64 = 0x10C0_71A;
+const TRIPPED: u64 = 0x010C_071A;
 const POLL_LIMIT: u64 = 80_000;
 
 #[repr(C)]
@@ -90,7 +90,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     assert_eq!(report.create_err, SysError::AccessDenied as u64);
     assert_eq!(report.pass_ok, 1, "passwd");
-    assert_eq!(report.create_ok, 1, "create after passwd clears must-change");
+    assert_eq!(
+        report.create_ok, 1,
+        "create after passwd clears must-change"
+    );
 
     loop {
         x86_64::instructions::hlt();

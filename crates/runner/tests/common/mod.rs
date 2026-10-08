@@ -2,7 +2,7 @@
 //! returns (exit code, serial output).
 
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -60,7 +60,7 @@ fn serial_log_path(name: &str) -> PathBuf {
 /// `-smp 2 -cpu max`: the SMP substrate requires FSGSBASE (`-cpu max`;
 /// QEMU's default qemu64 model lacks it), and 2 cores exercise the per-CPU
 /// paths in EVERY test — single-core assumptions regress loudly.
-fn qemu_command(img_path: &str, serial_path: &PathBuf) -> Command {
+fn qemu_command(img_path: &str, serial_path: &Path) -> Command {
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.arg("-drive")
         .arg(format!("format=raw,file={img_path}"))
@@ -122,8 +122,8 @@ pub enum GalfsBackend {
 /// second boot of the same image.
 fn qemu_command_with_galfs(
     img_path: &str,
-    galfs_path: &PathBuf,
-    serial_path: &PathBuf,
+    galfs_path: &Path,
+    serial_path: &Path,
     cache: GalfsDiskCache,
     backend: GalfsBackend,
 ) -> Command {
@@ -174,9 +174,7 @@ fn qemu_command_with_galfs(
 ///
 /// Uses [`GalfsDiskCache::Writethrough`] (see [`boot_with_galfs_cache`] for
 /// the flush matrix).
-pub fn boot_with_galfs(
-    image: &Image,
-) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
+pub fn boot_with_galfs(image: &Image) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
     boot_with_galfs_cache(image, GalfsDiskCache::Writethrough)
 }
 
@@ -211,9 +209,7 @@ pub fn boot_with_galfs_virtio(
 
 /// Like [`boot_with_galfs`], but the guest places GALF at LBA 2048
 /// (`DISK_PART_LBA`). Image is 2 MiB so base + dual slots fit.
-pub fn boot_with_galfs_part(
-    image: &Image,
-) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
+pub fn boot_with_galfs_part(image: &Image) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
     boot_with_galfs_inner(
         image,
         CorruptMode::None,
@@ -243,9 +239,7 @@ pub fn boot_with_galfs_recover(
 
 /// Like [`boot_with_galfs_recover`], but simulates a torn write: the newest
 /// slot keeps `GALF` magic while its payload is zeroed from mid-sector.
-pub fn boot_with_galfs_torn(
-    image: &Image,
-) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
+pub fn boot_with_galfs_torn(image: &Image) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
     boot_with_galfs_inner(
         image,
         CorruptMode::TornNewest,
@@ -354,7 +348,7 @@ fn newest_galfs_slot_off(data: &[u8]) -> usize {
     best_off.expect("expected at least one GALF slot after write boot")
 }
 
-fn corrupt_newest_galfs_slot(path: &PathBuf) {
+fn corrupt_newest_galfs_slot(path: &Path) {
     let mut data = std::fs::read(path).expect("read galfs.img");
     let off = newest_galfs_slot_off(&data);
     data[off + GALFS_DATA_TAG_OFF] ^= 0xFF;
@@ -366,7 +360,7 @@ fn corrupt_newest_galfs_slot(path: &PathBuf) {
 
 /// Simulate a crash mid-write: keep `GALF` magic + half a payload sector,
 /// zero the rest of the newest slot (older sibling stays intact).
-fn tear_newest_galfs_slot(path: &PathBuf) {
+fn tear_newest_galfs_slot(path: &Path) {
     let mut data = std::fs::read(path).expect("read galfs.img");
     let off = newest_galfs_slot_off(&data);
     let slot_end = off + GALFS_SLOT_SECTORS * GALFS_SECTOR;
@@ -381,7 +375,7 @@ fn tear_newest_galfs_slot(path: &PathBuf) {
     }
 }
 
-fn corrupt_all_galfs_slots(path: &PathBuf) {
+fn corrupt_all_galfs_slots(path: &Path) {
     let mut data = std::fs::read(path).expect("read galfs.img");
     let mut any = false;
     for slot in 0..2 {
@@ -401,16 +395,15 @@ fn corrupt_all_galfs_slots(path: &PathBuf) {
 
 fn boot_once_with_galfs(
     img_path: &str,
-    galfs_path: &PathBuf,
+    galfs_path: &Path,
     name: &str,
     cache: GalfsDiskCache,
     backend: GalfsBackend,
 ) -> (Option<i32>, String) {
     let serial_path = serial_log_path(name);
-    let mut child =
-        qemu_command_with_galfs(img_path, galfs_path, &serial_path, cache, backend)
-            .spawn()
-            .expect("failed to launch qemu-system-x86_64 (galfs disk)");
+    let mut child = qemu_command_with_galfs(img_path, galfs_path, &serial_path, cache, backend)
+        .spawn()
+        .expect("failed to launch qemu-system-x86_64 (galfs disk)");
 
     let deadline = Instant::now() + TEST_TIMEOUT;
     let code = loop {

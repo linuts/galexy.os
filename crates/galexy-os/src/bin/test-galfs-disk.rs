@@ -64,7 +64,11 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     if let Some(file) = galfs::find_under(desktop, "persist") {
         let mut buf = [0u8; 600];
         let n = galfs::read_file_bytes(file, &mut buf).expect("read persist");
-        assert_eq!(&buf[..n], &want[..], "persist file must hold multi-block marker");
+        assert_eq!(
+            &buf[..n],
+            &want[..],
+            "persist file must hold multi-block marker"
+        );
         assert!(
             galfs::blocks_used() >= 2,
             "multi-block persist must keep allocated blocks"

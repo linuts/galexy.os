@@ -894,7 +894,10 @@ impl ScreenWriter {
                 }
                 let idx = (py * info.stride + px) * info.bytes_per_pixel;
                 let end = idx + info.bytes_per_pixel;
-                if buffer.get(idx..end).is_some_and(|px| px.iter().any(|b| *b != 0)) {
+                if buffer
+                    .get(idx..end)
+                    .is_some_and(|px| px.iter().any(|b| *b != 0))
+                {
                     return true;
                 }
             }

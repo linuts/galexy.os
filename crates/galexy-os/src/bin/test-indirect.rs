@@ -34,7 +34,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     sched::ramdisk::init(archive);
 
     assert_eq!(galfs::FILE_BYTES, 32 * 1024);
-    assert!(galfs::FILE_BYTES > galfs::DIRECT_BLOCKS * galfs::BLOCK_SIZE);
+    const _: () = assert!(galfs::FILE_BYTES > galfs::DIRECT_BLOCKS * galfs::BLOCK_SIZE);
 
     let admin = galfs::admin_root();
     let desktop = galfs::find_under(admin, "Desktop").expect("Desktop");

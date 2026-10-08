@@ -64,8 +64,8 @@ fn main() -> ExitCode {
         println!("ok");
         ExitCode::SUCCESS
     } else {
-        for i in 0..report.issue_count {
-            print_issue(report.issues[i]);
+        for issue in &report.issues[..report.issue_count] {
+            print_issue(*issue);
         }
         println!("FAIL ({} issue(s))", report.issue_count);
         ExitCode::from(1)

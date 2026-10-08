@@ -25,11 +25,11 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
-    arg, close, create, create_replace, dmesg_cap, entry, files_cap, give, grant, keyboard_cap, kill,
-    open, pipe, read, reboot,
-    revoke, share, shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, user,
-    user_login, user_logout, user_name, user_name_pass, user_passwd, user_quota, user_setquota,
-    user_unlock, volume_locked, wait, write, write_console, yield_now,
+    arg, close, create, create_replace, dmesg_cap, entry, files_cap, give, grant, keyboard_cap,
+    kill, open, pipe, read, reboot, revoke, share, shutdown, spawn_with, stats_cap, sync,
+    tasks_cap, threads_cap, unshare, user, user_login, user_logout, user_name, user_name_pass,
+    user_passwd, user_quota, user_setquota, user_unlock, volume_locked, wait, write, write_console,
+    yield_now,
 };
 
 /// Exit status of the last Cap-waited utility (or spawn failure).
@@ -658,17 +658,13 @@ fn repl(kbd: Cap, cwd: &mut Cwd, must_change: &mut bool, history: &mut History) 
                             &mut draft_len,
                             &mut hist_idx,
                         ),
-                        b'D' => {
-                            if pos > 0 {
-                                pos -= 1;
-                                move_left(1);
-                            }
+                        b'D' if pos > 0 => {
+                            pos -= 1;
+                            move_left(1);
                         }
-                        b'C' => {
-                            if pos < len {
-                                pos += 1;
-                                move_right(1);
-                            }
+                        b'C' if pos < len => {
+                            pos += 1;
+                            move_right(1);
                         }
                         _ => {}
                     }
@@ -1263,9 +1259,7 @@ fn glob_one(pat: &[u8], name: &[u8]) -> bool {
     let prefix = &pat[..star];
     let suffix = &pat[star + 1..];
     let leaf = name.strip_suffix(b"/").unwrap_or(name);
-    leaf.len() >= prefix.len() + suffix.len()
-        && leaf.starts_with(prefix)
-        && leaf.ends_with(suffix)
+    leaf.len() >= prefix.len() + suffix.len() && leaf.starts_with(prefix) && leaf.ends_with(suffix)
 }
 
 /// One child of `cwd` from a files-snapshot line. Same shape as `ls`.
@@ -1926,7 +1920,7 @@ fn user_pass_op(
 fn passwd_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8], must_change: &mut bool) {
     let rest = trim(rest);
     // Never accept an inline password — always prompt + confirm masked.
-    if rest.iter().any(|b| *b == b' ') {
+    if rest.contains(&b' ') {
         write_console(b"usage: passwd [name]\n");
         prompt(cwd);
         return;

@@ -322,7 +322,10 @@ fn emit_fill_loop(code: &mut alloc::vec::Vec<u8>, count: u64, fill_ok_off: i32, 
     code.extend_from_slice(&[0x49, 0x39, 0xC5]); // cmp r13, rax
     let after_jb = code.len() + 2;
     let rel = loop_at as i32 - after_jb as i32;
-    debug_assert!((-128..128).contains(&rel), "fill loop too large for short jb");
+    debug_assert!(
+        (-128..128).contains(&rel),
+        "fill loop too large for short jb"
+    );
     code.push(0x72); // jb
     code.push(rel as u8);
 }

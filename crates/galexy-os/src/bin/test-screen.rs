@@ -121,7 +121,11 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert!(rows > 1, "the status row needs a row of its own");
     let text_rows = rows - 1;
     screen::clear_screen();
-    screen::draw_status_bar(screen::Color::new(0, 0, 0), screen::Color::new(0xE0, 0xE0, 0xE0), "S");
+    screen::draw_status_bar(
+        screen::Color::new(0, 0, 0),
+        screen::Color::new(0xE0, 0xE0, 0xE0),
+        "S",
+    );
     screen::set_pos(0, 0);
     screen::out_str("A");
     for _ in 0..text_rows {
@@ -167,7 +171,11 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert!(cr_b >= 200, "CR cleared the rest of the line");
 
     screen::clear_screen();
-    screen::draw_status_bar(screen::Color::new(0, 0, 0), screen::Color::new(0xE0, 0xE0, 0xE0), "S");
+    screen::draw_status_bar(
+        screen::Color::new(0, 0, 0),
+        screen::Color::new(0xE0, 0xE0, 0xE0),
+        "S",
+    );
     screen::set_pos(0, 0);
     // Raw bytes also go to COM1; the harness checks this string.
     console::out_str("\u{1b}[31mZ\u{1b}[2J");
@@ -259,15 +267,13 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     console::out_str("abc");
     let prompt_y = (text_rows - 1) * LINE_HEIGHT;
     // "galexy> abc" — check the 'a' after the 8-char prompt.
-    let typed = unsafe {
-        region_max_intensity(addr, info, 8 * CHAR_WIDTH, prompt_y, CHAR_WIDTH, 16)
-    };
+    let typed =
+        unsafe { region_max_intensity(addr, info, 8 * CHAR_WIDTH, prompt_y, CHAR_WIDTH, 16) };
     assert!(
         typed >= 200,
         "typed input on the bottom prompt row is invisible (intensity {typed})"
     );
-    let status_still =
-        unsafe { region_max_intensity(addr, info, 0, status_y, CHAR_WIDTH, 16) };
+    let status_still = unsafe { region_max_intensity(addr, info, 0, status_y, CHAR_WIDTH, 16) };
     assert!(
         status_still >= 200,
         "status bar lost after bottom-row typing (intensity {status_still})"

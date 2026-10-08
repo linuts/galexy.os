@@ -49,20 +49,18 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, SyscallResult::ok(0));
             Outcome::Handoff
         }
-        n if n == Syscall::Write as u64 => match syscall_write_ex(
-            Cap::from_bits(frame.rdi),
-            frame.rsi,
-            frame.rdx,
-        ) {
-            IoResult::Done(r) => {
-                stamp(frame, r);
-                Outcome::Resume
+        n if n == Syscall::Write as u64 => {
+            match syscall_write_ex(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx) {
+                IoResult::Done(r) => {
+                    stamp(frame, r);
+                    Outcome::Resume
+                }
+                IoResult::Park => {
+                    stamp(frame, SyscallResult::ok(0));
+                    Outcome::Handoff
+                }
             }
-            IoResult::Park => {
-                stamp(frame, SyscallResult::ok(0));
-                Outcome::Handoff
-            }
-        },
+        }
         n if n == Syscall::CapInfo as u64 => {
             stamp(frame, syscall_cap_info(Cap::from_bits(frame.rdi)));
             Outcome::Resume
@@ -71,20 +69,18 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, syscall_open(frame.rdi, frame.rsi));
             Outcome::Resume
         }
-        n if n == Syscall::Read as u64 => match syscall_read_ex(
-            Cap::from_bits(frame.rdi),
-            frame.rsi,
-            frame.rdx,
-        ) {
-            IoResult::Done(r) => {
-                stamp(frame, r);
-                Outcome::Resume
+        n if n == Syscall::Read as u64 => {
+            match syscall_read_ex(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx) {
+                IoResult::Done(r) => {
+                    stamp(frame, r);
+                    Outcome::Resume
+                }
+                IoResult::Park => {
+                    stamp(frame, SyscallResult::ok(0));
+                    Outcome::Handoff
+                }
             }
-            IoResult::Park => {
-                stamp(frame, SyscallResult::ok(0));
-                Outcome::Handoff
-            }
-        },
+        }
         n if n == Syscall::Close as u64 => {
             stamp(frame, syscall_close(Cap::from_bits(frame.rdi)));
             Outcome::Resume
@@ -174,22 +170,23 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, syscall_unshare(frame));
             Outcome::Resume
         }
-        n if n == Syscall::Wait as u64 => match crate::sched::task_wait(Cap::from_bits(frame.rdi))
-        {
-            Ok(None) => {
-                // Parked; exit code is stamped when the child exits.
-                stamp(frame, SyscallResult::ok(0));
-                Outcome::Handoff
+        n if n == Syscall::Wait as u64 => {
+            match crate::sched::task_wait(Cap::from_bits(frame.rdi)) {
+                Ok(None) => {
+                    // Parked; exit code is stamped when the child exits.
+                    stamp(frame, SyscallResult::ok(0));
+                    Outcome::Handoff
+                }
+                Ok(Some(code)) => {
+                    stamp(frame, SyscallResult::ok(code));
+                    Outcome::Resume
+                }
+                Err(err) => {
+                    stamp(frame, SyscallResult::err(err));
+                    Outcome::Resume
+                }
             }
-            Ok(Some(code)) => {
-                stamp(frame, SyscallResult::ok(code));
-                Outcome::Resume
-            }
-            Err(err) => {
-                stamp(frame, SyscallResult::err(err));
-                Outcome::Resume
-            }
-        },
+        }
         n if n == Syscall::Kill as u64 => {
             stamp(frame, syscall_kill(Cap::from_bits(frame.rdi)));
             Outcome::Resume
@@ -856,10 +853,7 @@ fn copy_user_str(addr: u64, len: u64, out: &mut [u8], named: bool) -> Option<usi
         if !file_name_ok(name) {
             return None;
         }
-    } else if !bytes
-        .iter()
-        .all(|b| b.is_ascii_graphic() || *b == b' ')
-    {
+    } else if !bytes.iter().all(|b| b.is_ascii_graphic() || *b == b' ') {
         return None;
     }
     Some(len as usize)
@@ -901,8 +895,7 @@ fn syscall_read_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
     if cap.index() == galexy_abi::reserved::SELF_INDEX {
         return IoResult::Done(syscall_read_self(cap, addr, len));
     }
-    if (galexy_abi::PROC_CAP_BASE
-        ..galexy_abi::PROC_CAP_BASE + galexy_abi::MAX_PROC_CAPS)
+    if (galexy_abi::PROC_CAP_BASE..galexy_abi::PROC_CAP_BASE + galexy_abi::MAX_PROC_CAPS)
         .contains(&cap.index())
     {
         return IoResult::Done(syscall_read_proc(cap, addr, len));
@@ -944,7 +937,7 @@ fn syscall_read_self(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if !cap.rights().contains(CapRights::PROC_INSPECT) {
         return SyscallResult::err(SysError::AccessDenied);
     }
-    copy_inspect(addr, len, |dst| crate::sched::task_self_inspect(dst))
+    copy_inspect(addr, len, crate::sched::task_self_inspect)
 }
 
 fn syscall_read_proc(cap: Cap, addr: u64, len: u64) -> SyscallResult {
@@ -1299,8 +1292,8 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
     let query = frame.r10 & galexy_abi::SPAWN_GRANT_QUERY != 0;
     let wait_exit = frame.r10 & galexy_abi::SPAWN_WAIT != 0;
     let inherit = frame.r10 & galexy_abi::SPAWN_INHERIT != 0;
-    let rights_mask = ((frame.r10 & galexy_abi::SPAWN_RIGHTS_BITS) >> galexy_abi::SPAWN_RIGHTS_SHIFT)
-        as u8;
+    let rights_mask =
+        ((frame.r10 & galexy_abi::SPAWN_RIGHTS_BITS) >> galexy_abi::SPAWN_RIGHTS_SHIFT) as u8;
     match crate::sched::task_spawn(
         name,
         &arg[..arg_len as usize],

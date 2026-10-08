@@ -68,7 +68,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     let n = (report.read_n as usize).min(report.text.len());
     let text = core::str::from_utf8(&report.text[..n]).expect("utf8 inspect");
-    assert!(text.starts_with("id="), "inspect starts with id=; got {text:?}");
+    assert!(
+        text.starts_with("id="),
+        "inspect starts with id=; got {text:?}"
+    );
     assert!(
         text.contains("name=selfcap"),
         "inspect names the task; got {text:?}"

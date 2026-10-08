@@ -54,7 +54,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     bad[52..54].copy_from_slice(&64u16.to_le_bytes()); // e_ehsize
     bad[54..56].copy_from_slice(&56u16.to_le_bytes()); // e_phentsize
     bad[56..58].copy_from_slice(&1u16.to_le_bytes()); // e_phnum
-    // Program header at 64: PT_LOAD, PF_R|PF_W|PF_X
+                                                      // Program header at 64: PT_LOAD, PF_R|PF_W|PF_X
     bad[64..68].copy_from_slice(&1u32.to_le_bytes()); // PT_LOAD
     bad[68..72].copy_from_slice(&7u32.to_le_bytes()); // PF_X|W|R
     bad[72..80].copy_from_slice(&0u64.to_le_bytes()); // p_offset

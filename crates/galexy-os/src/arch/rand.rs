@@ -45,7 +45,10 @@ fn next_u64() -> Option<u64> {
 
 fn mix_fallback(v: u64) {
     let ticks = crate::arch::timer_ticks();
-    FALLBACK.fetch_xor(v.wrapping_mul(0xD1B5_4A32_D192_ED03) ^ ticks, Ordering::Relaxed);
+    FALLBACK.fetch_xor(
+        v.wrapping_mul(0xD1B5_4A32_D192_ED03) ^ ticks,
+        Ordering::Relaxed,
+    );
 }
 
 fn fallback_u64() -> u64 {

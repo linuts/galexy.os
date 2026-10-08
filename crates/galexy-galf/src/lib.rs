@@ -9,7 +9,7 @@
 
 use galexy_core::crc32;
 use galexy_crypto::{
-    derive_key, open, wipe_bytes, KEY_LEN, NONCE_LEN, SALT_LEN, TAG_LEN, HASH_LEN,
+    derive_key, open, wipe_bytes, HASH_LEN, KEY_LEN, NONCE_LEN, SALT_LEN, TAG_LEN,
 };
 
 /// ATA / GALF sector size.
@@ -380,14 +380,13 @@ pub fn decode_slot(flat: &mut [u8], passphrase: &[u8], table: &mut Table) -> Opt
         *actor = Actor::empty();
         actor.used = flat[off] != 0;
         actor.name_len = flat[off + 1].min(ACTOR_NAME as u8);
-        actor.name
+        actor
+            .name
             .copy_from_slice(&flat[off + 2..off + 2 + ACTOR_NAME]);
-        actor.root = u16::from_le_bytes([
-            flat[off + 2 + ACTOR_NAME],
-            flat[off + 3 + ACTOR_NAME],
-        ]);
+        actor.root = u16::from_le_bytes([flat[off + 2 + ACTOR_NAME], flat[off + 3 + ACTOR_NAME]]);
         let salt_off = off + 4 + ACTOR_NAME;
-        actor.salt
+        actor
+            .salt
             .copy_from_slice(&flat[salt_off..salt_off + SALT_LEN]);
         actor
             .pass_hash
@@ -409,8 +408,7 @@ pub fn decode_slot(flat: &mut [u8], passphrase: &[u8], table: &mut Table) -> Opt
         obj.name_len = flat[off + 2].min(NAME_CAP as u8);
         obj.parent = u16::from_le_bytes([flat[off + 4], flat[off + 5]]);
         obj.len = u16::from_le_bytes([flat[off + 6], flat[off + 7]]);
-        obj.name
-            .copy_from_slice(&flat[off + 8..off + 8 + NAME_CAP]);
+        obj.name.copy_from_slice(&flat[off + 8..off + 8 + NAME_CAP]);
         let boff = off + 8 + NAME_CAP;
         for (i, blk) in obj.blocks.iter_mut().enumerate() {
             *blk = u16::from_le_bytes([flat[boff + i * 2], flat[boff + i * 2 + 1]]);
@@ -536,12 +534,7 @@ fn collect_issues(table: &Table, report: &mut Report) {
     }
 }
 
-fn mark_seen(
-    seen: &mut [bool; BLOCK_SLOTS],
-    bitmap: &[u8],
-    b: u16,
-    report: &mut Report,
-) {
+fn mark_seen(seen: &mut [bool; BLOCK_SLOTS], bitmap: &[u8], b: u16, report: &mut Report) {
     if b as usize >= BLOCK_SLOTS {
         report.push(Issue::BlockMissing { block: b });
         return;
@@ -568,12 +561,14 @@ fn check_object_blocks(
             report.push(Issue::FileTooLarge { object: index });
             return;
         }
-        (obj.len as usize + BLOCK_SIZE - 1) / BLOCK_SIZE
+        (obj.len as usize).div_ceil(BLOCK_SIZE)
     } else if obj.len != 0 {
         report.push(Issue::DirHasLength { object: index });
         0
     } else if obj.indirect != NO_BLOCK {
-        report.push(Issue::BlockLeak { block: obj.indirect });
+        report.push(Issue::BlockLeak {
+            block: obj.indirect,
+        });
         return;
     } else {
         0
@@ -606,7 +601,9 @@ fn check_object_blocks(
             }
         }
     } else if obj.indirect != NO_BLOCK {
-        report.push(Issue::BlockLeak { block: obj.indirect });
+        report.push(Issue::BlockLeak {
+            block: obj.indirect,
+        });
     }
 }
 
@@ -650,7 +647,7 @@ mod tests {
 
     #[test]
     fn layout_constants_fit_slot() {
-        assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * SECTOR);
+        // Slot fit is a `const _` assertion at the top of the crate.
         assert_eq!(ACTOR_ON_DISK, 66);
         assert_eq!(OBJECT_ON_DISK, 90);
         assert_eq!(SHARE_ON_DISK, 6);

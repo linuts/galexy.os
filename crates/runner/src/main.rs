@@ -64,9 +64,8 @@ fn main() {
             "format=raw,file={},if=none,id=galfs,cache=writethrough",
             galfs_path.display()
         ));
-        cmd.arg("-device").arg(
-            "virtio-blk-pci,drive=galfs,disable-legacy=off,disable-modern=on,queue-size=128",
-        );
+        cmd.arg("-device")
+            .arg("virtio-blk-pci,drive=galfs,disable-legacy=off,disable-modern=on,queue-size=128");
     }
     // SMP: 2 cores, exposed by the per-CPU substrate (gs:[8] syscall path,
     // per-CPU GDT/TSS). `-cpu max` exposes FSGSBASE, required by the

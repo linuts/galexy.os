@@ -5,10 +5,9 @@ mod common;
 
 use common::{
     boot, boot_and_type, boot_and_type_uefi, boot_galfs_once, boot_liveness, boot_uefi,
-    boot_with_galfs, boot_with_galfs_crash,
-    boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_part,
-    boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio, image,
-    GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
+    boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
+    boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio,
+    image, GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
 };
 use std::time::Duration;
 
@@ -612,8 +611,7 @@ fn galfs_disk_persists_none_cache() {
 /// Persistence via virtio-blk-pci (legacy) instead of the IDE slave.
 #[test]
 fn galfs_disk_persists_virtio_blk() {
-    let (code1, serial1, img, code2, serial2) =
-        boot_with_galfs_virtio(&image("test-galfs-disk"));
+    let (code1, serial1, img, code2, serial2) = boot_with_galfs_virtio(&image("test-galfs-disk"));
     assert!(
         serial1.contains("[virtio-blk] ready"),
         "guest must bind virtio-blk; serial:\n{serial1}"
@@ -624,8 +622,7 @@ fn galfs_disk_persists_virtio_blk() {
 /// GALF dual slots start at LBA 2048 — absolute LBA 0 stays empty.
 #[test]
 fn galfs_disk_persists_partition_offset() {
-    let (code1, serial1, img, code2, serial2) =
-        boot_with_galfs_part(&image("test-galfs-part"));
+    let (code1, serial1, img, code2, serial2) = boot_with_galfs_part(&image("test-galfs-part"));
     assert_eq!(
         code1,
         Some(QEMU_EXIT_SUCCESS),
@@ -639,10 +636,7 @@ fn galfs_disk_persists_partition_offset() {
         serial1.contains("LBA base 2048"),
         "format must log partition LBA base; serial:\n{serial1}"
     );
-    assert!(
-        img.len() > GALFS_PART_BYTE_OFF,
-        "parted image too short"
-    );
+    assert!(img.len() > GALFS_PART_BYTE_OFF, "parted image too short");
     assert!(
         img[..GALFS_PART_BYTE_OFF].iter().all(|&b| b == 0),
         "bytes before partition offset must stay zero"
@@ -775,8 +769,7 @@ fn share_disk_persists_across_reboot() {
 
 #[test]
 fn galfs_disk_recovers_from_corrupt_slot() {
-    let (code1, serial1, _img, code2, serial2) =
-        boot_with_galfs_recover(&image("test-galfs-disk"));
+    let (code1, serial1, _img, code2, serial2) = boot_with_galfs_recover(&image("test-galfs-disk"));
     assert_eq!(
         code1,
         Some(QEMU_EXIT_SUCCESS),
@@ -831,8 +824,7 @@ fn galfs_idempotent_after_recover() {
 
 #[test]
 fn galfs_disk_recovers_from_torn_write() {
-    let (code1, serial1, img, code2, serial2) =
-        boot_with_galfs_torn(&image("test-galfs-disk"));
+    let (code1, serial1, img, code2, serial2) = boot_with_galfs_torn(&image("test-galfs-disk"));
     assert_eq!(
         code1,
         Some(QEMU_EXIT_SUCCESS),
@@ -1632,9 +1624,7 @@ const SUPERVISOR_AFTER_LOGIN: &[(&str, &str)] = &[
 
 /// F2 selects the second shell. Login there, `echo hi`, then F1 and a key
 /// on the first shell (still logged out until login — only echoes `z`).
-const TTY_AFTER_F2: &[(&str, &str)] = &[
-    ("f2", "[tty] 2"),
-];
+const TTY_AFTER_F2: &[(&str, &str)] = &[("f2", "[tty] 2")];
 
 const TTY_AFTER_LOGIN: &[(&str, &str)] = &[
     ("e", "e"),
@@ -2121,9 +2111,9 @@ fn shell_pipeline_glob_typing_e2e() {
         Duration::from_millis(30),
         Duration::from_secs(180),
     );
-    let missed = serial.find("cd: no such directory").unwrap_or_else(|| {
-        panic!("failed cd did not report; serial:\n{serial}")
-    });
+    let missed = serial
+        .find("cd: no such directory")
+        .unwrap_or_else(|| panic!("failed cd did not report; serial:\n{serial}"));
     assert!(
         serial[missed..].contains("admin@galexy:/box> "),
         "failed cd changed the prompt; serial:\n{serial}"

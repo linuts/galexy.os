@@ -1644,18 +1644,19 @@ Make “green on my machine” into “green in CI and for the reviewer”.
       `qemu-system-x86` + `ovmf`; `--test-threads=1` for disk cases
 - [ ] **CI matrix** (doc + workflow): BIOS, UEFI (`OVMF_FD`), `-smp 2`,
       disk on/off, `cache=` modes
-- [ ] **Clippy green**: `cargo clippy -p galexy-os --target
-      x86_64-unknown-none --no-deps --bins` fails on the current nightly
-      with 10 pre-existing lints (`galfs.rs` `manual_is_multiple_of`,
-      `explicit_auto_deref` ×4, `manual_div_ceil` ×2,
-      `needless_range_loop`; `loader.rs` `too_many_arguments`;
-      `syscalls.rs` `redundant_closure`), plus `galexy-galf`
-      `manual_div_ceil` and four `gxc` warnings. Fix them in one commit;
-      keep `#![deny(clippy::all)]`
-- [ ] **rustfmt baseline**: `cargo fmt --all -- --check` reports 88
-      files on rustfmt 1.101-nightly. Reformat once on the pinned
-      toolchain in a formatting-only commit, then CI enforces it. Pin
-      the nightly date in `rust-toolchain.toml` so the baseline holds
+- [x] **Clippy green**: `cargo clippy -p galexy-os --target
+      x86_64-unknown-none --no-deps --bins`, the host crates with
+      `--all-targets`, the userspace programs, and the runner tests all
+      pass `-D warnings` on the pinned nightly (fixed `manual_div_ceil`,
+      `manual_is_multiple_of`, `explicit_auto_deref`,
+      `needless_range_loop`, `redundant_closure`, `unreadable_literal`,
+      `assertions_on_constants`, `ptr_arg`, `collapsible_if`;
+      `too_many_arguments` allowed on the two placed-spawn entry points).
+      `#![deny(clippy::all)]` kept
+- [x] **rustfmt baseline**: one formatting-only commit on the pinned
+      toolchain; `cargo fmt --all -- --check` is clean. Nightly date
+      pinned in `rust-toolchain.toml` (`nightly-2026-10-08`, rustc
+      1.101.0-nightly 1d81eb4ad) so the baseline holds
 - [ ] **Host tests** for abi/core on every PR
 - [ ] **Repro notes**: ramdisk tar hash printed at build; image names
       stable

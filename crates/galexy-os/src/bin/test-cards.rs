@@ -92,24 +92,18 @@ fn share_slot_exhaustion() {
     galfs::add_user("eve", b"eve-pass").expect("add eve");
 
     let mut names = [[0u8; 3]; galfs::SHARE_SLOTS];
-    for i in 0..galfs::SHARE_SLOTS {
-        names[i][0] = b's';
-        names[i][1] = b'0' + ((i / 10) as u8);
-        names[i][2] = b'0' + ((i % 10) as u8);
-        let label = core::str::from_utf8(&names[i]).unwrap();
+    for (i, name) in names.iter_mut().enumerate() {
+        name[0] = b's';
+        name[1] = b'0' + ((i / 10) as u8);
+        name[2] = b'0' + ((i % 10) as u8);
+        let label = core::str::from_utf8(name).unwrap();
         galfs::create_file_under(desktop, label).expect("share file");
         let mut path = [0u8; 16];
         path[..8].copy_from_slice(b"Desktop/");
-        path[8..11].copy_from_slice(&names[i]);
+        path[8..11].copy_from_slice(name);
         let p = core::str::from_utf8(&path[..11]).unwrap();
-        galfs::add_share(
-            admin,
-            &admin_cred.tokens,
-            p,
-            galfs::RIGHT_READ,
-            "eve",
-        )
-        .expect("fill share");
+        galfs::add_share(admin, &admin_cred.tokens, p, galfs::RIGHT_READ, "eve")
+            .expect("fill share");
     }
 
     let overflow = galfs::create_file_under(desktop, "sxx").expect("overflow file");
@@ -181,13 +175,7 @@ fn confused_deputy_share() {
     // Cannot mint a share on a tree the caller cannot cover.
     assert!(
         matches!(
-            galfs::add_share(
-                dan,
-                &toks,
-                "admin@Desktop",
-                galfs::RIGHT_LIST,
-                "eve",
-            ),
+            galfs::add_share(dan, &toks, "admin@Desktop", galfs::RIGHT_LIST, "eve",),
             Err(SysError::AccessDenied)
         ),
         "must not share a path without a covering card"
