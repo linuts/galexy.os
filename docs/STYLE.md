@@ -246,7 +246,8 @@ machines: ACPI, x2APIC, PCIe, virtio 1.x, UEFI + GOP.
 - Test seams (`crash-seam`, `verbose-sched`, inline passwords) are
   **feature-gated** or cfg'd out of the default release image. Public
   `test_*` functions are allowed as seams when a QEMU test kernel needs
-  them; list new ones in the DESIGN seam table (Milestone 51).
+  them; list new ones in the DESIGN seam table (Testing strategy →
+  Test seams).
 - `cargo test -p runner --test boot` must stay green on every milestone
   merge. New QEMU boots get a matching `bin/test-*` or typing e2e.
 - Prefer deterministic tests; when CSPRNG is required, inject a test
@@ -292,7 +293,7 @@ machines: ACPI, x2APIC, PCIe, virtio 1.x, UEFI + GOP.
   working* (e.g. seen in QEMU), never when "written".
 - ABI changes: `galexy-abi` + DESIGN syscall section + shell/`galexy-rt`
   wrappers in the **same PR**. Mark stable vs experimental in the ABI
-  table (Milestone 51).
+  table (`docs/ABI.md`).
 
 ## Git
 

@@ -933,8 +933,7 @@ A software GS fallback is out of scope.
 `USER_IMAGE_BASE`; randomizing the P4 slot would not hide that address
 from the program, and it would break the single load address the loader
 and the ABI share. Kernel-side KASLR (the bootloader's `mappings.aslr`)
-is Milestone 63. Rationale lives here until `docs/THREAT.md`
-(Milestone 51) cites it.
+is Milestone 63. `docs/THREAT.md` → Non-goals cites this paragraph.
 
 **CPU security features (status: absent).** `CR4` today sets only
 `FSGSBASE` (`arch/cpu.rs`). SMEP, SMAP, and UMIP are not enabled, and
@@ -947,13 +946,21 @@ Until then this paragraph is the honest statement: the isolation story
 is paging plus validated copies, with no hardware backstop against a
 kernel bug that dereferences a user pointer.
 
-**Hostile ELF images.** `sched/loader.rs` validates magic, `ET_EXEC`,
-W^X, the entry window, and the user P4 range, and `xmas_elf` bounds the
-segment data. A malformed image can still reach an `expect` (kernel
-panic) instead of `SysError`; `filesz <= memsz` and a `memsz` ceiling
-are not checked. Milestone 63 makes every loader failure an error and
-Milestone 51 adds `bin/test-badelf` as the oracle. Until then the
-ramdisk is trusted input (`AUTH.md` → Spawn policy).
+**Hostile ELF images.** `loader::validate_elf` runs before any page
+is mapped (the spawn syscall calls it on the ramdisk bytes): ELF
+magic, `ELFCLASS64`, `ET_EXEC`, `EM_X86_64`, the phdr table inside the
+file (`xmas_elf` slices it unchecked), `phentsize == 56`, 1–64 phdrs,
+`filesz <= memsz`, segment bytes inside the file, every `PT_LOAD`
+inside `[USER_IMAGE_BASE, +USER_IMAGE_WINDOW)` (512 MiB), no `W|X`
+segment, no overlapping `PT_LOAD` pages, and the entry inside an
+executable segment. Each failure is `Unsupported` (not our ELF shape)
+or `BadValue` (ours but malformed) — never a panic. `bin/test-badelf`
+forges nineteen mutations of the real `hello` image plus truncated
+header and table cases and asserts each one;
+`loader::load` keeps its own asserts as a second line. Milestone 63
+extends the sweep past the loader (every syscall argument, SMAP on).
+The ramdisk is still trusted input — measured, not signed (`THREAT.md`
+→ Trust assumptions).
 
 **User pointers.** Syscalls copy path, name, password, and write bytes
 into stack buffers only after a length check (`MAX_NAME`, `MAX_READ` /
@@ -1043,6 +1050,78 @@ Two tiers, chosen after studying the bootloader crate's own test suite:
 
 QEMU exit-code mapping (empirically verified): `Success` (0x10) → exit 33,
 `Failed` (0x11) → exit 35.
+
+`scripts/review-smoke.sh` runs the host suites, `audit_strings`, and
+eleven boots that touch every axis (BIOS + UEFI, SMP, auth, sealed disk
+persist + recover, hostile ELF, negative suite, capacity, typing e2e);
+`--full` runs the whole suite. CI (`.github/workflows/ci.yml`) always
+runs the whole suite — README → CI maps each matrix axis to its boots.
+
+### Test seams (feature-gated; off in the default image)
+
+Every switch that changes kernel or userspace behaviour for a test. A
+new seam is added to this table in the same PR (`STYLE.md` →
+Production vs test builds). The default `cargo run` image has none of
+them on; `audit_strings` and the e2e boots run against that image.
+
+| Seam | Kind | Where | What it changes | Who turns it on |
+| --- | --- | --- | --- | --- |
+| `crash-seam` | Cargo feature on `shell` | `userspace/shell` | adds the `crash` command (commit `keep`, start a second mutate, get killed) | `runner/build.rs` builds a second ramdisk (`ramdisk-crash.tar`) and the `galexy-os-crashseam-*` image for `crash_injection_picks_consistent_slot` |
+| `verbose-sched` | Cargo feature on `galexy-os` | `sched/mod.rs` | prints an idle-steal trace line per steal | nobody in the suite; a developer flag. The one-line `[sched] reap` count is unconditional because the suite reads it |
+| `expect_panic` | runtime registration | `galexy_os::test` | a panic exits QEMU with `Success` instead of `Failed` | `bin/test-should-panic`, `bin/test-memory` (allocator exhaustion) |
+| Inline `login user pass` | shell command form | `userspace/shell` | password on the command line (no masked prompt) | scripted typing e2e; production UX is the masked prompt (`AUTH.md`) |
+| `GALEXY_GALFS_IMG`, `GALEXY_GALFS_IDE` | runner env | `runner/src/main.rs` | disk path / IDE-slave attach for `cargo run` | the developer |
+| `OVMF_FD` | runner env | `runner` | UEFI firmware path | CI (`/usr/share/ovmf/OVMF.fd`), developers on non-Arch distros |
+| `pub fn test_*` seams | public kernel functions | `keyboard::test_inject` / `test_drain`; `screen::test_cursor_bar_lit` / `_clear`; `sched::test_push_token` / `test_revoke_token` / `test_auth_flags` / `test_backdate_input` / `test_poll_idle_all` / `test_set_idle_limit`; `ramdisk::measure` | expose or poke internals a test kernel asserts on; never called by the main kernel | `bin/test-audit`, `test-galfs`, `test-cards`, `test-idle`, `test-mustchange`, `test-ramdisk` |
+
+Not seams: `ramdisk-gxld.tar` is the same userspace linked by `gxld`
+instead of `rust-lld` — a build axis, not a behaviour switch.
+
+### Coverage: which milestone each test kernel guards
+
+One row per `crates/galexy-os/src/bin/test-*.rs` (70). The boot test is
+the `runner/tests/boot.rs` function that boots it; the milestone is the
+one whose promise breaks first if the kernel goes red. Typing e2e boots
+(`shell_*_typing_e2e`, `gxld_image_*`, `util_typing_e2e_on`) run the
+main image and are listed at the end.
+
+| Test kernel | Boot test | Guards |
+| --- | --- | --- |
+| `test-basic` | `test_kernel_runs_and_passes` | M5 harness; the full stack boots and exits via `isa-debug-exit` |
+| `test-should-panic` | `should_panic_kernel_exits_successfully` | M5 `expect_panic` seam |
+| `test-memory` | `memory_test_passes` | M6 frame allocator |
+| `test-paging` | `paging_test_passes` | M7 paging |
+| `test-heap`, `test-heapgrow` | `heap_test_passes`, `heap_grow_test_passes` | M8 heap, M19 grow + shootdown |
+| `test-sched` | `sched_test_passes` | M9 cooperative scheduler |
+| `test-preempt`, `test-threadexit`, `test-reuse` | `preempt_test_passes`, `threadexit_test_passes`, `reuse_test_passes` | M10 preemptive threads, M26 slot reuse |
+| `test-screen` | `screen_test_passes` | M2 framebuffer text |
+| `test-rings`, `test-userpreempt`, `test-syscall`, `test-user` | `rings_test_passes`, `userpreempt_test_passes`, `syscall_test_passes`, `user_lifecycle_test_passes` | M12–M13 ring 3 and the first syscall |
+| `test-freshl4`, `test-cloneroot`, `test-treechurn`, `test-userfault`, `test-wx` | `freshl4_test_passes`, `cloneroot_test_passes`, `treechurn_test_passes`, `userfault_test_passes`, `wx_test_passes` | M14 isolation, M28 clone root, M48 W^X and address-space lifecycle |
+| `test-ramdisk`, `test-realprogram`, `test-open`, `test-runshell` | `ramdisk_test_passes`, `realprogram_test_passes`, `open_test_passes`, `runshell_test_passes` | M15 ELF + ramdisk, M20 files as Caps, M31 launch by name; M51 ramdisk measurement |
+| `test-acpi`, `test-apic` | `acpi_test_passes`, `apic_test_passes` | M17 APIC family |
+| `test-smp`, `test-ipi`, `test-smpuser`, `test-smpstress` | `smp_test_passes`, `ipi_test_passes`, `smpuser_test_passes`, `smpstress_test_passes` | M18–M19 SMP, shootdown, steal |
+| `test-shutdown`, `test-reboot` | `shutdown_test_powers_off`, `reboot_test_resets` | M23 power |
+| `test-audit` | `audit_console_test_passes` | M49 keyboard overflow, dmesg ring, blink |
+| `test-scratch`, `test-rm`, `test-seek` | `scratch_test_passes`, `rm_test_passes`, `seek_test_passes` | M27 / M30 / M36 scratch files, remove, seek |
+| `test-galfs`, `test-paths`, `test-cards` | `galfs_test_passes`, `paths_test_passes`, `cards_test_passes` | M34–M35 tokens and grant, M45 path policy and confused deputy |
+| `test-blocks`, `test-quota`, `test-shares`, `test-indirect`, `test-ops`, `test-fsck` | `blocks_test_passes`, `quota_test_passes`, `shares_test_passes`, `indirect_test_passes`, `ops_test_passes`, `fsck_test_passes` | M39 / M45 galfs for real usage |
+| `test-galfs-disk`, `test-galfs-part`, `test-share-disk` | `galfs_disk_persists_*`, `assert_galfs_disk_persists`, `galfs_disk_persists_partition_offset`, `share_disk_persists_across_reboot` | M38 / M46 disk-backed galfs, cache modes, virtio, partition offset |
+| `test-galfs-corrupt`, `test-galfs-idempotent`, `test-crash` | `galfs_disk_recovers_*`, `galfs_disk_refuses_format_when_both_slots_corrupt`, `galfs_idempotent_after_recover`, `crash_injection_picks_consistent_slot` | M39 / M45 crash safety |
+| `test-ata` | `ata_absent_returns_unsupported` | M45 ATA error propagation |
+| `test-users`, `test-mustchange`, `test-lockout`, `test-idle`, `test-unlock` | `users_test_passes`, `mustchange_test_passes`, `lockout_test_passes`, `idle_test_passes`, `unlock_test_passes` | M37 / M42 / M43 auth, M44 sealed unlock |
+| `test-pipe` | `pipe_test_passes` | M36 pipes + `give`, M57 block/wake |
+| `test-proccap`, `test-selfcap`, `test-procgive`, `test-procbudget`, `test-capforge`, `test-orphan` | `proccap_test_passes`, `selfcap_test_passes`, `procgive_test_passes`, `procbudget_test_passes`, `capforge_test_passes`, `orphan_test_passes` | M47 process Caps and forge battery |
+| `test-init`, `test-jobcap` | `init_test_passes`, `jobcap_test_passes` | M53 init orphan root, M55 job Cap / Ctrl-C |
+| `test-sleep`, `test-idle` | `sleep_test_passes`, `idle_test_passes` | M56 time and deadlines, M58 policy freeze |
+| `test-hellogxc` | `hellogxc_test_passes` | M61 hello via `gxc`, M69 `gxld` link |
+| `test-badelf`, `test-negative` | `badelf_test_passes`, `negative_test_passes` | M51 hostile ELF oracle and negative suite (loader hardening itself: M63) |
+| main image | `main_kernel_boots_and_timer_ticks`, `uefi_image_boots_and_timer_ticks`, `shell_*_typing_e2e`, `shell_run_hello_typing_e2e_uefi`, `shell_tty_switch_e2e`, `util_typing_e2e_on`, `assert_passwords_masked` | M21 / M29 / M33 / M40 / M43 / M50 / M54 seats, shell, utilities, masked prompts |
+| `gxld` image | `gxld_image_run_hello_typing_e2e`, `gxld_image_util_typing_e2e` | M69 linker differential |
+
+Host suites (no QEMU): `galexy-abi` (table integrity), `galexy-core`
+(`Ring`, tar, `parse_path` exhaustive sweep), `galexy-crypto`
+(vectors), `galexy-galf` (slot round trip, generation monotonicity,
+token algebra properties), `galfs-fsck`, `gxc`, `gxld`.
 
 ## Process Caps (Milestone 47)
 

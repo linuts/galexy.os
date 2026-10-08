@@ -114,7 +114,7 @@ WRITE; a path without a covering card is `AccessDenied`.
 | --- | --- |
 | Utility (`SPAWN_WAIT`) | Inherits parent’s session tokens |
 | Bare program | Parent’s `fs_root`, **empty** tokens |
-| Pre-login seat | No loader; cannot spawn |
+| Pre-login seat | No `fs_root`; `spawn` is `AccessDenied` by kernel rule, and the seat holds no loader Cap |
 
 Password `login` replaces tokens with `ALL` on the actor’s root, then
 applies durable home shares. `logout` clears tokens and `fs_root`.

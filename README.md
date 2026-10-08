@@ -156,10 +156,65 @@ cargo build --release
 find target -name "galexy-os-*.img"
 ```
 
+## For reviewers
+
+Everything a systems engineer needs to poke at it in one place. Read
+`docs/THREAT.md` first (assets, adversaries, non-goals), then
+`docs/DEMO.md` for an eight-step walk through login, a second account,
+an access card, and two consoles.
+
+**Toolchain.** `rust-toolchain.toml` pins `nightly-2026-10-08`
+(`rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)`) with the
+`x86_64-unknown-none` / `x86_64-unknown-uefi` targets and `rust-src`;
+`rustup` installs it on the first `cargo` command (add `rustfmt` and
+`clippy` to run the CI checks locally). Host packages: `qemu-system-x86_64` and an
+OVMF image for UEFI. Nothing else.
+
+**Build and run.**
+
+```sh
+cargo build -p runner                       # every image under target/
+cargo run                                   # BIOS, -smp 2 -cpu max, COM1 on stdout
+OVMF_FD=/usr/share/ovmf/OVMF.fd cargo run -- --uefi   # UEFI; path varies per distro
+scripts/review-smoke.sh                     # focused subset: host suites + 11 boots (~10 min TCG)
+```
+
+**Disk.** `cargo run` creates and attaches `galfs.img` in the repo root
+(gitignored, virtio-blk). Fresh image ⇒ fresh format ⇒ the shell asks
+for a volume passphrase only once there is a sealed slot; the
+bring-up passphrase is `galfs`. `GALEXY_GALFS_IMG=/path` relocates it;
+`GALEXY_GALFS_IDE=1` attaches it as the IDE slave instead. If a boot
+refuses the disk after a GALF version bump (`[galfs] disk corrupt;
+refusing silent format`, or `fsck` reports a foreign version), delete `galfs.img`
+and boot again — the kernel never silently reformats a volume it can
+read but not parse.
+
+**Accounts.** Fresh format: `admin` / `admin`, and the first command
+must be `passwd`. Every F-key seat (F1–F12) is its own login; nothing
+is logged in at boot. `useradd`, `grant`, `share`, `su` are in
+`docs/AUTH.md`.
+
+**Where the evidence goes.**
+
+| What | Where |
+| --- | --- |
+| Kernel and audit log | COM1 (your terminal under `cargo run`); the same lines via `dmesg` after login |
+| Runner serial logs | `$TMPDIR/galexy-serial-<image>-<n>.log` (`/tmp` on Linux), one per boot; uploaded as a CI artifact on failure |
+| Ramdisk measurement | `cargo:warning=ramdisk.tar sha256=…` at build; `[test-ramdisk] sha256 …` at boot |
+| Images | `target/debug/build/runner-*/out/galexy-os-{bios,uefi}.img` is the main kernel; `galexy-os-gxld-*.img` carries the `gxld`-linked ramdisk; `galexy-os-crashseam-*.img` the `crash-seam` shell; `galexy-os-test-*-*.img` one per test kernel |
+| Screen | `scripts/boot-test.sh <image> <secs>` dumps `shot.ppm` and `serial.log` under `$WORKDIR` |
+
+**What to read while it boots.** `docs/ABI.md` (which syscalls are
+stable), `docs/PERF.md` (budgets and fixed capacities), `DESIGN.md` →
+Testing strategy (which test kernel guards which milestone, and the
+feature-gated seams that are off in the default image), `TODO.md`
+Milestone 52 (the review gate itself).
+
 ## Repo map
 
 ```
-docs/           STYLE, ROADMAP, DESIGN, AUTH, GALFS, PROCESS, SCHEDULING, COMPILER, DEMO
+docs/           STYLE, ROADMAP, THREAT, ABI, PERF, DESIGN, AUTH, GALFS, PROCESS, SCHEDULING, COMPILER, LINKER, RUSTC, DEMO
+LICENSE         MIT · SECURITY.md reporting + scope · CHANGELOG.md one line per milestone PR
 TODO.md         milestone checkboxes
 crates/
   galexy-abi/     syscall numbers, Cap model, errors (host-tested)

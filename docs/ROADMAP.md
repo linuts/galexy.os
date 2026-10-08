@@ -4,7 +4,7 @@ Direction-level plan. Concrete check-off items live in `TODO.md`.
 
 ## Where we stand (review, October 2026)
 
-Snapshot at commit `80cc05e` (Milestone 50 merged). The bar is a
+Snapshot at commit `80cc05e` (Milestone 50 merged), **Ready** row refreshed for the Milestone 51 docs pack. The bar is a
 **secure, fast, modern-only, full-feature, ready** OS. Each row says
 what is true today and which milestone closes the gap.
 
@@ -14,7 +14,7 @@ what is true today and which milestone closes the gap.
 | **Fast** | Deadline one-shot LAPIC, tickless idle, idle steal, park/wake for sleep / keyboard / pipe; IF=0 syscall path never allocates; console budget | Nothing is measured; suite is TCG at `opt-level = 0`; no release profile or LTO; virtio-blk spins 10 M polls; ATA is PIO; pipeline children `yield_now`-poll until `give` → **64** |
 | **Modern only** | x2APIC-aware LAPIC, I/O APIC, ACPI MADT / FADT / XSDT, UEFI first-class, GOP framebuffer, virtio-blk, FSGSBASE per-CPU, SMP | Legacy is the only path for timer calibration (PIT), 8259 remap, PS/2 keyboard, PIO IDE, legacy virtio IO BAR, port PCI config, `-M pc`; no TSC-deadline, no ECAM, no MSI-X → **65** |
 | **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, one pipeline, glob; 12 utilities; galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; gxc hello | No user heap, argv, clock read, or IPC beyond pipes; one pipeline shape; no background jobs → **66**. Shutdown bypasses init; no service table → **67**. Network and USB → **Phase 10** |
-| **Ready** | 68 QEMU test kernels, 87 runner boots, host suites green; docs for auth, galfs, process, scheduling, compiler, demo | No CI workflow; clippy red on the pinned nightly; rustfmt drift in 88 files; no `LICENSE`, `SECURITY.md`, `CHANGELOG.md`; no `THREAT.md` / `PERF.md` → **51**, **52**, then the **v1.0 gate** in 67 |
+| **Ready** | 70 QEMU test kernels, 91 runner boots, host suites green; CI workflow (`host` + `qemu` jobs); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Soak / fairness / pathological-input runs and the Milestone 52 checklist → **51**, **52**, then the **v1.0 gate** in 67 |
 
 Order of work: **51 → 52** (`review-rc1`), then **63 → 64 → 65 → 66 →
 67** (`v1.0`). Security first because every later change should land
@@ -272,10 +272,17 @@ checklist). Style: `docs/STYLE.md`.
    auth/grant audit lines, dmesg cap, `verbose-sched` steal trace
 8. **50 Shell for real demos** ✅ — `echo | cat`, `*` glob, line
    editing, cwd across login / `su` / failed `cd`
-9. **51 Docs, tests, CI & soak** — THREAT/FS, negative suite, hostile
-   ELF oracle, review-smoke, GitHub Actions, clippy / fmt baseline,
-   `LICENSE` / `SECURITY.md` / `CHANGELOG.md`, non-goals freeze
-10. **52 Review RC** — default secure build; tag `review-rc1`
+9. **51 Docs, tests, CI & soak** — landed: `THREAT.md`, `ABI.md`,
+   `PERF.md`, AUTH refresh, reviewer README, DESIGN seam table and
+   coverage list; negative suite, hostile ELF oracle (`validate_elf`),
+   path sweep and token / slot property tests, ramdisk measurement;
+   GitHub Actions, clippy / fmt baseline, pinned nightly;
+   `LICENSE` (MIT) / `SECURITY.md` / `CHANGELOG.md` / PR template /
+   `review-smoke.sh`; non-goals frozen in `THREAT.md`. Remaining: soak,
+   steal fairness, pathological input. Waived for now: a ramdisk
+   allowlist (hash only; trusted input)
+10. **52 Review RC** — default secure build audit, full suite BIOS+UEFI,
+    freeze-window rule; the `review-rc1` tag itself waits for the owner
 
 Standing rule unchanged: each milestone leaves the suite green; prefer
 explicit waivers in the threat/FS docs over half-landed features.
