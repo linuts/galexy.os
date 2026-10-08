@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#79](https://github.com/linuts/galexy.os/pull/79) — `cargo run` is
+  headless by default (`-nographic`); COM1 receive (IRQ4) feeds the
+  keyboard queue so the terminal is the console. `--display` still opens
+  the framebuffer window
 - [#78](https://github.com/linuts/galexy.os/pull/78) — M51/M52 — soak and
   fairness evidence: `bin/test-soak` (ten pipe/file/spawn rounds with
   frame, pipe, thread, and galfs-block leak checks), `bin/test-fairness`
