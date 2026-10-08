@@ -171,12 +171,14 @@ fn grow() -> bool {
     // deadlock rule). Fresh mappings technically cannot sit stale in other
     // CPUs' TLBs, but broadcasting here MECHANIZES the "kernel half is
     // map-only" assumption — every kernel-half remap flows through the
-    // shootdown path from day one.
-    let vas: alloc::vec::Vec<x86_64::VirtAddr> = broadcast_vas[..mapped]
-        .iter()
-        .map(|&v| x86_64::VirtAddr::new(v))
-        .collect();
-    let seq = super::shootdown::shootdown_others(&vas);
+    // shootdown path from day one. The VA list lives on the stack: this is
+    // the OOM path with GROWING held, so a heap allocation here could fail
+    // and re-enter `grow`, which would then wait on itself.
+    let mut vas = [VirtAddr::zero(); GROW_CHUNK_PAGES];
+    for (dst, &src) in vas.iter_mut().zip(&broadcast_vas[..mapped]) {
+        *dst = VirtAddr::new(src);
+    }
+    let seq = super::shootdown::shootdown_others(&vas[..mapped]);
 
     // SAFETY: [HEAP_START + current, +mapped*4096) was mapped above and has
     // never been handed to the allocator; `extend` claims it as one hole.

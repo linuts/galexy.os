@@ -441,7 +441,10 @@ on one CPU is stale in every other TLB until invalidated.
 - Initiator (`shootdown_others`): claim a slot, publish, `send_fixed_ipi`
   to every other online CPU, spin until each target's `seen` catches
   `seq`. Holds no Rust spin lock. Any IRQ state is fine — targets ack
-  the next time they run with IF=1.
+  the next time they run with IF=1. A target that has not acked after
+  2^26 spins is reported to serial (`[shootdown] cpu A waiting on cpu
+  B …`) and the wait continues — the line is the first evidence a hung
+  boot gives about which CPU is wedged IF=0.
 - Target: the 0xF8 handler scans unseen seqs, `invlpg`s the listed VAs,
   stores `seen`. Takes no locks, ever (an IF=0 lock holder must still be
   able to ack, or a broadcasting initiator spins forever).

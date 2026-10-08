@@ -2112,7 +2112,13 @@ Spectre stance, and an ELF loader that panics on a bad image.
       mailbox to serial when one stalls for > 2 s; then fix the window
       (suspects: idle-AP tickless re-arm racing an exit handoff that
       woke a waiter owned by the sleeping CPU; shootdown ack wait while
-      the target is between `arm_oneshot_ms` and `hlt`)
+      the target is between `arm_oneshot_ms` and `hlt`). Already in
+      place since the M51 close: `shootdown_others` prints
+      `[shootdown] cpu A waiting on cpu B (seq, slot, seen)` every 2^26
+      spins, so a hung serial now says whether the ack wait is the
+      stall and which CPU owes it; the heap-grow OOM path no longer
+      allocates a `Vec` while holding `GROWING` (it would have waited on
+      itself)
 - [ ] **KDF cost on disk**: PBKDF2 iteration count stored per actor
       (GALF v12); test kernels format at 10 000, production format
       under `--release` + KVM at ≥ 100 000; `passwd` re-derives at the
