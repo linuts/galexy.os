@@ -8,6 +8,19 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#78](https://github.com/linuts/galexy.os/pull/78) — M51/M52 — soak and
+  fairness evidence: `bin/test-soak` (ten pipe/file/spawn rounds with
+  frame, pipe, thread, and galfs-block leak checks), `bin/test-fairness`
+  (two-CPU steal fairness), `bin/test-pathological` (console budget
+  under a flood of writes), password-paste and no-`crash`-seam shell
+  e2e; `pipe::in_use()`; Milestone 52 checklist closed except the
+  owner-deferred `review-rc1` tag; intermittent SMP hang tracked for
+  Milestone 63
+- [#77](https://github.com/linuts/galexy.os/pull/77) — M51 — reviewer
+  docs pack: `docs/THREAT.md`, `docs/ABI.md`, `docs/PERF.md`,
+  `LICENSE` (MIT), `SECURITY.md`, this changelog, a PR template,
+  `scripts/review-smoke.sh`; DESIGN test-seam and coverage tables; AUTH
+  and GALFS status refresh; README "For reviewers"
 - [#76](https://github.com/linuts/galexy.os/pull/76) — M51 — hardening
   evidence: `loader::validate_elf` + `bin/test-badelf` (hostile ELF
   oracle), `bin/test-negative` (pre-login spawn denied, bare spawn cannot
