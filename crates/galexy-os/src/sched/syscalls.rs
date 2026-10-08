@@ -1294,6 +1294,8 @@ fn syscall_power(cap: Cap, op: u64) -> SyscallResult {
     if !crate::sched::task_granted(crate::sched::Grant::Power) {
         return SyscallResult::err(SysError::AccessDenied);
     }
+    // Durability before the machine goes away (write-back may still be dirty).
+    crate::sched::galfs::sync();
     match op {
         galexy_abi::POWER_SHUTDOWN => crate::arch::power::shutdown(),
         galexy_abi::POWER_REBOOT => crate::arch::power::reboot(),

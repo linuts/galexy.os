@@ -7,9 +7,11 @@
 //!
 //! When a [`BlockDevice`] large enough for both dual slots is present,
 //! the table is loaded from a GALF image (checksum + generation) or
-//! formatted if both slots are bad. Mutates sync to the inactive slot
-//! then flush. Without a usable disk the table stays RAM-only. Backends:
-//! virtio-blk (preferred when present), else ATA primary slave.
+//! formatted if both slots are bad. Mutates mark the table dirty; a
+//! coalesced sync (inactive slot + flush) runs on the 1 Hz main-loop
+//! tick, on `Syscall::Sync`, and before power-off. Without a usable disk
+//! the table stays RAM-only. Backends: virtio-blk (preferred when
+//! present), else ATA primary slave.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -377,11 +379,25 @@ pub fn disk_capacity_sectors() -> u64 {
     disk().capacity_sectors()
 }
 
+/// Set when the in-RAM table differs from the last flushed dual slot.
+static DIRTY: AtomicBool = AtomicBool::new(false);
+
+/// Marks the table dirty so the next [`sync_if_dirty`] / [`sync`] flushes.
+pub fn mark_dirty() {
+    DIRTY.store(true, Ordering::Release);
+}
+
+/// True when mutates are waiting on a dual-slot commit.
+pub fn is_dirty() -> bool {
+    DIRTY.load(Ordering::Acquire)
+}
+
 /// Builds actor [`ADMIN_NAME`] with an empty Desktop, or loads the newest
 /// valid GALF slot from the block device. Call once.
 ///
-/// Sync policy: every successful mutate that changes the table calls
-/// [`sync`] (inactive slot + flush). [`sync_explicit`] is an extra barrier.
+/// Sync policy: mutates call [`mark_dirty`]; the main loop's 1 Hz tick,
+/// [`sync_explicit`], and power-off call [`sync_if_dirty`] / [`sync`]
+/// (inactive slot + flush). Crash window is up to one second of writes.
 pub fn init() {
     if BOOTED.swap(true, Ordering::SeqCst) {
         return;
@@ -475,8 +491,17 @@ pub fn disk_slot_info() -> (u32, u64) {
 }
 
 /// Writes the in-RAM table to the block device. No-op when RAM-only.
+///
+/// Always commits when disk-backed (tests / power / explicit barriers).
 pub fn sync() {
     let _ = sync_to_disk();
+}
+
+/// Commits only when [`mark_dirty`] ran since the last successful flush.
+pub fn sync_if_dirty() {
+    if DIRTY.load(Ordering::Acquire) {
+        let _ = sync_to_disk();
+    }
 }
 
 /// Explicit flush for [`Syscall::Sync`]. RAM-only succeeds; corrupt fails.
@@ -485,6 +510,7 @@ pub fn sync_explicit() -> Result<(), SysError> {
         return Err(SysError::Unsupported);
     }
     if !disk_usable() {
+        DIRTY.store(false, Ordering::Release);
         return Ok(());
     }
     if sync_to_disk() {
@@ -522,6 +548,7 @@ fn sync_to_disk() -> bool {
     ACTIVE_SLOT.store(next_slot, Ordering::Release);
     ACTIVE_GEN.store(next_gen, Ordering::Release);
     DISK_LIVE.store(true, Ordering::Release);
+    DIRTY.store(false, Ordering::Release);
     true
 }
 
@@ -1152,7 +1179,7 @@ pub fn set_password(name: &str, password: &[u8]) -> Result<(), SysError> {
     };
     actor.set_password(password);
     drop(table);
-    sync();
+    mark_dirty();
     Ok(())
 }
 
@@ -1232,7 +1259,7 @@ pub fn add_share(
         if share.used && share.grantee as usize == gi && share.object == object {
             share.rights |= rights;
             drop(table);
-            sync();
+            mark_dirty();
             return Ok(());
         }
     }
@@ -1246,7 +1273,7 @@ pub fn add_share(
         object,
     };
     drop(table);
-    sync();
+    mark_dirty();
     Ok(())
 }
 
@@ -1280,7 +1307,7 @@ pub fn remove_share(
         return Err(SysError::NotFound);
     }
     drop(table);
-    sync();
+    mark_dirty();
     Ok(())
 }
 
@@ -1430,7 +1457,7 @@ pub fn set_actor_quota(name: &str, max_objects: u16, max_bytes: u32) -> Result<(
     actor.max_objects = max_objects;
     actor.max_bytes = max_bytes;
     drop(table);
-    sync();
+    mark_dirty();
     Ok(())
 }
 
@@ -1503,7 +1530,7 @@ pub fn mkdir_under_root(root: u16, name: &str) -> Result<u16, SysError> {
     let mut table = TABLE.lock();
     let oi = mkdir_locked(&mut table, root, name)?;
     drop(table);
-    sync();
+    mark_dirty();
     Ok(oi)
 }
 
@@ -1557,7 +1584,7 @@ pub fn create_file_under(parent: u16, name: &str) -> Result<u16, SysError> {
     obj.indirect = NO_BLOCK;
     obj.len = 0;
     drop(table);
-    sync();
+    mark_dirty();
     Ok(oi as u16)
 }
 
@@ -2048,7 +2075,7 @@ pub(crate) fn read_at(index: u16, start: usize, dst: &mut [u8]) -> Option<usize>
 pub fn append_file(index: u16, src: &[u8]) -> Option<usize> {
     let n = append(index, src)?;
     if n > 0 {
-        sync();
+        mark_dirty();
     }
     Some(n)
 }
@@ -2057,7 +2084,7 @@ pub fn append_file(index: u16, src: &[u8]) -> Option<usize> {
 pub fn remove_as_admin(name: &str) -> Result<(), SysError> {
     let cred = admin_cred();
     remove(cred.root, &cred.tokens, name)?;
-    sync();
+    mark_dirty();
     Ok(())
 }
 
@@ -2080,14 +2107,14 @@ pub fn blocks_used() -> usize {
 pub fn rename_as_admin(old: &str, new: &str) -> Result<(), SysError> {
     let cred = admin_cred();
     rename(cred.root, &cred.tokens, old, new)?;
-    sync();
+    mark_dirty();
     Ok(())
 }
 
 /// Sets a file's length. Test helper (object index).
 pub fn truncate_file(index: u16, new_len: usize) -> Result<(), SysError> {
     truncate(index, new_len)?;
-    sync();
+    mark_dirty();
     Ok(())
 }
 
