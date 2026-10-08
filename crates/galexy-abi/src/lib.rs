@@ -239,7 +239,8 @@ pub const POWER_REBOOT: u64 = 1;
 ///
 /// The child always receives the console. Bits other than the spawn
 /// flags and the rights mask ([`SPAWN_RIGHTS_BITS`]) are rejected.
-/// Keyboard, the loader, and power stay with the shell.
+/// The loader and power stay with the shell. Keyboard stays there too
+/// unless [`SPAWN_GRANT_KEYBOARD`] is set.
 pub const SPAWN_GRANT_QUERY: u64 = 1;
 /// `spawn` grant bit (`r10`): park the caller until the child exits
 /// (not only until the ELF is loaded). Convenience for Cap-wait; the
@@ -251,6 +252,11 @@ pub const SPAWN_WAIT: u64 = 2;
 /// [`SPAWN_WAIT`] — Cap-wait utilities set inherit and call
 /// [`Syscall::Wait`] on the returned Cap.
 pub const SPAWN_INHERIT: u64 = 4;
+/// `spawn` grant bit (`r10`, bit 3): also give the new task the keyboard.
+///
+/// The parent is expected to Cap-wait, so it is not reading keys at the
+/// same time. The shell sets this for `nano` and for nothing else.
+pub const SPAWN_GRANT_KEYBOARD: u64 = 8;
 /// `spawn` `r10` bits 8..15: when non-zero, each inherited token's rights
 /// are ANDed with this mask (0 in the mask keeps the parent's full set).
 /// Bare spawn (no [`SPAWN_INHERIT`] and no [`SPAWN_WAIT`]) stays empty
@@ -402,8 +408,9 @@ pub enum Syscall {
     /// alphanumeric plus `.` `_` `-` (no `/`). Optional: `R8` = argument
     /// blob address, `R9` = blob length (at most 256; **single arg blob**
     /// — no argv/env vector until a later ABI bump), `R10` = grant bits
-    /// ([`SPAWN_GRANT_QUERY`], [`SPAWN_WAIT`], [`SPAWN_INHERIT`], or a
-    /// combination, plus an optional rights mask in [`SPAWN_RIGHTS_BITS`]).
+    /// ([`SPAWN_GRANT_QUERY`], [`SPAWN_WAIT`], [`SPAWN_INHERIT`],
+    /// [`SPAWN_GRANT_KEYBOARD`], or a combination, plus an optional rights
+    /// mask in [`SPAWN_RIGHTS_BITS`]).
     /// Returns: `SyscallResult` — without [`SPAWN_WAIT`], `rax` is a
     /// process Cap ([`PROC_CAP_BASE`] + slot) with [`CapRights::PROC_PARENT`];
     /// with [`SPAWN_WAIT`], `rax` is the child's exit code (the Cap is still

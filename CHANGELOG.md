@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- `nano` — ring-3 screen editor (`nano <path>`): arrows, Ctrl-O save,
+  Ctrl-X exit. The shell passes `SPAWN_GRANT_KEYBOARD` (spawn `r10` bit 3)
+  and Cap-waits so the editor can read the seat's keys
 - [#79](https://github.com/linuts/galexy.os/pull/79) — `cargo run` is
   headless by default (`-nographic`); COM1 receive (IRQ4) feeds the
   keyboard queue so the terminal is the console. `--display` still opens

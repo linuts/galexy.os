@@ -1238,6 +1238,7 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
         & !(galexy_abi::SPAWN_GRANT_QUERY
             | galexy_abi::SPAWN_WAIT
             | galexy_abi::SPAWN_INHERIT
+            | galexy_abi::SPAWN_GRANT_KEYBOARD
             | galexy_abi::SPAWN_RIGHTS_BITS)
         != 0
     {
@@ -1294,12 +1295,14 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
     let query = frame.r10 & galexy_abi::SPAWN_GRANT_QUERY != 0;
     let wait_exit = frame.r10 & galexy_abi::SPAWN_WAIT != 0;
     let inherit = frame.r10 & galexy_abi::SPAWN_INHERIT != 0;
+    let keyboard = frame.r10 & galexy_abi::SPAWN_GRANT_KEYBOARD != 0;
     let rights_mask =
         ((frame.r10 & galexy_abi::SPAWN_RIGHTS_BITS) >> galexy_abi::SPAWN_RIGHTS_SHIFT) as u8;
     match crate::sched::task_spawn(
         name,
         &arg[..arg_len as usize],
         query,
+        keyboard,
         wait_exit,
         inherit,
         rights_mask,

@@ -98,7 +98,7 @@ frames). Up/down arrows recall session history (written to
 | Ctrl-C | Cancel a prompt, or kill the foreground job |
 | `fetch` | Re-show the login dashboard |
 | `help` | Commands |
-| `ls` / `echo hi` / `mkdir box` / `cat` / `cp` / `mv` / `rm` / `stat` / `truncate` | Files under your tree |
+| `ls` / `echo hi` / `mkdir box` / `cat` / `nano` / `cp` / `mv` / `rm` / `stat` / `truncate` | Files under your tree. `nano <path>` edits; Ctrl-O saves, Ctrl-X leaves |
 | `echo hi \| cat` · `echo *` | One pipeline (pipe + `give`); one `*` per word in the current directory |
 | `whoami` / `users` / `useradd` / `passwd` / `quota` / `tokens` | Identity, cards, limits |
 | `grant` / `revoke` / `share` / `unshare` / `su` | Access cards (see AUTH.md) |

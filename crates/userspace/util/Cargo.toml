@@ -13,6 +13,10 @@ name = "cat"
 path = "src/bin/cat.rs"
 
 [[bin]]
+name = "nano"
+path = "src/bin/nano.rs"
+
+[[bin]]
 name = "touch"
 path = "src/bin/touch.rs"
 
