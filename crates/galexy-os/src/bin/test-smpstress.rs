@@ -245,24 +245,26 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let _ = sched::spawn_thread("hammer1", hammer1);
 
     let console_cap = galexy_abi::reserved::console(CapRights::WRITE);
+    x86_64::instructions::interrupts::enable();
     let (region, _) = sched::spawn_user_task("stressblob", |gr| {
         blob(gr.code.as_u64(), console_cap.bits(), gr.scratch.as_u64())
     });
     let scratch_phys = region.scratch_phys;
+    // The blob is tiny — catch DONE before any remote reap wipes it.
+    let mut blob_marked = false;
+    let mark_deadline = arch::timer_ticks() + 2_000;
+    while arch::timer_ticks() < mark_deadline {
+        let ptr: *const u32 = arch::mm::frame_virt(scratch_phys).as_ptr();
+        if unsafe { core::ptr::read_volatile(ptr) } == DONE_MARK {
+            blob_marked = true;
+            serial_println!("[test-smpstress] phase C: ring-3 blob completed");
+            break;
+        }
+        core::hint::spin_loop();
+    }
 
     let churn_deadline = arch::timer_ticks() + 30000;
-    let mut blob_marked = false;
-    // Peek scratch before reap — exit frees and wipes the tree.
-    x86_64::instructions::interrupts::enable();
     loop {
-        if !blob_marked {
-            // SAFETY: phys map is present in every address space.
-            let ptr: *const u32 = arch::mm::frame_virt(scratch_phys).as_ptr();
-            if unsafe { core::ptr::read_volatile(ptr) } == DONE_MARK {
-                blob_marked = true;
-                serial_println!("[test-smpstress] phase C: ring-3 blob completed");
-            }
-        }
         if HAMMER_DONE[0].load(Ordering::Relaxed) == 1
             && HAMMER_DONE[1].load(Ordering::Relaxed) == 1
             && blob_marked

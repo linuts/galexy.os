@@ -927,11 +927,14 @@ pub fn spawn_user_task(name: &str, build: impl FnOnce(UserRegion) -> Vec<u8>) ->
 }
 
 /// Like [`spawn_user_task`], with shell-grade grants (loader, queries, …).
+///
+/// Pinned to the BSP so the BIOS harness can peek scratch before any
+/// remote reap wipes DONE marks (`test-procgive`, Cap batteries).
 pub fn spawn_user_launcher(
     name: &str,
     build: impl FnOnce(UserRegion) -> Vec<u8>,
 ) -> (UserRegion, u8) {
-    spawn_user_with_grants(name, galfs::admin_cred(), Grants::launcher(), build)
+    spawn_user_with_grants(name, galfs::admin_cred(), Grants::launcher(), build, Some(0))
 }
 
 /// Like [`spawn_user_task`], with explicit galfs credentials (token tests).
@@ -940,15 +943,18 @@ pub fn spawn_user_with(
     fs: galfs::FsCred,
     build: impl FnOnce(UserRegion) -> Vec<u8>,
 ) -> (UserRegion, u8) {
-    spawn_user_with_grants(name, fs, Grants::console(), build)
+    spawn_user_with_grants(name, fs, Grants::console(), build, None)
 }
 
 /// Like [`spawn_user_with`], with an explicit grant set.
+///
+/// `owner = None` → pin-at-spawn round-robin; `Some(cpu)` forces that CPU.
 pub(crate) fn spawn_user_with_grants(
     name: &str,
     fs: galfs::FsCred,
     grants: Grants,
     build: impl FnOnce(UserRegion) -> Vec<u8>,
+    owner: Option<u8>,
 ) -> (UserRegion, u8) {
     interrupts::without_interrupts(|| {
         // The loader allocates. A syscall runs with interrupts off, so the
@@ -1087,7 +1093,7 @@ pub(crate) fn spawn_user_with_grants(
         let kstack_top = (kstack.as_ptr() as u64 + kstack.len() as u64) & !0xF;
 
         let fx = Box::into_raw(Box::new(FxArea::new()));
-        let owner = next_cpu();
+        let owner = owner.unwrap_or_else(next_cpu);
         let (name_bytes, name_len) = pack_name(name);
         let _slot = push_thread(Thread {
             name_bytes,

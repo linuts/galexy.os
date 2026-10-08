@@ -34,15 +34,6 @@ struct HolderReport {
     after_revoke_err: u64,
 }
 
-#[repr(C)]
-struct GrantReport {
-    done: u64,
-    grant_ok: u64,
-    grant_err: u64,
-    revoke_ok: u64,
-    revoke_err: u64,
-}
-
 fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galexy_os::init();
     screen::init(boot_info);
@@ -294,56 +285,6 @@ fn build_holder_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     patch_jnz(&mut code, jz2, denied); // actually jz
     store(&mut code, 2, 0x10); // after_revoke_ok = rdx (0)
     store(&mut code, 0, 0x18); // after_revoke_err = rax
-
-    finish(&mut code);
-    code
-}
-
-fn build_granter_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
-    let path = b"/Desktop";
-    let task = b"holder";
-    let mut code: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
-    let data_len = path.len() + task.len();
-    code.push(0xEB);
-    code.push(data_len as u8);
-    let path_addr = code_base + 2;
-    let task_addr = path_addr + path.len() as u64;
-    code.extend_from_slice(path);
-    code.extend_from_slice(task);
-
-    mov_r64_imm(&mut code, 15, scratch);
-
-    // yield until holder is likely scheduled
-    for _ in 0..4 {
-        mov_eax(&mut code, Syscall::Yield as u32);
-        code.extend_from_slice(&[0x0F, 0x05]);
-    }
-
-    mov_eax(&mut code, Syscall::Grant as u32);
-    mov_r64_imm(&mut code, 7, path_addr);
-    mov_r64_imm(&mut code, 6, path.len() as u64);
-    mov_r64_imm(&mut code, 2, TOKEN_LIST | TOKEN_READ);
-    mov_r64_imm(&mut code, 8, task_addr);
-    mov_r64_imm(&mut code, 9, task.len() as u64);
-    code.extend_from_slice(&[0x0F, 0x05]);
-    store(&mut code, 2, 0x08);
-    store(&mut code, 0, 0x10);
-
-    // Holder often pins a different CPU; Yield only rotates THIS CPU.
-    // Sleep so the other CPU's open-loop can observe the grant.
-    mov_eax(&mut code, Syscall::Sleep as u32);
-    mov_r64_imm(&mut code, 7, 100); // rdi = 100 ms
-    code.extend_from_slice(&[0x0F, 0x05]);
-
-    mov_eax(&mut code, Syscall::Revoke as u32);
-    mov_r64_imm(&mut code, 7, path_addr);
-    mov_r64_imm(&mut code, 6, path.len() as u64);
-    mov_r64_imm(&mut code, 2, TOKEN_LIST | TOKEN_READ);
-    mov_r64_imm(&mut code, 8, task_addr);
-    mov_r64_imm(&mut code, 9, task.len() as u64);
-    code.extend_from_slice(&[0x0F, 0x05]);
-    store(&mut code, 2, 0x18);
-    store(&mut code, 0, 0x20);
 
     finish(&mut code);
     code
