@@ -207,6 +207,33 @@ pub fn seen_by(cpu_index: usize) -> [u64; SLOT_N] {
     out
 }
 
+/// Prints the in-flight mailbox for the rotation watchdog.
+pub fn log_mailbox() {
+    let online = cpu::online();
+    for (i, slot) in MAILBOX.iter().enumerate() {
+        let seq = slot.seq.load(Ordering::Relaxed);
+        let busy = slot.busy.load(Ordering::Relaxed);
+        if seq == 0 && !busy {
+            continue;
+        }
+        serial_println!(
+            "[watchdog] shootdown slot {} seq {} busy {} len {}",
+            i,
+            seq,
+            u8::from(busy),
+            slot.len.load(Ordering::Relaxed)
+        );
+        for (c, seen) in SEEN.iter().enumerate().take(online) {
+            serial_println!(
+                "[watchdog] shootdown cpu {} slot {} seen {}",
+                c,
+                i,
+                seen[i].load(Ordering::Relaxed)
+            );
+        }
+    }
+}
+
 /// Boot-time marker line (the machinery is lazy — say it exists).
 pub fn init() {
     serial_println!(

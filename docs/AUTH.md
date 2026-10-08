@@ -15,16 +15,16 @@ can be handed to another user or to an app without sharing a password.
 A password never grants rights on someone else’s tree by itself — after
 login you hold `RIGHT_ALL` on **your** root; everything else is granted.
 
-Passwords use **PBKDF2-HMAC-SHA256** (`galexy-crypto`: 10 000
-iterations) with an 8-byte CSPRNG salt and a 16-byte digest per actor.
-Salts come from `arch::rand` (RDRAND, with a tick-mixed fallback). Empty
-passwords are rejected. Syscall staging buffers are wiped after login /
-useradd / passwd / volume unlock, including the error path.
-`check_password` wipes its digest, and PBKDF2 wipes HMAC key blocks.
-The iteration count is a debug-QEMU boot budget, not a production
-cost. Milestone 63 stores the cost per actor on disk so production
-formats at 100 000 or more while test kernels keep 10 000; Argon2id
-stays waived (it needs a dedicated KDF stack).
+Passwords use **PBKDF2-HMAC-SHA256** with an 8-byte CSPRNG salt and a
+16-byte digest per actor. The iteration count is stored on the actor
+(GALF v12). `format` and `passwd` write 10 000 on a test kernel or
+under TCG, and 100 000 on a `--release` kernel that detects KVM.
+`check_password` uses the stored count (0 or above 1 000 000 is a
+reject). Salts come from `arch::rand` (RDRAND, with a tick-mixed
+fallback). Empty passwords are rejected. Syscall staging buffers are
+wiped after login / useradd / passwd / volume unlock, including the
+error path. `check_password` wipes its digest, and PBKDF2 wipes HMAC
+key blocks. The volume KEK stays at 10 000. Argon2id stays waived.
 
 ### Sealed GALF (at-rest disk)
 
@@ -32,8 +32,9 @@ stays waived (it needs a dedicated KDF stack).
 slave must not recover file bytes or password hashes offline. Cold-boot
 RAM extraction and a compromised live kernel are out of scope for now.
 
-GALF slots are sealed (introduced in v6; v11 today — actor/object
-tables, shares, bitmap, and block pool in one payload, see `GALFS.md`):
+GALF slots are sealed (introduced in v6; v12 today — actor/object
+tables, shares, bitmap, block pool, and a per-actor KDF count in one
+payload, see `GALFS.md`):
 
 1. Format creates a random 32-byte volume key.
 2. A KEK is derived from the volume passphrase (`galfs` for bring-up)
@@ -290,9 +291,10 @@ within budget; a tight write loop cannot pin COM1.
 ## Explicit non-goals (for now)
 
 - Argon2id (PBKDF2 stays; a dedicated KDF stack is deferred). The
-  per-actor KDF cost is Milestone 63
+  per-actor iteration count is on disk as of Milestone 63
 - Hardware-feature hardening of the kernel itself (SMEP / SMAP / UMIP /
-  KASLR) is absent today and is Milestone 63, not an auth item
+  KASLR) landed in Milestone 63 and is described in `THREAT.md`, not
+  here
 - One-shot scratch password syscall (interactive prompts already hide secrets)
 - Wall clock. Audit lines use monotonic `timer_ticks` only
 - PAM-style modules, MFA, networked IdP
@@ -300,9 +302,9 @@ within budget; a tight write loop cannot pin COM1.
   `crash-seam` shell packed into `galexy-os-crashseam` for the
   supervisor typing test. `help` never lists it
 
-**Note:** GALF **v11** (see `GALFS.md`) refuses older images, including
-every earlier sealed layout. Delete `galfs.img` or let format recreate a
-sealed volume after upgrading.
+**Note:** GALF **v12** (see `GALFS.md`) refuses older images, including
+v11. Delete `galfs.img` or let format recreate a sealed volume after
+upgrading.
 
 ## Status (end state after Milestones 43–44, reviewed in 51)
 
@@ -311,7 +313,7 @@ expect to find, and where the remaining edges are:
 
 | Promise | Since | Evidence | Open edge |
 | --- | --- | --- | --- |
-| Passwords hashed with PBKDF2-HMAC-SHA256, CSPRNG salt, constant-time compare, staging wiped on every path | M43 | `users`, `mustchange`, `audit_strings` | cost fixed at 10 000 → **M63** stores it per actor |
+| Passwords hashed with PBKDF2-HMAC-SHA256, CSPRNG salt, constant-time compare, staging wiped on every path; iteration count stored per actor | M43 / M63 | `users`, `mustchange`, `audit_strings`, `galexy_crypto` stored-count test | volume KEK stays at 10 000; bring-up passphrase `galfs` |
 | No echo at any password prompt; no secret on serial, console, or `dmesg` | M43 | `assert_passwords_masked`, `shell_secret_prompt_typing_e2e`, `audit_strings` | inline `login user pass` remains for scripts (seam table in `DESIGN.md`) |
 | Lockout: five misses lock actor and TTY; `Locked` does not check the password | M43 (#62) | `lockout_test_passes` | cool-down is ticks, not wall clock (by design) |
 | Idle logout; last logout or power wipes the volume key | M43 / M44 | `idle_test_passes`, `unlock_test_passes`, `shutdown_test_powers_off` | — |

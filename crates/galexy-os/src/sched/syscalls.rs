@@ -39,6 +39,9 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
         stamp(frame, SyscallResult::err(SysError::Unsupported));
         return Outcome::Resume;
     }
+    // Spectre v1: the compare above is a branch. Mask the number so a
+    // speculated out-of-range value cannot index past the dispatch arms.
+    let sysno = crate::arch::cpu::spectre_mask(sysno, MAX_SYSCALL + 1);
     match sysno {
         n if n == Syscall::Exit as u64 => {
             // Exit code (a0) is informational this early in the OS; the
@@ -263,11 +266,7 @@ fn syscall_write_console(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     // SAFETY: validated above — every byte of [addr, addr+len) lives in
     // present pages holding user data.
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            VirtAddr::new(addr).as_ptr::<u8>(),
-            staged.as_mut_ptr(),
-            len as usize,
-        );
+        crate::arch::user_copy::copy_from_user(addr, staged.as_mut_ptr(), len as usize);
     }
     // Printable ASCII, newline, backspace (0x08), form feed (0x0c),
     // tab (0x09), CR (0x0d), ESC (0x1b, for CSI), and BEL (0x07 → beep).
@@ -308,11 +307,7 @@ fn syscall_write_file_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
     if len > 0 {
         // SAFETY: `user_buffer` accepted every byte of [addr, addr+len).
         unsafe {
-            core::ptr::copy_nonoverlapping(
-                VirtAddr::new(addr).as_ptr::<u8>(),
-                staged.as_mut_ptr(),
-                len as usize,
-            );
+            crate::arch::user_copy::copy_from_user(addr, staged.as_mut_ptr(), len as usize);
         }
     }
     match crate::sched::task_write_ex(cap, &staged[..len as usize]) {
@@ -340,11 +335,7 @@ fn syscall_create(addr: u64, len: u64, flags: u64) -> SyscallResult {
     let mut raw = [0u8; MAX_NAME as usize];
     // SAFETY: `user_buffer` accepted every byte of [addr, addr+len).
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            VirtAddr::new(addr).as_ptr::<u8>(),
-            raw.as_mut_ptr(),
-            len as usize,
-        );
+        crate::arch::user_copy::copy_from_user(addr, raw.as_mut_ptr(), len as usize);
     }
     let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
     if !path_ok(name) {
@@ -369,11 +360,7 @@ fn syscall_remove(addr: u64, len: u64) -> SyscallResult {
     let mut raw = [0u8; MAX_NAME as usize];
     // SAFETY: `user_buffer` accepted every byte of [addr, addr+len).
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            VirtAddr::new(addr).as_ptr::<u8>(),
-            raw.as_mut_ptr(),
-            len as usize,
-        );
+        crate::arch::user_copy::copy_from_user(addr, raw.as_mut_ptr(), len as usize);
     }
     let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
     if !path_ok(name) {
@@ -395,11 +382,7 @@ fn copy_user_path(addr: u64, len: u64) -> Result<[u8; MAX_NAME as usize], SysErr
     let mut raw = [0u8; MAX_NAME as usize];
     // SAFETY: `user_buffer` accepted every byte of [addr, addr+len).
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            VirtAddr::new(addr).as_ptr::<u8>(),
-            raw.as_mut_ptr(),
-            len as usize,
-        );
+        crate::arch::user_copy::copy_from_user(addr, raw.as_mut_ptr(), len as usize);
     }
     Ok(raw)
 }
@@ -451,11 +434,7 @@ fn syscall_stat(path_addr: u64, path_len: u64, buf_addr: u64, buf_len: u64) -> S
         Ok(n) => {
             // SAFETY: `user_buffer` accepted the destination.
             unsafe {
-                core::ptr::copy_nonoverlapping(
-                    staged.as_ptr(),
-                    VirtAddr::new(buf_addr).as_mut_ptr::<u8>(),
-                    n,
-                );
+                crate::arch::user_copy::copy_to_user(staged.as_ptr(), buf_addr, n);
             }
             SyscallResult::ok(n as u64)
         }
@@ -497,16 +476,8 @@ fn syscall_grant(frame: &Context) -> SyscallResult {
     let mut task_raw = [0u8; MAX_NAME as usize];
     // SAFETY: `user_buffer` accepted every byte of both ranges.
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            VirtAddr::new(path_addr).as_ptr::<u8>(),
-            path_raw.as_mut_ptr(),
-            path_len as usize,
-        );
-        core::ptr::copy_nonoverlapping(
-            VirtAddr::new(task_addr).as_ptr::<u8>(),
-            task_raw.as_mut_ptr(),
-            task_len as usize,
-        );
+        crate::arch::user_copy::copy_from_user(path_addr, path_raw.as_mut_ptr(), path_len as usize);
+        crate::arch::user_copy::copy_from_user(task_addr, task_raw.as_mut_ptr(), task_len as usize);
     }
     let path = core::str::from_utf8(&path_raw[..path_len as usize]).unwrap_or("");
     let task = core::str::from_utf8(&task_raw[..task_len as usize]).unwrap_or("");
@@ -546,16 +517,8 @@ fn syscall_revoke(frame: &Context) -> SyscallResult {
     let mut task_raw = [0u8; MAX_NAME as usize];
     // SAFETY: `user_buffer` accepted every byte of both ranges.
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            VirtAddr::new(path_addr).as_ptr::<u8>(),
-            path_raw.as_mut_ptr(),
-            path_len as usize,
-        );
-        core::ptr::copy_nonoverlapping(
-            VirtAddr::new(task_addr).as_ptr::<u8>(),
-            task_raw.as_mut_ptr(),
-            task_len as usize,
-        );
+        crate::arch::user_copy::copy_from_user(path_addr, path_raw.as_mut_ptr(), path_len as usize);
+        crate::arch::user_copy::copy_from_user(task_addr, task_raw.as_mut_ptr(), task_len as usize);
     }
     let path = core::str::from_utf8(&path_raw[..path_len as usize]).unwrap_or("");
     let task = core::str::from_utf8(&task_raw[..task_len as usize]).unwrap_or("");
@@ -601,16 +564,8 @@ fn syscall_share_op(frame: &Context, add: bool) -> SyscallResult {
     let mut user_raw = [0u8; MAX_NAME as usize];
     // SAFETY: `user_buffer` accepted every byte of both ranges.
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            VirtAddr::new(path_addr).as_ptr::<u8>(),
-            path_raw.as_mut_ptr(),
-            path_len as usize,
-        );
-        core::ptr::copy_nonoverlapping(
-            VirtAddr::new(user_addr).as_ptr::<u8>(),
-            user_raw.as_mut_ptr(),
-            user_len as usize,
-        );
+        crate::arch::user_copy::copy_from_user(path_addr, path_raw.as_mut_ptr(), path_len as usize);
+        crate::arch::user_copy::copy_from_user(user_addr, user_raw.as_mut_ptr(), user_len as usize);
     }
     let path = core::str::from_utf8(&path_raw[..path_len as usize]).unwrap_or("");
     let user = core::str::from_utf8(&user_raw[..user_len as usize]).unwrap_or("");
@@ -637,11 +592,7 @@ fn syscall_pipe(addr: u64) -> SyscallResult {
             let bits = [read_cap.bits(), write_cap.bits()];
             // SAFETY: `user_buffer` accepted 16 writable user bytes.
             unsafe {
-                core::ptr::copy_nonoverlapping(
-                    bits.as_ptr() as *const u8,
-                    VirtAddr::new(addr).as_mut_ptr::<u8>(),
-                    16,
-                );
+                crate::arch::user_copy::copy_to_user(bits.as_ptr() as *const u8, addr, 16);
             }
             SyscallResult::ok(0)
         }
@@ -659,11 +610,7 @@ fn syscall_give(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     let mut raw = [0u8; MAX_NAME as usize];
     // SAFETY: `user_buffer` accepted every byte of [addr, addr+len).
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            VirtAddr::new(addr).as_ptr::<u8>(),
-            raw.as_mut_ptr(),
-            len as usize,
-        );
+        crate::arch::user_copy::copy_from_user(addr, raw.as_mut_ptr(), len as usize);
     }
     let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
     if !file_name_ok(name) {
@@ -721,11 +668,7 @@ fn syscall_user(frame: &Context) -> SyscallResult {
                 Ok(n) => {
                     // SAFETY: buffer accepted as writable user memory.
                     unsafe {
-                        core::ptr::copy_nonoverlapping(
-                            staged.as_ptr(),
-                            VirtAddr::new(addr).as_mut_ptr::<u8>(),
-                            n,
-                        );
+                        crate::arch::user_copy::copy_to_user(staged.as_ptr(), addr, n);
                     }
                     SyscallResult::ok(n as u64)
                 }
@@ -841,11 +784,7 @@ fn copy_user_str(addr: u64, len: u64, out: &mut [u8], named: bool) -> Option<usi
     }
     // SAFETY: `user_buffer` accepted every byte.
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            VirtAddr::new(addr).as_ptr::<u8>(),
-            out.as_mut_ptr(),
-            len as usize,
-        );
+        crate::arch::user_copy::copy_from_user(addr, out.as_mut_ptr(), len as usize);
     }
     let bytes = &out[..len as usize];
     if named {
@@ -869,11 +808,7 @@ fn syscall_open(addr: u64, len: u64) -> SyscallResult {
     let mut raw = [0u8; MAX_NAME as usize];
     // SAFETY: `user_buffer` accepted every byte of [addr, addr+len).
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            VirtAddr::new(addr).as_ptr::<u8>(),
-            raw.as_mut_ptr(),
-            len as usize,
-        );
+        crate::arch::user_copy::copy_from_user(addr, raw.as_mut_ptr(), len as usize);
     }
     let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
     if !path_ok(name) {
@@ -911,11 +846,7 @@ fn syscall_read_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
             if n > 0 {
                 // SAFETY: the destination was accepted as present, user, writable.
                 unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        staged.as_ptr(),
-                        VirtAddr::new(addr).as_mut_ptr::<u8>(),
-                        n,
-                    );
+                    crate::arch::user_copy::copy_to_user(staged.as_ptr(), addr, n);
                 }
             }
             IoResult::Done(SyscallResult::ok(n as u64))
@@ -964,11 +895,7 @@ fn copy_inspect(
     if n > 0 {
         // SAFETY: destination accepted as present, user, writable.
         unsafe {
-            core::ptr::copy_nonoverlapping(
-                staged.as_ptr(),
-                VirtAddr::new(addr).as_mut_ptr::<u8>(),
-                n,
-            );
+            crate::arch::user_copy::copy_to_user(staged.as_ptr(), addr, n);
         }
     }
     SyscallResult::ok(n as u64)
@@ -1028,11 +955,7 @@ fn syscall_read_query(cap: Cap, kind: Query, addr: u64, len: u64) -> SyscallResu
     if n > 0 {
         // SAFETY: the destination was accepted as present, user, writable.
         unsafe {
-            core::ptr::copy_nonoverlapping(
-                staged.as_ptr(),
-                VirtAddr::new(addr).as_mut_ptr::<u8>(),
-                n,
-            );
+            crate::arch::user_copy::copy_to_user(staged.as_ptr(), addr, n);
         }
     }
     SyscallResult::ok(n as u64)
@@ -1209,11 +1132,7 @@ fn syscall_read_keyboard_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
     crate::sched::note_tty_input(tty);
     // SAFETY: the destination was accepted as present, user, writable.
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            staged.as_ptr(),
-            VirtAddr::new(addr).as_mut_ptr::<u8>(),
-            filled,
-        );
+        crate::arch::user_copy::copy_to_user(staged.as_ptr(), addr, filled);
     }
     IoResult::Done(SyscallResult::ok(filled as u64))
 }
@@ -1256,21 +1175,13 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
     let mut raw = [0u8; MAX_NAME as usize];
     // SAFETY: `user_buffer` accepted every byte of [addr, addr+len).
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            VirtAddr::new(addr).as_ptr::<u8>(),
-            raw.as_mut_ptr(),
-            len as usize,
-        );
+        crate::arch::user_copy::copy_from_user(addr, raw.as_mut_ptr(), len as usize);
     }
     let mut arg = [0u8; crate::sched::ARG_MAX];
     if arg_len > 0 {
         // SAFETY: `user_buffer` accepted every byte of the argument.
         unsafe {
-            core::ptr::copy_nonoverlapping(
-                VirtAddr::new(frame.r8).as_ptr::<u8>(),
-                arg.as_mut_ptr(),
-                arg_len as usize,
-            );
+            crate::arch::user_copy::copy_from_user(frame.r8, arg.as_mut_ptr(), arg_len as usize);
         }
     }
     let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
@@ -1363,6 +1274,10 @@ fn path_ok(name: &str) -> bool {
 /// active tree. `writable` also requires the leaf to be writable, so `read`
 /// cannot store into the task's code page (that would be a ring-0 fault).
 fn user_buffer(addr: u64, len: u64, writable: bool) -> Result<(), SysError> {
+    // An empty range is a valid buffer. `len - 1` would underflow.
+    if len == 0 {
+        return Ok(());
+    }
     let Some(last_byte) = addr.checked_add(len - 1) else {
         return Err(SysError::BadBuffer);
     };

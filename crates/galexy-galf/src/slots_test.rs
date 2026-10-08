@@ -51,6 +51,7 @@ fn minimal_table() -> Box<Table> {
     admin.name[..ADMIN_NAME.len()].copy_from_slice(ADMIN_NAME.as_bytes());
     admin.name_len = ADMIN_NAME.len() as u8;
     admin.root = 0;
+    admin.kdf_iters = 10_000;
     let root = &mut table.objects[0];
     root.kind = KIND_DIR;
     root.parent = NO_PARENT;
@@ -93,7 +94,7 @@ fn issues(report: &Report) -> Vec<Issue> {
 #[test]
 fn encode_decode_round_trip() {
     let mut rng = Rng(0x5EED_0001);
-    let table = table_at(7);
+    let mut table = table_at(7);
     let mut flat = vec![0u8; SLOT_BYTES];
     assert!(encode_slot(&table, 7, PASS, &VK, &rng.nonces(), &mut flat));
     let mut decoded = Box::new(Table::empty());
@@ -101,6 +102,21 @@ fn encode_decode_round_trip() {
     assert!(decoded.actors[0].name_is(ADMIN_NAME));
     assert_eq!(decoded.objects[0].kind, KIND_DIR);
     assert_eq!(decoded.actors[0].max_bytes, 7);
+    assert_eq!(decoded.actors[0].kdf_iters, 10_000);
+
+    // An older stored cost round-trips; verify stays the caller's job.
+    table.actors[0].kdf_iters = 1_000;
+    let mut flat_old = vec![0u8; SLOT_BYTES];
+    assert!(encode_slot(
+        &table,
+        7,
+        PASS,
+        &VK,
+        &rng.nonces(),
+        &mut flat_old
+    ));
+    assert_eq!(decode_slot(&mut flat_old, PASS, &mut decoded), Some(7));
+    assert_eq!(decoded.actors[0].kdf_iters, 1_000);
 
     // Wrong passphrase: the KEK does not unwrap the volume key.
     let mut flat2 = vec![0u8; SLOT_BYTES];
