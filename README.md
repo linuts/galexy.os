@@ -124,8 +124,32 @@ UEFI cases need `OVMF_FD` if the default firmware path is absent. Disk
 and typing cases want `--test-threads=1`; the suite runs under TCG
 (no KVM yet — Milestone 64) so a full pass takes a while. Test kernels
 live under `crates/galexy-os/src/bin/` (68 today); the runner builds
-one image per binary and checks exit codes + serial. There is no CI
-workflow yet (Milestone 51).
+one image per binary and checks exit codes + serial.
+
+### CI
+
+`.github/workflows/ci.yml` runs on every push to `master` and every
+pull request, on the toolchain pinned in `rust-toolchain.toml`:
+
+| Job | What it proves |
+|---|---|
+| `host` | `cargo fmt --all -- --check`; host suites (abi, core, crypto, galf, fsck, gxc, gxld); `clippy -D warnings` on the host crates (`--all-targets`), the kernel bins (`x86_64-unknown-none`), and the userspace programs |
+| `qemu` | builds every image, `clippy` on the runner and its tests, `audit_strings`, then the full boot suite with `--test-threads=1` under TCG on `ubuntu-latest` (`qemu-system-x86` + `ovmf`, `OVMF_FD=/usr/share/ovmf/OVMF.fd`) |
+
+The boot suite *is* the matrix — each axis is a named test rather than
+a workflow dimension, so a failure points at one boot:
+
+| Axis | Covered by |
+|---|---|
+| Firmware | BIOS for every kernel; UEFI via `uefi_image_boots_and_timer_ticks`, `shell_run_hello_typing_e2e_uefi` |
+| CPUs | `-smp 2 -cpu max` on every boot; `smp_*`, `ipi_*`, `smpuser_*`, `smpstress_*` |
+| galfs disk | off for most kernels; on for `galfs_disk_*`, `share_disk_*`, `assert_galfs_disk_persists`, `crash_injection_*` |
+| Disk transport | virtio-blk (`galfs_disk_persists_virtio_blk`), IDE/ATA (`galfs_disk_persists_across_reboot`, `ata_absent_returns_unsupported`), partition offset |
+| Cache mode | `galfs_disk_persists_writeback_cache`, `galfs_disk_persists_none_cache` |
+| Linker | `rust-lld` image for every kernel; `gxld` image via `gxld_image_*_e2e` |
+
+Serial logs (`/tmp/galexy-serial-*.log`) are uploaded as an artifact
+when the QEMU job fails.
 
 ```sh
 cargo build --release
