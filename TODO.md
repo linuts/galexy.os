@@ -1638,12 +1638,17 @@ Make “green on my machine” into “green in CI and for the reviewer”.
       reviewer section
 - [ ] **One-command review boot**: `cargo run` + disk + `OVMF_FD` notes;
       script `scripts/review-smoke.sh` runs a focused subset
-- [ ] **GitHub Actions workflow** (`.github/workflows/ci.yml`, absent
-      today): host tests (abi / core / crypto / galf / gxc), clippy,
-      fmt check, then the QEMU runner on `ubuntu-latest` with
-      `qemu-system-x86` + `ovmf`; `--test-threads=1` for disk cases
-- [ ] **CI matrix** (doc + workflow): BIOS, UEFI (`OVMF_FD`), `-smp 2`,
-      disk on/off, `cache=` modes
+- [x] **GitHub Actions workflow** (`.github/workflows/ci.yml`): `host`
+      job — fmt check, host tests (abi / core / crypto / galf / fsck /
+      gxc / gxld), clippy on host crates, kernel bins, and userspace;
+      `qemu` job — image build, runner clippy, `audit_strings`, full
+      boot suite on `ubuntu-latest` with `qemu-system-x86` + `ovmf`,
+      `OVMF_FD=/usr/share/ovmf/OVMF.fd`, `--test-threads=1`; serial
+      logs uploaded on failure
+- [x] **CI matrix** (doc + workflow): README "CI" section maps each axis
+      (BIOS/UEFI, `-smp 2`, disk on/off, virtio vs IDE vs partition
+      offset, `cache=` modes, rust-lld vs gxld image) to the named boot
+      tests that cover it
 - [x] **Clippy green**: `cargo clippy -p galexy-os --target
       x86_64-unknown-none --no-deps --bins`, the host crates with
       `--all-targets`, the userspace programs, and the runner tests all
@@ -1657,7 +1662,7 @@ Make “green on my machine” into “green in CI and for the reviewer”.
       toolchain; `cargo fmt --all -- --check` is clean. Nightly date
       pinned in `rust-toolchain.toml` (`nightly-2026-10-08`, rustc
       1.101.0-nightly 1d81eb4ad) so the baseline holds
-- [ ] **Host tests** for abi/core on every PR
+- [x] **Host tests** for abi/core (and crypto/galf/fsck/gxc/gxld) on every PR
 - [ ] **Repro notes**: ramdisk tar hash printed at build; image names
       stable
 - [ ] **PR template**: test plan + STYLE secrets/GALF checklist
@@ -2400,9 +2405,8 @@ items stay here with rationale.
       pipeline shape, no background jobs — **Milestone 66**
 - [ ] Shutdown bypasses init; no service table or `svc`; session id is
       not bound to the seat Cap — **Milestone 67**
-- [ ] No CI workflow, clippy red on the pinned nightly (10 kernel + 5
-      host lints), rustfmt drift in 88 files, no `LICENSE` /
-      `SECURITY.md` / `CHANGELOG.md` — **Milestone 51**
+- [ ] No `LICENSE` / `SECURITY.md` / `CHANGELOG.md` yet (CI workflow,
+      clippy, and rustfmt baseline landed) — **Milestone 51**
 - [ ] No network stack, no USB — **Phase 10** (after `v1.0`)
 - [x] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
