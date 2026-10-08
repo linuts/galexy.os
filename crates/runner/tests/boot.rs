@@ -487,6 +487,31 @@ fn badelf_test_passes() {
     );
 }
 
+/// Negative suite: a logged-out seat cannot spawn or create (kernel rule,
+/// not shell UX); a bare program without inherited cards reads the ramdisk
+/// but cannot create, open, or remove anything in galfs.
+#[test]
+fn negative_test_passes() {
+    let (code, serial) = boot(&image("test-negative"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-negative should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-negative] pre-login spawn denied"),
+        "pre-login marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-negative] bare spawn cannot touch galfs"),
+        "bare-spawn marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-negative] passed"),
+        "test-negative success marker missing; serial:\n{serial}"
+    );
+}
+
 #[test]
 fn rm_test_passes() {
     let (code, serial) = boot(&image("test-rm"));

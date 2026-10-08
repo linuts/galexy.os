@@ -1823,7 +1823,6 @@ fn start_root(table: &Table, cred: &FsCred, parsed: &ParsedPath<'_>) -> Result<u
     }
 }
 
-/// True when `ancestor` is `object` or a parent of it.
 /// Parent lookup for the card algebra: `None` past the table or at a root.
 fn parent_link(table: &Table) -> impl Fn(u16) -> Option<u16> + '_ {
     move |cur| {
