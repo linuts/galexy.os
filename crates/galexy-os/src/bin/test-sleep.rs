@@ -7,9 +7,7 @@
 
 use bootloader_api::{entry_point, BootInfo};
 use galexy_core::TarCursor;
-use galexy_os::{
-    arch, drivers::screen, exit_qemu, println, sched, serial_println, QemuExitCode,
-};
+use galexy_os::{arch, drivers::screen, exit_qemu, println, sched, serial_println, QemuExitCode};
 use x86_64::VirtAddr;
 
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);

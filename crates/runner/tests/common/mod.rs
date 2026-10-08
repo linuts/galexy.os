@@ -174,9 +174,7 @@ fn qemu_command_with_galfs(
 ///
 /// Uses [`GalfsDiskCache::Writethrough`] (see [`boot_with_galfs_cache`] for
 /// the flush matrix).
-pub fn boot_with_galfs(
-    image: &Image,
-) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
+pub fn boot_with_galfs(image: &Image) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
     boot_with_galfs_cache(image, GalfsDiskCache::Writethrough)
 }
 
@@ -211,9 +209,7 @@ pub fn boot_with_galfs_virtio(
 
 /// Like [`boot_with_galfs`], but the guest places GALF at LBA 2048
 /// (`DISK_PART_LBA`). Image is 2 MiB so base + dual slots fit.
-pub fn boot_with_galfs_part(
-    image: &Image,
-) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
+pub fn boot_with_galfs_part(image: &Image) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
     boot_with_galfs_inner(
         image,
         CorruptMode::None,
@@ -243,9 +239,7 @@ pub fn boot_with_galfs_recover(
 
 /// Like [`boot_with_galfs_recover`], but simulates a torn write: the newest
 /// slot keeps `GALF` magic while its payload is zeroed from mid-sector.
-pub fn boot_with_galfs_torn(
-    image: &Image,
-) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
+pub fn boot_with_galfs_torn(image: &Image) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
     boot_with_galfs_inner(
         image,
         CorruptMode::TornNewest,
@@ -407,10 +401,9 @@ fn boot_once_with_galfs(
     backend: GalfsBackend,
 ) -> (Option<i32>, String) {
     let serial_path = serial_log_path(name);
-    let mut child =
-        qemu_command_with_galfs(img_path, galfs_path, &serial_path, cache, backend)
-            .spawn()
-            .expect("failed to launch qemu-system-x86_64 (galfs disk)");
+    let mut child = qemu_command_with_galfs(img_path, galfs_path, &serial_path, cache, backend)
+        .spawn()
+        .expect("failed to launch qemu-system-x86_64 (galfs disk)");
 
     let deadline = Instant::now() + TEST_TIMEOUT;
     let code = loop {

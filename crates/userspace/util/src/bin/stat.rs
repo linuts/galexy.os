@@ -3,7 +3,9 @@
 #![no_std]
 #![no_main]
 
-use galexy_abi::{STAT_DIR, STAT_FILE, STAT_LEN, TOKEN_CREATE, TOKEN_LIST, TOKEN_READ, TOKEN_REMOVE, TOKEN_WRITE};
+use galexy_abi::{
+    STAT_DIR, STAT_FILE, STAT_LEN, TOKEN_CREATE, TOKEN_LIST, TOKEN_READ, TOKEN_REMOVE, TOKEN_WRITE,
+};
 use galexy_rt::{arg, entry, stat, write_console};
 
 entry!(main);

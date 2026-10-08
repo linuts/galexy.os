@@ -52,8 +52,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         galfs::disk_backed(),
         "block device must back galfs for this test"
     );
-    let need = u64::from(galfs::DISK_PART_LBA)
-        + (galfs::DISK_SECTORS * galfs::DISK_SLOT_COUNT) as u64;
+    let need =
+        u64::from(galfs::DISK_PART_LBA) + (galfs::DISK_SECTORS * galfs::DISK_SLOT_COUNT) as u64;
     assert!(
         galfs::disk_capacity_sectors() >= need,
         "capacity must cover partition offset + dual slots"

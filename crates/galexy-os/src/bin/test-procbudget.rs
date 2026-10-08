@@ -148,7 +148,7 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     code.extend_from_slice(&rel_yb.to_le_bytes());
 
     let after_jmp_fill = code.len();
-    // patch jmp_fill → fill_loop (we're at after_jmp_fill which is yield_busy end... 
+    // patch jmp_fill → fill_loop (we're at after_jmp_fill which is yield_busy end...
     // Actually jmp_fill should go to fill_loop. Patch now with current len wrong.
     // Re-patch after we know fill_loop target: already have fill_loop.
     let rel_fill = fill_loop as i32 - (jmp_fill as i32 + 5);

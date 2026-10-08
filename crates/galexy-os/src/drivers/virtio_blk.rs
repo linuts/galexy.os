@@ -357,11 +357,7 @@ fn probe() -> bool {
         last_used: 0,
     });
     CAPACITY.store(capacity, Ordering::Release);
-    crate::serial_println!(
-        "[virtio-blk] ready ({} sectors, io=0x{:x})",
-        capacity,
-        io
-    );
+    crate::serial_println!("[virtio-blk] ready ({} sectors, io=0x{:x})", capacity, io);
     true
 }
 

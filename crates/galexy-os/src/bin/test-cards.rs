@@ -102,14 +102,8 @@ fn share_slot_exhaustion() {
         path[..8].copy_from_slice(b"Desktop/");
         path[8..11].copy_from_slice(name);
         let p = core::str::from_utf8(&path[..11]).unwrap();
-        galfs::add_share(
-            admin,
-            &admin_cred.tokens,
-            p,
-            galfs::RIGHT_READ,
-            "eve",
-        )
-        .expect("fill share");
+        galfs::add_share(admin, &admin_cred.tokens, p, galfs::RIGHT_READ, "eve")
+            .expect("fill share");
     }
 
     let overflow = galfs::create_file_under(desktop, "sxx").expect("overflow file");
@@ -181,13 +175,7 @@ fn confused_deputy_share() {
     // Cannot mint a share on a tree the caller cannot cover.
     assert!(
         matches!(
-            galfs::add_share(
-                dan,
-                &toks,
-                "admin@Desktop",
-                galfs::RIGHT_LIST,
-                "eve",
-            ),
+            galfs::add_share(dan, &toks, "admin@Desktop", galfs::RIGHT_LIST, "eve",),
             Err(SysError::AccessDenied)
         ),
         "must not share a path without a covering card"

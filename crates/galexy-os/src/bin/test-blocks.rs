@@ -97,11 +97,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     // Remove the multi-block file and reuse its blocks.
     let before = galfs::blocks_used();
     galfs::remove_as_admin("Desktop/big").expect("remove big");
-    assert_eq!(
-        galfs::blocks_used(),
-        before - 4,
-        "remove frees four blocks"
-    );
+    assert_eq!(galfs::blocks_used(), before - 4, "remove frees four blocks");
 
     let reuse = galfs::create_file_under(desktop, "reuse").expect("reuse");
     let again = [0x5Au8; galfs::BLOCK_SIZE + 16];

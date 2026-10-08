@@ -90,7 +90,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     assert_eq!(report.create_err, SysError::AccessDenied as u64);
     assert_eq!(report.pass_ok, 1, "passwd");
-    assert_eq!(report.create_ok, 1, "create after passwd clears must-change");
+    assert_eq!(
+        report.create_ok, 1,
+        "create after passwd clears must-change"
+    );
 
     loop {
         x86_64::instructions::hlt();

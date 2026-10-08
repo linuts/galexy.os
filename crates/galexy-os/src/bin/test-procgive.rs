@@ -10,9 +10,7 @@
 extern crate alloc;
 
 use bootloader_api::{entry_point, BootInfo};
-use galexy_abi::{
-    reserved, Cap, CapRights, SysError, Syscall, PROC_CAP_BASE,
-};
+use galexy_abi::{reserved, Cap, CapRights, SysError, Syscall, PROC_CAP_BASE};
 use galexy_os::{
     arch::mm, drivers::screen, exit_qemu, println, sched, serial_println, QemuExitCode,
 };
@@ -223,7 +221,7 @@ fn build_peer(scratch: u64) -> alloc::vec::Vec<u8> {
     code.extend_from_slice(&[0x48, 0x85, 0xD2]); // test rdx, rdx
     let jnz = code.len();
     code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]); // jnz got
-    // yield and retry
+                                                       // yield and retry
     mov_eax(&mut code, Syscall::Yield as u32);
     code.extend_from_slice(&[0x0F, 0x05]);
     let after = code.len() + 5;

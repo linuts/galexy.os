@@ -128,7 +128,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     );
 
     // Boot admin+Desktop+note leave 125 free of 128 (GALF v7).
-    assert_eq!(report.fill_ok, 125, "one hundred twenty-five more galfs files must fit");
+    assert_eq!(
+        report.fill_ok, 125,
+        "one hundred twenty-five more galfs files must fit"
+    );
     assert_eq!(report.extra_ok, 0, "a full galfs table must fail");
     assert_eq!(
         report.extra_err,
@@ -287,7 +290,10 @@ fn emit_fill_loop(code: &mut alloc::vec::Vec<u8>, count: u64, fill_ok_off: i32, 
     code.extend_from_slice(&[0x49, 0x39, 0xC5]); // cmp r13, rax
     let after_jb = code.len() + 2;
     let rel = loop_at as i32 - after_jb as i32;
-    debug_assert!((-128..128).contains(&rel), "fill loop too large for short jb");
+    debug_assert!(
+        (-128..128).contains(&rel),
+        "fill loop too large for short jb"
+    );
     code.push(0x72); // jb
     code.push(rel as u8);
 }

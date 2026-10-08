@@ -955,7 +955,13 @@ pub fn spawn_user_launcher(
     name: &str,
     build: impl FnOnce(UserRegion) -> Vec<u8>,
 ) -> (UserRegion, u8) {
-    spawn_user_with_grants(name, galfs::admin_cred(), Grants::launcher(), build, Some(0))
+    spawn_user_with_grants(
+        name,
+        galfs::admin_cred(),
+        Grants::launcher(),
+        build,
+        Some(0),
+    )
 }
 
 /// Like [`spawn_user_task`], with explicit galfs credentials (token tests).
@@ -1312,11 +1318,8 @@ pub(crate) fn task_proc_inspect(cap: Cap, dst: &mut [u8]) -> Result<usize, SysEr
     }
     interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        let handle = threads
-            .get(slot - 1)
-            .ok_or(SysError::BadCap)?
-            .procs[pi]
-            .ok_or(SysError::BadCap)?;
+        let handle =
+            threads.get(slot - 1).ok_or(SysError::BadCap)?.procs[pi].ok_or(SysError::BadCap)?;
         if !handle.rights.contains(CapRights::PROC_INSPECT) {
             return Err(SysError::AccessDenied);
         }
@@ -1666,25 +1669,9 @@ pub fn drain_spawn() {
     let elf_name = if seat { "shell" } else { name };
     let child_slot = if let Some(bytes) = ramdisk::find(elf_name) {
         Some(if seat {
-            loader::spawn_launched_seat(
-                name,
-                bytes,
-                grants,
-                &arg[..arg_len],
-                tty,
-                fs,
-                waiter_slot,
-            )
+            loader::spawn_launched_seat(name, bytes, grants, &arg[..arg_len], tty, fs, waiter_slot)
         } else {
-            loader::spawn_launched(
-                name,
-                bytes,
-                grants,
-                &arg[..arg_len],
-                tty,
-                fs,
-                waiter_slot,
-            )
+            loader::spawn_launched(name, bytes, grants, &arg[..arg_len], tty, fs, waiter_slot)
         })
     } else {
         serial_println!(
@@ -1698,7 +1685,11 @@ pub fn drain_spawn() {
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let Some(child_slot) = child_slot else {
-            wake_spawn_waiter(&mut threads, waiter_slot, SyscallResult::err(SysError::NotFound));
+            wake_spawn_waiter(
+                &mut threads,
+                waiter_slot,
+                SyscallResult::err(SysError::NotFound),
+            );
             return;
         };
         if must_change {
@@ -1824,9 +1815,7 @@ pub fn interrupt_foreground(tty: u8) -> bool {
         if state == STATE_WAITING {
             interrupt_io_waiter(&mut threads, i);
         }
-        threads[i]
-            .exit_code
-            .store(EXIT_KILLED, Ordering::Release);
+        threads[i].exit_code.store(EXIT_KILLED, Ordering::Release);
         threads[i].state.store(STATE_EXITED, Ordering::Release);
         let mut raw = [0u8; NAME_CAP];
         let n = threads[i].name_len as usize;
@@ -1971,11 +1960,7 @@ fn transfer_orphans_to_init(threads: &mut [Thread], dead_slot: u8, dead_index: u
 
 /// Installs a [`PROC_PARENT`] Cap on `waiter_slot` for `child_slot`.
 /// Returns Cap bits, or `None` if the parent's process-Cap table is full.
-fn install_proc_cap(
-    threads: &mut [Thread],
-    waiter_slot: u8,
-    child_slot: u8,
-) -> Option<u64> {
+fn install_proc_cap(threads: &mut [Thread], waiter_slot: u8, child_slot: u8) -> Option<u64> {
     if waiter_slot == 0 || child_slot == 0 {
         return None;
     }
@@ -2536,9 +2521,7 @@ pub(crate) fn task_wait(cap: Cap) -> Result<Option<u64>, SysError> {
         let state = threads[ci - 1].state.load(Ordering::Acquire);
         if state == STATE_EXITED || state == STATE_FREED {
             let code = threads[ci - 1].exit_code.load(Ordering::Acquire);
-            threads[ci - 1]
-                .exit_waited
-                .store(true, Ordering::Release);
+            threads[ci - 1].exit_waited.store(true, Ordering::Release);
             threads[slot - 1].procs[pi] = None;
             return Ok(Some(code));
         }
@@ -2609,9 +2592,7 @@ pub(crate) fn task_kill(cap: Cap) -> Result<(), SysError> {
         threads[ci - 1]
             .exit_code
             .store(EXIT_KILLED, Ordering::Release);
-        threads[ci - 1]
-            .state
-            .store(STATE_EXITED, Ordering::Release);
+        threads[ci - 1].state.store(STATE_EXITED, Ordering::Release);
         let mut raw = [0u8; NAME_CAP];
         let n = threads[ci - 1].name_len as usize;
         raw[..n].copy_from_slice(&threads[ci - 1].name_bytes[..n]);
@@ -2689,7 +2670,9 @@ pub(crate) fn task_grant(path: &str, rights: u8, target: &str) -> Result<(), Sys
         };
         galfs::push_token(&mut threads[ti].fs_tokens, object, rights)
     });
-    log_token("grant", &actor_buf, actor_len, path, rights, target, &result);
+    log_token(
+        "grant", &actor_buf, actor_len, path, rights, target, &result,
+    );
     result
 }
 
@@ -2724,7 +2707,9 @@ pub(crate) fn task_revoke(path: &str, rights: u8, target: &str) -> Result<(), Sy
         };
         galfs::revoke_token(&mut threads[ti].fs_tokens, object, rights)
     });
-    log_token("revoke", &actor_buf, actor_len, path, rights, target, &result);
+    log_token(
+        "revoke", &actor_buf, actor_len, path, rights, target, &result,
+    );
     result
 }
 
@@ -3029,11 +3014,7 @@ pub(crate) fn task_tokens(out: &mut [u8]) -> Result<usize, SysError> {
         if thread.fs_root == galfs::NO_OBJECT {
             return Err(SysError::AccessDenied);
         }
-        Ok(galfs::format_tokens(
-            thread.fs_root,
-            &thread.fs_tokens,
-            out,
-        ))
+        Ok(galfs::format_tokens(thread.fs_root, &thread.fs_tokens, out))
     })
 }
 
@@ -3066,11 +3047,7 @@ pub(crate) fn task_quota(out: &mut [u8], name: Option<&str>) -> Result<usize, Sy
 }
 
 /// Sets durable quotas for `name`. Caller must be admin.
-pub(crate) fn task_setquota(
-    name: &str,
-    max_objects: u16,
-    max_bytes: u32,
-) -> Result<(), SysError> {
+pub(crate) fn task_setquota(name: &str, max_objects: u16, max_bytes: u32) -> Result<(), SysError> {
     let slot = current_slot();
     if slot == 0 {
         return Err(SysError::BadCap);
@@ -3501,9 +3478,7 @@ fn idle_scan(all_tasks: bool) {
             if state == STATE_WAITING {
                 interrupt_io_waiter(&mut threads, i);
             }
-            threads[i]
-                .exit_code
-                .store(EXIT_KILLED, Ordering::Release);
+            threads[i].exit_code.store(EXIT_KILLED, Ordering::Release);
             threads[i].state.store(STATE_EXITED, Ordering::Release);
         }
         cleared && !sessions_open(&threads)
@@ -3540,10 +3515,7 @@ pub fn test_auth_flags(name: &str) -> Option<(u64, bool)> {
         let threads = THREADS.lock();
         threads.iter().find_map(|t| {
             let state = t.state.load(Ordering::Acquire);
-            if t.is_user
-                && t.name() == name
-                && (state == STATE_RUNNING || state == STATE_WAITING)
-            {
+            if t.is_user && t.name() == name && (state == STATE_RUNNING || state == STATE_WAITING) {
                 Some((t.session_gen, t.must_change))
             } else {
                 None
@@ -3752,9 +3724,7 @@ pub unsafe fn syscall_handoff(
             } else {
                 0
             };
-            threads[slot - 1]
-                .exit_code
-                .store(code, Ordering::Release);
+            threads[slot - 1].exit_code.store(code, Ordering::Release);
             threads[slot - 1]
                 .state
                 .store(STATE_EXITED, Ordering::Release);
@@ -4033,9 +4003,10 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
 fn cpu_has_runnable() -> bool {
     let my_cpu = crate::arch::cpu::current_index() as u8;
     interrupts::without_interrupts(|| {
-        THREADS.lock().iter().any(|t| {
-            t.owner == my_cpu && t.state.load(Ordering::Acquire) == STATE_RUNNING
-        })
+        THREADS
+            .lock()
+            .iter()
+            .any(|t| t.owner == my_cpu && t.state.load(Ordering::Acquire) == STATE_RUNNING)
     })
 }
 
@@ -4319,7 +4290,9 @@ fn complete_pipe_write(threads: &mut [Thread], index: usize) {
     // Copy FROM user into staging.
     let root = PhysFrame::from_start_address(PhysAddr::new(cr3)).expect("cr3");
     let ok = unsafe {
-        crate::arch::mm::with_table(root, |mapper| copy_from_user_via(mapper, addr, &mut staged[..max]))
+        crate::arch::mm::with_table(root, |mapper| {
+            copy_from_user_via(mapper, addr, &mut staged[..max])
+        })
     };
     if !ok {
         clear_wait_fields(&threads[index]);
@@ -4414,10 +4387,7 @@ fn interrupt_io_waiter(threads: &mut [Thread], index: usize) {
         return; // Cap-wait / spawn — leave for exit wake
     }
     clear_wait_fields(&threads[index]);
-    stamp_waiter_frame(
-        &threads[index],
-        SyscallResult::err(SysError::Interrupted),
-    );
+    stamp_waiter_frame(&threads[index], SyscallResult::err(SysError::Interrupted));
     threads[index].state.store(STATE_RUNNING, Ordering::Release);
 }
 
@@ -4435,11 +4405,7 @@ fn ms_until_next_sleep() -> Option<u32> {
             if deadline == 0 {
                 continue;
             }
-            let remain = if deadline <= now {
-                1
-            } else {
-                deadline - now
-            };
+            let remain = if deadline <= now { 1 } else { deadline - now };
             best = Some(match best {
                 Some(b) => b.min(remain),
                 None => remain,

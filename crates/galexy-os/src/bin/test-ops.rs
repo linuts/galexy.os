@@ -59,10 +59,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galfs::rename_as_admin("Desktop/moved", "box/inside").expect("cross rename");
     let box_dir = galfs::find_under(admin, "box").expect("box dir");
     assert!(galfs::find_under(desktop, "moved").is_none());
-    assert_eq!(
-        galfs::find_under(box_dir, "inside").expect("inside"),
-        file
-    );
+    assert_eq!(galfs::find_under(box_dir, "inside").expect("inside"), file);
 
     let mut st = [0u8; STAT_LEN];
     let sn = galfs::stat_as_admin("box/inside", &mut st).expect("stat file");
