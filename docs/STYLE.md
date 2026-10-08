@@ -106,12 +106,37 @@ Host `rustc` remains how real programs (`shell`, utils) are built.
   second userspace contract.
 - **Hello is the gate.** New language features need a milestone checkbox;
   do not grow the subset to compile `shell` in the same breath as hello.
-- **Host first.** `gxc` lands as a Linux host tool; on-OS compile is
-  Milestone 62 only after 59–61 are boring.
+- **Frozen.** `gxc` is a Linux host tool at gxr v0, bug fixes only; it
+  never grows toward Rust. On-OS compile is upstream `rustc` (Phase 11,
+  `docs/RUSTC.md`); Milestone 62 is superseded.
 - **License-aware reuse.** Prefer MIT/Apache (Cranelift, rustc-lite
   ideas, `object` / `iced-x86`). Vendored slices get attribution;
   evaluate before copying large trees.
 - **Keep rustc `hello` green.** gxc demos use a distinct ramdisk name.
+
+## Linker
+
+Rules for `gxld` (Milestone 69; plan: `docs/LINKER.md`).
+
+- **Static only.** `ET_EXEC` at `galexy_abi::USER_IMAGE_BASE`, no
+  `PT_INTERP`, no `PT_DYNAMIC`, no PLT. Dynamic linking is a non-goal
+  of the OS, not a missing feature of the linker.
+- **One source for the loader contract.** Image base, page size and the
+  W^X rule are read from `galexy-abi` and checked with the same
+  `elf_bytes_wx_ok` the loader uses. Never retype a constant.
+- **Differential or it did not happen.** A change to layout or
+  relocation handling is accepted only with the `rust-lld` differential
+  test green: the same objects linked both ways boot and pass the same
+  runner cases.
+- **Hostile input returns `Err`.** Truncated headers, overlapping
+  sections, out-of-range relocations and unknown relocation kinds are
+  errors with the object and section named; no panic, no `unwrap` on
+  input-derived values.
+- **`no_std + alloc`.** The crate is a library first; the host CLI and
+  the later ring-3 program are thin `main`s. Nothing in it may depend on
+  `std::fs` or paths — inputs are byte slices, the output is a `Vec`.
+- **Caps, not paths, on-OS.** The ring-3 `gxld` receives input and
+  output Caps at spawn and opens nothing itself.
 
 
 ## Process model and init

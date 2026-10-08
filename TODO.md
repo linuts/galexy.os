@@ -1962,15 +1962,20 @@ End-to-end proof without regressing rustc-built programs.
 - [x] README one-liner for `gxc build` / COMPILER.md
 - [x] No vendored cranelift/rustc-lite (hand-x64) — nothing to attribute
 
-## Milestone 62 — On-OS compile (follow-on)
+## Milestone 62 — On-OS compile — SUPERSEDED by Phase 11
 
-Only after 59–61 are boring.
+`gxc` is **frozen** at gxr v0 (`docs/COMPILER.md` → Status). On-OS
+compilation is upstream `rustc` on Galexy (Milestones 68–73,
+`docs/RUSTC.md`), not a ring-3 `gxc`. The crate stays as a fixture:
+bug fixes only, `test-hellogxc` stays green, and its ELF emitter moves
+into the linker (Milestone 69).
 
-- [ ] **no_std `gxc` core** (or ring-3 host with `alloc`) builds on Galexy
-- [ ] Read `.gxr` from galfs / scratch; write ELF; `spawn` it
-- [ ] Cranelift `no_std` path evaluated (upstream or rustc-lite forks) —
-      waive to hand x64 if weight is wrong
-- [ ] Explicit non-goal until then: compiling `shell` on-OS
+- [x] ~~no_std `gxc` core on Galexy~~ — dropped; `rustc` is the self-host path
+- [x] ~~Read `.gxr` from galfs; write ELF; `spawn` it~~ — dropped
+- [x] ~~Cranelift `no_std` path for `gxc`~~ — dropped; Cranelift arrives
+      as `rustc`'s backend (Milestone 72)
+- [ ] `gxc` emits a relocatable object and links through `gxld`
+      (Milestone 69) — the only change `gxc` receives again
 
 ---
 
@@ -2177,8 +2182,9 @@ and links `hello.rs` in ring 3. Plan, gap analysis, rejected paths and
 risks: `docs/RUSTC.md`. The toolchain side is reused from upstream
 (custom target spec, `std` PAL, Cranelift backend, `object` /
 `ar_archive_writer`, `wild`, `unwinding`); the work is kernel runtime
-surface. Milestone 68 needs no kernel change; 69 follows Milestone 66;
-70–72 follow `v1.0` and run under KVM (Milestone 64).
+surface. Milestones 68 and 69 need no kernel change (host-only, can
+run beside Phase 9); 70 follows Milestone 66; 71–73 follow `v1.0` and
+run under KVM (Milestone 64).
 
 ## Milestone 68 — `x86_64-unknown-galexy` target (no fork)
 
@@ -2196,7 +2202,42 @@ surface. Milestone 68 needs no kernel change; 69 follows Milestone 66;
       the console Cap; typed E2E
 - [ ] Docs: `RUSTC.md` Stage 1 ✅; README build line for the target
 
-## Milestone 69 — `std` PAL in a `galexy-rust` fork
+## Milestone 69 — `gxld`, a static linker (host library first)
+
+Plan: `docs/LINKER.md`. Static ELF64 linker for the loader's contract,
+`no_std + alloc`, host-tested against `rust-lld`. Only Phase 11 item
+with zero kernel dependencies; de-risks Milestone 73.
+
+- [ ] `crates/gxld` library: ELF64 relocatable input via `object`
+      (`read_core`, no `std`); `ar` archives with on-demand member pull
+- [ ] Symbol resolution: global / weak / local / COMMON, undefined
+      symbol error names the referencing object and section
+- [ ] Layout: `.text*` → RX, `.rodata*` → R, `.data*` + `.bss*` → RW,
+      page-aligned `PT_LOAD`s at `galexy_abi::USER_IMAGE_BASE`;
+      `.eh_frame`, `.debug_*`, `.comment`, `.note*` discarded in v0
+- [ ] Relocations: `R_X86_64_64`, `32`, `32S`, `PC32`, `PLT32` (as
+      `PC32`, no PLT), `GOTPCREL` / `GOTPCRELX` / `REX_GOTPCRELX` with a
+      synthesized GOT in the R segment; `TPOFF32` deferred to Milestone
+      70 (threads / TLS)
+- [ ] Output: `ET_EXEC`, entry `_start`, passes `gxc::validate_elf` and
+      the loader's `elf_bytes_wx_ok`; layout constants come from
+      `galexy-abi`, never retyped
+- [ ] `gxc` emits a relocatable object; `gxc::elf` deleted; `gxc build`
+      links through `gxld`; `test-hellogxc` unchanged
+- [ ] **Differential test (hard requirement)**: host `rustc --emit=obj`
+      of `hello`, `util`, and `shell` linked by `gxld` and by
+      `rust-lld`; both images boot and pass the same runner cases
+      (`test-realprogram`, `shell_*_e2e`); symbol addresses may differ,
+      behavior may not
+- [ ] Hostile input: fuzz-style host tests (truncated headers, overlapping
+      sections, out-of-range relocations) return `Err`, never panic
+- [ ] Non-goals written in `LINKER.md`: dynamic linking, `PT_INTERP`,
+      linker scripts, LTO, `--gc-sections`, non-x86_64
+- [ ] Ring-3 `gxld` program is **not** this milestone (needs user heap +
+      large files → Milestone 71); the crate must compile for the
+      Galexy target so it is a thin `main` later
+
+## Milestone 70 — `std` PAL in a `galexy-rust` fork
 
 - [ ] Fork `rust-lang/rust` as `galexy-rust`, pinned to one nightly;
       `library/std/build.rs` lists `galexy`; `sys/pal/mod.rs` selects
@@ -2226,8 +2267,9 @@ surface. Milestone 68 needs no kernel change; 69 follows Milestone 66;
 - [ ] Milestone 67 ABI freeze extended to `ThreadSpawn` / `Futex`
 - [ ] Every `galexy-rt` / PAL syscall stub is `#[inline(never)]
       extern "C"` (cg_clif on-OS must never meet `asm!`)
+- [ ] `gxld` grows `TPOFF32` (TLS) the same milestone threads arrive
 
-## Milestone 70 — Capacity for a compiler process
+## Milestone 71 — Capacity for a compiler process
 
 - [ ] `-m 2G` in the runner and `cargo run`; frame bitmap past 512 MiB
       (the Milestone 6 open box); `Map` budget per task up to 1 GiB
@@ -2242,9 +2284,13 @@ surface. Milestone 68 needs no kernel change; 69 follows Milestone 66;
 - [ ] Sysroot `.rlib`s packed into the ramdisk tar under `rust/`
 - [ ] `bin/test-big`: allocate 300 MiB, write and re-read a 20 MiB
       file, hash check; `test-fsck` green on both formats
+- [ ] Ring-3 `gxld` program: thin `main` over the Milestone 69 crate;
+      input Caps and the output Cap arrive via `give` at spawn, no path
+      opens; `bin/test-gxld` links two ramdisk objects into a running
+      program
 - [ ] KVM-only marker for Phase 11 tests in the runner
 
-## Milestone 71 — `rustc` cross-built for Galexy (Cranelift only)
+## Milestone 72 — `rustc` cross-built for Galexy (Cranelift only)
 
 - [ ] `bootstrap.toml` from cg_clif's `setup_rust_fork.sh`:
       `codegen-backends = ["cranelift"]`, `llvm-tools = false`,
@@ -2265,17 +2311,15 @@ surface. Milestone 68 needs no kernel change; 69 follows Milestone 66;
       symbol table and section sizes match the host cg_clif build;
       `--print cfg`; one asserted type-error diagnostic
 
-## Milestone 72 — Link on Galexy, run the result (Phase 11 gate)
+## Milestone 73 — Link on Galexy, run the result (Phase 11 gate)
 
-- [ ] Try `wild` first: `fork` and `mimalloc` features off, `--threads=1`,
-      `memmap2` replaced by read-into-memory; static non-relocatable
-      output
-- [ ] Fallback `gxld`: static linker over the `object` crate — cg_clif
-      objects + rlib archives, seven relocation kinds (`64`, `32`,
-      `32S`, `PC32`, `PLT32`, `GOTPCREL(X)`, `TPOFF32`), on-demand
-      archive members, `R | RX | RW` `PT_LOAD`s at `USER_IMAGE_BASE`;
-      host unit tests diff against `wild` on the same inputs
-- [ ] `rustc_session`: galexy default `-Clinker=wild` (or `gxld`),
+- [ ] `gxld` (Milestone 69 / 71) links cg_clif output: rlib archives
+      with the `lib.rmeta` member skipped, `TPOFF32` for TLS, `.eh_frame`
+      kept once `unwinding` lands; host differential test against
+      `rust-lld` on the galexy-target sysroot + `hello.rs`
+- [ ] Fallback only if `gxld` cannot cope: port `wild` (`fork` and
+      `mimalloc` off, `--threads=1`, `memmap2` → read-into-memory)
+- [ ] `rustc_session`: galexy default `-Clinker=gxld`,
       `linker-flavor = gnu`; spawned over `spawn_with` with stdio pipes
 - [ ] `test-rustc-hello`: in ring 3, `rustc hello.rs -o hello` on galfs,
       `./hello` prints `hello from rustc on galexy`; a second on-OS
@@ -2382,7 +2426,10 @@ items stay here with rationale.
 - [x] Mini Rust compiler frontend (gxr) — **Milestone 59** (Phase 8)
 - [x] gxc codegen + ELF emit — **Milestone 60**
 - [x] Hello via gxc in QEMU — **Milestone 61**
-- [ ] On-OS gxc (follow-on) — **Milestone 62**
+- [x] ~~On-OS gxc~~ — **Milestone 62** superseded by Phase 11; `gxc`
+      frozen at gxr v0
+- [ ] No linker on Galexy; `gxc` emits a finished ELF, host `rust-lld`
+      links everything else — **Milestone 69** (`gxld`)
 - [ ] Kernel hardening (SMEP/SMAP/UMIP/KASLR, hostile ELF, KDF cost) —
       **Milestone 63** (Phase 9)
 - [ ] Fast path (bench, KVM, release profile, IRQ completion) —

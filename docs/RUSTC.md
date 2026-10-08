@@ -4,8 +4,9 @@ Plan for getting the real Rust toolchain onto Galexy.OS by the lowest
 path of resistance: reuse what upstream already built for new operating
 systems, and grow the kernel only where a compiler actually hits a wall.
 This is the Phase 11 plan; checkboxes live in `TODO.md` Milestones
-**68–72**. `gxc` (`COMPILER.md`) stays the tiny in-tree subset compiler;
-this document is about running *upstream* `rustc` on Galexy.
+**68–73**; the linker has its own plan in `LINKER.md`. `gxc`
+(`COMPILER.md`) is frozen as a fixture; this document is about running
+*upstream* `rustc` on Galexy.
 
 ## What "migrate rustc" means here
 
@@ -38,7 +39,7 @@ The toolchain side is largely done upstream, and that is the lever:
 | Cranelift codegen backend, pure Rust | `rustc_codegen_cranelift` in-tree | No LLVM, no C++, no libstdc++ port |
 | Pure-Rust object / archive writers | `object`, `ar_archive_writer`, `gimli` | rlibs and `.o` files without binutils |
 | `rustc` builds with only the Cranelift backend | `cg_clif/scripts/setup_rust_fork.sh` config | A documented bootstrap configuration to copy |
-| Pure-Rust ELF linker | `wild` (`wild-linker/wild`, 0.10, static non-PIE output supported) | Avoids porting `ld` / `lld` |
+| Pure-Rust ELF reader for objects and archives | `object` (`read_core`, `no_std`) | A static linker (`gxld`, `LINKER.md`) is a few thousand lines, not a port of `ld` / `lld`; `wild` (pure Rust, Linux-targeted) stays the fallback |
 | Pure-Rust unwinder | `unwinding` crate (used by cg_clif, Hermit-class targets) | `panic=unwind` without libgcc |
 | Hardware RNG backend | `getrandom` `rdrand` backend | No `/dev/urandom` emulation |
 
@@ -72,10 +73,10 @@ surface (heap, threads, big files), plus one linker decision.
 | E. Grow `gxc` into Rust | Rejected for this goal: it is a learning compiler; Rust parity is years of frontend work. `gxc` stays as-is |
 | F. Native `std` via a libc shim (`relibc` / musl port, `unix` PAL) | Rejected: a libc is a bigger port than a PAL and would import POSIX into a capability OS |
 
-## The plan, in five stages
+## The plan, in six stages
 
 Each stage leaves the suite green and is useful on its own. The first
-two need no fork of the Rust repository.
+two need no fork of the Rust repository and no kernel change.
 
 ### Stage 1 — `x86_64-unknown-galexy` target (Milestone 68)
 
@@ -100,7 +101,24 @@ Error>` work in a Galexy program; `std::fs`, threads, `println!` do not.
 Exit: `bin/test-std-min` — a `std` crate that builds a `HashMap<String,
 Vec<u32>>`, formats it, and writes through the console Cap.
 
-### Stage 2 — Real PAL in a rust-lang/rust fork (Milestone 69)
+### Stage 2 — `gxld`, the static linker (Milestone 69)
+
+Full plan: `LINKER.md`. A `no_std + alloc` library that turns ELF64
+relocatable objects and `ar` archives into the `ET_EXEC` the loader
+already accepts, reading inputs with the `object` crate and taking the
+layout rules from `galexy-abi`. It absorbs `gxc::elf`, so `gxc` becomes
+a producer of relocatable objects and the linker becomes the one place
+that knows the loader contract. Proof is a differential test: host
+`rustc --emit=obj` of `hello`, `util` and `shell`, linked by `gxld` and
+by `rust-lld`, both booting through the same runner cases.
+
+It comes this early because it is the only Phase 11 item with no
+kernel dependency and it de-risks Stage 6, the step most likely to fail.
+
+Exit: `test-hellogxc` green through `gxld`; the differential suite green
+on three programs; hostile-input tests return `Err`.
+
+### Stage 3 — Real PAL in a rust-lang/rust fork (Milestone 70)
 
 Fork `rust-lang/rust` as `galexy-rust`, tracked monthly like Xous does.
 Three edits upstream documents for exactly this (`wiki.osdev.org/
@@ -142,7 +160,7 @@ and re-reading a galfs file, `Command::new("echo").output()`,
 patches (`toml` or `regex` parsing a file from the ramdisk) to prove the
 target is honest.
 
-### Stage 3 — Capacity for a compiler process (Milestone 70)
+### Stage 4 — Capacity for a compiler process (Milestone 71)
 
 The kernel limits a compiler trips over, all already named in `TODO.md`
 as debt:
@@ -155,7 +173,9 @@ as debt:
   lengths, extents or double indirection, pool sized to the disk; keep
   the current small format readable. Files up to at least 64 MiB. If
   this lags, a RAM-backed scratch volume with the same `FileBody`
-  interface unblocks Stage 4.
+  interface unblocks Stage 5.
+- **Ring-3 `gxld`**: the Stage 2 crate behind a thin `main`, receiving
+  input Caps and the output Cap at spawn (`LINKER.md` → On the OS).
 - **Limits**: `MAX_OPEN_FILES` 8 → 64 (heap table on spawn, not in the
   IF=0 path); `SPAWN_ARG_MAX` 256 → 4 KiB (one page, copied with
   `user_copy`).
@@ -166,7 +186,7 @@ Exit: `bin/test-big` — a `std` program allocates 300 MiB, writes a 20 MiB
 file, reopens it, checks a hash; `test-fsck` still passes on both
 galfs formats.
 
-### Stage 4 — `rustc` cross-built for Galexy, Cranelift only (Milestone 71)
+### Stage 5 — `rustc` cross-built for Galexy, Cranelift only (Milestone 72)
 
 Use the configuration cg_clif's own CI uses to build a `rustc` with no
 LLVM backend, then point it at our target:
@@ -203,7 +223,7 @@ and each small:
 | `getrandom` | no OS source | `--cfg getrandom_backend="rdrand"` |
 | `stacker` / `psm` | stack growth via `mmap` on unix | `psm`'s x86_64 SysV assembly is OS-neutral; stacker's non-unix path allocates stacks on the heap — verify, else `-Zstack-size`-only |
 | `rustc_driver_impl` | signal handlers, `ctrlc` | already `cfg(unix)` — confirm nothing leaks |
-| `rustc_session` / `rustc_codegen_ssa` | default linker | `linker-flavor = gnu` with linker `wild` (Stage 5) |
+| `rustc_session` / `rustc_codegen_ssa` | default linker | `linker-flavor = gnu` with linker `gxld` (Stage 6) |
 | `psm` build script | needs a cross assembler | `CC_x86_64_unknown_galexy=clang`, `--target=x86_64-unknown-none-elf` |
 | panic strategy | `FatalError::raise` uses `resume_unwind` | MVP on `panic=abort`: errors print, then abort. Then `unwinding` crate for real `panic=unwind` |
 
@@ -222,30 +242,26 @@ host-side cg_clif output for the same source and sysroot (the runner
 compares the two). Also `rustc --print cfg` and an intentional type
 error whose diagnostic text is asserted.
 
-### Stage 5 — Link on Galexy, run the result (Milestone 72)
+### Stage 6 — Link on Galexy, run the result (Milestone 73)
 
-`rustc` writes `.o` files and spawns a linker. Two candidates, tried in
-order:
+`rustc` writes `.o` files and spawns a linker. That linker is the
+ring-3 `gxld` from Stages 2 and 4, extended for cg_clif output: rlib
+archives whose `lib.rmeta` member must be skipped, `TPOFF32` for TLS
+(arrives with threads in Stage 3), `.eh_frame` kept once `unwinding`
+lands. The differential test moves to the real inputs: the
+galexy-target sysroot plus `hello.rs`, linked by `gxld` on the host and
+by `rust-lld`, both booting.
 
-1. **Port `wild`** (`--no-fork --threads=1`, `fork` feature off,
-   `mimalloc` off). It is Linux-targeted but pure Rust; its hard deps are
-   threads, `memmap2` (replace with read-into-memory on galexy, same
-   trick as `rustc`), and `rayon` (fine at one thread once `ThreadSpawn`
-   exists). Static non-relocatable output is a supported mode. This is
-   the "existing tooling" answer and should be attempted first.
-2. **`gxld`**: a purpose-built static linker if `wild`'s dependency
-   surface fights back. Scope is deliberately tiny: inputs are cg_clif
-   ELF objects plus rlib archives (parse with the `object` crate, which
-   already reads archives, symbols and relocations); seven relocation
-   kinds (`R_X86_64_64`, `32`, `32S`, `PC32`, `PLT32`, `GOTPCREL(X)`,
-   `TPOFF32`); on-demand archive member pull; section layout into
-   `R | RX | RW` `PT_LOAD`s at `USER_IMAGE_BASE`, mirroring `gxc::elf`.
-   No dynamic linking, no linker scripts, no LTO. Several thousand
-   lines, host unit-tested against `wild`'s output on the same inputs.
+Fallback only if `gxld` cannot cope: **port `wild`** (`--no-fork
+--threads=1`, `fork` and `mimalloc` features off, `memmap2` replaced by
+read-into-memory). It is pure Rust and supports static non-relocatable
+output, but it is Linux-shaped — threads, `rayon`, `mmap` — and would
+only build once Stage 3 is complete, which is why it is not the first
+choice.
 
-Either way `rustc` sees it through `-Clinker=wild` (or `gxld`) with
-`linker-flavor = gnu`, spawned over `spawn_with` with stdio pipes, exit
-status via the process Cap.
+`rustc` sees the linker through `-Clinker=gxld` with `linker-flavor =
+gnu`, spawned over `spawn_with` with stdio pipes, exit status via the
+process Cap.
 
 Exit: `test-rustc-hello` — in ring 3, `rustc hello.rs -o hello` on
 galfs, `./hello` spawns and prints `hello from rustc on galexy`; a
@@ -272,16 +288,18 @@ runs. This is the Phase 11 gate.
 | Fork drift: `std`'s PAL internals move between nightlies | Track one nightly per quarter; the PAL is ~15 files, Xous forward-ports in an afternoon per release |
 | `rustc`'s dependency graph grows a unix-only crate | `[patch.crates-io]` with the wasm/dummy path; the set above is the one cg_clif + Hermit ports already hit |
 | cg_clif rejects some inline asm in the sysroot at *host* build time | Host build uses GNU `as`; only on-OS compiles must avoid `asm!`, which the `#[inline(never)]` rule enforces |
-| `wild` cannot be made to build for the target | `gxld` (Stage 5 option 2); scope is bounded by cg_clif's output shape |
+| `gxld` meets a relocation or section cg_clif emits that v0 does not handle | The differential test names it early (Stage 2 runs on rustc-built `shell` from day one); `wild` is the fallback (Stage 6) |
+| A subtly wrong link is a debugging sink | No layout or relocation change lands without the `rust-lld` differential green (`STYLE.md` → Linker) |
 | `panic=abort` turns every `FatalError` into a process abort | Acceptable for the gate; `unwinding` crate + `.eh_frame` from cg_clif afterwards |
-| 2 GiB of guest RAM slows TCG runs | Stages 4–5 tests are KVM-only in CI (Milestone 64 provides the path); TCG keeps the Stage 1–3 tests |
+| 2 GiB of guest RAM slows TCG runs | Stages 4–6 tests are KVM-only in CI (Milestone 64 provides the path); TCG keeps the Stage 1–3 tests |
 | galfs large-volume rewrite is bigger than hoped | RAM scratch volume for outputs; galfs v13 lands later without blocking the gate |
 
 ## Order of operations vs. the v1.0 roadmap
 
-Stage 1 can start now (no kernel change). Stage 2 depends on Milestone 66
-(`Map`, `Clock`, argv) and adds `ThreadSpawn` + `Futex`, which should be
-designed in `PROCESS.md` beside `Channel` so the Milestone 67 ABI freeze
-covers them. Stages 3–5 come after `v1.0`; they need KVM in the runner
-(Milestone 64) to be testable in reasonable time. Nothing here blocks
-Phase 10; `net` in the PAL is the Phase 10 hook.
+Stages 1 and 2 can start now (no kernel change; host-only work beside
+Phase 9). Stage 3 depends on Milestone 66 (`Map`, `Clock`, argv) and
+adds `ThreadSpawn` + `Futex`, which should be designed in `PROCESS.md`
+beside `Channel` so the Milestone 67 ABI freeze covers them. Stages 4–6
+come after `v1.0`; they need KVM in the runner (Milestone 64) to be
+testable in reasonable time. Nothing here blocks Phase 10; `net` in the
+PAL is the Phase 10 hook.
