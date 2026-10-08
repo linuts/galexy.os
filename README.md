@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="Galexy.OS" width="280">
+</p>
+
 # Galexy.OS
 
 A small **capability-based** operating system in Rust. Boots BIOS and UEFI,
@@ -220,7 +224,7 @@ Milestone 52 (the review gate itself).
 ## Repo map
 
 ```
-docs/           STYLE, ROADMAP, THREAT, ABI, PERF, DESIGN, AUTH, GALFS, PROCESS, SCHEDULING, COMPILER, LINKER, RUSTC, DEMO
+docs/           logo.png, STYLE, ROADMAP, THREAT, ABI, PERF, DESIGN, AUTH, GALFS, PROCESS, SCHEDULING, COMPILER, LINKER, RUSTC, DEMO
 LICENSE         MIT · SECURITY.md reporting + scope · CHANGELOG.md one line per milestone PR
 TODO.md         milestone checkboxes
 crates/
