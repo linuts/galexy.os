@@ -13,6 +13,7 @@ pub mod context;
 pub mod demo;
 pub mod galfs;
 pub mod loader;
+pub mod lockout;
 pub mod pipe;
 pub mod ramdisk;
 pub mod syscalls;
@@ -2974,13 +2975,31 @@ pub(crate) fn task_useradd(name: &str, password: &[u8]) -> Result<(), SysError> 
 }
 
 /// Password login: replace the caller's session with `ALL` on `name`'s root.
+///
+/// After `LOCKOUT_MAX_FAILS` misses on this actor or this TTY, further
+/// attempts return [`SysError::Locked`] until the monotonic cool-down
+/// elapses. That check runs before the password KDF.
 pub(crate) fn task_login(name: &str, password: &[u8]) -> Result<(), SysError> {
     let slot = current_slot();
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    if !galfs::verify_password(name, password)? {
-        return Err(SysError::AccessDenied);
+    let tty = current_tty();
+    if lockout::blocked(name, tty) {
+        lockout::note_refused(name, tty);
+        return Err(SysError::Locked);
+    }
+    match galfs::verify_password(name, password) {
+        Ok(true) => {}
+        Ok(false) => {
+            lockout::record_failure(name, tty, true);
+            return Err(SysError::AccessDenied);
+        }
+        Err(SysError::NotFound) => {
+            lockout::record_failure(name, tty, false);
+            return Err(SysError::NotFound);
+        }
+        Err(err) => return Err(err),
     }
     let target = galfs::root_named(name)?;
     interrupts::without_interrupts(|| {
@@ -2991,7 +3010,9 @@ pub(crate) fn task_login(name: &str, password: &[u8]) -> Result<(), SysError> {
         }
         install_session(caller, target, true)?;
         Ok(())
-    })
+    })?;
+    lockout::record_success(name, tty);
+    Ok(())
 }
 
 /// Clear the caller's session (logged out / pre-login).
@@ -3158,6 +3179,7 @@ pub(crate) fn task_userdel(name: &str) -> Result<(), SysError> {
         }
         Ok(())
     })?;
+    lockout::clear_actor(name);
     galfs::mark_dirty();
     Ok(())
 }

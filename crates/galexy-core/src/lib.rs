@@ -15,6 +15,9 @@ mod bitmap_test;
 mod crc32;
 #[cfg(test)]
 mod crc32_test;
+mod lockout;
+#[cfg(test)]
+mod lockout_test;
 mod password;
 mod ring;
 #[cfg(test)]
@@ -25,6 +28,10 @@ mod tar_test;
 
 pub use bitmap::Bitmap;
 pub use crc32::crc32;
+pub use lockout::{
+    FailNote, LoginLockout, LOCKOUT_ACTORS, LOCKOUT_COOLDOWN_MS, LOCKOUT_MAX_FAILS, LOCKOUT_NAME,
+    LOCKOUT_TTYS,
+};
 pub use password::{HASH_LEN, SALT_LEN};
 pub use ring::Ring;
 pub use tar::TarCursor;

@@ -1112,6 +1112,36 @@ fn users_test_passes() {
 }
 
 #[test]
+fn lockout_test_passes() {
+    let (code, serial) = boot(&image("test-lockout"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-lockout should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[auth] lockout user=eve"),
+        "actor lockout line missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[auth] lockout tty=1"),
+        "tty lockout line missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[auth] login refused user=eve tty=1 locked"),
+        "refused line missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("fails=5"),
+        "failure count missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-lockout] passed"),
+        "test-lockout success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn scratch_test_passes() {
     let (code, serial) = boot(&image("test-scratch"));
     assert_eq!(

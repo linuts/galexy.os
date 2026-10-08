@@ -190,7 +190,7 @@ lock-order table remains Milestone 48; do not invent a second story here.
 | Concern | Doc |
 | --- | --- |
 | Who may wait/kill a task | `PROCESS.md` (process Cap) |
-| Login cool-down / idle logout clock | monotonic time (this doc + M43) |
+| Login cool-down / idle logout clock | monotonic `timer_ticks` (lockout landed, M43; idle logout still open) |
 | Seat restart / Cap-wait supervision | `PROCESS.md` Phase 6; wake primitives here |
 | galfs tokens on a task | `AUTH.md` / `GALFS.md` |
 

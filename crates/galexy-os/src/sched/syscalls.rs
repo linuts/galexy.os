@@ -1097,7 +1097,9 @@ fn render_stats(out: &mut TextBuf<'_>) {
     out.push_u64(crate::sched::galfs::blocks_used() as u64);
     out.push(b" / ");
     out.push_u64(crate::sched::galfs::BLOCK_SLOTS as u64);
-    out.push(b" blocks\n");
+    out.push(b" blocks\nlockouts: ");
+    out.push_u64(crate::sched::lockout::lockout_active());
+    out.push(b"\n");
 }
 
 fn render_tasks(out: &mut TextBuf<'_>) {

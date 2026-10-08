@@ -1102,9 +1102,10 @@ Make seats behave like accounts, not permanent admin shells.
       `passwd` succeeds. Typing e2e clears the default before other cmds.
 - [ ] **Kernel must-change** (follow-up): persist flag on the actor /
       deny mutating syscalls so non-shell clients cannot skip the gate
-- [ ] **Login lockout**: after N failures per actor (and/or per TTY),
-      refuse further attempts for a cool-down; count visible via `stats`
-      or serial audit line
+- [x] **Login lockout**: after 5 failures per actor and per TTY, further
+      `login` attempts return `Locked` for 5 s (`timer_ticks`). Count is
+      on the serial audit line (`fails=N`) and `stats` (`lockouts:`).
+      Unknown names count only against the TTY. RAM-only (reboot clears).
 - [ ] **Remove `crash` from production shells**: `cfg` / build feature so
       release images omit the seam; keep it only on test kernels that the
       supervisor e2e uses
@@ -1112,7 +1113,8 @@ Make seats behave like accounts, not permanent admin shells.
       keys on a logged-in seat, auto-`logout` (needs monotonic clock below)
 - [ ] **Session id / generation**: bump a counter on login/logout so
       stale grants targeting a recycled task name cannot confuse audits
-- [ ] Tests: lockout trips; must-change blocks `touch` until `passwd`
+- [x] Tests: lockout trips (`bin/test-lockout`, host `LoginLockout`)
+- [ ] Tests: must-change blocks `touch` until `passwd`
 
 ### Least-privilege seats & spawn
 
@@ -1142,7 +1144,8 @@ Lockout and idle logout need a trustworthy clock source.
       one-shot deadlines advance it by the armed window (tickless idle)
 - [ ] **Wall clock (optional)**: CMOS/UEFI runtime clock or “no wall
       clock” waive — audit lines may use monotonic only
-- [ ] **Lockout cool-down** wired to monotonic time (session items above)
+- [x] **Lockout cool-down** wired to monotonic `timer_ticks` (absolute
+      deadline; `test-lockout` waits it out). Reboot clears RAM state.
 - [ ] **Idle logout** wired to monotonic time (session items above)
 - [ ] **Timeout helpers** in tests (QEMU accelerate / tick injection)
 - [x] **Tickless idle (MVP)**: LAPIC one-shot — preempt quantum when
