@@ -1,9 +1,10 @@
 # STYLE — galexy.os conventions
 
 Rules for how code in this repo is written. Reviewers (and future me) should
-enforce these. Auth/token, galfs, and process/init rules below are binding
-once the matching milestones land (43+ / 47 / 53–55); until then treat
-them as the target.
+enforce these. Every section below is binding: the auth/token (43–44),
+galfs (45–46), process/init (47, 53–55), scheduling (56–58), and
+compiler (59–61) milestones have landed. The Platform section is the
+rule for Phase 9 (Milestones 63–67).
 
 ## Rust idioms
 
@@ -157,6 +158,37 @@ POSIX layer beside these rules.
   DESIGN + `galexy-rt` + shell/init in the **same PR**, marked
   experimental until Milestone 51/55 freezes them.
 
+## Platform (modern path first)
+
+Rules for Phase 9 (`docs/ROADMAP.md` → Where we stand; Milestones
+**63–67**). Galexy targets current x86-64 virtual machines and
+machines: ACPI, x2APIC, PCIe, virtio 1.x, UEFI + GOP.
+
+- **Modern path first, legacy as a named fallback.** A legacy device or
+  table (PIT, 8259, i8042, PIO IDE, legacy virtio IO BAR, port PCI
+  config, `-M pc`) stays only when the platform offers nothing newer.
+  The fallback logs one serial line naming itself and keeps exactly one
+  runner regression case. New code never adds a legacy-only path.
+- **Hardware security features default on.** SMEP, SMAP, UMIP, NX, and
+  KASLR are enabled wherever CPUID reports them (Milestone 63). Every
+  copy to or from a user virtual address goes through `arch::user_copy`
+  (the only `stac`/`clac` site). A feature that is off needs a written
+  waiver in `THREAT.md`, not a silent skip.
+- **Hostile input returns errors.** The ELF loader, GALF decode, path
+  parse, and every syscall argument path return `SysError` on bad
+  input. A `panic!` / `expect` is reserved for kernel invariants and
+  says so in a comment.
+- **Measure before optimizing.** A performance change cites a
+  `docs/PERF.md` number taken with `bin/test-bench` before and after,
+  under KVM when available (Milestone 64). No drive-by "faster" commits.
+- **Park, never poll, in userspace too.** A utility that waits for a
+  Cap, a pipe, or a key parks on the syscall; `yield_now` loops are a
+  bug once Milestone 64 hands Caps over at spawn.
+- **Release profile is the product.** `cargo run --release` and the
+  runner images use the tuned release profile (LTO, `codegen-units =
+  1`, debug assertions on in tests). The `dev` profile is for
+  compile-edit loops, not for claims about speed.
+
 ## Secrets and passwords
 
 - **Never log, serial-mirror, or `write_console` cleartext passwords.**
@@ -166,10 +198,10 @@ POSIX layer beside these rules.
   leave hashes/passwords in reaped scratch pages without wipe.
 - Compare password hashes in **constant time** (`hash_eq` or the KDF
   crate's verify). No early-out memcmp on secrets.
-- Inline `login user pass` is a test convenience until Milestone 43 e2e
-  lands; production UX is interactive prompts.
-- Default `admin`/`admin` is for format bring-up only; Milestone 43 forces
-  change before general use.
+- Inline `login user pass` is kept for scripts and older tests;
+  production UX is the interactive masked prompt (Milestone 43).
+- Default `admin`/`admin` is for format bring-up only; the must-change
+  flag (Milestone 43) blocks galfs mutation until `passwd`.
 
 ## On-disk formats (GALF and friends)
 
@@ -186,9 +218,10 @@ POSIX layer beside these rules.
 
 ## Production vs test builds
 
-- Test seams (`crash`, verbose sched logs, inline passwords) are
-  **feature-gated** or cfg'd out of the default release image
-  (Milestones 45 / 58).
+- Test seams (`crash-seam`, `verbose-sched`, inline passwords) are
+  **feature-gated** or cfg'd out of the default release image. Public
+  `test_*` functions are allowed as seams when a QEMU test kernel needs
+  them; list new ones in the DESIGN seam table (Milestone 51).
 - `cargo test -p runner --test boot` must stay green on every milestone
   merge. New QEMU boots get a matching `bin/test-*` or typing e2e.
 - Prefer deterministic tests; when CSPRNG is required, inject a test
@@ -198,6 +231,14 @@ POSIX layer beside these rules.
 ## Formatting
 
 - `cargo fmt` is the law; `cargo clippy -- -D warnings` must pass.
+  **Today neither holds on the pinned nightly** (88 files drift under
+  rustfmt 1.101-nightly; 10 kernel + 5 host clippy lints). Milestone 51
+  reformats once in a formatting-only commit, fixes the lints, pins the
+  nightly date, and adds the CI check. Until that commit lands, format
+  only the files you touch (`rustfmt --edition 2021 <file>`) so
+  unrelated reflows stay out of feature PRs.
+- Kernel clippy: `cargo clippy -p galexy-os --target x86_64-unknown-none
+  --no-deps --bins` (the lib-test target duplicates `panic_impl`).
 - Max line length: whatever rustfmt uses (100 by default).
 - Names: modules `snake_case`, types `UpperCamelCase`, kernel-agnostic names
   preferred (`ScreenWriter`, not `VgaTextBufferWriterFactory`).
@@ -230,9 +271,10 @@ POSIX layer beside these rules.
 
 ## Git
 
-- Commit message style: `milestone: short imperative summary` (e.g.
-  `mm: frame allocator over boot memory map`, `auth: argon2id actor
-  passwords`).
+- Commit message style: `area: short imperative summary` (e.g.
+  `mm: frame allocator over boot memory map`). A milestone-closing PR
+  uses `Finish Milestone N <summary>.` with a two-line body, and merges
+  with a merge commit.
 - Never commit build artifacts; `target/` and `*.img` are gitignored.
 - One logical change per commit when practical; docs-only commits are
   fine for milestone planning.

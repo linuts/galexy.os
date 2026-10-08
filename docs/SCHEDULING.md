@@ -97,8 +97,9 @@ Rules reviewers need:
    re-arms.
 4. Sleep deadlines shorten the idle arm to
    `min(next_sleeper, next_second)` (clamped by `IDLE_MAX_MS`).
-5. TSC-deadline mode is optional if one-shot drift ever matters; until
-   then, PIT-calibrated one-shot is the story.
+5. TSC-deadline mode and CPUID / HPET calibration are Milestone 65;
+   until then, PIT-calibrated one-shot is the story. The frozen numbers
+   below do not change with the timer source.
 
 ## Target shape (Phase 7 — shipped)
 
@@ -199,7 +200,9 @@ no Cap and no galfs card.
 
 ## Explicit non-goals (v1)
 
-- POSIX `nanosleep` / `clock_gettime` / `timer_create` surface
+- POSIX `nanosleep` / `clock_gettime` / `timer_create` surface (a
+  Galexy `Clock` read of monotonic ms is Milestone 66; it is not a
+  POSIX clock API)
 - CFS, MLFQ, weighted fair queueing
 - POSIX `nice` / realtime priority classes
 - Per-task CPU affinity Caps (unless a later phase adds them)

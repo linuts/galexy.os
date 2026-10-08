@@ -29,7 +29,7 @@ crates/
 ├── userspace/           # ring-3 programs, one package per program
 │   ├── galexy-rt/       #   the runtime: entry!, syscall wrappers, panic handler
 │   └── hello/           #   the first real Rust user program
-├── gxc/                 # (planned) host mini Rust-subset compiler — docs/COMPILER.md
+├── gxc/                 # host mini Rust-subset compiler (gxr → ELF) — docs/COMPILER.md
 └── runner/              # host tooling: builds BIOS+UEFI images, launches QEMU,
                          #   hosts the boot tests (tests/boot.rs)
 ```
@@ -929,10 +929,31 @@ have is a panic: that is a kernel bug, not a user error.
 `cpu: FSGSBASE unsupported — per-CPU mechanism requires it (CPUID 7.0.EBX bit 0)`.
 A software GS fallback is out of scope.
 
-**ASLR.** Waived. Every user ELF links at `USER_IMAGE_BASE`; randomizing
-the P4 slot would not hide that address from the program, and it would
-break the single load address the loader and the ABI share. Rationale
-lives here until `docs/THREAT.md` (Milestone 51) cites it.
+**ASLR.** User-side ASLR is waived. Every user ELF links at
+`USER_IMAGE_BASE`; randomizing the P4 slot would not hide that address
+from the program, and it would break the single load address the loader
+and the ABI share. Kernel-side KASLR (the bootloader's `mappings.aslr`)
+is Milestone 63. Rationale lives here until `docs/THREAT.md`
+(Milestone 51) cites it.
+
+**CPU security features (status: absent).** `CR4` today sets only
+`FSGSBASE` (`arch/cpu.rs`). SMEP, SMAP, and UMIP are not enabled, and
+the syscall staging copies read user virtual addresses directly after
+the `user_buffer` walk. Milestone 63 turns the three bits on where
+CPUID reports them, routes every user-VA copy through one
+`arch::user_copy` module that owns `stac`/`clac`, and writes the
+Spectre v1 mask plus the KPTI / IBRS / CET waivers into `THREAT.md`.
+Until then this paragraph is the honest statement: the isolation story
+is paging plus validated copies, with no hardware backstop against a
+kernel bug that dereferences a user pointer.
+
+**Hostile ELF images.** `sched/loader.rs` validates magic, `ET_EXEC`,
+W^X, the entry window, and the user P4 range, and `xmas_elf` bounds the
+segment data. A malformed image can still reach an `expect` (kernel
+panic) instead of `SysError`; `filesz <= memsz` and a `memsz` ceiling
+are not checked. Milestone 63 makes every loader failure an error and
+Milestone 51 adds `bin/test-badelf` as the oracle. Until then the
+ramdisk is trusted input (`AUTH.md` → Spawn policy).
 
 **User pointers.** Syscalls copy path, name, password, and write bytes
 into stack buffers only after a length check (`MAX_NAME`, `MAX_READ` /
@@ -1079,10 +1100,23 @@ pinned in `galexy-abi` tests.
   fails loudly rather than guessing.
 - The LAPIC timer calibration assumes the PIT exists (it does on every
   x86 platform worth booting; QEMU emulates it under both SeaBIOS and
-  OVMF). TSC-deadline mode is the follow-up if drift ever matters.
+  OVMF). Milestone 65 calibrates from CPUID 0x15 / 0x16 or HPET first
+  and uses TSC-deadline mode where CPUID reports it; PIT becomes the
+  fallback.
 - x2APIC-mode hosts take the MSR path (`0x800 + offset>>4`); QEMU defaults
   to xAPIC — both are exercised by the access-layer abstraction, only xAPIC
-  by the QEMU test suite (assert in `bin/test-apic`).
+  by the QEMU test suite (assert in `bin/test-apic`). Milestone 65 adds
+  an x2APIC run.
+- Legacy device paths are the only paths today: 8259 remap + mask, PS/2
+  i8042 keyboard, PIO IDE, virtio-blk over the legacy IO BAR with a
+  polled used ring, PCI config through ports 0xCF8 / 0xCFC, `-M pc`.
+  Milestone 65 moves the default to `q35` + ECAM + virtio 1.x + MSI-X
+  + virtio-input and keeps each legacy path as a named fallback with
+  one regression case (ROADMAP standing principle).
+- Nothing is profiled. The suite runs under TCG with the `dev` profile
+  (`opt-level = 0`, no LTO); `cargo run` is the same. Milestone 64 adds
+  `bin/test-bench`, `docs/PERF.md`, KVM detection, and a release
+  profile before any optimization lands.
 - `-no-reboot` is always passed to QEMU so triple faults surface as an exit
   instead of an infinite reboot loop. A `reboot` request still pulses the
   reset line; QEMU then exits rather than restarting the guest. `shutdown`

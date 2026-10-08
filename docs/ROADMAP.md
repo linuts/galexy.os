@@ -2,6 +2,27 @@
 
 Direction-level plan. Concrete check-off items live in `TODO.md`.
 
+## Where we stand (review, October 2026)
+
+Snapshot at commit `80cc05e` (Milestone 50 merged). The bar is a
+**secure, fast, modern-only, full-feature, ready** OS. Each row says
+what is true today and which milestone closes the gap.
+
+| Bar | Today | Gap → milestone |
+| --- | --- | --- |
+| **Secure** | Capabilities everywhere (26 syscalls, no ambient PID / fd); PBKDF2 passwords, lockout, idle logout, must-change; sealed dual-slot GALF (ChaCha20 + HMAC); W^X user maps, NX, guard pages, kstack canary, stack/secret wipe; TOCTOU-safe copies; lock-order table; audit lines without secrets; zero `static mut` | SMEP / SMAP / UMIP / KASLR absent, not waived; no Spectre / KPTI stance; ELF loader panics on a hostile image; KDF cost fixed at a debug budget → **63**. Threat model, negative suite, hostile-ELF oracle, CI → **51** |
+| **Fast** | Deadline one-shot LAPIC, tickless idle, idle steal, park/wake for sleep / keyboard / pipe; IF=0 syscall path never allocates; console budget | Nothing is measured; suite is TCG at `opt-level = 0`; no release profile or LTO; virtio-blk spins 10 M polls; ATA is PIO; pipeline children `yield_now`-poll until `give` → **64** |
+| **Modern only** | x2APIC-aware LAPIC, I/O APIC, ACPI MADT / FADT / XSDT, UEFI first-class, GOP framebuffer, virtio-blk, FSGSBASE per-CPU, SMP | Legacy is the only path for timer calibration (PIT), 8259 remap, PS/2 keyboard, PIO IDE, legacy virtio IO BAR, port PCI config, `-M pc`; no TSC-deadline, no ECAM, no MSI-X → **65** |
+| **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, one pipeline, glob; 12 utilities; galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; gxc hello | No user heap, argv, clock read, or IPC beyond pipes; one pipeline shape; no background jobs → **66**. Shutdown bypasses init; no service table → **67**. Network and USB → **Phase 10** |
+| **Ready** | 68 QEMU test kernels, 87 runner boots, host suites green; docs for auth, galfs, process, scheduling, compiler, demo | No CI workflow; clippy red on the pinned nightly; rustfmt drift in 88 files; no `LICENSE`, `SECURITY.md`, `CHANGELOG.md`; no `THREAT.md` / `PERF.md` → **51**, **52**, then the **v1.0 gate** in 67 |
+
+Order of work: **51 → 52** (`review-rc1`), then **63 → 64 → 65 → 66 →
+67** (`v1.0`). Security first because every later change should land
+on a kernel that already has SMAP on and a loader that returns errors.
+Measure (64) before modernizing (65) so the device rewrite has a
+baseline. Network is a phase of its own after `v1.0`; `v1.0` ships
+without it and says so.
+
 ## Phase 0 — Boot & TTY ✅
 
 Goal: bootable image, working text display, working keyboard, echo shell.
@@ -238,12 +259,12 @@ checklist). Style: `docs/STYLE.md`.
    sync/refuse-format, quotas, host fsck, durable shares, single-indirect,
    crash injection, ATA I/O errors. Double-indirect and fsck
    repair-into-new-slot stay follow-ons
-4. **46 Storage stack** — BlockDevice, ATA capacity, flush matrix,
-   virtio-blk, partition offset (landed)
-5. **47 Process, ABI & caps** — process-Cap foundation per
-   `docs/PROCESS.md` (landed: spawn Cap, wait/kill/give, ceilings,
-   ring-3 DS/ES reload, forge battery, soft frame reserve, enriched
-   `stats` sysinfo). Init itself is Phase 6.
+4. **46 Storage stack** ✅ — BlockDevice, ATA capacity, flush matrix,
+   virtio-blk (legacy), partition offset. Modern virtio is Milestone 65
+5. **47 Process, ABI & caps** ✅ — process-Cap foundation per
+   `docs/PROCESS.md`: spawn Cap, wait/kill/give, ceilings, ring-3
+   DS/ES reload, forge battery, soft frame reserve, enriched `stats`
+   sysinfo. Init itself is Phase 6
 6. **48 Memory, safety & concurrency** ✅ — W^X, stack wipe, fixed
    user maps (demand paging waived), heap policy, FSGSBASE required,
    lock-order table, secret scrub. PCID and ASLR waived
@@ -251,14 +272,17 @@ checklist). Style: `docs/STYLE.md`.
    auth/grant audit lines, dmesg cap, `verbose-sched` steal trace
 8. **50 Shell for real demos** ✅ — `echo | cat`, `*` glob, line
    editing, cwd across login / `su` / failed `cd`
-9. **51 Docs, tests, CI & soak** — THREAT/FS, negative suite, review-smoke,
-   non-goals freeze
+9. **51 Docs, tests, CI & soak** — THREAT/FS, negative suite, hostile
+   ELF oracle, review-smoke, GitHub Actions, clippy / fmt baseline,
+   `LICENSE` / `SECURITY.md` / `CHANGELOG.md`, non-goals freeze
 10. **52 Review RC** — default secure build; tag `review-rc1`
 
 Standing rule unchanged: each milestone leaves the suite green; prefer
 explicit waivers in the threat/FS docs over half-landed features.
+`review-rc1` is the reviewable system; `v1.0` (Phase 9) is the ready
+one.
 
-## Phase 6 — Process model, init & supervised seats
+## Phase 6 — Process model, init & supervised seats ✅ (shutdown / `svc` → Milestone 67)
 
 Goal: finish the clean-slate **capability** process architecture — not
 named-task forever, not “PIDs because 1970”, not POSIX. Plan:
@@ -276,7 +300,7 @@ Style: `docs/STYLE.md` → Process model and init.
 Non-goals for this phase: systemd/dbus, full POSIX signals/job control,
 ambient PID/`waitpid` namespace, socket activation, cgroups.
 
-## Phase 7 — Scheduling complete
+## Phase 7 — Scheduling complete ✅
 
 Goal: finish the **runtime** side of scheduling so the kernel is not
 “preempt + RR + tickless idle MVP” forever — timed sleep, general
@@ -301,7 +325,7 @@ Non-goals for this phase: full POSIX `nanosleep`/`clock_*` surface,
 multi-priority scheduling classes, realtime guarantees, tickless *busy*
 (only idle stretches today; busy stays quantum-paced).
 
-## Phase 8 — Mini Rust compiler (hello world)
+## Phase 8 — Mini Rust compiler (hello world) ✅ (on-OS compile → Milestone 62)
 
 Goal: a **Galexy-owned** tiny Rust-subset compiler that emits a static
 ELF the existing loader will run — enough for hello through the console
@@ -327,6 +351,49 @@ for a Cranelift-backed subset shape. Not mrustc, not full rustc-in-tree.
 
 Non-goals for this phase: Rust/cargo parity, compiling the kernel or
 shell with `gxc`, LLVM/mrustc in-tree, kernel JIT.
+
+## Phase 9 — Hardened, fast, modern (`v1.0`)
+
+Goal: turn `review-rc1` into a ready OS. The review table above is the
+spec; `TODO.md` Milestones **63–67** are the checkboxes. Order matters:
+harden the kernel first, measure second, then rewrite device paths on a
+baseline, then grow userland on the hardened kernel, then let init own
+the machine.
+
+1. **63 Kernel hardening** — SMEP / SMAP (`arch::user_copy` owns
+   `stac`/`clac`) / UMIP on; KASLR via the bootloader; Spectre v1 mask
+   on dispatch; KPTI / IBRS / CET written waivers; ELF loader returns
+   `SysError` on every hostile image; KDF cost stored per actor so
+   production formats at ≥ 100 000 iterations
+2. **64 Fast path** — `bin/test-bench` + `docs/PERF.md` first; KVM in
+   the runner and `cargo run`; release profile with LTO; virtio-blk IRQ
+   completion; Caps handed over at spawn (no `yield` polls); framebuffer
+   batching; PCID / allocator changes only if the numbers ask
+3. **65 Modern platform** — `-M q35` default, PCIe ECAM, virtio 1.x
+   with MSI-X, virtio-input keyboard, CPUID / HPET timer calibration,
+   TSC-deadline, x2APIC preferred, 8259 mask-only. PIT, i8042, PIO IDE,
+   legacy virtio, and `-M pc` stay as named fallbacks with one
+   regression case each
+4. **66 Userland completeness** — user heap (`Map`) + `galexy-rt`
+   allocator, argv vector, `Clock`, capability channels carrying Caps,
+   N-stage pipelines and background jobs, tab completion, scrollback,
+   `head` / `tail` / `wc` / `grep` / `uptime` / `ls -l`
+5. **67 Init owns shutdown and services** — ordered shutdown through
+   init, service table with backoff, `svc`, session id on the seat Cap,
+   ABI freeze for process Caps / `Map` / `Clock` / `Channel`; the
+   **`v1.0` gate**
+
+Non-goals for `v1.0`: network, USB, GPU beyond the GOP framebuffer,
+5-level paging, huge user pages, POSIX compatibility, SMT / MDS
+mitigations beyond the written waiver.
+
+## Phase 10 — Network (after `v1.0`)
+
+Direction only; no milestone numbers until Phase 9 is boring.
+virtio-net on the modern PCI path from Milestone 65; a small IPv4 /
+UDP / TCP stack (`smoltcp`-class, host-tested); sockets as Caps handed
+out by init, never an ambient `socket()`; `fetch`-style utilities over
+channels. A USB stack stays out until a device needs it.
 
 
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
@@ -355,3 +422,9 @@ shell with `gxc`, LLVM/mrustc in-tree, kernel JIT.
 - Prefer the blog_os-proven path over cleverness until a step is *boring*.
 - Anything that could corrupt the kernel's own memory is postponed one phase
   beyond the phase that needs it.
+- **Modern path first, legacy as a named fallback.** A legacy device or
+  table (PIT, 8259, i8042, PIO IDE, legacy virtio, port PCI config) may
+  stay only when the platform offers nothing newer, and each one keeps
+  exactly one regression case (`docs/STYLE.md` → Platform).
+- **Measure before optimizing.** A performance change cites a
+  `docs/PERF.md` number taken before and after.
