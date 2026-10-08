@@ -3,20 +3,24 @@
 //! **Rust subset for Galexy**, not rustc-compatible. See `docs/COMPILER.md`.
 //!
 //! - Milestone 59: lex → parse → check
-//! - Milestone 60: hand-x64 codegen + static ELF64 @ `USER_IMAGE_BASE`
+//! - Milestone 60: hand-x64 codegen
+//! - Milestone 69: relocatable object out, linked by `gxld`
+//!
+//! Frozen at gxr v0 (`docs/COMPILER.md`); kept as the smallest producer of
+//! a relocatable object the linker has to accept.
 
 #![deny(missing_docs)]
 
 pub mod ast;
 pub mod check;
 pub mod codegen;
-pub mod elf;
 pub mod error;
 pub mod lex;
+pub mod obj;
 pub mod parse;
 
 use ast::Program;
-use error::Result;
+use error::{Error, Result};
 
 /// Frontend pipeline: lex → parse → check.
 pub fn compile_check(src: &str) -> Result<Program> {
@@ -25,11 +29,22 @@ pub fn compile_check(src: &str) -> Result<Program> {
     check::check(program)
 }
 
-/// Full host compile: check → hand-x64 → ELF64 bytes.
-pub fn compile_elf(src: &str) -> Result<Vec<u8>> {
+/// Host compile to a relocatable object: check → hand-x64 → `ET_REL`.
+pub fn compile_object(src: &str) -> Result<Vec<u8>> {
     let program = compile_check(src)?;
-    let obj = codegen::codegen(&program);
-    elf::emit_elf(&obj)
+    let code = codegen::codegen(&program);
+    Ok(obj::emit_object(&code))
+}
+
+/// Full host compile: object → `gxld` → static ELF64 at `USER_IMAGE_BASE`.
+pub fn compile_elf(src: &str) -> Result<Vec<u8>> {
+    let object = compile_object(src)?;
+    let inputs = [gxld::Input {
+        name: "gxc.o".into(),
+        bytes: &object,
+        whole_archive: false,
+    }];
+    gxld::link(&inputs, &gxld::Options::default()).map_err(|e| Error::msg(format!("link: {e}")))
 }
 
 /// Codegen backend: hand-written x86_64 (Milestone 60).
@@ -99,8 +114,13 @@ fn other() -> i32 { 0 }
     #[test]
     fn compile_elf_hello_entry() {
         let bytes = compile_elf(HELLO).unwrap();
+        gxld::validate(&bytes, USER_IMAGE_BASE).unwrap();
+        // gxld layout: R (headers + rodata) in page 0, text at page 1.
         let entry = u64::from_le_bytes(bytes[24..32].try_into().unwrap());
-        assert_eq!(entry, USER_IMAGE_BASE + 0x2000);
-        elf::validate_elf(&bytes).unwrap();
+        assert_eq!(entry, USER_IMAGE_BASE + 0x1000);
+        // The linked `mov rsi, imm64` points at the hello string.
+        let rsi = u64::from_le_bytes(bytes[0x1000 + 22..0x1000 + 30].try_into().unwrap());
+        let off = (rsi - USER_IMAGE_BASE) as usize;
+        assert_eq!(&bytes[off..off + 16], b"Hello from gxc!\n");
     }
 }

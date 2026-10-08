@@ -63,9 +63,11 @@ fn cmd_check(args: &[String]) -> ExitCode {
 fn cmd_build(args: &[String]) -> ExitCode {
     let mut input = None;
     let mut output = None;
+    let mut object_only = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "-c" => object_only = true,
             "-o" => {
                 i += 1;
                 let Some(path) = args.get(i) else {
@@ -94,7 +96,11 @@ fn cmd_build(args: &[String]) -> ExitCode {
     };
     let output = output.unwrap_or_else(|| {
         let stem = input.trim_end_matches(".gxr");
-        format!("{stem}.elf")
+        if object_only {
+            format!("{stem}.o")
+        } else {
+            format!("{stem}.elf")
+        }
     });
     let src = match fs::read_to_string(&input) {
         Ok(s) => s,
@@ -103,16 +109,22 @@ fn cmd_build(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    match gxc::compile_elf(&src) {
+    let result = if object_only {
+        gxc::compile_object(&src)
+    } else {
+        gxc::compile_elf(&src)
+    };
+    match result {
         Ok(bytes) => {
             if let Err(e) = fs::write(&output, &bytes) {
                 eprintln!("gxc: write {output}: {e}");
                 return ExitCode::from(1);
             }
             println!(
-                "wrote {output} ({} bytes, backend {})",
+                "wrote {output} ({} bytes, backend {}{})",
                 bytes.len(),
-                gxc::CODEGEN_BACKEND_PLAN
+                gxc::CODEGEN_BACKEND_PLAN,
+                if object_only { "" } else { ", linked by gxld" }
             );
             ExitCode::SUCCESS
         }
@@ -130,7 +142,8 @@ gxc — Galexy mini Rust-subset compiler (not rustc)
 
 Usage:
   gxc check <file.gxr>           Lex, parse, and type-check
-  gxc build [-o out.elf] <file>  Emit static ELF64 @ USER_IMAGE_BASE
+  gxc build [-o out.elf] <file>  Object → gxld → static ELF64 @ USER_IMAGE_BASE
+  gxc build -c [-o out.o] <file> Emit the relocatable object only
   gxc version
 
 See docs/COMPILER.md."

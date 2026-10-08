@@ -265,6 +265,7 @@ name = "gxc"
 version = "0.1.0"
 dependencies = [
  "galexy-abi",
+ "gxld",
 ]
 
 [[package]]

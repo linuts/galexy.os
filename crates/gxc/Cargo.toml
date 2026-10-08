@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 galexy-abi = { path = "../galexy-abi" }
+gxld = { path = "../gxld", default-features = false }
 
 [lib]
 name = "gxc"
