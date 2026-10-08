@@ -62,7 +62,8 @@ Fresh format password is **`admin`** / **`admin`**. After login a
 fastfetch-style **command center** dashboard prints (OS / TTY / user /
 uptime / heap / galfs / tasks), then the prompt is `admin@galexy> `.
 The bottom status bar keeps a live strip (uptime, heap, galfs, tasks,
-frames). Up/down arrows recall `shell.history`.
+frames). Up/down arrows recall session history (written to
+`shell.history` on `logout`).
 
 | Keys / command | What it does |
 | --- | --- |

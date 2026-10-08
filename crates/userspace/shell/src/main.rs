@@ -12,7 +12,8 @@
 //! Boot shows a login screen (`Galexy.OS v… (ttyN)`). After login a
 //! fastfetch-style dashboard prints, then the prompt is `user@galexy>`
 //! (with `:/path` when cwd is not `/`). Up/down arrows recall lines from
-//! the per-user galfs file `shell.history`. `logout` returns to login.
+//! the session history (loaded from / saved to per-user `shell.history`
+//! on login / logout). `logout` returns to login.
 
 #![no_std]
 #![no_main]
@@ -200,6 +201,10 @@ impl History {
     }
 
     /// Append a non-empty line; skip if it matches the newest entry.
+    ///
+    /// RAM only — [`save`] is for logout. Every galfs write syncs the whole
+    /// dual-slot image (~144 KiB + flush); doing that per command made
+    /// `ls` feel wedged.
     fn push(&mut self, line: &[u8]) {
         let line = trim(line);
         if line.is_empty() || line.len() > LINE_MAX {
@@ -222,7 +227,6 @@ impl History {
         self.lines[i][..line.len()].copy_from_slice(line);
         self.lens[i] = line.len();
         self.count += 1;
-        self.save();
     }
 
     fn load(&mut self) {
@@ -581,7 +585,7 @@ fn dispatch(
     line: &[u8],
     cwd: &mut Cwd,
     must_change: &mut bool,
-    _history: &mut History,
+    history: &mut History,
 ) -> Option<ReplEnd> {
     if line.is_empty() {
         prompt(cwd);
@@ -606,7 +610,7 @@ fn dispatch(
         write_console(b"login, logout, passwd, su, sync, stats, tasks, threads,\n");
         write_console(b"about, clear, echo $?\n");
         write_console(b"fetch / dashboard - system glance (also shown after login)\n");
-        write_console(b"up/down arrows - recall shell.history (per-user galfs file)\n");
+        write_console(b"up/down arrows - recall history (saved to shell.history on logout)\n");
         write_console(b"login [user] [pass] - omit pass for a masked Password: prompt\n");
         write_console(b"passwd [name] - masked Password: + Confirm: (no inline secret)\n");
         write_console(b"useradd <name> [pass] - omit pass for a masked Password: prompt\n");
@@ -733,6 +737,9 @@ fn dispatch(
         return None;
     }
     if line == b"logout" {
+        // Persist while the session still holds galfs tokens — after
+        // logout the seat is pre-login and create/write would fail.
+        history.save();
         let result = user_logout();
         if !result.ok {
             report_user(cwd, b"logout", result, false);
