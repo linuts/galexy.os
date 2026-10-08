@@ -4,6 +4,9 @@
 //! Utilities spawn with `SPAWN_INHERIT`, then [`galexy_rt::wait`] on the
 //! child Cap so the prompt returns after they exit; a bare program name
 //! returns once the load finishes (Cap dropped) and keeps running.
+//! Bare launches share this console — there is no background job.
+//! `echo text | cat` is a pipe (`pipe` + `give`). A `*` word expands to
+//! names in the current directory from the files snapshot.
 //! `echo`, `cat`, `touch`, `mkdir`, `rm`, and `ls` are those utilities.
 //! The kernel keeps the status bar and the screen, and loads this shell
 //! again if it faults. The current directory lives here and starts over
@@ -22,8 +25,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
-    arg, close, create, create_replace, dmesg_cap, entry, files_cap, grant, keyboard_cap, open, read,
-    reboot,
+    arg, close, create, create_replace, dmesg_cap, entry, files_cap, give, grant, keyboard_cap, kill,
+    open, pipe, read, reboot,
     revoke, share, shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, user,
     user_login, user_logout, user_name, user_name_pass, user_passwd, user_quota, user_setquota,
     user_unlock, volume_locked, wait, write, write_console, yield_now,
@@ -455,12 +458,18 @@ fn show_help() {
 
     help_section(b"keys");
     help_row(b"up / down", b"history (saved on logout)");
+    help_row(b"left / right", b"move inside the line");
+    help_row(b"Ctrl-A / Ctrl-E", b"start / end of the line");
+    help_row(b"Ctrl-U", b"clear the line");
     help_row(b"Esc / Ctrl-C", b"cancel a prompt");
     help_row(b"Ctrl-D", b"ignored (not end of input)");
     help_row(b"F1-F12", b"switch consoles");
     write_console(b"\n");
 
     write_console(b"notes\n");
+    write_console(b"  echo text | cat    pipe the text through cat\n");
+    write_console(b"  *                  names in the current directory\n");
+    write_console(b"  a bare program shares this console (no background)\n");
     write_console(b"  default admin/admin must passwd before other commands\n");
     write_console(b"  su admin restores a born-admin seat; login always needs a password\n");
     write_console(b"  a bare program name loads it from the ramdisk\n");
@@ -554,6 +563,7 @@ fn repl(kbd: Cap, cwd: &mut Cwd, must_change: &mut bool, history: &mut History) 
     // Index into history while browsing; `None` means the draft line.
     let mut hist_idx: Option<usize> = None;
     let mut parse = KeyParse::Normal;
+    let mut pos = 0usize;
     prompt(cwd);
     loop {
         let mut buf = [0u8; 8];
@@ -580,28 +590,43 @@ fn repl(kbd: Cap, cwd: &mut Cwd, must_change: &mut bool, history: &mut History) 
                             return end;
                         }
                         len = 0;
+                        pos = 0;
                     }
                     0x1b => parse = KeyParse::Esc,
-                    0x08 => {
-                        if len > 0 {
-                            len -= 1;
-                            write_console(&[0x08, b' ', 0x08]);
-                            if hist_idx.is_some() {
-                                hist_idx = None;
-                                draft[..len].copy_from_slice(&line[..len]);
-                                draft_len = len;
-                            }
-                        }
+                    0x08 => editor_backspace(
+                        &mut line,
+                        &mut len,
+                        &mut pos,
+                        &mut draft,
+                        &mut draft_len,
+                        &mut hist_idx,
+                    ),
+                    0x01 => {
+                        move_left(pos);
+                        pos = 0;
                     }
+                    0x05 => {
+                        move_right(len - pos);
+                        pos = len;
+                    }
+                    0x15 => editor_clear(
+                        &mut line,
+                        &mut len,
+                        &mut pos,
+                        &mut draft,
+                        &mut draft_len,
+                        &mut hist_idx,
+                    ),
                     b if (b.is_ascii_graphic() || b == b' ') && len < LINE_MAX => {
-                        if hist_idx.is_some() {
-                            hist_idx = None;
-                        }
-                        line[len] = b;
-                        len += 1;
-                        draft[..len].copy_from_slice(&line[..len]);
-                        draft_len = len;
-                        write_console(&[b]);
+                        editor_insert(
+                            b,
+                            &mut line,
+                            &mut len,
+                            &mut pos,
+                            &mut draft,
+                            &mut draft_len,
+                            &mut hist_idx,
+                        );
                     }
                     _ => {}
                 },
@@ -619,6 +644,7 @@ fn repl(kbd: Cap, cwd: &mut Cwd, must_change: &mut bool, history: &mut History) 
                             history,
                             &mut line,
                             &mut len,
+                            &mut pos,
                             &mut draft,
                             &mut draft_len,
                             &mut hist_idx,
@@ -627,10 +653,23 @@ fn repl(kbd: Cap, cwd: &mut Cwd, must_change: &mut bool, history: &mut History) 
                             history,
                             &mut line,
                             &mut len,
+                            &mut pos,
                             &mut draft,
                             &mut draft_len,
                             &mut hist_idx,
                         ),
+                        b'D' => {
+                            if pos > 0 {
+                                pos -= 1;
+                                move_left(1);
+                            }
+                        }
+                        b'C' => {
+                            if pos < len {
+                                pos += 1;
+                                move_right(1);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -639,10 +678,107 @@ fn repl(kbd: Cap, cwd: &mut Cwd, must_change: &mut bool, history: &mut History) 
     }
 }
 
+fn editor_insert(
+    byte: u8,
+    line: &mut [u8; LINE_MAX],
+    len: &mut usize,
+    pos: &mut usize,
+    draft: &mut [u8; LINE_MAX],
+    draft_len: &mut usize,
+    hist_idx: &mut Option<usize>,
+) {
+    if *len >= LINE_MAX || *pos > *len {
+        return;
+    }
+    *hist_idx = None;
+    for i in (*pos..*len).rev() {
+        line[i + 1] = line[i];
+    }
+    line[*pos] = byte;
+    *len += 1;
+    write_console(&[byte]);
+    if *pos + 1 < *len {
+        write_console(&line[*pos + 1..*len]);
+        move_left(*len - *pos - 1);
+    }
+    *pos += 1;
+    draft[..*len].copy_from_slice(&line[..*len]);
+    *draft_len = *len;
+}
+
+fn editor_backspace(
+    line: &mut [u8; LINE_MAX],
+    len: &mut usize,
+    pos: &mut usize,
+    draft: &mut [u8; LINE_MAX],
+    draft_len: &mut usize,
+    hist_idx: &mut Option<usize>,
+) {
+    if *pos == 0 || *len == 0 {
+        return;
+    }
+    *pos -= 1;
+    for i in *pos..*len - 1 {
+        line[i] = line[i + 1];
+    }
+    *len -= 1;
+    line[*len] = 0;
+    if *pos == *len {
+        write_console(&[0x08, b' ', 0x08]);
+    } else {
+        move_left(1);
+        write_console(&line[*pos..*len]);
+        write_console(b" ");
+        move_left(*len - *pos + 1);
+    }
+    *hist_idx = None;
+    draft[..*len].copy_from_slice(&line[..*len]);
+    *draft_len = *len;
+}
+
+fn editor_clear(
+    line: &mut [u8; LINE_MAX],
+    len: &mut usize,
+    pos: &mut usize,
+    draft: &mut [u8; LINE_MAX],
+    draft_len: &mut usize,
+    hist_idx: &mut Option<usize>,
+) {
+    move_left(*pos);
+    for _ in 0..*len {
+        write_console(b" ");
+    }
+    move_left(*len);
+    *len = 0;
+    *pos = 0;
+    *draft_len = 0;
+    *hist_idx = None;
+    line[..LINE_MAX].fill(0);
+    draft[..LINE_MAX].fill(0);
+}
+
+fn move_left(n: usize) {
+    move_csi(n, b'D');
+}
+
+fn move_right(n: usize) {
+    move_csi(n, b'C');
+}
+
+fn move_csi(n: usize, final_byte: u8) {
+    if n == 0 {
+        return;
+    }
+    write_console(b"\x1b[");
+    write_u64_dec(n as u64);
+    write_console(&[final_byte]);
+}
+
 fn history_up(
     history: &History,
     line: &mut [u8; LINE_MAX],
     len: &mut usize,
+    pos: &mut usize,
     draft: &mut [u8; LINE_MAX],
     draft_len: &mut usize,
     hist_idx: &mut Option<usize>,
@@ -660,7 +796,7 @@ fn history_up(
         Some(i) => i - 1,
     };
     if let Some(text) = history.get(next) {
-        replace_input_line(line, len, text);
+        replace_input_line(line, len, pos, text);
         *hist_idx = Some(next);
     }
 }
@@ -669,6 +805,7 @@ fn history_down(
     history: &History,
     line: &mut [u8; LINE_MAX],
     len: &mut usize,
+    pos: &mut usize,
     draft: &mut [u8; LINE_MAX],
     draft_len: &mut usize,
     hist_idx: &mut Option<usize>,
@@ -678,22 +815,27 @@ fn history_down(
     };
     if i + 1 < history.count {
         if let Some(text) = history.get(i + 1) {
-            replace_input_line(line, len, text);
+            replace_input_line(line, len, pos, text);
             *hist_idx = Some(i + 1);
         }
     } else {
-        replace_input_line(line, len, &draft[..*draft_len]);
+        replace_input_line(line, len, pos, &draft[..*draft_len]);
         *hist_idx = None;
     }
 }
 
-fn replace_input_line(line: &mut [u8; LINE_MAX], len: &mut usize, new: &[u8]) {
+fn replace_input_line(line: &mut [u8; LINE_MAX], len: &mut usize, pos: &mut usize, new: &[u8]) {
+    move_right(*len - *pos);
     for _ in 0..*len {
         write_console(&[0x08, b' ', 0x08]);
     }
     let n = new.len().min(LINE_MAX);
     line[..n].copy_from_slice(&new[..n]);
+    if n < LINE_MAX {
+        line[n] = 0;
+    }
     *len = n;
+    *pos = n;
     if n > 0 {
         write_console(&line[..n]);
     }
@@ -727,6 +869,19 @@ fn dispatch(
         prompt(cwd);
         return None;
     }
+    let mut owned = [0u8; LINE_MAX];
+    let line = match expanded_line(cwd, line, &mut owned) {
+        None => {
+            write_console(b"glob: too long\n");
+            prompt(cwd);
+            return None;
+        }
+        Some(n) => trim(&owned[..n]),
+    };
+    if line.is_empty() {
+        prompt(cwd);
+        return None;
+    }
     // Compiled out of release images. The supervisor e2e boots a ramdisk
     // whose shell was built with `--features crash-seam`.
     #[cfg(feature = "crash-seam")]
@@ -734,6 +889,9 @@ fn dispatch(
         unsafe {
             core::ptr::read_volatile(core::ptr::null::<u8>());
         }
+        return None;
+    }
+    if try_pipeline(cwd, line) {
         return None;
     }
     if line == b"help" {
@@ -924,6 +1082,217 @@ fn dispatch(
     write_console(b"\x07"); // BEL → PC speaker
     prompt(cwd);
     None
+}
+
+/// `echo text | cat` — one pipe, two utilities, `give` of each end.
+fn try_pipeline(cwd: &Cwd, line: &[u8]) -> bool {
+    let Some(at) = find_slice(line, b" | ") else {
+        return false;
+    };
+    if find_slice(&line[at + 3..], b" | ").is_some() {
+        write_console(b"pipeline: one pipe only\n");
+        prompt(cwd);
+        return true;
+    }
+    let left = trim(&line[..at]);
+    let right = trim(&line[at + 3..]);
+    let Some(text) = arg_of(left, b"echo") else {
+        write_console(b"pipeline: usage: echo text | cat\n");
+        prompt(cwd);
+        return true;
+    };
+    if right != b"cat" {
+        write_console(b"pipeline: usage: echo text | cat\n");
+        prompt(cwd);
+        return true;
+    }
+    run_echo_cat(cwd, text);
+    true
+}
+
+fn run_echo_cat(cwd: &Cwd, text: &[u8]) {
+    let mut arg = [0u8; 2 + LINE_MAX];
+    arg[0] = 3;
+    arg[1] = 0;
+    let ncopy = text.len().min(LINE_MAX);
+    arg[2..2 + ncopy].copy_from_slice(&text[..ncopy]);
+    let echo_res = spawn_with(b"echo", &arg[..2 + ncopy], galexy_abi::SPAWN_INHERIT);
+    if !echo_res.ok {
+        write_console(b"pipeline: failed\n");
+        LAST_STATUS.store(1, Ordering::Relaxed);
+        prompt(cwd);
+        return;
+    }
+    let echo_cap = Cap::from_bits(echo_res.value);
+    let cat_res = spawn_with(b"cat", b"-", galexy_abi::SPAWN_INHERIT);
+    if !cat_res.ok {
+        let _ = kill(echo_cap);
+        let _ = wait(echo_cap);
+        write_console(b"pipeline: failed\n");
+        LAST_STATUS.store(1, Ordering::Relaxed);
+        prompt(cwd);
+        return;
+    }
+    let cat_cap = Cap::from_bits(cat_res.value);
+    let mut ends = [0u64; 2];
+    let piped = pipe(&mut ends);
+    if !piped.ok {
+        let _ = kill(echo_cap);
+        let _ = kill(cat_cap);
+        let _ = wait(echo_cap);
+        let _ = wait(cat_cap);
+        write_console(b"pipeline: failed\n");
+        LAST_STATUS.store(1, Ordering::Relaxed);
+        prompt(cwd);
+        return;
+    }
+    let read_cap = Cap::from_bits(ends[0]);
+    let write_cap = Cap::from_bits(ends[1]);
+    let gave_w = give(write_cap, b"echo");
+    let gave_r = give(read_cap, b"cat");
+    if !gave_w.ok {
+        let _ = close(write_cap);
+    }
+    if !gave_r.ok {
+        let _ = close(read_cap);
+    }
+    if !gave_w.ok || !gave_r.ok {
+        let _ = kill(echo_cap);
+        let _ = kill(cat_cap);
+    }
+    let _ = wait(echo_cap);
+    let cat_done = wait(cat_cap);
+    LAST_STATUS.store(
+        if cat_done.ok { cat_done.value } else { 1 },
+        Ordering::Relaxed,
+    );
+    prompt(cwd);
+}
+
+/// Copies `line` into `out`, expanding `*` words against the files snapshot.
+/// `None` when the expansion does not fit.
+fn expanded_line(cwd: &Cwd, line: &[u8], out: &mut [u8; LINE_MAX]) -> Option<usize> {
+    if !line.contains(&b'*') {
+        if line.len() > out.len() {
+            return None;
+        }
+        out[..line.len()].copy_from_slice(line);
+        return Some(line.len());
+    }
+    let mut snap = [0u8; 1024];
+    let got = read(files_cap(), &mut snap);
+    let snap_n = if got.ok {
+        (got.value as usize).min(snap.len())
+    } else {
+        0
+    };
+    let mut n = 0usize;
+    let mut i = 0usize;
+    let mut first = true;
+    while i < line.len() {
+        while i < line.len() && line[i] == b' ' {
+            i += 1;
+        }
+        if i >= line.len() {
+            break;
+        }
+        let start = i;
+        while i < line.len() && line[i] != b' ' {
+            i += 1;
+        }
+        let word = &line[start..i];
+        if !first && !push_byte(out, &mut n, b' ') {
+            return None;
+        }
+        first = false;
+        if word.contains(&b'*') {
+            let mut matched = false;
+            let mut s = 0usize;
+            while s < snap_n {
+                let rest = &snap[s..snap_n];
+                let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());
+                if let Some(name) = dir_entry(&cwd.buf[..cwd.len], &rest[..end]) {
+                    if glob_one(word, name) {
+                        if matched && !push_byte(out, &mut n, b' ') {
+                            return None;
+                        }
+                        if !push_bytes(out, &mut n, name) {
+                            return None;
+                        }
+                        matched = true;
+                    }
+                }
+                s += end + 1;
+            }
+            if !matched && !push_bytes(out, &mut n, word) {
+                return None;
+            }
+        } else if !push_bytes(out, &mut n, word) {
+            return None;
+        }
+    }
+    Some(n)
+}
+
+fn push_byte(out: &mut [u8], n: &mut usize, b: u8) -> bool {
+    if *n >= out.len() {
+        return false;
+    }
+    out[*n] = b;
+    *n += 1;
+    true
+}
+
+fn push_bytes(out: &mut [u8], n: &mut usize, bytes: &[u8]) -> bool {
+    if n.saturating_add(bytes.len()) > out.len() {
+        return false;
+    }
+    out[*n..*n + bytes.len()].copy_from_slice(bytes);
+    *n += bytes.len();
+    true
+}
+
+/// One `*` in `pat`. The name is one directory entry (no extra slash).
+fn glob_one(pat: &[u8], name: &[u8]) -> bool {
+    let Some(star) = pat.iter().position(|b| *b == b'*') else {
+        return false;
+    };
+    if pat[star + 1..].contains(&b'*') {
+        return false;
+    }
+    let prefix = &pat[..star];
+    let suffix = &pat[star + 1..];
+    let leaf = name.strip_suffix(b"/").unwrap_or(name);
+    leaf.len() >= prefix.len() + suffix.len()
+        && leaf.starts_with(prefix)
+        && leaf.ends_with(suffix)
+}
+
+/// One child of `cwd` from a files-snapshot line. Same shape as `ls`.
+fn dir_entry<'a>(cwd: &[u8], line: &'a [u8]) -> Option<&'a [u8]> {
+    if line.is_empty() {
+        return None;
+    }
+    if cwd.is_empty() {
+        let slashes = line.iter().filter(|b| **b == b'/').count();
+        if slashes == 0 || (slashes == 1 && line.ends_with(b"/")) {
+            return Some(line);
+        }
+        return None;
+    }
+    if line.len() <= cwd.len() + 1 {
+        return None;
+    }
+    if &line[..cwd.len()] != cwd || line[cwd.len()] != b'/' {
+        return None;
+    }
+    let rest = &line[cwd.len() + 1..];
+    let slashes = rest.iter().filter(|b| **b == b'/').count();
+    if slashes == 0 || (slashes == 1 && rest.ends_with(b"/")) {
+        Some(rest)
+    } else {
+        None
+    }
 }
 
 fn echo(cwd: &Cwd, rest: &[u8]) {
@@ -1706,6 +2075,7 @@ fn cd(cwd: &mut Cwd, name: &[u8]) {
         return;
     };
     if !snapshot_has(&path[..n]) {
+        // Leave cwd alone so the prompt stays on the directory that exists.
         write_console(b"cd: no such directory\n");
         prompt(cwd);
         return;

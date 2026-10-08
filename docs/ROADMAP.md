@@ -249,7 +249,8 @@ checklist). Style: `docs/STYLE.md`.
    lock-order table, secret scrub. PCID and ASLR waived
 7. **49 Console, audit & UX** ✅ — blink cursor, keyboard overflow,
    auth/grant audit lines, dmesg cap, `verbose-sched` steal trace
-8. **50 Shell for real demos** — pipes, glob, line editing
+8. **50 Shell for real demos** ✅ — `echo | cat`, `*` glob, line
+   editing, cwd across login / `su` / failed `cd`
 9. **51 Docs, tests, CI & soak** — THREAT/FS, negative suite, review-smoke,
    non-goals freeze
 10. **52 Review RC** — default secure build; tag `review-rc1`

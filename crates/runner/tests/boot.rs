@@ -2039,6 +2039,105 @@ fn shell_nested_spawn_refused_e2e() {
     );
 }
 
+/// `mkdir` / `cd`, a failed `cd` that keeps the prompt, `echo *`, and
+/// `echo quiz | cat`.
+const PIPE_GLOB_KEYS: &[(&str, &str)] = &[
+    ("m", "m"),
+    ("k", "k"),
+    ("d", "d"),
+    ("i", "i"),
+    ("r", "r"),
+    ("spc", " "),
+    ("b", "b"),
+    ("o", "o"),
+    ("x", "x"),
+    ("ret", "admin@galexy> "),
+    ("c", "c"),
+    ("d", "d"),
+    ("spc", " "),
+    ("b", "b"),
+    ("o", "o"),
+    ("x", "x"),
+    ("ret", "admin@galexy:/box> "),
+    ("c", "c"),
+    ("d", "d"),
+    ("spc", " "),
+    ("n", "n"),
+    ("o", "o"),
+    ("p", "p"),
+    ("e", "e"),
+    ("ret", "cd: no such directory"),
+    ("t", "t"),
+    ("o", "o"),
+    ("u", "u"),
+    ("c", "c"),
+    ("h", "h"),
+    ("spc", " "),
+    ("a", "a"),
+    ("a", "a"),
+    ("ret", "admin@galexy:/box> "),
+    ("t", "t"),
+    ("o", "o"),
+    ("u", "u"),
+    ("c", "c"),
+    ("h", "h"),
+    ("spc", " "),
+    ("b", "b"),
+    ("b", "b"),
+    ("ret", "admin@galexy:/box> "),
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("shift+8", "*"),
+    ("ret", "aa bb\n"),
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("q", "q"),
+    ("u", "u"),
+    ("i", "i"),
+    ("z", "z"),
+    ("spc", " "),
+    ("shift+backslash", "|"),
+    ("spc", " "),
+    ("c", "c"),
+    ("a", "a"),
+    ("t", "t"),
+    ("ret", "quiz\n"),
+];
+
+#[test]
+fn shell_pipeline_glob_typing_e2e() {
+    let keys = with_login(PIPE_GLOB_KEYS);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "quiz\n",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    let missed = serial.find("cd: no such directory").unwrap_or_else(|| {
+        panic!("failed cd did not report; serial:\n{serial}")
+    });
+    assert!(
+        serial[missed..].contains("admin@galexy:/box> "),
+        "failed cd changed the prompt; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("aa bb\n"),
+        "glob did not expand echo *; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("quiz\n"),
+        "echo | cat did not print the payload; serial:\n{serial}"
+    );
+}
+
 /// `cat banner.txt`, a scratch file written with `echo`, and `mkdir` /
 /// `cd` / `ls`. `hello` is not console text. A tar name cannot be replaced.
 /// `rm` drops a scratch file and refuses a directory that still has a child.
