@@ -23,6 +23,7 @@ fn image_path(name: &str, kind: &str) -> String {
 
 fn main() {
     let uefi = std::env::args().any(|arg| arg == "--uefi");
+    let display = std::env::args().any(|arg| arg == "--display");
     let img_path = if uefi {
         image_path("galexy-os", "uefi")
     } else {
@@ -72,8 +73,23 @@ fn main() {
     // per-CPU mechanism (WRGSBASE/RDGSBASE).
     cmd.arg("-smp").arg("2");
     cmd.arg("-cpu").arg("max");
-    // Surface guest COM1 on the host terminal for debugging.
-    cmd.arg("-serial").arg("stdio");
+    // COM1 is the console: the guest mirrors the visible TTY onto it and
+    // reads keystrokes back. Headless is the default so that text is this
+    // terminal (copy, paste, scroll). `--display` also opens the
+    // framebuffer window; F1–F12 only exist on that PS/2 keyboard.
+    //
+    // `-nographic` muxes the QEMU monitor onto the same stdio (Ctrl-A C
+    // switches, Ctrl-A X quits) and leaves Ctrl-C for the guest. The
+    // window path keeps the monitor in the window and serial on stdio.
+    if display {
+        cmd.arg("-serial").arg("stdio");
+        eprintln!("[runner] framebuffer window open; type in this terminal or the window");
+    } else {
+        cmd.arg("-nographic");
+        eprintln!(
+            "[runner] headless; type here. Ctrl-A X quits, Ctrl-A C is the QEMU monitor. --display opens the window"
+        );
+    }
     // Make triple faults visible instead of silently rebooting.
     cmd.arg("-no-reboot");
     // Exit device for automated tests (io port 0xF4 writes end QEMU with a code).

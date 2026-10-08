@@ -1,9 +1,9 @@
 //! I/O APIC: external interrupt routing.
 //!
 //! Maps the boot I/O APIC (MMIO base + GSI base from the MADT, see
-//! `arch::acpi`) and wires exactly ONE external line for now: the PS/2
-//! keyboard's ISA IRQ1 (its GSI from the MADT's Interrupt Source Override
-//! when present, `1` otherwise) onto the keyboard's vector (33).
+//! `arch::acpi`) and wires two external lines: the PS/2 keyboard's ISA
+//! IRQ1 (its GSI from the MADT's Interrupt Source Override when present,
+//! `1` otherwise) onto vector 33, and COM1's ISA IRQ4 onto vector 36.
 //!
 //! All other redirection entries stay MASKED — an unmasked dead RTE can
 //! never assert, but a stray on a wired-but-unhandled vector would be an
@@ -26,7 +26,7 @@ use x86_64::{PhysAddr, VirtAddr};
 use crate::arch::acpi;
 use crate::arch::apic;
 use crate::arch::mm;
-use crate::arch::pics::KEYBOARD_INTERRUPT_ID;
+use crate::arch::pics::{KEYBOARD_INTERRUPT_ID, SERIAL_INTERRUPT_ID};
 use crate::serial_println;
 
 /// IOREGSEL: 32-bit register selector (memory offset within the page).
@@ -103,8 +103,8 @@ fn map_ioapic_page(base: u64) -> VirtAddr {
 }
 
 /// Brings up the I/O APIC: maps the register page, masks ALL redirection
-/// entries, then wires the keyboard line. Called by `arch::init` after the
-/// LAPIC is enabled (its ID is the routing destination).
+/// entries, then wires the keyboard and COM1. Called by `arch::init` after
+/// the LAPIC is enabled (its ID is the routing destination).
 pub fn init() {
     let madt = acpi::madt();
     let page = map_ioapic_page(madt.ioapic_base());
@@ -131,28 +131,36 @@ pub fn init() {
         pins
     );
 
-    // Wire the keyboard: ISA IRQ1 -> GSI (override or identity) -> pin
-    // (GSI - base), vector 33, edge-triggered, active-high, physical dest
-    // = this CPU's LAPIC ID.
-    let gsi = madt.isa_gsi(1);
+    // ISA IRQ -> GSI (override or identity) -> pin, edge-triggered,
+    // active-high, physical dest = this CPU's LAPIC ID.
+    wire_isa(page, pins, 1, KEYBOARD_INTERRUPT_ID, "keyboard");
+    wire_isa(page, pins, 4, SERIAL_INTERRUPT_ID, "serial");
+}
+
+/// Unmasks one ISA IRQ onto `vector`. Edge, active-high, BSP destination.
+fn wire_isa(page: VirtAddr, pins: u32, isa_irq: u8, vector: u8, what: &str) {
+    let madt = acpi::madt();
+    let gsi = madt.isa_gsi(isa_irq);
     assert!(
         gsi >= madt.ioapic_gsi_base(),
-        "ioapic: keyboard GSI {gsi} is below the boot I/O APIC's GSI base {}",
+        "ioapic: {what} GSI {gsi} is below the boot I/O APIC's GSI base {}",
         madt.ioapic_gsi_base()
     );
     let pin = gsi - madt.ioapic_gsi_base();
     assert!(
         pin < pins,
-        "ioapic: keyboard GSI {gsi} is beyond the boot I/O APIC's pin count {pins}"
+        "ioapic: {what} GSI {gsi} is beyond the boot I/O APIC's pin count {pins}"
     );
     let dest = u64::from(apic::lapic_id()) << DEST_SHIFT;
-    let entry = u64::from(KEYBOARD_INTERRUPT_ID) | dest;
+    let entry = u64::from(vector) | dest;
     write_redtbl(page, pin as u8, entry);
     serial_println!(
-        "[ioapic] keyboard: isa irq 1 -> gsi {} -> pin {}, vector {}",
+        "[ioapic] {}: isa irq {} -> gsi {} -> pin {}, vector {}",
+        what,
+        isa_irq,
         gsi,
         pin,
-        KEYBOARD_INTERRUPT_ID
+        vector
     );
 }
 

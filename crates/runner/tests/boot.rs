@@ -7,7 +7,7 @@ use common::{
     boot, boot_and_type, boot_and_type_uefi, boot_galfs_once, boot_liveness, boot_uefi,
     boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
     boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio,
-    image, GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
+    image, uart_login_serial, GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
 };
 use std::time::Duration;
 
@@ -2089,6 +2089,22 @@ fn shell_password_paste_typing_e2e() {
     assert!(
         serial.contains("password too long"),
         "overlong paste was not refused; serial:\n{serial}"
+    );
+    assert_passwords_masked(&serial);
+}
+
+/// Headless COM1 is a console, not just a log: bytes written to the UART
+/// log in (DEL is backspace, CR is Enter) and the password stays masked.
+#[test]
+fn uart_console_login_e2e() {
+    let serial = uart_login_serial(&image("galexy-os"));
+    assert!(
+        serial.contains("[ioapic] serial: isa irq 4"),
+        "COM1 was not routed; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("passwd: change the default password"),
+        "UART login never reached the default-password prompt; serial:\n{serial}"
     );
     assert_passwords_masked(&serial);
 }

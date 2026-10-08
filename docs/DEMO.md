@@ -1,15 +1,20 @@
 # Reviewer demo
 
 A short path through login, a second account, an access card, and two
-consoles. Serial (COM1) is the audit log; `dmesg` after login shows the
-same lines. No command here prints a password.
+consoles. The terminal is the console (COM1); `dmesg` after login shows
+the kernel lines. No command here prints a password.
 
 ```sh
-cargo run
+cargo run -- --display
 ```
 
+Headless `cargo run` (the default) types the same login in this
+terminal. Steps 4–7 switch consoles with F1/F2, which are PS/2 keys, so
+they need the window.
+
 1. On tty1 the login screen asks for a name and a masked password.
-   Type `admin`, then `admin`. The password line shows stars.
+   Type `admin`, then `admin`. The password line shows stars. Quit the
+   headless session with Ctrl-A then X.
 2. The shell requires `passwd` before other commands. Enter a new
    password twice. COM1 records `[auth] passwd user=admin` and not the
    secret.

@@ -562,6 +562,135 @@ pub fn boot(image: &Image) -> (Option<i32>, String) {
     (code, serial)
 }
 
+/// Boots the main image with COM1 on a Unix socket and types a login.
+///
+/// No data disk, so the seat comes up RAM-only and asks `Login as:`
+/// directly. Returns everything the guest wrote. The caller kills nothing;
+/// this function stops QEMU before returning.
+pub fn uart_login_serial(image: &Image) -> String {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let sock_path = std::env::temp_dir().join(format!("galexy-uart-{nanos}.sock"));
+    let _ = std::fs::remove_file(&sock_path);
+
+    let mut child = Command::new("qemu-system-x86_64")
+        .arg("-drive")
+        .arg(format!(
+            "format=raw,file={},if=ide,index=0,snapshot=on",
+            image.bios
+        ))
+        .arg("-smp")
+        .arg("2")
+        .arg("-cpu")
+        .arg("max")
+        .arg("-display")
+        .arg("none")
+        .arg("-monitor")
+        .arg("none")
+        .arg("-no-reboot")
+        .arg("-serial")
+        .arg(format!("unix:{},server=on,wait=off", sock_path.display()))
+        .arg("-device")
+        .arg("isa-debug-exit,iobase=0xf4,iosize=0x04")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to launch qemu-system-x86_64 (uart login)");
+
+    let deadline = Instant::now() + TEST_TIMEOUT;
+    let stream = loop {
+        if let Some(status) = child.try_wait().expect("try_wait failed") {
+            let _ = std::fs::remove_file(&sock_path);
+            panic!("qemu exited before the serial socket connected: {status:?}");
+        }
+        if let Ok(stream) = UnixStream::connect(&sock_path) {
+            break stream;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&sock_path);
+            panic!("serial socket never appeared at {}", sock_path.display());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .expect("set_read_timeout");
+
+    let mut buf = Vec::new();
+    let mut scratch = [0u8; 1024];
+    let mut stream = stream;
+
+    // DEL drops the extra `x`, so the name is `admin`. CR is Enter.
+    let steps: &[(&str, Option<&[u8]>)] = &[
+        ("Login as:", Some(b"admix\x7fn\r")),
+        ("Password:", Some(b"admin\r")),
+        ("passwd: change the default password", None),
+    ];
+    for (needle, then) in steps {
+        if !uart_read_until(
+            &mut stream,
+            &mut buf,
+            &mut scratch,
+            &mut child,
+            needle,
+            deadline,
+        ) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&sock_path);
+            panic!(
+                "{needle} never appeared on COM1; serial:\n{}",
+                String::from_utf8_lossy(&buf)
+            );
+        }
+        if let Some(bytes) = then {
+            stream.write_all(bytes).expect("write COM1");
+        }
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_file(&sock_path);
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+/// Reads the guest's COM1 until `needle` shows up, the deadline passes, or
+/// QEMU exits. Timed-out reads are retried; any other I/O error stops.
+fn uart_read_until(
+    stream: &mut std::os::unix::net::UnixStream,
+    buf: &mut Vec<u8>,
+    scratch: &mut [u8],
+    child: &mut std::process::Child,
+    needle: &str,
+    deadline: Instant,
+) -> bool {
+    use std::io::Read;
+    while Instant::now() < deadline {
+        if child.try_wait().expect("try_wait failed").is_some() {
+            return false;
+        }
+        match stream.read(scratch) {
+            Ok(0) => return false,
+            Ok(n) => buf.extend_from_slice(&scratch[..n]),
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(_) => return false,
+        }
+        if std::str::from_utf8(buf).unwrap_or("").contains(needle) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Boots `image` under UEFI (OVMF) and kills the guest after `timeout`.
 /// Returns the serial output.
 pub fn boot_uefi(image: &Image, timeout: Duration) -> String {

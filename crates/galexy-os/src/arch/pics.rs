@@ -23,6 +23,8 @@ pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 pub const TIMER_INTERRUPT_ID: u8 = PIC_1_OFFSET;
 /// Vector the PS/2 keyboard fires on (I/O APIC route of legacy IRQ1).
 pub const KEYBOARD_INTERRUPT_ID: u8 = PIC_1_OFFSET + 1;
+/// Vector COM1 fires on (I/O APIC route of legacy IRQ4).
+pub const SERIAL_INTERRUPT_ID: u8 = PIC_1_OFFSET + 4;
 
 static PICS: LazyLock<Mutex<ChainedPics>> = LazyLock::new(|| {
     // SAFETY: PICs are only initialized through this single static instance.
