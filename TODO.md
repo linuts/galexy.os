@@ -1558,19 +1558,23 @@ If it is not logged, it did not happen in a review.
 - [x] **No secrets in audits**: `audit_strings` host test rejects
       `password` inside any `serial_println!` invocation
 
-## Milestone 50 — Shell for real demos
+## Milestone 50 — Shell for real demos ✅
 
 Shell is the demo UI; make it less surprising under load.
 
-- [ ] **Pipeline wiring**: `echo hi | cat` via existing pipe/give syscalls
-- [ ] **Background / foreground**: optional; at least document that all
-      bare launches share the console
-- [ ] **Glob** (userspace): `*` expansion against the files snapshot
+- [x] **Pipeline wiring**: `echo text | cat` via `pipe` + `give`
+      (echo mode 3, `cat -`)
+- [x] **Background / foreground**: bare launches share the console;
+      no background job (documented in the shell help and DESIGN)
+- [x] **Glob** (userspace): one `*` per word, against the files snapshot
+      for the current directory
 - [x] **Line editing**: `shell.history` + up/down CSI arrows (command
       center); Ctrl-C kills the TTY foreground job Cap (M55)
-- [ ] **Line editing (more)**: left/right cursor, Ctrl-A/E, clear-line
-- [ ] **Prompt / cwd correctness** across login, logout, su, failed cd
-- [ ] Typing e2e for pipeline + glob smoke
+- [x] **Line editing (more)**: left/right (`CSI C`/`D`), Ctrl-A / Ctrl-E,
+      Ctrl-U clears the line
+- [x] **Prompt / cwd correctness** across login, logout, su (cwd cleared),
+      failed `cd` (cwd unchanged)
+- [x] Typing e2e for pipeline + glob smoke (`shell_pipeline_glob_typing_e2e`)
 
 ## Milestone 51 — Docs, tests, CI & soak
 
@@ -1965,7 +1969,8 @@ items stay here with rationale.
       ESC, BEL). CSI policy and the blinking cursor are Milestone 49
       (`DESIGN.md`). The reject set stays intentional
 - [x] ~~There is no glob or disk-backed store yet~~ — disk-backed store
-      CLOSED by Milestone 38; glob — **Milestone 50**
+      CLOSED by Milestone 38; glob CLOSED by Milestone 50 (`*` in the
+      current directory)
 - [x] ~~`run` leaks the task name, and freed slots panic the table at
       64~~ — CLOSED by Milestone 26 (name copied into the slot; a
       `Freed` record is reused once no CPU is current on it)
@@ -1990,7 +1995,7 @@ items stay here with rationale.
 - [ ] Process/ABI/caps (process-Cap foundation) — **Milestone 47**
 - [x] Memory/safety/concurrency — **Milestone 48**
 - [x] Console/audit — **Milestone 49**
-- [ ] Shell demos — **Milestone 50**
+- [x] Shell demos — **Milestone 50**
 - [ ] Docs/tests/CI/soak — **Milestone 51**
 - [ ] Review RC — **Milestone 52**
 - [x] Init (orphan root) — **Milestone 53** (Phase 6)

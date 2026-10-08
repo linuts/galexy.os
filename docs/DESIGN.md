@@ -840,8 +840,15 @@ fit — via `screen::draw_status_bar`. It never moves the text cursor
 (hijacking `set_pos` for the bar could leave typing on the status row so
 input vanished on the next redraw). That row is not part of the text
 scroll, and the bar is drawn without feeding the CSI parser. Arrow keys
-arrive as CSI (`ESC [ A`…`D`) on the keyboard Cap so the ring-3 shell
-can browse `shell.history`.
+arrive as CSI (`ESC [ A`…`D`) on the keyboard Cap. Up/down browse
+`shell.history`. Left/right move inside the line; Ctrl-A / Ctrl-E jump
+to the ends; Ctrl-U clears the line. `echo text | cat` is one pipe:
+the shell `give`s the write end to `echo` and the read end to `cat`.
+A `*` word expands to names in the current directory from the files
+snapshot. A bare program shares the console with the seat (no
+background job). Login, logout, and `su` clear the working directory.
+A failed `cd` leaves it, so the prompt stays on the directory that
+exists.
 
 ### sched/ramdisk — "the archive" (`sched/`)
 
