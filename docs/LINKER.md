@@ -83,8 +83,9 @@ Three placements, two of which are the same code:
    (`sched/loader.rs`). The one coupling worth adding is agreement by
    construction: the linker takes `USER_IMAGE_BASE`, the page size and
    the W^X rule from `galexy-abi` and validates its own output with
-   the same `elf_bytes_wx_ok` the loader runs. `gxc::validate_elf`
-   becomes the shared post-link check.
+   the rules the loader enforces (`gxld::validate`: ELF64 LE,
+   `ET_EXEC`, page-aligned disjoint `PT_LOAD`s at or above the base,
+   W^X, entry inside the window) — the shared post-link check.
 
 ## Inputs and output
 
@@ -92,8 +93,9 @@ Three placements, two of which are the same code:
 (rlibs are `ar` archives with one extra `lib.rmeta` member to skip).
 Parsing is the `object` crate with `read_core` + `elf` + `archive`,
 which builds without `std`. Nothing is written with `object`; the
-output is emitted by hand, as `gxc::elf` does today, because the
-output shape is fixed and tiny.
+output is emitted by hand (`link.rs` → `emit`) because the output
+shape is fixed and tiny: ELF header, up to three program headers, the
+segment bytes. No section headers, no symbol table.
 
 Two relocation styles must both work: today's userspace is compiled
 for `x86_64-unknown-none`, which is PIC by default (so `PLT32` and
@@ -193,7 +195,7 @@ galexy-target sysroot plus `hello.rs` compiled by cg_clif.
 
 | Risk | Mitigation |
 |---|---|
-| A subtly wrong image is a debugging sink | No layout or relocation change without the `rust-lld` differential green; `elf_bytes_wx_ok` and `validate_elf` on every output |
+| A subtly wrong image is a debugging sink | No layout or relocation change without the `gxld_image_*_e2e` differential green; `gxld::validate` on every output |
 | cg_clif emits a relocation or section v0 does not know | The error names it; the differential test on `shell` surfaces most of them before `rustc` exists; `wild` is the written fallback (`RUSTC.md` Stage 6) |
 | `object` crate API churn | Pin the version; the read API used is small (sections, symbols, relocations, archive members) |
 | Scope creep toward `ld` | Non-goals above are the gate; a new relocation kind or section needs a checkbox |
