@@ -275,8 +275,10 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 - Sealed dual-slot image (288 sectors/slot) on the IDE slave
 - Object + block fill stress; remove reuses blocks without leaks
 - Shell: `ls` / `cat` / `echo` / `touch` / `mkdir` / `rm` / `cp` / `mv`
-  / `grant` / `revoke` / `share` / `unshare` / `quota` / `tokens` / `sync`
-- Admin operator bypass still broad (narrow in Milestone 43 leftovers)
+  / `stat` / `truncate` / `grant` / `revoke` / `share` / `unshare` /
+  `quota` / `tokens` / `sync`; `echo text | cat` and `*` glob (M50)
+- Admin operator bypass is narrow (Milestone 43): admin's root token
+  does not cover foreign trees; `su` or a card is required
 
 ### Ops (landed)
 
@@ -372,7 +374,12 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 - Double-indirect / lengths beyond u16
 - Optional fsck repair into a new slot
 
-### Target storage stack (Milestone 46)
+### Storage stack (Milestone 46 ✅)
+
+Legacy today, by the ROADMAP review: virtio-blk speaks the **legacy**
+PCI IO-BAR transport and polls the used ring; ATA is PIO. Milestone 64
+adds IRQ completion; Milestone 65 adds virtio 1.x (PCI capabilities,
+MMIO BARs, MSI-X) on `-M q35` and keeps the paths below as fallbacks.
 
 - **Landed:** `BlockDevice` + `ata::PrimarySlave` + IDENTIFY capacity;
   galfs via `disk()`; dual-slot size gate
@@ -400,9 +407,11 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 
 | Milestone | Delivers |
 | --- | --- |
-| **44** | Sealed GALF (volume key + AEAD); threat model; no plaintext in image |
-| **45** | Capacity, blocks, ops, sync, quotas, host fsck, shares, single-indirect, crash injection, ATA I/O errors |
-| **46** | Storage stack polish for demos / review |
+| **44** ✅ | Sealed GALF (volume key + AEAD); threat model; no plaintext in image |
+| **45** ✅ | Capacity, blocks, ops, sync, quotas, host fsck, shares, single-indirect, crash injection, ATA I/O errors |
+| **46** ✅ | `BlockDevice`, capacity gate, flush matrix, legacy virtio-blk, partition offset |
+| **63** | Per-actor KDF cost in the actor record (GALF v12) |
+| **64 / 65** | IRQ completion; virtio 1.x + MSI-X on `q35`; IDE and legacy virtio as fallbacks |
 
 Demo limits above are the shipped contract (double-indirect and fsck
 repair-into-new-slot are follow-ons). New code must not invent a second

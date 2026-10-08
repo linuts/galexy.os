@@ -3,12 +3,19 @@
 Tracking document for concrete work items. Big-picture direction lives in
 `docs/ROADMAP.md`. Check items off as they land and are verified.
 
-Shipped through Milestone 42 (password auth + login screen). **Next
-focus:** Phase — Review readiness (Milestones **43–52**), then Phase 6 —
-process Caps / init / seats (**53–55**). Parallel tracks after that:
-Phase 7 — scheduling complete (**56–58**, `docs/SCHEDULING.md`) and
-Phase 8 — mini Rust compiler (**59–61**, `docs/COMPILER.md`). Style:
-`docs/STYLE.md`.
+Shipped: Milestones **1–50** (boot through shell demos), Phase 6
+init/seats/jobs (**53–55**), Phase 7 scheduling (**56–58**), and Phase 8
+gxc hello (**59–61**). **Next focus:** Milestone **51** (docs, CI, soak)
+and **52** (`review-rc1`), then Phase 9 — hardened, fast, modern
+(**63–67**, `docs/ROADMAP.md` → Where we stand) toward `v1.0`.
+Style: `docs/STYLE.md`.
+
+Review snapshot (2026-10, commit `80cc05e`): 26 syscalls, 10 reserved
+caps, 68 QEMU test kernels, 87 runner boots + 1 host audit test, host
+suites green (abi 7 / core 23 / crypto 11 / galf 2 / gxc 11). Gaps that
+block "secure, fast, modern, full-feature, ready" are listed as
+Milestones 51–52 and 63–67; nothing below is checked unless it runs in
+QEMU.
 
 ## Milestone 1 — Boot skeleton ✅
 
@@ -1325,9 +1332,11 @@ Multi-user usage beyond one admin and ad-hoc grants.
       revoke/unshare frees a slot; maxima documented (`TOKEN_SLOTS`=8,
       `SHARE_SLOTS`=32); `bin/test-cards`
 
-## Milestone 46 — Storage stack
+## Milestone 46 — Storage stack ✅
 
-Reviewers will ask how storage grows past QEMU's secondary IDE.
+Reviewers will ask how storage grows past QEMU's secondary IDE. Every
+box below landed; modern virtio (PCI capabilities, MSI-X, IRQ
+completion) is Milestone 65.
 
 - [x] **Device abstraction**: `BlockDevice` trait (read/write sectors,
       flush, capacity) with ATA PIO `PrimarySlave` as the first impl;
@@ -1353,7 +1362,7 @@ Reviewers will ask how storage grows past QEMU's secondary IDE.
 - [x] Disk backend matrix in runner tests: IDE (writethrough / writeback /
       none) + virtio-blk-pci persistence e2e
 
-## Milestone 47 — Process, ABI & capabilities
+## Milestone 47 — Process, ABI & capabilities ✅
 
 What a non-toy program and a forged Cap will hit. This milestone lays the
 **clean-slate process foundation**: tasks are kernel objects addressed by
@@ -1603,10 +1612,16 @@ Evidence, not assertions.
 
 - [ ] **Negative suite**: path fuzz (host); grant/revoke confused-deputy
       cases; pre-login spawn denied; bare spawn cannot write galfs
+- [ ] **Hostile ELF suite**: `bin/test-badelf` feeds the loader a
+      segment with `filesz > memsz`, a `memsz` past the user window, an
+      overlapping `PT_LOAD`, and a truncated header; each returns
+      `SysError`, never a panic (loader hardening itself is Milestone 63)
 - [ ] **Ramdisk measurement**: hash of the packed tar at build time;
       kernel checks optional allowlist before `SPAWN_WAIT` inherit
       (or document “trusted ramdisk” as a hard requirement)
 - [ ] **Feature-gated test seams**: `crash`, verbose panics, etc.
+      (`crash-seam`, `verbose-sched` exist; list every seam in one
+      DESIGN table)
 - [ ] **CI matrix doc**: BIOS, UEFI (`OVMF_FD`), `-smp 2`, with/without
       galfs disk, cache modes
 - [ ] **Coverage list**: which milestones each `bin/test-*` guards
@@ -1623,13 +1638,32 @@ Make “green on my machine” into “green in CI and for the reviewer”.
       reviewer section
 - [ ] **One-command review boot**: `cargo run` + disk + `OVMF_FD` notes;
       script `scripts/review-smoke.sh` runs a focused subset
-- [ ] **CI matrix** (doc + workflow if GH Actions exists, else runner
-      instructions): BIOS, UEFI, smp2, disk on/off
-- [ ] **Clippy -D warnings** + fmt check in CI
+- [ ] **GitHub Actions workflow** (`.github/workflows/ci.yml`, absent
+      today): host tests (abi / core / crypto / galf / gxc), clippy,
+      fmt check, then the QEMU runner on `ubuntu-latest` with
+      `qemu-system-x86` + `ovmf`; `--test-threads=1` for disk cases
+- [ ] **CI matrix** (doc + workflow): BIOS, UEFI (`OVMF_FD`), `-smp 2`,
+      disk on/off, `cache=` modes
+- [ ] **Clippy green**: `cargo clippy -p galexy-os --target
+      x86_64-unknown-none --no-deps --bins` fails on the current nightly
+      with 10 pre-existing lints (`galfs.rs` `manual_is_multiple_of`,
+      `explicit_auto_deref` ×4, `manual_div_ceil` ×2,
+      `needless_range_loop`; `loader.rs` `too_many_arguments`;
+      `syscalls.rs` `redundant_closure`), plus `galexy-galf`
+      `manual_div_ceil` and four `gxc` warnings. Fix them in one commit;
+      keep `#![deny(clippy::all)]`
+- [ ] **rustfmt baseline**: `cargo fmt --all -- --check` reports 88
+      files on rustfmt 1.101-nightly. Reformat once on the pinned
+      toolchain in a formatting-only commit, then CI enforces it. Pin
+      the nightly date in `rust-toolchain.toml` so the baseline holds
 - [ ] **Host tests** for abi/core on every PR
 - [ ] **Repro notes**: ramdisk tar hash printed at build; image names
       stable
 - [ ] **PR template**: test plan + STYLE secrets/GALF checklist
+- [ ] **Repo files**: `LICENSE` (owner picks; MIT or Apache-2.0
+      matches the dependency stance), `SECURITY.md` (how to report;
+      what is in scope per `THREAT.md`), `CHANGELOG.md` (one line per
+      merged milestone PR, starting at #62)
 - [ ] **`galfs.img` gitignore** verified; clean instructions if a bad
       image breaks boots after a version bump
 
@@ -1668,10 +1702,13 @@ What we will tell a reviewer we are *not* doing — written down.
 
 ## Milestone 52 — Review release candidate
 
-The “ready for review” checklist — not a feature dump.
+The “ready for review” checklist — not a feature dump. `review-rc1`
+means a systems engineer can read and poke it. `v1.0` (the "ready OS"
+bar) adds Phase 9 (Milestones 63–67) on top; see the gate at the end
+of Milestone 67.
 
 - [ ] All milestones 43–51 either ✅ or explicitly waived in THREAT/FS
-      docs with rationale
+      docs with rationale (46 and 47 are ✅ as of this review)
 - [ ] Full suite green BIOS+UEFI; disk persist + corrupt recover + auth
       e2e + galfs capacity smoke
 - [ ] Default build: no `crash`, KDF live, encryption on if disk present
@@ -1697,7 +1734,7 @@ POSIX claim. **Plan: `docs/PROCESS.md`.** Builds on Milestone 47. Style:
 `docs/STYLE.md` → Process model and init. Direction: `docs/ROADMAP.md`
 Phase 6.
 
-## Milestone 53 — Init (orphan root)
+## Milestone 53 — Init (orphan root) ✅ (ordered shutdown → Milestone 67)
 
 Mechanism in the kernel; policy in userspace.
 
@@ -1712,7 +1749,7 @@ Mechanism in the kernel; policy in userspace.
 - [x] **Retire kernel seat supervisor**: when init is present, kernel
       skips `spawn_all_shells` / `ensure_shell` (Milestone 54)
 - [ ] **Shutdown/reboot path**: init holds power grant; ordered
-      “request to init” remains a follow-on
+      “request to init” → **Milestone 67**
 - [x] Tests: `bin/test-init` + `init_test_passes` (orphan Cap transfer to
       init); `test-orphan` covers no-init → kernel root
 
@@ -1740,7 +1777,7 @@ Move F-key consoles and long-runners under init.
 - [x] **Seat crash → restart**: round-robin Cap-wait replaces
       `ensure_shell` when init is present
 - [ ] **Session id**: bind M43 session generation to seat Cap / debug id
-      — follow-on polish
+      → **Milestone 67**
 - [x] **F1–F12 switching** remains kernel console selection
 - [x] Tests: typing e2e reaches a seat; init console chatter absent (suite)
 
@@ -1748,8 +1785,9 @@ Move F-key consoles and long-runners under init.
 
 Small and explicit — not a systemd clone.
 
-- [ ] **Service table**: waived for v1 beyond seats — DESIGN note
-- [ ] **Operator surface**: `svc` waived for v1 — DESIGN note
+- [ ] **Service table**: waived for the seats MVP → **Milestone 67**
+- [ ] **Operator surface**: `svc` waived for the seats MVP →
+      **Milestone 67**
 - [x] **No ambient root services**: seats are pre-login; init attenuated
 - [x] **Hang detection (optional)**: waived for v1
 - [x] Docs: seats under init for boot; `svc`/extra services later
@@ -1936,6 +1974,320 @@ Only after 59–61 are boring.
 
 ---
 
+## Phase 9 — Hardened, fast, modern (v1.0)
+
+Goal: close the gap between `review-rc1` (a reviewable system) and a
+**ready OS**: hardware security features on, measured performance under
+KVM, modern device paths with legacy as fallback, a userland that can
+hold real programs, and init that owns shutdown and services. Direction
+and the review scorecard: `docs/ROADMAP.md` → Where we stand. Each
+milestone keeps the suite green on BIOS + UEFI; waivers are written
+down, not implied. Numbering continues after Milestone 62.
+
+## Milestone 63 — Kernel hardening (CPU features + hostile input)
+
+What the audit found absent, not waived: SMEP, SMAP, UMIP, KASLR, a
+Spectre stance, and an ELF loader that panics on a bad image.
+
+### CPU security features
+
+- [ ] **SMEP**: set `CR4.SMEP` when CPUID 7.0 EBX bit 7; the kernel
+      never executes user pages. `bin/test-smep` calls into a
+      user-mapped page from ring 0 and expects the fault
+- [ ] **SMAP**: set `CR4.SMAP` when CPUID 7.0 EBX bit 20. One
+      `arch::user_copy` module owns `stac`/`clac`; every syscall copy
+      that reads or writes a user VA (`syscalls.rs` staging after
+      `user_buffer`) goes through it. Copies through the physical map
+      (`copy_to_user_via` / `copy_from_user_via`) stay as they are.
+      `bin/test-smap` touches a user VA without `stac` and expects the
+      fault
+- [ ] **UMIP**: set `CR4.UMIP` when CPUID 7.0 ECX bit 2; `sgdt` /
+      `sidt` from ring 3 fault and kill the task (`bin/test-umip`)
+- [ ] **KASLR**: `BootloaderConfig.mappings.aslr = true`; the runner
+      boots twice and asserts the printed kernel base differs.
+      `USER_IMAGE_BASE` stays fixed (M48 user-ASLR waiver stands)
+- [ ] **Spectre v1 on dispatch**: mask the syscall number and Cap index
+      after the bounds check (`lfence` or arithmetic mask); documented
+      in `THREAT.md`
+- [ ] **KPTI / Meltdown, IBRS / retpoline, MDS**: written **waiver**
+      for v1.0 — single-tenant guest on a hardware-fixed host; the
+      kernel half stays mapped in every tree. `THREAT.md` states the
+      assumption and what changes it
+- [ ] **CET shadow stacks**: waived (QEMU TCG coverage is thin); noted
+
+### Hostile input
+
+- [ ] **ELF loader returns errors**: every `expect` / `panic!` on image
+      contents in `sched/loader.rs` becomes `SysError::BadValue`;
+      `filesz <= memsz`; `memsz` capped by `USER_IMAGE_MAX_PAGES`;
+      overlapping `PT_LOAD`s rejected; truncated headers rejected.
+      `bin/test-badelf` (Milestone 51) is the oracle
+- [ ] **`user_buffer(len == 0)`**: guard inside the function, not only
+      at call sites
+- [ ] **Waiter CR3 `expect`s** (`sched/mod.rs` keyboard / pipe
+      completion): keep the panic (kernel invariant) and say so in
+      DESIGN; add a `debug_assert` that the slot is `WAITING`
+- [ ] **KDF cost on disk**: PBKDF2 iteration count stored per actor
+      (GALF v12); test kernels format at 10 000, production format
+      under `--release` + KVM at ≥ 100 000; `passwd` re-derives at the
+      current default. Host test: old cost still verifies
+- [ ] **Audit**: `SAFETY:` comment on every production `unsafe` block
+      (13 missing today, 6 in `sched/mod.rs`); test kernels follow in
+      Milestone 51's coverage pass
+- [ ] Docs: `THREAT.md` gains a "CPU features" table (on / waived /
+      absent); DESIGN memory policy cites it
+
+## Milestone 64 — Fast path (measured, not assumed)
+
+The suite runs under TCG with `opt-level = 0`; nothing has been
+profiled. Make speed a number before changing anything.
+
+### Measure
+
+- [ ] **`bin/test-bench`**: syscall round-trip (`yield` ×10 000),
+      spawn + exit, 4 KiB through a pipe, 32 KiB galfs append + `sync`,
+      one full-screen repaint; prints `[bench] name=… us=…`
+- [ ] **`docs/PERF.md`**: the Milestone 51 budgets doc holds the
+      numbers from `test-bench` on TCG and on KVM, with the commit they
+      were taken at; a budget is an upper bound the runner asserts
+      only under KVM
+- [ ] **KVM in the runner and `cargo run`**: `-accel kvm -cpu host`
+      when `/dev/kvm` is writable, else `-accel tcg -cpu max`; both
+      paths green; CI records which one ran
+
+### Change (only what the numbers justify)
+
+- [ ] **Release profile**: `opt-level = 3`, `lto = "fat"`,
+      `codegen-units = 1`, `debug = "line-tables-only"` for kernel and
+      userspace; the runner builds images with the release profile and
+      `debug-assertions = true`; `cargo run --release` is the default
+      path in README
+- [ ] **virtio-blk IRQ completion**: used-ring interrupt (INTx via the
+      I/O APIC; MSI-X in Milestone 65) wakes a parked requester
+      (`STATE_WAITING` + `IO_BLOCK`) instead of the 10 M-spin poll in
+      `drivers/virtio_blk.rs`. ATA PIO stays polled and is marked
+      legacy fallback
+- [ ] **Caps at spawn**: `SPAWN_WITH_CAPS` moves up to two file / pipe
+      Caps from the parent into the child before it runs, so `echo` /
+      `cat -` start with `FILE_CAP_BASE` populated. Removes the
+      `yield_now` poll loops in `util/echo.rs`, `util/cat.rs`
+- [ ] **Shell keyboard loop**: drop the `got.value == 0 → yield_now`
+      branch (reads park since Milestone 57)
+- [ ] **Framebuffer batching**: `show_tty` and scroll repaint only
+      changed cells / rows; measured by the repaint bench
+- [ ] **PCID / heap allocator**: stay waived unless `test-bench` shows
+      CR3 or `alloc` on a hot path; the decision is recorded in
+      `PERF.md`
+
+## Milestone 65 — Modern platform (legacy paths become fallbacks)
+
+Today: PIT calibration, remapped 8259, PS/2 i8042, PIO IDE, legacy
+virtio over an IO BAR, port-based PCI config. Target: ACPI + x2APIC +
+TSC-deadline + PCIe ECAM + virtio 1.x with MSI-X on `-M q35`, and the
+legacy paths kept only where the platform has nothing else.
+
+- [ ] **q35 default**: runner and `cargo run` boot `-M q35`; the IDE
+      slave matrix survives as one `-M pc` legacy regression case
+- [ ] **PCIe ECAM**: parse ACPI `MCFG`; PCI config through MMIO; the
+      0xCF8/0xCFC path only when `MCFG` is absent
+- [ ] **virtio 1.x (modern)**: PCI capability structures (common /
+      notify / ISR / device cfg), MMIO BARs, `VIRTIO_F_VERSION_1`
+      negotiation; the runner drops `disable-modern=on`; the legacy
+      IO-BAR path remains as a fallback with a serial line naming it
+- [ ] **MSI-X** for virtio-blk; INTx fallback
+- [ ] **virtio-input keyboard**: same `keyboard::enqueue` path; PS/2
+      i8042 is the fallback when no virtio-input device is present;
+      the QMP typing e2e runs on both
+- [ ] **Timer source**: LAPIC calibration from CPUID 0x15 / 0x16 when
+      present, else ACPI `HPET`, else PIT; **TSC-deadline** mode when
+      CPUID.1 ECX bit 24; `IDLE_MAX_MS` / quantum numbers unchanged
+      (SCHEDULING freeze holds)
+- [ ] **8259**: mask only; skip the remap when the FADT boot-arch flags
+      report no 8259
+- [ ] **x2APIC preferred**: enable when CPUID reports it; `bin/test-apic`
+      asserts the MSR path under `-cpu max,+x2apic`
+- [ ] **PC speaker**: stays the only audio path (no virtio-sound);
+      feature `pc-speaker` default on; documented as the one remaining
+      PIT user
+- [ ] **Stated non-goals**: 5-level paging, huge user pages, USB, GPU
+      beyond the GOP framebuffer, network (Phase 10)
+
+## Milestone 66 — Userland completeness
+
+Programs today get one 256-byte argument, no heap, pipes only, and
+`sleep` as the only clock. Fill the holes a real utility hits.
+
+- [ ] **User heap**: `Syscall::Map` grows a per-task NX|RW heap region
+      by N pages against a per-task frame budget; `galexy-rt` ships a
+      `#[global_allocator]` over it; `alloc::{Vec, String}` usable in
+      shell and utils; `bin/test-userheap` (exhaustion is
+      `NoResource`, reap returns every frame)
+- [ ] **argv**: spawn arg v2 — NUL-separated vector inside the 256-byte
+      blob; `galexy_rt::args()` iterator; `cat a b`, `ls -l`. No `env`
+      (non-goal)
+- [ ] **Clock**: `Syscall::Clock` → monotonic ms, no Cap; `uptime`
+      util; stable beside `Sleep`
+- [ ] **Channels**: `Syscall::Channel` creates two endpoint Caps;
+      `send` / `recv` carry up to 256 bytes plus up to two Caps; `recv`
+      parks (Milestone 57 state); design in `PROCESS.md` first;
+      `bin/test-channel`
+- [ ] **Shell pipelines**: N stages of any util that reads `-`; `&`
+      background jobs with a job table (`jobs`, `fg`); `Ctrl-Z` waived
+- [ ] **Shell UX**: tab completion from the files snapshot, `history`
+      builtin, Shift+PgUp scrollback over the 128-row grid
+- [ ] **Utilities**: `head`, `tail`, `wc`, `grep` (fixed string),
+      `uptime`, `ls -l` via `stat`; each with the one-line trust note
+      STYLE requires
+- [ ] **Optional**: `edit`, a line-oriented editor over one galfs file
+      (≤ 32 KiB)
+- [ ] Docs: ABI table rows for `Map`, `Clock`, `Channel` marked
+      experimental until Milestone 67 closes
+
+## Milestone 67 — Init owns shutdown and services
+
+The Milestone 53–54 follow-ons, finished.
+
+- [ ] **Ordered shutdown**: `shutdown` / `reboot` ask init over a
+      channel; init Cap-kills seats, calls `sync`, then `Power`; the
+      Power grant lives only on init
+- [ ] **Service table**: `restart | once | ignore` with backoff; a
+      restart storm on a crashing seat backs off (`bin/test-init`
+      asserts the delay)
+- [ ] **`svc status|start|stop|restart <name>`** over the channel;
+      operators never receive raw service Caps
+- [ ] **Session id**: audit lines carry the seat Cap debug id
+- [ ] **Config**: fixed table stays v1; `/etc/init` on galfs optional
+- [ ] **ABI freeze**: process Caps, `Map`, `Clock`, `Channel` move
+      from experimental to stable in the ABI table
+
+### v1.0 gate
+
+- [ ] Milestones 51–52 and 63–67 ✅ or waived in `THREAT.md` / `PERF.md`
+- [ ] Suite green on BIOS + UEFI, TCG + KVM, `q35` + the `pc` legacy
+      case
+- [ ] `PERF.md` numbers within budget under KVM
+- [ ] Tag `v1.0` with the changelog
+
+---
+
+## Phase 11 — Rust on Galexy (upstream `rustc` as a tenant)
+
+Goal: Galexy becomes a real Rust target, then upstream `rustc` compiles
+and links `hello.rs` in ring 3. Plan, gap analysis, rejected paths and
+risks: `docs/RUSTC.md`. The toolchain side is reused from upstream
+(custom target spec, `std` PAL, Cranelift backend, `object` /
+`ar_archive_writer`, `wild`, `unwinding`); the work is kernel runtime
+surface. Milestone 68 needs no kernel change; 69 follows Milestone 66;
+70–72 follow `v1.0` and run under KVM (Milestone 64).
+
+## Milestone 68 — `x86_64-unknown-galexy` target (no fork)
+
+- [ ] `targets/x86_64-unknown-galexy.json`: `os = "galexy"`, no
+      `target_family`, `panic-strategy = "abort"`, static relocation
+      model, `rust-lld` gnu flavor, `executables = true`
+- [ ] All userspace crates build with `--target` the JSON +
+      `-Zbuild-std=core,alloc`; `galexy-rt` keys on
+      `cfg(target_os = "galexy")`; `x86_64-unknown-none` removed from
+      userspace build scripts
+- [ ] `-Zbuild-std=std,panic_abort` on the `unsupported` PAL;
+      `#![feature(restricted_std)]` (or `-Zcrate-attr`) on the graph;
+      `galexy-rt` `#[global_allocator]` over `Map` (Milestone 66)
+- [ ] `bin/test-std-min`: `HashMap<String, Vec<u32>>` + `format!` through
+      the console Cap; typed E2E
+- [ ] Docs: `RUSTC.md` Stage 1 ✅; README build line for the target
+
+## Milestone 69 — `std` PAL in a `galexy-rust` fork
+
+- [ ] Fork `rust-lang/rust` as `galexy-rust`, pinned to one nightly;
+      `library/std/build.rs` lists `galexy`; `sys/pal/mod.rs` selects
+      `pal/galexy`
+- [ ] PAL modules over `galexy-abi`: `alloc` (`Map`), `stdio` (console /
+      spawn-handed Caps), `time` (`Clock`), `args` (argv v2), `os` (env
+      empty, cwd in-process, `SysError` → `io::ErrorKind`), `fs`
+      (existing file syscalls; `read_dir` from the files snapshot),
+      `process` (`spawn_with` + `pipe` + `Wait`), `random` (`rdrand`)
+- [ ] Kernel: `Syscall::ThreadSpawn` / `ThreadExit` — new slot, same
+      CR3, fresh user + kernel stack, join via process Cap `Wait`;
+      design in `PROCESS.md` beside `Channel`; `bin/test-thread`
+- [ ] Kernel: `Syscall::Futex` — `wait(addr, expected)` / `wake(addr,
+      n)` on the Milestone 57 park / wake state; `bin/test-futex`
+- [ ] PAL `thread` + `thread_local_key` with the per-thread pointer in
+      FS base via user-mode `wrfsbase` (kernel never touches FS in ring
+      3); `sync` from `std`'s generic futex implementations
+- [ ] Positional `Write` (or documented seek-then-append) so
+      `File::write_at` / `seek` + `write` behave
+- [ ] Sysroot shipped the Xous way: `cargo build` of `library/sysroot`
+      → `.rlib`s copied into `lib/rustlib/x86_64-unknown-galexy/lib`;
+      `rustup toolchain link galexy`; `xtask sysroot` does it
+- [ ] `bin/test-std`: threads + `Mutex<Vec<_>>`, `std::fs` round-trip on
+      galfs, `Command::new("echo").output()`, monotonic `Instant`
+- [ ] One real crate ported with zero patches (`toml` or `regex` over a
+      ramdisk file)
+- [ ] Milestone 67 ABI freeze extended to `ThreadSpawn` / `Futex`
+- [ ] Every `galexy-rt` / PAL syscall stub is `#[inline(never)]
+      extern "C"` (cg_clif on-OS must never meet `asm!`)
+
+## Milestone 70 — Capacity for a compiler process
+
+- [ ] `-m 2G` in the runner and `cargo run`; frame bitmap past 512 MiB
+      (the Milestone 6 open box); `Map` budget per task up to 1 GiB
+- [ ] Spawn-time user stack size (default stays 4 pages; `rustc` asks
+      for 8 MiB on the thread it spawns itself)
+- [ ] galfs large-volume format v13: 4 KiB blocks, 32-bit lengths,
+      extents or double indirection, pool sized to the disk, files ≥
+      64 MiB; small format still readable; `fsck` for both. Fallback if
+      it lags: RAM-backed scratch volume behind the same `FileBody`
+- [ ] `MAX_OPEN_FILES` 8 → 64 (heap table at spawn, not in the IF=0
+      path); `SPAWN_ARG_MAX` 256 → 4 KiB via `user_copy`
+- [ ] Sysroot `.rlib`s packed into the ramdisk tar under `rust/`
+- [ ] `bin/test-big`: allocate 300 MiB, write and re-read a 20 MiB
+      file, hash check; `test-fsck` green on both formats
+- [ ] KVM-only marker for Phase 11 tests in the runner
+
+## Milestone 71 — `rustc` cross-built for Galexy (Cranelift only)
+
+- [ ] `bootstrap.toml` from cg_clif's `setup_rust_fork.sh`:
+      `codegen-backends = ["cranelift"]`, `llvm-tools = false`,
+      `full-bootstrap = true`, `download-ci-llvm = true` (host only);
+      `./x.py build --stage 1 compiler/rustc --target
+      x86_64-unknown-galexy`
+- [ ] `rustc_target`: builtin `x86_64_unknown_galexy` spec
+- [ ] Patches, cfg-gated on `target_os = "galexy"`:
+      `rustc_data_structures::memmap` read-into-`Vec`; `jobserver`
+      dummy via `[patch.crates-io]`; `getrandom_backend="rdrand"`;
+      `stacker` heap stacks verified; `rustc_driver_impl` signal paths
+      confirmed `cfg(unix)`-only; `psm` assembled with
+      `CC_x86_64_unknown_galexy=clang --target=x86_64-unknown-none-elf`
+- [ ] `panic=abort` MVP (`FatalError::raise` aborts after diagnostics);
+      `unwinding` crate for `panic=unwind` as a follow-on
+- [ ] `rustc` + `rustc_driver` + `rustc_codegen_cranelift` on the
+      ramdisk; `test-rustc-obj`: on-OS `rustc --emit=obj hello.rs`
+      symbol table and section sizes match the host cg_clif build;
+      `--print cfg`; one asserted type-error diagnostic
+
+## Milestone 72 — Link on Galexy, run the result (Phase 11 gate)
+
+- [ ] Try `wild` first: `fork` and `mimalloc` features off, `--threads=1`,
+      `memmap2` replaced by read-into-memory; static non-relocatable
+      output
+- [ ] Fallback `gxld`: static linker over the `object` crate — cg_clif
+      objects + rlib archives, seven relocation kinds (`64`, `32`,
+      `32S`, `PC32`, `PLT32`, `GOTPCREL(X)`, `TPOFF32`), on-demand
+      archive members, `R | RX | RW` `PT_LOAD`s at `USER_IMAGE_BASE`;
+      host unit tests diff against `wild` on the same inputs
+- [ ] `rustc_session`: galexy default `-Clinker=wild` (or `gxld`),
+      `linker-flavor = gnu`; spawned over `spawn_with` with stdio pipes
+- [ ] `test-rustc-hello`: in ring 3, `rustc hello.rs -o hello` on galfs,
+      `./hello` prints `hello from rustc on galexy`; a second on-OS
+      program using `std::fs` + `std::thread` runs
+- [ ] Docs: `RUSTC.md` stages ✅; README "Rust on Galexy" section;
+      `COMPILER.md` notes `gxc` is the subset compiler, `rustc` the
+      tenant
+- [ ] Stated non-goals: `cargo` on-OS, proc macros on-OS, rebuilding
+      `rustc` / `std` on Galexy, LLVM / `lld` / `mrustc` / libc
+
+---
+
 ## Known limitations / follow-ups
 
 Open bullets below are tracked by milestone id where planned. Waived
@@ -1956,14 +2308,36 @@ items stay here with rationale.
             stealing: owner flip under THREADS, entry deferred one tick,
             stolen_at cooldown). Pin-at-spawn is still the initial
             placement; only idle CPUs migrate
-      - [ ] `-cpu max` asserts FSGSBASE on real hardware too; a fallback
-            would be needed on pre-FSGSBASE CPUs — **waive for review**
-            unless real hardware without FSGSBASE is a goal (Milestone 48)
-      - [ ] Everything still single-consumer by DESIGN stays that way:
+      - [x] `-cpu max` asserts FSGSBASE on real hardware too; a soft
+            fallback is **waived** (Milestone 48 — the panic names the
+            CPUID bit; KVM `-cpu host` has it on every supported host)
+      - [x] Everything still single-consumer by DESIGN stays that way:
             cooperative tasks + shell + framebuffer + keyboard all live
-            on the BSP (Milestone 48 concurrency note)
-- [ ] SYSCALL leaves DS/ES/FS/GS as kernel bootstrap selectors when the
-      task resumes in ring 3 — **Milestone 47**
+            on the BSP (waived in the Milestone 48 concurrency note)
+- [x] ~~SYSCALL leaves DS/ES/FS/GS as kernel bootstrap selectors when
+      the task resumes in ring 3~~ — CLOSED by Milestone 47
+      (`USER_DS_RPL3` reload on every ring-3 return tail)
+- [ ] CPU security features (SMEP, SMAP, UMIP, KASLR) are **absent**,
+      not waived; Spectre / KPTI stance unwritten — **Milestone 63**
+- [ ] ELF loader panics on a hostile image instead of returning
+      `SysError` — **Milestone 63** (`bin/test-badelf` in Milestone 51)
+- [ ] PBKDF2 at 10 000 iterations is a debug-QEMU budget, not a
+      production cost — **Milestone 63** (cost stored per actor)
+- [ ] Nothing is profiled; the suite runs TCG at `opt-level = 0`; no
+      release profile, no LTO, no KVM path — **Milestone 64**
+- [ ] virtio-blk completion is a 10 M-spin poll; ATA is PIO; `echo` /
+      `cat -` poll with `yield_now` until `give` lands — **Milestone 64**
+- [ ] Legacy platform paths are the only paths: PIT calibration,
+      remapped 8259, PS/2 i8042, PIO IDE, legacy virtio IO BAR,
+      port-based PCI config, `-M pc` — **Milestone 65**
+- [ ] No user heap, no argv, no clock read, IPC is pipes only, one
+      pipeline shape, no background jobs — **Milestone 66**
+- [ ] Shutdown bypasses init; no service table or `svc`; session id is
+      not bound to the seat Cap — **Milestone 67**
+- [ ] No CI workflow, clippy red on the pinned nightly (10 kernel + 5
+      host lints), rustfmt drift in 88 files, no `LICENSE` /
+      `SECURITY.md` / `CHANGELOG.md` — **Milestone 51**
+- [ ] No network stack, no USB — **Phase 10** (after `v1.0`)
 - [x] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
       ESC, BEL). CSI policy and the blinking cursor are Milestone 49
@@ -1987,12 +2361,12 @@ items stay here with rationale.
       concurrency note (preemptive threads run user code)
 - [x] TLB efficiency: every CR3 swap is a full flush (no PCID/GLOBAL
       kernel pages) — waived in Milestone 48 (suite time is KDF and PIO)
-- [ ] Auth hardening (crypto, prompts, sessions, least privilege) —
+- [x] Auth hardening (crypto, prompts, sessions, least privilege) —
       **Milestone 43**
 - [x] Sealed GALF — **Milestone 44**
 - [x] galfs for real usage — **Milestone 45**
 - [x] Storage stack — **Milestone 46**
-- [ ] Process/ABI/caps (process-Cap foundation) — **Milestone 47**
+- [x] Process/ABI/caps (process-Cap foundation) — **Milestone 47**
 - [x] Memory/safety/concurrency — **Milestone 48**
 - [x] Console/audit — **Milestone 49**
 - [x] Shell demos — **Milestone 50**
@@ -2009,3 +2383,13 @@ items stay here with rationale.
 - [x] gxc codegen + ELF emit — **Milestone 60**
 - [x] Hello via gxc in QEMU — **Milestone 61**
 - [ ] On-OS gxc (follow-on) — **Milestone 62**
+- [ ] Kernel hardening (SMEP/SMAP/UMIP/KASLR, hostile ELF, KDF cost) —
+      **Milestone 63** (Phase 9)
+- [ ] Fast path (bench, KVM, release profile, IRQ completion) —
+      **Milestone 64**
+- [ ] Modern platform (q35, ECAM, virtio 1.x, MSI-X, TSC-deadline) —
+      **Milestone 65**
+- [ ] Userland completeness (heap, argv, clock, channels, jobs) —
+      **Milestone 66**
+- [ ] Init owns shutdown and services; ABI freeze; `v1.0` gate —
+      **Milestone 67**

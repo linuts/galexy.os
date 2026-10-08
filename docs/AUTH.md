@@ -21,9 +21,10 @@ Salts come from `arch::rand` (RDRAND, with a tick-mixed fallback). Empty
 passwords are rejected. Syscall staging buffers are wiped after login /
 useradd / passwd / volume unlock, including the error path.
 `check_password` wipes its digest, and PBKDF2 wipes HMAC key blocks.
-Iteration count is capped for debug-QEMU boot budget;
-raise it (or switch to Argon2id on a dedicated KDF stack) once release
-profiles or fatter kstacks make that practical.
+The iteration count is a debug-QEMU boot budget, not a production
+cost. Milestone 63 stores the cost per actor on disk so production
+formats at 100 000 or more while test kernels keep 10 000; Argon2id
+stays waived (it needs a dedicated KDF stack).
 
 ### Sealed GALF (at-rest disk)
 
@@ -31,8 +32,8 @@ profiles or fatter kstacks make that practical.
 slave must not recover file bytes or password hashes offline. Cold-boot
 RAM extraction and a compromised live kernel are out of scope for now.
 
-GALF **v8** slots are sealed (same AEAD as v6; actor/object tables plus
-block pool — see `GALFS.md`):
+GALF slots are sealed (introduced in v6; v11 today — actor/object
+tables, shares, bitmap, and block pool in one payload, see `GALFS.md`):
 
 1. Format creates a random 32-byte volume key.
 2. A KEK is derived from the volume passphrase (`galfs` for bring-up)
@@ -158,8 +159,9 @@ line is the signal there.
 
 After format, `admin` / `admin` is the default. A seat that logs in with
 that pair must run `passwd` before other shell commands (`help`,
-`whoami`, and `logout` remain available). Kernel-wide enforcement of the
-same gate is a follow-up.
+`whoami`, and `logout` remain available). The kernel enforces the same
+gate through the actor's must-change flag (below), so a program that
+bypasses the shell still cannot mutate galfs until `passwd` succeeds.
 
 ```text
 useradd <name> [password]     # admin only; prompts if password omitted
@@ -275,8 +277,10 @@ within budget; a tight write loop cannot pin COM1.
 
 ## Explicit non-goals (for now)
 
-- Interactive volume unlock (replace bring-up passphrase) → Milestone 44
-- Argon2id (PBKDF2 stays; a dedicated KDF stack is deferred)
+- Argon2id (PBKDF2 stays; a dedicated KDF stack is deferred). The
+  per-actor KDF cost is Milestone 63
+- Hardware-feature hardening of the kernel itself (SMEP / SMAP / UMIP /
+  KASLR) is absent today and is Milestone 63, not an auth item
 - One-shot scratch password syscall (interactive prompts already hide secrets)
 - Wall clock. Audit lines use monotonic `timer_ticks` only
 - PAM-style modules, MFA, networked IdP
@@ -284,5 +288,6 @@ within budget; a tight write loop cannot pin COM1.
   `crash-seam` shell packed into `galexy-os-crashseam` for the
   supervisor typing test. `help` never lists it
 
-**Note:** GALF **v8** refuses older images (including sealed v7). Delete
-`galfs.img` or let format recreate a sealed volume after upgrading.
+**Note:** GALF **v11** (see `GALFS.md`) refuses older images, including
+every earlier sealed layout. Delete `galfs.img` or let format recreate a
+sealed volume after upgrading.

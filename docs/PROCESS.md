@@ -43,9 +43,10 @@ We do **not** claim POSIX. Process Caps are the Galexy ABI.
 | Seat | Per-TTY login shell (or getty→shell); child of init |
 | Job Cap | Group of tasks for a pipeline / foreground (Milestone 55) |
 
-## Cap rights (planned abi)
+## Cap rights (landed in `galexy-abi`, Milestone 47)
 
-Exact names freeze in `galexy-abi` with Milestone 47. Intent:
+Bits 6–9 of the rights word; pinned by the abi tests. Experimental
+until Milestone 67 freezes them:
 
 | Right | Allows |
 | --- | --- |
@@ -119,18 +120,20 @@ by a magic “PID 1” in the public ABI. Cap-kill of init is always
 2. Shutdown/reboot ordered through init.
 3. Session/job Caps (Milestone 55).
 
-## Init (Milestone 53)
+## Init (Milestone 53 ✅; services and shutdown → Milestone 67)
 
-`crates/userspace/init` (planned):
+`crates/userspace/init` today:
 
-- Cap-wait loop on children / orphans
-- Boot table: which programs to start (seats + optional services)
-- Restart policy per entry: `restart` | `once` | `ignore` (+ backoff)
-- Attenuated caps/tokens per child — not “all rights because init”
-- Shutdown request path from an operator-held right
+- Cap-wait loop on children / orphans; round-robin seat restart
+- Fixed seat table (`shell`…`shell12`); no keyboard grant; off the console
+- Attenuated caps/tokens per child (`Grants::init` → seats get
+  `pre_login`)
 
-Config v1: fixed table or a small galfs file (`/etc/init`). No
-systemd/dbus graph.
+Milestone 67 adds: per-entry restart policy (`restart` | `once` |
+`ignore` + backoff), non-seat services with `svc` over a capability
+channel (Milestone 66), and an ordered shutdown path where the Power
+grant lives only on init. Config stays a fixed table; `/etc/init` on
+galfs is optional. No systemd/dbus graph.
 
 ## Seats and services (Milestone 54)
 
@@ -187,11 +190,12 @@ process Cap never grants galfs rights on the child’s files.
 
 | Milestone | Delivers |
 | --- | --- |
-| **47** | Process Cap rights; spawn returns Cap; Cap-wait + exit status; Cap-kill; give/ceiling; ring-3 DS/ES reload; reserved/file forge + soft frame reserve |
-| **53** | Userspace init; orphan Cap transfer; kill-init denied; retire `ensure_shell` policy |
-| **54** | Seats under init; service table + `svc`; supervise Caps |
-| **55** | Session/job Caps; foreground Ctrl-C |
+| **47** ✅ | Process Cap rights; spawn returns Cap; Cap-wait + exit status; Cap-kill; give/ceiling; ring-3 DS/ES reload; reserved/file forge + soft frame reserve |
+| **53** ✅ | Userspace init; orphan Cap transfer; kill-init denied; retire `ensure_shell` policy |
+| **54** ✅ | Seats under init; supervise Caps (service table + `svc` moved to 67) |
+| **55** ✅ | Session/job Caps; foreground Ctrl-C |
+| **66** | Capability channels (`Channel` / `send` / `recv` carrying Caps); background job table in the shell |
+| **67** | Ordered shutdown through init; service table with backoff; `svc`; session id on the seat Cap; ABI freeze |
 
-M47 process Caps ship alongside name + `SPAWN_WAIT` + kernel
-`ensure_shell`. New code must not dig a deeper PID-shaped API beside
-this plan; init Cap transfer stays Milestone 53.
+`SPAWN_WAIT` remains a convenience beside Cap-wait. New code must not
+dig a deeper PID-shaped API beside this plan.
