@@ -332,11 +332,11 @@ fn build_granter_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     store(&mut code, 2, 0x08);
     store(&mut code, 0, 0x10);
 
-    // yield so holder can open
-    for _ in 0..16 {
-        mov_eax(&mut code, Syscall::Yield as u32);
-        code.extend_from_slice(&[0x0F, 0x05]);
-    }
+    // Holder often pins a different CPU; Yield only rotates THIS CPU.
+    // Sleep so the other CPU's open-loop can observe the grant.
+    mov_eax(&mut code, Syscall::Sleep as u32);
+    mov_r64_imm(&mut code, 7, 100); // rdi = 100 ms
+    code.extend_from_slice(&[0x0F, 0x05]);
 
     mov_eax(&mut code, Syscall::Revoke as u32);
     mov_r64_imm(&mut code, 7, path_addr);
