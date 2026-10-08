@@ -458,6 +458,35 @@ fn wx_test_passes() {
     );
 }
 
+/// Hostile ELF suite: forged headers and segments are refused with a
+/// `SysError` by the spawn gate, never a kernel panic; real programs pass.
+#[test]
+fn badelf_test_passes() {
+    let (code, serial) = boot(&image("test-badelf"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-badelf should exit with Success; serial:\n{serial}"
+    );
+    for case in [
+        "filesz > memsz",
+        "memsz past the user window",
+        "overlapping PT_LOAD",
+        "truncated header/table",
+        "W|X segment",
+        "ET_DYN (PIE)",
+    ] {
+        assert!(
+            serial.contains(&format!("[test-badelf] {case}: refused with")),
+            "test-badelf case '{case}' missing; serial:\n{serial}"
+        );
+    }
+    assert!(
+        serial.contains("[test-badelf] passed"),
+        "test-badelf success marker missing; serial:\n{serial}"
+    );
+}
+
 #[test]
 fn rm_test_passes() {
     let (code, serial) = boot(&image("test-rm"));

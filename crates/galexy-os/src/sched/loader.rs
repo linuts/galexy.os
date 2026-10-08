@@ -43,6 +43,115 @@ pub fn looks_like_elf(bytes: &[u8]) -> bool {
     bytes.starts_with(b"\x7fELF")
 }
 
+/// Size of the window a program image may occupy, starting at
+/// `USER_IMAGE_BASE`. The stack sits at `+1 GiB`, well above it.
+pub const USER_IMAGE_WINDOW: u64 = 512 * 1024 * 1024;
+
+/// Most `PT_LOAD`-or-other program headers a program may carry. Bounds the
+/// pairwise overlap check; real programs have fewer than ten.
+const MAX_PHDRS: u16 = 64;
+
+/// Validates `bytes` as a program the loader will accept, without touching
+/// any page table. The `spawn` syscall runs this before the loader so a
+/// hostile ramdisk file is refused with an error code instead of a kernel
+/// panic (`test-badelf`).
+///
+/// Error mapping:
+/// - [`SysError::Unsupported`]: not an ELF, not `ELFCLASS64` + `ET_EXEC` +
+///   `EM_X86_64` (relocatable and PIE images are not loadable here).
+/// - [`SysError::BadValue`]: structurally hostile — program-header table
+///   outside the file, `p_filesz > p_memsz`, segment data past the end of
+///   the file, a segment outside
+///   `[USER_IMAGE_BASE, USER_IMAGE_BASE + USER_IMAGE_WINDOW)`, overlapping
+///   `PT_LOAD` pages, a writable+executable segment, or an entry point
+///   outside an executable segment.
+pub fn validate_elf(bytes: &[u8]) -> Result<(), galexy_abi::SysError> {
+    use galexy_abi::SysError;
+    use xmas_elf::header::{Class, Machine, Type as ElfType};
+
+    if !looks_like_elf(bytes) {
+        return Err(SysError::Unsupported);
+    }
+    let elf = ElfFile::new(bytes).map_err(|_| SysError::BadValue)?;
+    if elf.header.pt1.class() != Class::SixtyFour {
+        return Err(SysError::Unsupported);
+    }
+    if elf.header.pt2.type_().as_type() != ElfType::Executable {
+        return Err(SysError::Unsupported);
+    }
+    if elf.header.pt2.machine().as_machine() != Machine::X86_64 {
+        return Err(SysError::Unsupported);
+    }
+
+    // The phdr table must sit inside the file before anything iterates it
+    // (xmas_elf slices without checking).
+    let ph_off = elf.header.pt2.ph_offset();
+    let ph_count = elf.header.pt2.ph_count();
+    let ph_size = elf.header.pt2.ph_entry_size() as u64;
+    if ph_count == 0 || ph_count > MAX_PHDRS || ph_size != 56 {
+        return Err(SysError::BadValue);
+    }
+    let ph_end = ph_off
+        .checked_add(u64::from(ph_count) * ph_size)
+        .ok_or(SysError::BadValue)?;
+    if ph_end > bytes.len() as u64 {
+        return Err(SysError::BadValue);
+    }
+
+    let window_lo = galexy_abi::USER_IMAGE_BASE;
+    let window_hi = window_lo + USER_IMAGE_WINDOW;
+    // Page-granular [first, last] of every accepted PT_LOAD so far.
+    let mut loads: [(u64, u64); MAX_PHDRS as usize] = [(0, 0); MAX_PHDRS as usize];
+    let mut n_loads = 0usize;
+    let entry = elf.header.pt2.entry_point();
+    let mut entry_in_text = false;
+
+    for ph in elf.program_iter() {
+        match ph.get_type() {
+            Ok(Type::Load) => {}
+            Ok(_) => continue,
+            Err(_) => return Err(SysError::BadValue),
+        }
+        let vaddr = ph.virtual_addr();
+        let memsz = ph.mem_size();
+        let filesz = ph.file_size();
+        if filesz > memsz {
+            return Err(SysError::BadValue);
+        }
+        let data_end = ph.offset().checked_add(filesz).ok_or(SysError::BadValue)?;
+        if data_end > bytes.len() as u64 {
+            return Err(SysError::BadValue);
+        }
+        if memsz == 0 {
+            continue;
+        }
+        let end = vaddr.checked_add(memsz).ok_or(SysError::BadValue)?;
+        if vaddr < window_lo || end > window_hi {
+            return Err(SysError::BadValue);
+        }
+        if ph.flags().is_write() && ph.flags().is_execute() {
+            return Err(SysError::BadValue);
+        }
+        let first = vaddr >> 12;
+        let last = (end - 1) >> 12;
+        if loads[..n_loads]
+            .iter()
+            .any(|&(f, l)| first <= l && f <= last)
+        {
+            return Err(SysError::BadValue);
+        }
+        loads[n_loads] = (first, last);
+        n_loads += 1;
+        if ph.flags().is_execute() && entry >= vaddr && entry < end {
+            entry_in_text = true;
+        }
+    }
+    if n_loads == 0 || !entry_in_text {
+        return Err(SysError::BadValue);
+    }
+    Ok(())
+}
+
 /// Loads `bytes` as a static ELF64 program and spawns the task running it.
 ///
 /// The task is granted the console only. Same rotation/lifecycle as every
@@ -209,7 +318,7 @@ fn spawn_program_placed(
         let image = VirtAddr::new(galexy_abi::USER_IMAGE_BASE);
         let entry = VirtAddr::new(entry_vaddr);
         assert!(
-            entry >= image && entry.as_u64() < image.as_u64() + 512 * 1024 * 1024,
+            entry >= image && entry.as_u64() < image.as_u64() + USER_IMAGE_WINDOW,
             "spawn_program: entry {:#x} outside the image region",
             entry.as_u64()
         );
