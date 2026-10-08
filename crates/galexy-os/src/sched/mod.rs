@@ -2054,6 +2054,8 @@ fn install_open(body: FileBody, rights: CapRights) -> Result<Cap, SysError> {
 /// The effective right is the intersection of the kernel grant and the
 /// handle snapshot, so a task cannot inflate READ onto a handle it stripped,
 /// and cannot use a WRITE-only forgery of a file index.
+/// Sync wrapper around [`task_read_ex`]; keep for call sites that cannot park.
+#[allow(dead_code)]
 pub(crate) fn task_read(cap: Cap, dst: &mut [u8]) -> Result<usize, SysError> {
     match task_read_ex(cap, dst)? {
         IoOp::Ready(n) => Ok(n),
@@ -2128,6 +2130,8 @@ fn task_read_inner(cap: Cap, dst: &mut [u8]) -> Result<IoOp, SysError> {
 /// The read cursor stays put, so a later `read` still starts at the
 /// beginning. A write that does not fit is short: the count is the bytes
 /// copied, and `0` means the buffer is already full.
+/// Sync wrapper around [`task_write_ex`]; keep for call sites that cannot park.
+#[allow(dead_code)]
 pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
     match task_write_ex(cap, src)? {
         IoOp::Ready(n) => Ok(n),

@@ -39,6 +39,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     sched::init();
     sched::demo::spawn_all(); // silent preemptive threads
     banner::show();
+    // Hand the framebuffer to the seats: wipe the banner so init/shell
+    // cannot race mid-glyph with leftover [ok] lines beside Login as:.
+    screen::clear_screen();
     // One ring-3 shell per F-key, each pinned to the BSP. F1 stays named
     // `shell`. The kernel loop paints a console switch, drains launches,
     // and keeps the status bar. Without that ELF, the in-kernel line

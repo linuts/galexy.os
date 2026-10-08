@@ -1963,7 +1963,8 @@ fn shell_echo_status_typing_e2e() {
     );
 }
 
-/// Login dashboard (command center) + up-arrow history from `shell.history`.
+/// Login dashboard + in-session up-arrow recall, then logout persists
+/// `shell.history` for the next login.
 const COMMAND_CENTER_KEYS: &[(&str, &str)] = &[
     ("e", "e"),
     ("c", "c"),
@@ -1987,36 +1988,47 @@ const COMMAND_CENTER_KEYS: &[(&str, &str)] = &[
     ("up", "echo bb"),
     ("up", "echo aa"),
     ("ret", "aa\n"),
-    ("c", "c"),
-    ("a", "a"),
-    ("t", "t"),
-    ("spc", " "),
-    ("s", "s"),
-    ("h", "h"),
-    ("e", "e"),
     ("l", "l"),
-    ("l", "l"),
-    ("dot", "."),
-    ("h", "h"),
-    ("i", "i"),
-    ("s", "s"),
-    ("t", "t"),
     ("o", "o"),
-    ("r", "r"),
-    ("y", "y"),
-    ("ret", "echo aa\n"),
+    ("g", "g"),
+    ("o", "o"),
+    ("u", "u"),
+    ("t", "t"),
+    ("ret", "Login as: "),
 ];
 
 #[test]
 fn shell_command_center_typing_e2e() {
-    let keys = with_login(COMMAND_CENTER_KEYS);
+    let mut keys = with_login(COMMAND_CENTER_KEYS);
+    // History is flushed on logout; next login loads shell.history.
+    keys.extend(LOGIN_ADMIN_TESTPASS_KEYS.iter().copied());
+    keys.extend([
+        ("c", "c"),
+        ("a", "a"),
+        ("t", "t"),
+        ("spc", " "),
+        ("s", "s"),
+        ("h", "h"),
+        ("e", "e"),
+        ("l", "l"),
+        ("l", "l"),
+        ("dot", "."),
+        ("h", "h"),
+        ("i", "i"),
+        ("s", "s"),
+        ("t", "t"),
+        ("o", "o"),
+        ("r", "r"),
+        ("y", "y"),
+        ("ret", "echo aa\n"),
+    ]);
     let serial = boot_and_type(
         &image("galexy-os"),
         &keys,
         "[boot] main loop ready",
         "",
         Duration::from_millis(30),
-        Duration::from_secs(120),
+        Duration::from_secs(150),
     );
     assert_passwords_masked(&serial);
     assert!(
@@ -2031,7 +2043,11 @@ fn shell_command_center_typing_e2e() {
         serial.contains("Galfs"),
         "login dashboard missing galfs; serial:\n{serial}"
     );
-    // History file persisted the recalled commands (plus passwd from with_login).
+    assert!(
+        !serial.contains("[init]"),
+        "init must stay off the console beside login; serial:\n{serial}"
+    );
+    // History file persisted across logout (plus passwd from with_login).
     assert!(
         serial.contains("echo aa\n") && serial.contains("echo bb\n"),
         "shell.history / recall missed echo lines; serial:\n{serial}"
