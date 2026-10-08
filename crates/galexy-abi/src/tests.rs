@@ -170,7 +170,7 @@ fn reserved_caps_have_permanent_indexes() {
 
 #[test]
 fn result_codes_roundtrip() {
-    for code in [SysError::BadCap as u64, 2, 3, 4, 5, 6, 7, 8] {
+    for code in [SysError::BadCap as u64, 2, 3, 4, 5, 6, 7, 8, 9] {
         let r = SyscallResult {
             ok: false,
             value: code,

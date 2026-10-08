@@ -150,7 +150,11 @@ fn login_screen(kbd: Cap, tty: u8) -> Option<bool> {
                     write_console(b"\n");
                     return Some(default_admin);
                 }
-                write_console(b"\nLogin incorrect\n");
+                if result.value == SysError::Locked as u64 {
+                    write_console(b"\nLogin locked\n");
+                } else {
+                    write_console(b"\nLogin incorrect\n");
+                }
                 for _ in 0..30 {
                     yield_now();
                 }
@@ -1588,6 +1592,7 @@ fn report_user(cwd: &mut Cwd, label: &[u8], result: SyscallResult, reset_cwd: bo
             SysError::Unsupported => write_console(b"unsupported\n"),
             SysError::NoResource => write_console(b"no resource\n"),
             SysError::BadValue => write_console(b"bad value\n"),
+            SysError::Locked => write_console(b"locked\n"),
             _ => write_console(b"failed\n"),
         };
     } else if reset_cwd {

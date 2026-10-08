@@ -470,9 +470,10 @@ pub enum Syscall {
     /// password in `R8`/`R9`; quota get takes an optional actor name
     /// there; setquota takes max_objects/max_bytes. Whoami/users/tokens/
     /// quota write into the buffer. Passwords authenticate identity;
-    /// tokens authorize object access (see `docs/AUTH.md`). Deleting
-    /// admin, a non-empty tree, or an actor a live task still uses is
-    /// `Unsupported` / `NotFound`.
+    /// tokens authorize object access (see `docs/AUTH.md`). A login
+    /// inside a cool-down is `Locked` and does not check the password.
+    /// Deleting admin, a non-empty tree, or an actor a live task still
+    /// uses is `Unsupported` / `NotFound`.
     User,
     /// `rename(old, old_len, new, new_len)` — move a galfs dirent.
     ///
@@ -665,6 +666,11 @@ pub enum SysError {
     /// exit status `137`; this code is stamped on the cancelled waiter's
     /// syscall frame before the slot goes `EXITED`.
     Interrupted = 8,
+    /// Login is in a cool-down (actor and/or TTY). The password was not checked.
+    ///
+    /// **Stable** (Milestone 43). Wrong passwords stay [`Self::AccessDenied`];
+    /// an unknown actor stays [`Self::NotFound`]. See `docs/AUTH.md`.
+    Locked = 9,
 }
 
 impl SysError {
@@ -679,6 +685,7 @@ impl SysError {
             6 => SysError::NotFound,
             7 => SysError::NoResource,
             8 => SysError::Interrupted,
+            9 => SysError::Locked,
             _ => SysError::Unsupported,
         }
     }

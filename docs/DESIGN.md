@@ -84,7 +84,7 @@ contract between them.
    power=0x8005, files=0x8006 in the high reserved band, above any file slot),
    syscall numbers (exit=0, yield=1, write=2, cap_info=3, open=4, read=5,
    close=6, spawn=7, power=8, create=9, remove=10), error codes (BadCap=1, AccessDenied=2, BadBuffer=3,
-   Unsupported=4, BadValue=5, NotFound=6, NoResource=7) — are permanent.
+   Unsupported=4, BadValue=5, NotFound=6, NoResource=7, Interrupted=8, Locked=9) — are permanent.
    New syscalls APPEND;
    renumbering/renaming = ABI major bump. NO file descriptors at this ABI
    level: resources are capabilities kernel-side, validated on every call,
@@ -838,6 +838,9 @@ not free ramdisk bytes.
   locks. The IRQ gate is still part of every acquisition (a local
   `hlt`-sleeping CPU must not re-enter a held lock). Steal correctness
   rides this lock; there is no separate migration lock.
+- **Login cool-down (`LOCKOUT`)** is a separate RAM table. Acquire it only
+  when `THREADS` and the galfs table are not held. It is IRQ-gated. The
+  deadline is absolute `timer_ticks` (Milestone 43).
 - **BSP homeownership**: cooperative tasks (`SCHED` queue), the status
   bar, and the framebuffer stay BSP-only by design — one display, one
   input queue, one accounting yardstick (`main_ticks` = the BSP's slot-0

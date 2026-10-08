@@ -74,6 +74,7 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
    ```
 
    Wrong password prints `Login incorrect` and repeats the screen.
+   A cool-down prints `Login locked` (see below).
 3. After a successful password login the prompt is `user@galexy>`.
 4. `whoami` while logged out fails (`AccessDenied`).
 5. `logout` returns to the login screen (not a shell prompt).
@@ -97,6 +98,40 @@ Inline `login <user> <password>` remains for scripts and older tests.
 
 `logout` clears tokens, sets `fs_root = none`, restores pre-login grants,
 and returns the shell to the login screen.
+
+### Login lockout
+
+Five failed guesses against **one actor** or **one TTY** start a
+**5 second** cool-down (`LOCKOUT_MAX_FAILS` / `LOCKOUT_COOLDOWN_MS` in
+`galexy-core`). The clock is monotonic `timer_ticks` (~1 ms), not a wall
+clock. While it runs, `login` returns `Locked` **before** the password
+KDF, so a locked guess does not reveal whether the password was right
+and does not extend the deadline.
+
+- An actor lock refuses that name on every seat.
+- A TTY lock refuses every name on that seat (including unknown names,
+  which count only against the TTY so probes cannot fill the actor table).
+- The guess that reaches five still returns `AccessDenied` (known actor,
+  wrong password) or `NotFound` (unknown name). The **next** guess is
+  `Locked`.
+- A successful password login clears that actor and that TTY.
+- `userdel` drops the actor slot. The TTY cool-down stays.
+- State is RAM-only. A reboot clears it. It is not written into GALF.
+
+The login screen prints `Login locked`. The `login` command prints
+`login: locked`. COM1 records the count and the arming line, with no
+password material:
+
+```text
+[auth] login fail user=eve tty=1 fails=5
+[auth] lockout user=eve for 5000ms after 5 fails
+[auth] lockout tty=1 for 5000ms after 5 fails
+[auth] login refused user=eve tty=1 locked
+```
+
+`stats` (query cap) appends `lockouts: N` — actor slots plus TTY slots
+still inside a cool-down. Pre-login seats have no query cap; the serial
+line is the signal there.
 
 After format, `admin` / `admin` is the default. A seat that logs in with
 that pair must run `passwd` before other shell commands (`help`,
@@ -169,7 +204,7 @@ within budget; a tight write loop cannot pin COM1.
 Tracked for review readiness in `TODO.md` Milestones 43–44:
 
 - Interactive volume unlock (replace bring-up passphrase) → Milestone 44
-- Lockout, idle logout, kernel must-change → remaining Milestone 43
+- Idle logout, kernel must-change → remaining Milestone 43
 - PAM-style modules, MFA, networked IdP (still out of scope for review)
 - Removing the `crash` test seam from production images → Milestone 43
   (kept for supervisor e2e; omitted from `help`)
