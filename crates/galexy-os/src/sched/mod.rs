@@ -1106,7 +1106,9 @@ pub(crate) fn spawn_user_with_grants(
             stolen_at: AtomicU64::new(0),
             files: [None; MAX_OPEN_FILES],
             procs: [None; MAX_PROC_CAPS],
-            no_steal: false,
+            // Hand-rolled test blobs coordinate via yield races; keep them
+            // on their spawn CPU so idle steal cannot starve a waiter.
+            no_steal: true,
             wait_child_slot: AtomicU8::new(0),
             wait_for_exit: AtomicBool::new(false),
             sleep_deadline: AtomicU64::new(0),

@@ -252,13 +252,11 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     let churn_deadline = arch::timer_ticks() + 30000;
     let mut blob_marked = false;
+    // Peek scratch before reap — exit frees and wipes the tree.
+    x86_64::instructions::interrupts::enable();
     loop {
-        x86_64::instructions::hlt();
-        sched::reap();
         if !blob_marked {
-            // SAFETY: the scratch page stays mapped until the task's OWN
-            // reap frees its tree; the peek runs on the kernel tree (the
-            // phys map is present in every address space).
+            // SAFETY: phys map is present in every address space.
             let ptr: *const u32 = arch::mm::frame_virt(scratch_phys).as_ptr();
             if unsafe { core::ptr::read_volatile(ptr) } == DONE_MARK {
                 blob_marked = true;
@@ -280,6 +278,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
             ],
             blob_marked
         );
+        sched::reap();
+        core::hint::spin_loop();
     }
 
     // Drain everything (the blob's exit handoff lags its output by a

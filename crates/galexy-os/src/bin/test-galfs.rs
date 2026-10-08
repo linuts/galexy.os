@@ -145,34 +145,34 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     });
 
     let granter_scratch: *const GrantReport = mm::frame_virt(granter_region.scratch_phys).as_ptr();
+    let holder_scratch: *const HolderReport = mm::frame_virt(holder_region.scratch_phys).as_ptr();
+    // Spin-poll both reports before reap (frame wipe). IRQs on for quantums.
+    x86_64::instructions::interrupts::enable();
     elapsed = 0;
     let grant_report = loop {
-        x86_64::instructions::hlt();
         let done =
             unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*granter_scratch).done)) };
         if done == DONE {
             break unsafe { core::ptr::read_volatile(granter_scratch) };
         }
-        sched::reap();
+        core::hint::spin_loop();
         elapsed += 1;
-        if elapsed > TICK_TIMEOUT {
+        if elapsed > TICK_TIMEOUT.saturating_mul(10_000) {
             panic!("granter never finished");
         }
     };
     assert_eq!(grant_report.grant_ok, 1, "grant must succeed");
     assert_eq!(grant_report.revoke_ok, 1, "revoke must succeed");
 
-    let holder_scratch: *const HolderReport = mm::frame_virt(holder_region.scratch_phys).as_ptr();
     elapsed = 0;
     let holder_report = loop {
-        x86_64::instructions::hlt();
         let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*holder_scratch).done)) };
         if done == DONE {
             break unsafe { core::ptr::read_volatile(holder_scratch) };
         }
-        sched::reap();
+        core::hint::spin_loop();
         elapsed += 1;
-        if elapsed > TICK_TIMEOUT {
+        if elapsed > TICK_TIMEOUT.saturating_mul(10_000) {
             panic!("holder never finished");
         }
     };

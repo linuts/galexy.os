@@ -612,12 +612,15 @@ fn typing_visible(raw: &str) -> String {
             i += 1;
             continue;
         }
+        // Strip the `Ns: ` uptime prefix but keep the payload so markers
+        // like `[tty] 2` still sync. Dropping the whole line broke F-key
+        // console-switch e2e after write-back made Cap-wait finish quickly.
         if is_uptime_log_prefix(bytes, i) {
-            while i < bytes.len() && bytes[i] != b'\n' {
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
                 i += 1;
             }
-            if i < bytes.len() {
-                i += 1;
+            if bytes[i..].starts_with(b"s: ") {
+                i += 3;
             }
             continue;
         }
