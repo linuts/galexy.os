@@ -6,11 +6,47 @@ Milestone **69** (host library), **71** (ring-3 program), **73** (links
 `rustc` plan (`RUSTC.md`) and the only Phase 11 item with no kernel
 dependency, so it comes first.
 
+## Status — Milestone 69 shipped (host library + CLI)
+
+`crates/gxld` exists and links every Galexy userspace program today.
+What is in the tree:
+
+- **Library** (`gxld::link`, `no_std + alloc`): inputs are byte slices
+  (objects or `ar` archives), output is a `Vec<u8>`; `gxld::validate`
+  is the loader-mirroring post-link check (`gxc::validate_elf` is gone).
+- **CLI** (`gxld` binary, `std` feature): the GNU-ld argument subset
+  `rustc -Clinker-flavor=ld` emits — `-o`, `-L`/`-l`, `--image-base`,
+  `-e`, `--gc-sections`/`--no-gc-sections`, `--whole-archive`,
+  `@argfile`. Dynamic-only flags (`-pie`, `-z …`, `--eh-frame-hdr`,
+  `-Bdynamic`, …) are accepted and ignored so `rustc` drives it unchanged.
+- **`gxc` as first client**: `gxc build -c` writes an `ET_REL`
+  (`.text` + global `_start`, `.rodata`, `R_X86_64_64` per string);
+  `gxc build` links it in-process; `gxc build -c` + `gxld` CLI is
+  byte-identical.
+- **Differential image**: `crates/runner/build.rs` builds `gxld`,
+  re-links `hello`, `init`, `shell` and every `util` binary with
+  `-Clinker=gxld` (the exact objects and rlibs `rustc` hands
+  `rust-lld`) and packs `galexy-os-gxld` (BIOS + UEFI). The runner's
+  `gxld_image_*_e2e` tests type the same keys as the `rust-lld` image.
+
+Deviations from the plan below, decided by the real inputs:
+
+| Planned | Shipped | Why |
+|---|---|---|
+| no `--gc-sections` | implemented (liveness from `_start` + `SHF_GNU_RETAIN`) | `rustc` always passes it, and `lld` only reports undefined symbols from live sections — without GC, dead `core` sections would demand symbols nothing provides |
+| `32`/`32S` "legal below 4 GiB" | range-checked, and they overflow | `USER_IMAGE_BASE` is `0xC80_0000_0000`; `rustc` emits only PC-relative and 64-bit absolute relocations for this target, so nothing needs them |
+| differential via `rustc --emit=obj` + hand link line | `-Clinker=gxld -Clinker-flavor=ld` | the real link line, including `symbols.o`, `compiler_builtins` and `--gc-sections`, is what Milestone 73 will send |
+| GOT in the RW segment | GOT in the R segment | the image is static; slots are filled at link time and never written again |
+
+Still open from this plan: TLS (`TPOFF32`, `.tdata`/`.tbss`) with
+Milestone 70; the ring-3 program with Milestone 71; `.eh_frame` kept
+for `unwinding` as a 72 follow-on; cg_clif output in 73.
+
 ## Why a linker at all
 
-Today nothing on Galexy links. `gxc` emits a finished `ET_EXEC`
-directly (`crates/gxc/src/elf.rs`, one code blob, no relocations), and
-every real program is linked on the host by `rust-lld` with
+Before Milestone 69 nothing on Galexy linked. `gxc` emitted a finished
+`ET_EXEC` directly (one code blob, no relocations), and every real
+program is linked on the host by `rust-lld` with
 `--image-base=USER_IMAGE_BASE --no-pie`. That is fine while every
 program is one translation unit built on Linux. It stops being fine at
 three points:
@@ -33,8 +69,9 @@ Three placements, two of which are the same code:
 
 1. **Library (`crates/gxld`)**, `no_std + alloc`, host-tested. Inputs are
    byte slices, the output is a `Vec<u8>`. `gxc` on the host calls it
-   instead of `gxc::elf`. This is the version that exists first and
-   runs in the existing CI and runner with no kernel change.
+   (`gxc::compile_elf`). This is the version that exists (Milestone 69)
+   and runs in the existing CI and runner with no kernel change; the
+   `gxld` binary is a thin `std` `main` over it.
 2. **Ring-3 program** (Milestone 71), a thin `main` over the same crate.
    The compiler driver `spawn_with`s it, `give`s it read Caps on the
    input files and one write Cap on the output, and `Wait`s on the
@@ -133,7 +170,7 @@ galexy-target sysroot plus `hello.rs` compiled by cg_clif.
 
 | Milestone | Delivers |
 |---|---|
-| **69** | `crates/gxld` library; `gxc` emits a relocatable object and links through it (`gxc::elf` deleted); differential suite on `hello`, `util`, `shell`; hostile-input tests |
+| **69** ✅ | `crates/gxld` library + CLI; `gxc` emits a relocatable object and links through it (`gxc::elf` deleted); `galexy-os-gxld` differential image (`hello`, `init`, `shell`, `util`); hostile-input tests |
 | **70** | `TPOFF32` and `.tdata`/`.tbss` the same milestone threads and TLS arrive |
 | **71** | Ring-3 `gxld` over Caps; `bin/test-gxld` links two ramdisk objects into a program that runs |
 | **72** (follow-on) | `.eh_frame` kept for `unwinding` |
@@ -144,7 +181,8 @@ galexy-target sysroot plus `hello.rs` compiled by cg_clif.
 - Dynamic linking, `PT_INTERP`, `PT_DYNAMIC`, PLT, shared objects,
   `dlopen`.
 - Linker scripts beyond the fixed three-segment layout.
-- LTO, `--gc-sections`, identical-code folding, incremental linking.
+- LTO, identical-code folding, string merging, relocation relaxation,
+  incremental linking. (`--gc-sections` is in: see Status.)
 - Debug info in the image (`.debug_*` are discarded; host tools keep
   the unstripped objects).
 - Any architecture but x86_64; any format but ELF64.

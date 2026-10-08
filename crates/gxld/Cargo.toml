@@ -1,0 +1,23 @@
+[package]
+name = "gxld"
+version = "0.1.0"
+edition = "2021"
+description = "Galexy static ELF64 linker (gxld) — host library and tool. Static only; docs/LINKER.md."
+publish = false
+
+[[bin]]
+name = "gxld"
+path = "src/main.rs"
+required-features = ["std"]
+
+[lib]
+name = "gxld"
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+galexy-abi = { path = "../galexy-abi" }
+object = { version = "0.40", default-features = false, features = ["read_core", "elf", "archive"] }

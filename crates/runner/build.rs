@@ -113,31 +113,35 @@ fn main() {
     let crash_ramdisk = out_dir.join("ramdisk-crash.tar");
     {
         let crash_shell = build_crash_shell(&out_dir);
-        let bytes = std::fs::read(&ramdisk_path).unwrap();
-        // Rebuild from the production entry list is simpler: read names we
-        // already packed by reconstructing. The crash image only swaps `shell`.
-        let mut archive = tar::Archive::new(std::io::Cursor::new(bytes));
-        let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
-        for entry in archive.entries().unwrap() {
-            let mut entry = entry.unwrap();
-            let name = entry.path().unwrap().to_string_lossy().into_owned();
-            let mut body = Vec::new();
-            std::io::Read::read_to_end(&mut entry, &mut body).unwrap();
+        write_ramdisk_variant(&ramdisk_path, &crash_ramdisk, |name, body| {
             if name == "shell" {
-                entries.push((name, crash_shell.clone()));
+                crash_shell.clone()
             } else {
-                entries.push((name, body));
+                body
             }
-        }
-        let mut tar = tar::Builder::new(std::fs::File::create(&crash_ramdisk).unwrap());
-        for (name, body) in &entries {
-            let mut header = tar::Header::new_gnu();
-            header.set_size(body.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            tar.append_data(&mut header, name, body as &[u8]).unwrap();
-        }
-        tar.finish().unwrap();
+        });
+    }
+
+    // Milestone 69 differential: every program re-linked by `gxld` (same
+    // objects, same rlibs, `-Clinker` swapped). Boot tests on this image
+    // must behave exactly like the rust-lld image.
+    let gxld_ramdisk = out_dir.join("ramdisk-gxld.tar");
+    {
+        let gxld_bins = build_gxld_userspace(&out_dir);
+        let mut swapped = 0usize;
+        write_ramdisk_variant(&ramdisk_path, &gxld_ramdisk, |name, body| {
+            match gxld_bins.get(name) {
+                Some(bytes) => {
+                    swapped += 1;
+                    bytes.clone()
+                }
+                None => body,
+            }
+        });
+        assert!(
+            swapped >= 4,
+            "gxld ramdisk: expected to swap hello/init/shell/util, swapped {swapped}"
+        );
     }
 
     for (name, kernel) in &bins {
@@ -165,27 +169,38 @@ fn main() {
     }
 
     if let Some((_, kernel)) = bins.iter().find(|(name, _)| name == "galexy-os") {
-        let bios_path = out_dir.join("galexy-os-crashseam-bios.img");
-        let uefi_path = out_dir.join("galexy-os-crashseam-uefi.img");
-        bootloader::BiosBoot::new(kernel)
-            .set_ramdisk(&crash_ramdisk)
-            .create_disk_image(&bios_path)
-            .unwrap();
-        bootloader::UefiBoot::new(kernel)
-            .set_ramdisk(&crash_ramdisk)
-            .create_disk_image(&uefi_path)
-            .unwrap();
-        if !manifest.is_empty() {
-            manifest.push(';');
+        for (variant, ramdisk) in [
+            ("galexy-os-crashseam", &crash_ramdisk),
+            ("galexy-os-gxld", &gxld_ramdisk),
+        ] {
+            let bios_path = out_dir.join(format!("{variant}-bios.img"));
+            let uefi_path = out_dir.join(format!("{variant}-uefi.img"));
+            bootloader::BiosBoot::new(kernel)
+                .set_ramdisk(ramdisk)
+                .create_disk_image(&bios_path)
+                .unwrap();
+            bootloader::UefiBoot::new(kernel)
+                .set_ramdisk(ramdisk)
+                .create_disk_image(&uefi_path)
+                .unwrap();
+            if !manifest.is_empty() {
+                manifest.push(';');
+            }
+            manifest.push_str(&format!(
+                "{variant}:{},{}",
+                bios_path.display(),
+                uefi_path.display()
+            ));
         }
-        manifest.push_str(&format!(
-            "galexy-os-crashseam:{},{}",
-            bios_path.display(),
-            uefi_path.display()
-        ));
     }
 
     println!("cargo:rustc-env=GALEXY_IMAGES={}", manifest);
+    println!(
+        "cargo:rerun-if-changed={}",
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../gxld/src")
+            .display()
+    );
     println!(
         "cargo:rerun-if-changed={}",
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -200,25 +215,38 @@ fn main() {
     );
 }
 
-/// Shell ELF with the `crash` test seam. A separate target dir so this
-/// build does not fight the parent cargo lock or feature unification.
-fn build_crash_shell(out_dir: &Path) -> Vec<u8> {
-    let target_dir = out_dir.join("crash-shell-target");
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../userspace/shell/Cargo.toml");
-    let release = std::env::var("PROFILE").as_deref() == Ok("release");
-    let mut cmd = Command::new(env!("CARGO"));
-    cmd.arg("build")
-        .arg("--manifest-path")
-        .arg(&manifest)
-        .arg("--target")
-        .arg("x86_64-unknown-none")
-        .arg("--features")
-        .arg("crash-seam")
-        .arg("--target-dir")
-        .arg(&target_dir);
-    if release {
-        cmd.arg("--release");
+/// Re-pack `source` as `dest`, letting `swap(name, body)` replace entries.
+fn write_ramdisk_variant(
+    source: &Path,
+    dest: &Path,
+    mut swap: impl FnMut(&str, Vec<u8>) -> Vec<u8>,
+) {
+    let bytes = std::fs::read(source).unwrap();
+    let mut archive = tar::Archive::new(std::io::Cursor::new(bytes));
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        let name = entry.path().unwrap().to_string_lossy().into_owned();
+        let mut body = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut body).unwrap();
+        let body = swap(&name, body);
+        entries.push((name, body));
     }
+    let mut tar = tar::Builder::new(std::fs::File::create(dest).unwrap());
+    for (name, body) in &entries {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, name, body as &[u8]).unwrap();
+    }
+    tar.finish().unwrap();
+}
+
+/// A nested `cargo` with this build script's package-specific environment
+/// scrubbed, so it neither inherits our features nor fights our lock.
+fn nested_cargo() -> Command {
+    let mut cmd = Command::new(env!("CARGO"));
     for (key, _) in std::env::vars() {
         if key.starts_with("CARGO_FEATURE_")
             || key.starts_with("CARGO_BIN_")
@@ -233,6 +261,32 @@ fn build_crash_shell(out_dir: &Path) -> Vec<u8> {
             cmd.env_remove(&key);
         }
     }
+    cmd
+}
+
+fn is_release() -> bool {
+    std::env::var("PROFILE").as_deref() == Ok("release")
+}
+
+/// Shell ELF with the `crash` test seam. A separate target dir so this
+/// build does not fight the parent cargo lock or feature unification.
+fn build_crash_shell(out_dir: &Path) -> Vec<u8> {
+    let target_dir = out_dir.join("crash-shell-target");
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../userspace/shell/Cargo.toml");
+    let release = is_release();
+    let mut cmd = nested_cargo();
+    cmd.arg("build")
+        .arg("--manifest-path")
+        .arg(&manifest)
+        .arg("--target")
+        .arg("x86_64-unknown-none")
+        .arg("--features")
+        .arg("crash-seam")
+        .arg("--target-dir")
+        .arg(&target_dir);
+    if release {
+        cmd.arg("--release");
+    }
     let status = cmd.status().expect("spawn cargo for crash-seam shell");
     if !status.success() {
         panic!("crash-seam shell build failed");
@@ -243,4 +297,69 @@ fn build_crash_shell(out_dir: &Path) -> Vec<u8> {
         .join(profile)
         .join("shell");
     std::fs::read(&elf).unwrap_or_else(|e| panic!("read {}: {e}", elf.display()))
+}
+
+/// Build the host `gxld` binary, then every userspace program with
+/// `-Clinker=gxld -Clinker-flavor=ld`: rustc hands `gxld` the exact
+/// objects and rlibs it hands `rust-lld`. Returns `bin name → ELF`.
+fn build_gxld_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let gxld_target = out_dir.join("gxld-target");
+    let gxld_manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../gxld/Cargo.toml");
+    let mut cmd = nested_cargo();
+    cmd.arg("build")
+        .arg("--release")
+        .arg("--manifest-path")
+        .arg(&gxld_manifest)
+        .arg("--target-dir")
+        .arg(&gxld_target);
+    let status = cmd.status().expect("spawn cargo for gxld");
+    if !status.success() {
+        panic!("gxld build failed");
+    }
+    let gxld = gxld_target.join("release").join("gxld");
+    assert!(gxld.is_file(), "gxld binary missing at {}", gxld.display());
+
+    let target_dir = out_dir.join("gxld-userspace");
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml");
+    let release = is_release();
+    let mut cmd = nested_cargo();
+    cmd.arg("build")
+        .arg("--manifest-path")
+        .arg(&workspace)
+        .arg("--target")
+        .arg("x86_64-unknown-none")
+        .arg("--target-dir")
+        .arg(&target_dir);
+    for pkg in ["hello", "init", "shell", "util"] {
+        cmd.arg("-p").arg(pkg);
+    }
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env(
+        "RUSTFLAGS",
+        format!("-Clinker={} -Clinker-flavor=ld", gxld.display()),
+    );
+    let status = cmd.status().expect("spawn cargo for gxld-linked userspace");
+    if !status.success() {
+        panic!("gxld-linked userspace build failed");
+    }
+    let profile = if release { "release" } else { "debug" };
+    let bin_dir = target_dir.join("x86_64-unknown-none").join(profile);
+    let mut bins = std::collections::BTreeMap::new();
+    for entry in std::fs::read_dir(&bin_dir).unwrap().flatten() {
+        let path = entry.path();
+        if !path.is_file() || path.extension().is_some() {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        if bytes.starts_with(b"\x7fELF") {
+            bins.insert(name, bytes);
+        }
+    }
+    bins
 }

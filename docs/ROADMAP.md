@@ -414,10 +414,11 @@ first.
 1. **68 Target** — `x86_64-unknown-galexy.json`; userspace builds with
    `-Zbuild-std`; `std` on the `unsupported` PAL (`restricted_std`) with
    `galexy-rt`'s allocator over `Map`. No fork. Can start now
-2. **69 `gxld`** — static ELF64 linker as a `no_std + alloc` library over
-   the `object` crate; absorbs `gxc::elf`; proven by a `rust-lld`
-   differential test on `hello`, `util`, `shell`. Host-only; can start
-   now
+2. **69 `gxld`** ✅ — static ELF64 linker as a `no_std + alloc` library
+   over the `object` crate plus a GNU-ld-compatible CLI; absorbed
+   `gxc::elf`; proven by the `galexy-os-gxld` image, where `hello`,
+   `init`, `shell` and `util` are re-linked with `-Clinker=gxld` and
+   pass the same typing tests as the `rust-lld` image
 3. **70 PAL** — `galexy-rust` fork with `sys/pal/galexy` modeled on
    `uefi` / `xous`: alloc, stdio, time, args, fs, process, thread (new
    `ThreadSpawn`, FS-base TLS), sync (new `Futex`). Sysroot shipped as

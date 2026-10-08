@@ -11,7 +11,7 @@ Not a Linux clone. No POSIX claim. Authority is **capabilities** (and
 galfs access cards), not global file descriptors or PIDs.
 
 **Status (October 2026):** Milestones 1–50 and 53–61 are merged; the
-QEMU suite is 87 boots plus host tests, all green. The next two
+QEMU suite is 89 boots plus host tests, all green. The next two
 milestones (51–52) produce `review-rc1`; Phase 9 (63–67) is the
 hardening, performance, modern-platform, and userland work toward
 `v1.0`. The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md)
@@ -109,14 +109,15 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 - **Auth** — PBKDF2 passwords, lockout, idle logout, forced first `passwd`; every seat boots logged out; audit lines carry no secrets
 - **Init and seats** — userspace `init` is the orphan root and respawns F-key seats; Ctrl-C kills the TTY foreground job
 - **Scheduling** — RR + pin-at-spawn + idle steal; `sleep`; blocking keyboard and pipe reads park and wake (`docs/SCHEDULING.md`)
-- **gxc** — a frozen Rust-subset compiler on the host that emits a hello ELF the loader runs; a fixture, not the self-host path (`docs/COMPILER.md`)
+- **gxc** — a frozen Rust-subset compiler on the host that emits a hello object the linker turns into an ELF the loader runs; a fixture, not the self-host path (`docs/COMPILER.md`)
+- **gxld** — the static ELF64 linker: `no_std` library + GNU-ld-compatible CLI; `rustc -Clinker=gxld` links every userspace program and the `galexy-os-gxld` image passes the same tests as the `rust-lld` one (`docs/LINKER.md`)
 
 ## Tests
 
 ```sh
-cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxc   # host suites
+cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxc -p gxld   # host suites
 cargo test -p runner --test audit_strings   # no "password" in any serial line
-cargo test -p runner --test boot -- --test-threads=1   # QEMU suite (87 boots, -smp 2)
+cargo test -p runner --test boot -- --test-threads=1   # QEMU suite (89 boots, -smp 2)
 ```
 
 UEFI cases need `OVMF_FD` if the default firmware path is absent. Disk
@@ -176,17 +177,22 @@ crates/
 - **Phase 10** — network (virtio-net, small stack, sockets as Caps),
   after `v1.0`
 - **Phase 11** — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
-  static linker (LINKER.md), `std` PAL, upstream `rustc` with the
-  Cranelift backend compiling and linking on-OS — RUSTC.md
+  static linker (LINKER.md, ✅ Milestone 69), `std` PAL, upstream
+  `rustc` with the Cranelift backend compiling and linking on-OS —
+  RUSTC.md
 
-Host-compile the gxr hello (not rustc):
+Host-compile the gxr hello (not rustc) and link it with `gxld`:
 
 ```sh
-cargo run -p gxc -- build -o hello-gxc.elf crates/gxc/examples/hello.gxr
+cargo run -p gxc -- build -o hello-gxc.elf crates/gxc/examples/hello.gxr   # object → gxld in-process
+cargo run -p gxc -- build -c -o hello-gxc.o crates/gxc/examples/hello.gxr  # object only
+cargo run -p gxld -- -o hello-gxc.elf hello-gxc.o                           # same bytes
 ```
 
 The runner packs that ELF as ramdisk `hello-gxc` for QEMU
-(`test-hellogxc`). Details: [`docs/COMPILER.md`](docs/COMPILER.md).
+(`test-hellogxc`). Any userspace program links the same way:
+`RUSTFLAGS="-Clinker=target/release/gxld -Clinker-flavor=ld" cargo build -p shell --target x86_64-unknown-none`.
+Details: [`docs/COMPILER.md`](docs/COMPILER.md), [`docs/LINKER.md`](docs/LINKER.md).
 
 Details: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 

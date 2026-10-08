@@ -19,10 +19,10 @@ now:
 
 - A **fixture**: the second, independent producer of loader-conformant
   ELFs. Bug fixes only; `test-hellogxc` stays green.
-- The **first client of the linker** (`LINKER.md`, Milestone 69): its
-  `elf.rs` becomes `gxld`'s layout code, and `gxc` emits a relocatable
-  object instead of a finished executable. That is the only change it
-  receives again.
+- The **first client of the linker** (`LINKER.md`, Milestone 69 ✅):
+  `gxc::elf` is gone; `gxc` emits a relocatable object (`gxc build
+  -c`, `gxc::compile_object`) and `gxc build` links it through the
+  `gxld` library. That was the only change it receives again.
 - Milestone 62 (on-OS `gxc`) is **superseded**; a ring-3 compile is
   `rustc` (Milestone 72–73), not `gxc`.
 
@@ -135,15 +135,16 @@ compatible.”
   → lex / parse / name-resolve (host unit tests)
   → typed AST (i32, &[u8] byte strings, fn)
   → IR (custom tiny IR *or* Cranelift CLIF)
-  → machine code (x86_64 SysV)
-  → ELF64 ET_EXEC @ USER_IMAGE_BASE (RX text, R rodata; no W|X)
+  → machine code (x86_64 SysV) with R_X86_64_64 string relocations
+  → ELF64 ET_REL (.text, .rodata, .rela.text)      ← `gxc build -c`
+  → gxld → ET_EXEC @ USER_IMAGE_BASE (R, RX; no W|X) ← `gxc build`
   → ramdisk / galfs → spawn
 ```
 
 **Host-only:** `gxc` is a Linux host binary in the workspace and stays
-one. On-OS compilation is upstream `rustc` (`RUSTC.md`). Once `gxld`
-lands (Milestone 69) the last two pipeline steps become "ELF64
-relocatable object → `gxld` → `ET_EXEC`".
+one. On-OS compilation is upstream `rustc` (`RUSTC.md`). Since
+Milestone 69 the last two pipeline steps are "ELF64 relocatable object
+→ `gxld` → `ET_EXEC`"; the layout rules live in the linker only.
 
 ## Runtime contract (must match loader)
 
@@ -170,13 +171,13 @@ QEMU suite (serial line + exit 0). Prefer a **second** ramdisk name
 | **60** ✅ | Codegen + ELF emit at `USER_IMAGE_BASE`; prelude syscalls |
 | **61** ✅ | `hello.gxr` → ramdisk `hello-gxc` + `test-hellogxc` in QEMU |
 | **62** *superseded* | ~~Port `gxc` to ring-3~~ — on-OS compile is `rustc` (Phase 11); `gxc` frozen |
-| **69** (Phase 11) | `gxc` emits a relocatable object; `gxld` links it (`LINKER.md`) |
+| **69** ✅ (Phase 11) | `gxc` emits a relocatable object; `gxld` links it (`LINKER.md`) |
 
 ## Suggested crate layout (when coding starts)
 
 ```text
 crates/
-  gxc/              # host binary + lib (parse/codegen/elf)
+  gxc/              # host binary + lib (parse/codegen/obj → gxld)
   gxc-prelude/      # tiny asm/Rust blobs for write/exit (optional)
 docs/COMPILER.md    # this plan
 ```

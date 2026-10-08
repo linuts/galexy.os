@@ -2143,9 +2143,47 @@ fn shell_pipeline_glob_typing_e2e() {
 /// `rm` drops a scratch file and refuses a directory that still has a child.
 #[test]
 fn shell_util_typing_e2e() {
+    util_typing_e2e_on("galexy-os");
+}
+
+/// Milestone 69 differential: the `galexy-os-gxld` image carries init,
+/// shell, hello and every util re-linked by `gxld` from the exact objects
+/// and rlibs rustc hands `rust-lld`. Same keystrokes, same output.
+#[test]
+fn gxld_image_util_typing_e2e() {
+    util_typing_e2e_on("galexy-os-gxld");
+}
+
+/// `hello` typed into the gxld-linked shell on the gxld-linked image.
+#[test]
+fn gxld_image_run_hello_typing_e2e() {
+    let keys = with_login(RUN_HELLO_KEYS);
+    let serial = boot_and_type(
+        &image("galexy-os-gxld"),
+        &keys,
+        "[boot] main loop ready",
+        "exited (syscall)",
+        Duration::from_millis(30),
+        Duration::from_secs(90),
+    );
+    assert!(
+        serial.contains(HELLO_TEXT),
+        "typed `hello` on the gxld image never produced user output; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("exited (syscall)"),
+        "user task exit marker missing on the gxld image; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[pf] ring-3 task fault"),
+        "a gxld-linked program faulted; serial:\n{serial}"
+    );
+}
+
+fn util_typing_e2e_on(image_name: &str) {
     let keys = with_login(UTIL_KEYS);
     let serial = boot_and_type(
-        &image("galexy-os"),
+        &image(image_name),
         &keys,
         "[boot] main loop ready",
         "rm: directory not empty",

@@ -239,9 +239,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>> {
         if c.is_ascii_alphabetic() || c == b'_' {
             let begin = i;
             i += 1;
-            while i < bytes.len()
-                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
-            {
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                 i += 1;
             }
             let name = &src[begin..i];
@@ -275,7 +273,10 @@ pub fn lex(src: &str) -> Result<Vec<Token>> {
 fn lex_int(bytes: &[u8], mut i: usize) -> Result<(i32, usize)> {
     let start = i;
     if bytes[i] == b'0' && bytes.get(i + 1).is_some_and(|b| b.is_ascii_digit()) {
-        return Err(Error::at(start, "leading zeros are not allowed on integers"));
+        return Err(Error::at(
+            start,
+            "leading zeros are not allowed on integers",
+        ));
     }
     while i < bytes.len() && bytes[i].is_ascii_digit() {
         i += 1;
@@ -297,6 +298,8 @@ mod tests {
         let toks = lex(src).unwrap();
         assert!(matches!(toks[0].kind, TokenKind::Fn));
         assert!(matches!(toks[1].kind, TokenKind::Main));
-        assert!(toks.iter().any(|t| matches!(&t.kind, TokenKind::ByteStr(b) if b == b"hi\n")));
+        assert!(toks
+            .iter()
+            .any(|t| matches!(&t.kind, TokenKind::ByteStr(b) if b == b"hi\n")));
     }
 }
