@@ -48,14 +48,34 @@ pub fn syscall(number: u64, a0: u64, a1: u64, a2: u64) -> SyscallResult {
 }
 
 /// Writes bytes to the console through the console capability.
+///
+/// Retries across the per-tick console budget (short writes / `0` mean
+/// yield and continue) so multi-section output like `help` is not silently
+/// truncated mid-stream.
 pub fn write_console(bytes: &[u8]) -> SyscallResult {
     let cap = console_cap();
-    syscall(
-        Syscall::Write as u64,
-        cap.bits(),
-        bytes.as_ptr() as u64,
-        bytes.len() as u64,
-    )
+    let mut off = 0usize;
+    while off < bytes.len() {
+        let r = syscall(
+            Syscall::Write as u64,
+            cap.bits(),
+            bytes[off..].as_ptr() as u64,
+            (bytes.len() - off) as u64,
+        );
+        if !r.ok {
+            return r;
+        }
+        let n = r.value as usize;
+        if n == 0 {
+            let _ = yield_now();
+            continue;
+        }
+        off += n;
+    }
+    SyscallResult {
+        ok: true,
+        value: bytes.len() as u64,
+    }
 }
 
 /// Creates a scratch file or directory. On success, a file's `value` is a

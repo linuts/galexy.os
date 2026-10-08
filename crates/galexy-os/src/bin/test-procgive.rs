@@ -78,18 +78,17 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     let hold: *const HolderReport = mm::frame_virt(holder_region.scratch_phys).as_ptr();
     let mut elapsed = 0u64;
-    // Copy reports before reap — exit frees (and wipes) scratch trees.
+    // Spin-poll DONE before any reap (wipe + AP steal/reap race). IRQs on.
+    x86_64::instructions::interrupts::enable();
     let href = loop {
-        sched::arm_timer_for_load();
-        x86_64::instructions::hlt();
         sched::drain_spawn();
         let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*hold).done)) };
         if done == DONE {
             break unsafe { core::ptr::read_volatile(hold) };
         }
-        sched::reap();
+        core::hint::spin_loop();
         elapsed += 1;
-        if elapsed > TICK_TIMEOUT {
+        if elapsed > TICK_TIMEOUT.saturating_mul(10_000) {
             panic!("holder never finished");
         }
     };
@@ -111,16 +110,14 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let peer: *const PeerReport = mm::frame_virt(peer_region.scratch_phys).as_ptr();
     elapsed = 0;
     let pref = loop {
-        sched::arm_timer_for_load();
-        x86_64::instructions::hlt();
         sched::drain_spawn();
         let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*peer).done)) };
         if done == DONE {
             break unsafe { core::ptr::read_volatile(peer) };
         }
-        sched::reap();
+        core::hint::spin_loop();
         elapsed += 1;
-        if elapsed > TICK_TIMEOUT {
+        if elapsed > TICK_TIMEOUT.saturating_mul(10_000) {
             panic!("peer never finished");
         }
     };
