@@ -354,12 +354,23 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 - `bin/test-galfs-idempotent` + `boot_with_galfs_recover`
 - Duplicate create → `Unsupported`; remove+recreate advances generation
 
-### Remaining (Milestone 45)
+### Crash injection (landed)
+
+- `boot_with_galfs_crash` kills QEMU during the guest's in-flight
+  `sync` (`bin/test-crash`)
+- Next boot loads a consistent slot: the pre-crash file survives and
+  the killed mutate does not
+
+### ATA errors (landed)
+
+- ERR/DF and command timeout log `[ata] I/O error` / `[ata] I/O timeout`
+  and return `Unsupported` (no panic). Absent slave: same error.
+  `bin/test-ata`
+
+### Follow-ons (not this milestone)
 
 - Double-indirect / lengths beyond u16
 - Optional fsck repair into a new slot
-- Crash injection (kill QEMU mid-mutate)
-- ATA error surfacing (no panic on I/O failure where possible)
 
 ### Target storage stack (Milestone 46)
 
@@ -390,9 +401,9 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 | Milestone | Delivers |
 | --- | --- |
 | **44** | Sealed GALF (volume key + AEAD); threat model; no plaintext in image |
-| **45** | Capacity, blocks, ops, sync, quotas, host fsck, shares, single-indirect; polish remain |
+| **45** | Capacity, blocks, ops, sync, quotas, host fsck, shares, single-indirect, crash injection, ATA I/O errors |
 | **46** | Storage stack polish for demos / review |
 
-Until 45 lands, demo limits above are the shipped contract. New code
-must not invent a second ambient “path implies permission” API beside
-tokens.
+Demo limits above are the shipped contract (double-indirect and fsck
+repair-into-new-slot are follow-ons). New code must not invent a second
+ambient “path implies permission” API beside tokens.

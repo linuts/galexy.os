@@ -234,9 +234,10 @@ checklist). Style: `docs/STYLE.md`.
    spawn rights mask. Monotonic time only (no wall clock). Argon2id waived
 2. **44 Sealed GALF** ✅ — volume key + AEAD; interactive unlock; key
    wipe on last logout / power. Poly1305 waived (HMAC tag stays)
-3. **45 galfs for real usage** — extents/capacity, rename/truncate/stat,
-   sync/refuse-format, quotas, host fsck, durable shares, single-indirect
-   (M45 polish / double-indirect remain)
+3. **45 galfs for real usage** ✅ — extents/capacity, rename/truncate/stat,
+   sync/refuse-format, quotas, host fsck, durable shares, single-indirect,
+   crash injection, ATA I/O errors. Double-indirect and fsck
+   repair-into-new-slot stay follow-ons
 4. **46 Storage stack** — BlockDevice, ATA capacity, flush matrix,
    virtio-blk, partition offset (landed)
 5. **47 Process, ABI & caps** — process-Cap foundation per

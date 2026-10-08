@@ -437,6 +437,69 @@ fn boot_once_with_galfs(
     (code, serial)
 }
 
+/// Commit a durable slot, kill QEMU during the next mutate, boot again.
+///
+/// The guest prints `[test-crash] mutating` and then calls `sync`. This
+/// waits until that line is visible, pauses briefly so the commit is in
+/// progress (key wrap, before the new slot is published), and kills QEMU.
+/// The second boot must observe a consistent slot.
+pub fn boot_with_galfs_crash(image: &Image) -> (String, Option<i32>, String) {
+    let galfs_path = std::env::temp_dir().join(format!(
+        "galexy-galfs-crash-{}-{}.img",
+        image.name.replace('-', "_"),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::write(&galfs_path, vec![0u8; GALFS_IMG_BYTES]).expect("create galfs.img");
+    let serial_path = serial_log_path(&format!("{}-kill", image.name));
+    let mut child = qemu_command_with_galfs(
+        &image.bios,
+        &galfs_path,
+        &serial_path,
+        GalfsDiskCache::Writethrough,
+        GalfsBackend::IdeSlave,
+    )
+    .spawn()
+    .expect("failed to launch qemu-system-x86_64 (crash injection)");
+
+    let deadline = Instant::now() + TEST_TIMEOUT;
+    loop {
+        match child.try_wait().expect("try_wait failed") {
+            Some(_) => break,
+            None if Instant::now() > deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break;
+            }
+            None => {
+                let serial = std::fs::read_to_string(&serial_path).unwrap_or_default();
+                if serial.contains("[test-crash] mutating") {
+                    // Inside the in-flight commit: PBKDF runs before the
+                    // inactive slot is written, so a short pause is still
+                    // mid-mutate and the previous slot stays authoritative.
+                    std::thread::sleep(Duration::from_millis(250));
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+    let serial1 = std::fs::read_to_string(&serial_path).unwrap_or_default();
+    let (code2, serial2) = boot_once_with_galfs(
+        &image.bios,
+        &galfs_path,
+        &image.name,
+        GalfsDiskCache::Writethrough,
+        GalfsBackend::IdeSlave,
+    );
+    let _ = std::fs::remove_file(&galfs_path);
+    (serial1, code2, serial2)
+}
+
 /// One boot with a fresh zeroed GALF image on the IDE slave.
 pub fn boot_galfs_once(image: &Image) -> (Option<i32>, String) {
     let galfs_path = std::env::temp_dir().join(format!(

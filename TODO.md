@@ -1201,7 +1201,7 @@ Protect the ATA image at rest (password hashes and file bytes).
 - [x] Explicit non-goal: per-file keys, secure erase, TPM seal
       (documented in `AUTH.md` / `GALFS.md`)
 
-## Milestone 45 — galfs for real usage
+## Milestone 45 — galfs for real usage ✅
 
 Capacity, operations, durability, and multi-user sharing.
 
@@ -1277,13 +1277,16 @@ Dual-slot CRC is a start; make failure modes explicit and operable.
       guest-written image
 - [x] **Corrupt-slot recovery**: runner breaks the newest slot's AEAD tag;
       verify boot recovers from the older sibling
-- [ ] **Crash injection**: runner helper that kills QEMU mid-mutate;
-      assert the next boot picks a consistent slot
+- [x] **Crash injection**: `boot_with_galfs_crash` kills QEMU after the
+      guest prints `[test-crash] mutating` and before that commit
+      returns. The next boot loads a consistent slot (`keep` survives,
+      the in-flight `drop` does not). `bin/test-crash`
 - [x] **Refuse silent format**: both slots fail with GALF magic →
       galfs unavailable (`DISK_CORRUPT`); no RAM invent of admin;
       `bin/test-galfs-corrupt` + runner both-corrupt harness
-- [ ] ATA errors: surface `Unsupported` / logged I/O error instead of
-      panicking where possible
+- [x] ATA errors: status and timeout failures log `[ata] I/O error` /
+      `[ata] I/O timeout` and return `Unsupported` (no panic). A missing
+      slave takes the same error. `bin/test-ata`
 - [x] **Torn-write test**: host zeros newest slot from mid-sector (keeps
       `GALF` magic); guest recovers from older sibling
       (`boot_with_galfs_torn` + `galfs_disk_recovers_from_torn_write`)
@@ -1963,7 +1966,7 @@ items stay here with rationale.
 - [ ] Auth hardening (crypto, prompts, sessions, least privilege) —
       **Milestone 43**
 - [x] Sealed GALF — **Milestone 44**
-- [ ] galfs for real usage — **Milestone 45**
+- [x] galfs for real usage — **Milestone 45**
 - [x] Storage stack — **Milestone 46**
 - [ ] Process/ABI/caps (process-Cap foundation) — **Milestone 47**
 - [ ] Memory/safety/concurrency — **Milestone 48**
