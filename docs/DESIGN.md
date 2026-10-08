@@ -441,8 +441,8 @@ Cap-kill of a sleep/I/O waiter stamps `SysError::Interrupted` then
 
 **Policy freeze (Milestone 58).** Numbers, non-goals, and sched lock
 rules live in `docs/SCHEDULING.md` (Frozen policy + Sched lock / IRQ
-rules). Wiring stays here; do not fork a second policy table. Full
-kernel lock-order table remains Milestone 48.
+rules). Wiring stays here; do not fork a second policy table. The
+kernel lock-order table is in **Concurrency model** below.
 
 **Init / seats / jobs (Milestones 53–55).** When ramdisk `init` is present
 the kernel loads it once (`Thread.is_init`, `Grants::init`). On parent
@@ -869,6 +869,104 @@ not free ramdisk bytes.
   Interrupt handlers never touch the screen lock (serial or atomics only).
   The shootdown handler is the same rule pushed further: serial or
   atomics, never a lock.
+
+### Memory policy (Milestone 48)
+
+**PCID / GLOBAL.** Every CR3 swap is a full TLB flush. No suite test is
+TLB-bound: QEMU time is PBKDF2 (10 000 HMAC rounds, about two seconds
+each on this TCG host) and ATA PIO. PCID and global kernel pages are
+waived until a profile shows CR3 churn as the cost.
+
+**Demand paging.** Non-goal. A user task gets a fixed image, a 4-page
+stack (`USER_STACK_PAGES`) with one unmapped guard page below it, and
+one scratch page. There is no user heap. A user `#PF` kills that task
+(`test-userfault`). The kernel heap grows by an explicit map, not by
+faulting.
+
+**Kernel heap.** Start is 100 pages (400 KiB) at P4 index 43. Growth is
+16 pages (64 KiB) per step, cap `HEAP_MAX_PAGES` (64 × 1024 pages,
+256 MiB). A failed `alloc` returns null. Syscall paths that cannot
+proceed return `NoResource` (object table, frame reserve
+`SPAWN_FRAME_RESERVE` = 64). An `expect` on a frame the kernel must
+have is a panic: that is a kernel bug, not a user error.
+
+**FSGSBASE.** Per-CPU GS requires CPUID 7.0 EBX bit 0. The runner and
+`cargo run` pass `-cpu max`. Boot panics with
+`cpu: FSGSBASE unsupported — per-CPU mechanism requires it (CPUID 7.0.EBX bit 0)`.
+A software GS fallback is out of scope.
+
+**ASLR.** Waived. Every user ELF links at `USER_IMAGE_BASE`; randomizing
+the P4 slot would not hide that address from the program, and it would
+break the single load address the loader and the ABI share. Rationale
+lives here until `docs/THREAT.md` (Milestone 51) cites it.
+
+**User pointers.** Syscalls copy path, name, password, and write bytes
+into stack buffers only after a length check (`MAX_NAME`, `MAX_READ` /
+`MAX_WRITE`, `SPAWN_ARG_MAX` 256, password ≤ 64) and a `user_buffer`
+walk. Parse and KDF run on that copy, so a later store in the user
+page cannot change the bytes mid-check.
+
+**Secrets.** Login, useradd, passwd, and volume-unlock staging buffers
+are `wipe_bytes`'d before the syscall returns, including the error
+path. `check_password` wipes its digest. PBKDF2 wipes HMAC key blocks
+and the working block. Volume key and passphrase are wiped on last
+logout and on power. Cold-boot RAM remanence stays accepted.
+
+**Canaries and guards.** Reap reads the kstack canary
+(`STACK_CANARY`) and panics in every build if it changed — a corrupted
+kernel stack is not a soft error. `test-threadexit` reaps clean
+returns, so a broken canary fails that boot. The user stack's guard
+page is unmapped; `test-userfault` recurses into it, kills only that
+task, and requires `free_frames` back at the boot baseline.
+`test-treechurn` and `test-smpstress` are the same budget after N
+spawn/exit cycles.
+
+**Debug vs release.** Canary mismatch always panics. GALF structural
+checks return failure and refuse the image (soft) in every build.
+`debug_assert` on encode lengths stays debug-only.
+
+**Cooperative scheduler.** `run()`'s mid-sweep fairness and `TaskCtx`'s
+eight `u64` slots are waived for review. Preemptive threads are the
+path that runs user code (Milestone 58).
+
+### Lock order
+
+Allowed nesting is top to bottom. Never take a lock above one you
+already hold. IRQ-gate means `interrupts::without_interrupts` (or an
+IRQ that already has IF=0) around the acquire.
+
+| Lock | May hold while taking | IRQ-gate |
+| --- | --- | --- |
+| `THREADS` | galfs `TABLE`, then `VOLUME_KEY`, then `VOLUME_PASS` | yes |
+| galfs `TABLE` | `DISK_BUF` only while encoding; not `THREADS` | yes, on the syscall path |
+| `VOLUME_KEY` | `VOLUME_PASS` | with the caller |
+| `LOCKOUT` | nothing above | yes; never under `THREADS` or `TABLE` |
+| Frame `USED` then `USABLE` | nothing else | yes |
+| Heap `INNER` | nothing else; growth drops it before shootdown | yes |
+| `ATA` / virtio `DEV` then `DMA` | nothing else | with the caller (syscall or BSP) |
+| Screen `SCREEN` / `GRIDS` | nothing else | BSP; IRQ handlers do not take it |
+| Keyboard queue | nothing else | IRQ may push; readers gate |
+| `SCHED`, `RAMDISK`, `PIPES`, `PENDING_SPAWN` | not `THREADS` | yes when called from preemptable code |
+| Shootdown handler | **no lock** | runs at IPI; initiator holds none across the broadcast |
+
+Init order (`galexy-os` `main`): serial → framebuffer → ramdisk publish
+→ `mm` (frames, paging, heap) → `arch` (GDT, IDT, ACPI, FSGSBASE,
+LAPIC, SMP) → `sched::init` (`galfs::init`) → `init` / shells.
+
+Shutdown order (`Syscall::Power`): `galfs::sync`, `wipe_volume_key`,
+then platform power. A platform that stays up has already dropped the
+key.
+
+### Steal and reap
+
+1. A thread is current on at most one CPU.
+2. `owner` is the CPU that rotates it and the CPU that may `reap` it.
+3. Steal flips `owner` only when the victim is not current and its
+   switch-out tail has stored `CTX_STABLE`.
+4. Reap runs on the owner, sees `EXITED` or a finished kernel thread,
+   checks the canary, zeros stacks, and frees frames.
+5. `test-smpstress` is the hammer: churn on both CPUs, then
+   `free_frames` returns to the post-grow baseline.
 
 ## Testing strategy
 

@@ -1438,33 +1438,39 @@ Make the object-capability story hold under exhaustion and forgery.
       (`Grants::pre_login` has no loader — Milestone 43; forged/ungranted
       loader Cap → AccessDenied in `test-capforge`)
 
-## Milestone 48 — Memory, safety & concurrency
+## Milestone 48 — Memory, safety & concurrency ✅
 
-Paging policy, W^X, scrub, and a frozen lock story.
+Paging policy, W^X, scrub, and a frozen lock story. Narrative:
+`docs/DESIGN.md` → Concurrency model.
 
 ### Memory, paging, and SMP review items
 
 Close or formally waive the known memory-model nits.
 
-- [ ] **PCID / GLOBAL kernel pages**: design note; implement if churn
-      measurements warrant, else waive with numbers from the suite
-- [ ] **Demand paging policy**: page faults for user heap/stack growth
-      vs today's fixed maps — either a small MVP or a written non-goal
-- [ ] **Heap policy**: initial size, growth cap, OOM behavior visible to
-      userland (kill vs error)
-- [ ] **FSGSBASE fallback**: document `-cpu` requirements; panic message
-      names the feature; optional soft path remains out of scope but
-      stated
-- [ ] **BSP-only devices**: reaffirm keyboard/framebuffer single-consumer
-      in DESIGN; add a one-page “Concurrency model for reviewers”
-- [ ] **Guard / canary audit**: confirm user stack guard + kstack canary
-      still fire in dedicated tests
-- [ ] **Frame accounting**: free frames at boot vs after N spawn/exit
-      cycles stays stable (existing churn tests + a documented budget)
+- [x] **PCID / GLOBAL kernel pages**: waived. Every CR3 swap is a full
+      flush. Suite time is PBKDF2 and ATA PIO, not TLB churn
+      (`DESIGN.md`)
+- [x] **Demand paging policy**: written non-goal. Fixed 4-page user
+      stack + guard page; no user heap; user `#PF` kills the task
+- [x] **Heap policy**: 400 KiB start, 64 KiB steps, 256 MiB cap. User
+      exhaustion is `NoResource`; a missing kernel frame on a path that
+      `expect`s one panics (`DESIGN.md`)
+- [x] **FSGSBASE fallback**: `-cpu max` on `cargo run` and the runner.
+      Panic text names `FSGSBASE` and CPUID 7.0 EBX bit 0. Soft path
+      stays out of scope
+- [x] **BSP-only devices**: keyboard and framebuffer stay BSP-only;
+      concurrency note in `DESIGN.md`
+- [x] **Guard / canary audit**: `test-userfault` walks the user stack
+      into the guard page and reclaims frames; `test-threadexit` reaps
+      with the kstack canary check (a mismatch panics the boot)
+- [x] **Frame accounting**: `test-userfault`, `test-treechurn`, and
+      `test-smpstress` require `free_frames` back at baseline after
+      spawn/exit. Spawn refuses below `SPAWN_FRAME_RESERVE` (64)
 - [x] **User map W^X**: blob code RX, stack/scratch RW|NX; `test-wx`
       jumps to scratch (NX #PF) and reclaims frames
-- [ ] **ASLR-lite (optional)**: randomize user P4 pick among free
-      entries, or waive with rationale in THREAT.md
+- [x] **ASLR-lite (optional)**: waived. `USER_IMAGE_BASE` is the ABI
+      load address; a random P4 slot would not hide it. Rationale in
+      `DESIGN.md` (cited from `THREAT.md` when Milestone 51 adds it)
 
 ### Memory safety hardening pass
 
@@ -1473,31 +1479,37 @@ Push the easy wins a systems engineer will check in the first hour.
 - [x] **Stack wipe on reap**: `deallocate_frame` zeros every freed frame
       (user stack/scratch/code + page tables); reap zeros heap `stack` /
       `kstack` before drop
-- [ ] **Password / key scrub** audit across login, passwd, unlock
-      (cross-check Milestones 43/44)
+- [x] **Password / key scrub** audit across login, passwd, unlock
+      (cross-check Milestones 43/44): staging buffers and the PBKDF2
+      HMAC block are wiped; volume key wipe is Milestone 44
 - [x] **NX / W^X audit** (cross-check paging items above): ELF loader
       refuses W|X `PT_LOAD` (`elf_bytes_wx_ok` + assert in `map_segment`);
       `test-wx` covers forged W|X header + live NX fault
-- [ ] **User pointer TOCTOU**: copy path/password into kernel buffers
-      before parse/verify (document if already true; fix if not)
-- [ ] **Integer / length checks**: every `len` from userland checked
-      against ABI max before slice construction
-- [ ] **Panic on debug assertions** in test builds for canary / table
-      invariants; soft handling in release where appropriate
+- [x] **User pointer TOCTOU**: path, name, password, and write bytes are
+      copied into kernel stack buffers after the length check and
+      before parse or KDF (`DESIGN.md`)
+- [x] **Integer / length checks**: `MAX_NAME`, `MAX_READ` / `MAX_WRITE`,
+      `SPAWN_ARG_MAX`, password ≤ 64, before any slice is built from a
+      user `len`
+- [x] **Panic on debug assertions**: kstack canary mismatch panics in
+      every build. GALF validate stays a soft refuse. Encode length
+      checks stay `debug_assert`
 
 ### Lock order, IRQ gates, and init/shutdown
 
 Freeze concurrency rules so review does not invent races.
 
-- [ ] **Lock-order table** in DESIGN (complete list: THREADS, galfs TABLE,
-      screen, keyboard ring, ATA, …) with allowed nestings
-- [ ] **IRQ-gate audit**: every public API that takes a preemptable lock
-      is IRQ-gated; grep/doc checklist
-- [ ] **Init order** documented: mm → arch/ACPI → sched → galfs → shells
-- [ ] **Shutdown order**: flush galfs, drop volume key, power
-- [ ] **Steal/reap invariants** restated with a small diagram or bullet
-      proof; `test-smpstress` remains the hammer
-- [ ] **No lock in shootdown handler** reaffirmed; new IPI handlers follow
+- [x] **Lock-order table** in DESIGN (`THREADS` → galfs `TABLE` →
+      volume key; `LOCKOUT` never under those; screen/keyboard/ATA
+      unnested; shootdown takes none)
+- [x] **IRQ-gate audit**: preemptable acquires of those locks run under
+      `without_interrupts` or IF=0; table in `DESIGN.md`
+- [x] **Init order** documented: serial → screen → ramdisk → mm →
+      arch/ACPI → sched → galfs → shells
+- [x] **Shutdown order**: `galfs::sync`, `wipe_volume_key`, platform power
+- [x] **Steal/reap invariants** restated as five bullets; `test-smpstress`
+      remains the hammer
+- [x] **No lock in shootdown handler** reaffirmed; new IPI handlers follow
       the same rule
 
 ## Milestone 49 — Console, audit & operator UX
@@ -1957,19 +1969,18 @@ items stay here with rationale.
       work needs a physical FB remap
 - [ ] Screen: text-mode cursor (blinking) — **Milestone 49**
 - [ ] Keyboard queue overflow silently drops keys — **Milestone 49**
-- [ ] Cooperative-scheduler nits: `run()` sweep fairness mid-sweep;
-      TaskCtx's 8 fixed u64 slots — **waive for review** (document in
-      Milestone 48 concurrency note / **Milestone 58** non-goals) unless
-      a bug shows up
-- [ ] TLB efficiency: every CR3 swap is a full flush (no PCID/GLOBAL
-      kernel pages) — **Milestone 48** (implement or waive with numbers)
+- [x] Cooperative-scheduler nits: `run()` sweep fairness mid-sweep;
+      TaskCtx's 8 fixed u64 slots — waived in the Milestone 48
+      concurrency note (preemptive threads run user code)
+- [x] TLB efficiency: every CR3 swap is a full flush (no PCID/GLOBAL
+      kernel pages) — waived in Milestone 48 (suite time is KDF and PIO)
 - [ ] Auth hardening (crypto, prompts, sessions, least privilege) —
       **Milestone 43**
 - [x] Sealed GALF — **Milestone 44**
 - [x] galfs for real usage — **Milestone 45**
 - [x] Storage stack — **Milestone 46**
 - [ ] Process/ABI/caps (process-Cap foundation) — **Milestone 47**
-- [ ] Memory/safety/concurrency — **Milestone 48**
+- [x] Memory/safety/concurrency — **Milestone 48**
 - [ ] Console/audit — **Milestone 49**
 - [ ] Shell demos — **Milestone 50**
 - [ ] Docs/tests/CI/soak — **Milestone 51**

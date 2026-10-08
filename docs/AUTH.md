@@ -19,7 +19,9 @@ Passwords use **PBKDF2-HMAC-SHA256** (`galexy-crypto`: 10 000
 iterations) with an 8-byte CSPRNG salt and a 16-byte digest per actor.
 Salts come from `arch::rand` (RDRAND, with a tick-mixed fallback). Empty
 passwords are rejected. Syscall staging buffers are wiped after login /
-useradd / passwd. Iteration count is capped for debug-QEMU boot budget;
+useradd / passwd / volume unlock, including the error path.
+`check_password` wipes its digest, and PBKDF2 wipes HMAC key blocks.
+Iteration count is capped for debug-QEMU boot budget;
 raise it (or switch to Argon2id on a dedicated KDF stack) once release
 profiles or fatter kstacks make that practical.
 
