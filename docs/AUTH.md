@@ -257,12 +257,24 @@ the flag because it lives in the sealed actor record.
 | Bare program (`hello`, `linger`, …) | Parent’s `fs_root`, **empty tokens** (the mask does not apply) |
 
 Every `SPAWN_WAIT` / `SPAWN_INHERIT` ramdisk binary is trusted code
-running with the caller’s cards. Milestone 51 signs and measures those
-ELFs; until then, a hostile utility is a hostile operator.
+running with the caller’s cards. The ramdisk is **measured, not
+signed**: `runner/build.rs` prints the tar’s SHA-256 at build and the
+kernel re-hashes it at boot (`ramdisk_test_passes` asserts equality).
+There is no allowlist; a hostile utility is a hostile operator
+(`THREAT.md` → Trust assumptions). Before any page is mapped the ELF
+goes through `loader::validate_elf`; a malformed image is `SysError`,
+never a panic (`bin/test-badelf`).
 
-Pre-login seats cannot spawn (no loader grant). Empty tokens stop a
-runaway bare program from writing the caller’s tree. Utilities need
-create/open.
+Pre-login seats cannot spawn. Two independent rules enforce it: the
+seat holds no loader grant (`AccessDenied` on the Cap check), and the
+kernel refuses `spawn` from any caller whose session has no `fs_root`
+(`task_spawn` → `AccessDenied`) even when a loader Cap is present.
+`bin/test-negative` proves the second rule with an unauthenticated
+credential that does hold the loader. Empty tokens stop a runaway bare
+program from writing the caller’s tree (`test-negative`: open a
+ramdisk banner succeeds; create / open / remove under the caller’s
+Desktop is `AccessDenied`). Utilities need create/open and get them
+via inherit.
 
 Process identity and wait/kill are a separate layer: spawn will return a
 **process Cap** (see `docs/PROCESS.md`). Holding that Cap does not grant
@@ -291,3 +303,24 @@ within budget; a tight write loop cannot pin COM1.
 **Note:** GALF **v11** (see `GALFS.md`) refuses older images, including
 every earlier sealed layout. Delete `galfs.img` or let format recreate a
 sealed volume after upgrading.
+
+## Status (end state after Milestones 43–44, reviewed in 51)
+
+Everything above is landed and under test. What a reviewer should
+expect to find, and where the remaining edges are:
+
+| Promise | Since | Evidence | Open edge |
+| --- | --- | --- | --- |
+| Passwords hashed with PBKDF2-HMAC-SHA256, CSPRNG salt, constant-time compare, staging wiped on every path | M43 | `users`, `mustchange`, `audit_strings` | cost fixed at 10 000 → **M63** stores it per actor |
+| No echo at any password prompt; no secret on serial, console, or `dmesg` | M43 | `assert_passwords_masked`, `shell_secret_prompt_typing_e2e`, `audit_strings` | inline `login user pass` remains for scripts (seam table in `DESIGN.md`) |
+| Lockout: five misses lock actor and TTY; `Locked` does not check the password | M43 (#62) | `lockout_test_passes` | cool-down is ticks, not wall clock (by design) |
+| Idle logout; last logout or power wipes the volume key | M43 / M44 | `idle_test_passes`, `unlock_test_passes`, `shutdown_test_powers_off` | — |
+| Kernel-enforced must-change for the default admin password | M43 | `mustchange_test_passes`, `shell_must_change_typing_e2e` | — |
+| Sealed GALF: volume key wrapped under a passphrase KEK; wrong passphrase stays RAM-only; raw image carries no plaintext | M44 | `unlock_test_passes`, `galfs_disk_*`, `galexy_galf::slots_test` | bring-up passphrase `galfs`; Poly1305 waived (HMAC tag) |
+| Authorization is tokens, never identity; grant/share need every right on the object or an ancestor; revoke is exact-object | M34–M45 | `galfs`, `cards`, `shares`, `galexy_galf::cards_test` | — |
+| Pre-login seat cannot spawn; bare spawn has empty tokens; utilities inherit, optionally masked | M41–M43, kernel rule in M51 | `negative_test_passes`, `shell_nested_spawn_refused_e2e` | no in-tree spawner sets the rights mask yet |
+| Session generation is an audit counter per login/logout (`[auth] session login … gen=N tty=K`) | M43 | `mustchange_test_passes`, `audit_strings` | binding it to the seat *Cap* → **M67** |
+| Init has no keyboard; seats are pre-login; init is immortal to user kill | M53–M54 | `init_test_passes`, `jobcap_test_passes` | — |
+
+Non-goals (MFA, networked IdP, PAM, Argon2id) are restated with
+rationale in `THREAT.md` → Non-goals.

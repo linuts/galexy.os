@@ -1593,18 +1593,29 @@ Paperwork, evidence, tooling, and scope freeze.
 
 Paperwork a systems engineer expects before reading code.
 
-- [ ] **`docs/THREAT.md`**: assets (disk, console, ramdisk ELFs, caps);
+- [x] **`docs/THREAT.md`**: assets (disk, console, ramdisk ELFs, caps);
       adversaries (stolen disk, malicious user program, malicious second
-      seat); trusts (physical F1, ramdisk publisher); non-goals
-- [ ] **`docs/FS.md`**: galfs layout, versions, sync, recovery, quotas,
-      path grammar — split out of the long DESIGN syscall essay
-- [ ] **`AUTH.md` refresh**: end-state after Milestones 43–44
-- [ ] **Reviewer README section**: how to build, run BIOS/UEFI, attach
-      disk, default accounts, where logs go
-- [ ] **ABI stability table**: syscall numbers + struct layouts marked
-      stable / unstable
-- [ ] **Known limitations** pruned: every remaining bullet either has a
-      milestone id or an explicit waive
+      seat); trusts (physical F1, ramdisk publisher); controls table with
+      the guarding test per row; absent-but-tracked table (M63/M64);
+      non-goals with rationale
+- [x] **`docs/FS.md`**: satisfied by `docs/GALFS.md` (layout, versions,
+      slots, sync / commit ordering, recovery, quotas, path grammar,
+      table limits) — no second file; pre-login row now states the
+      kernel rule
+- [x] **`AUTH.md` refresh**: end-state after Milestones 43–44 — spawn
+      policy rewritten (measured ramdisk, `validate_elf`, kernel
+      pre-login rule), new Status table (promise / since / evidence /
+      open edge)
+- [x] **Reviewer README section**: "For reviewers" — toolchain and
+      `rustc -V`, build / BIOS / UEFI (`OVMF_FD`), disk attach and clean
+      instructions, default accounts, evidence table (COM1, serial logs,
+      ramdisk hash, images, screen dumps), reading order
+- [x] **ABI stability table**: `docs/ABI.md` — register convention, 26
+      syscall numbers (stable / experimental / template), error codes,
+      handle and buffer layouts, what is not ABI; freeze rule stated
+- [x] **Known limitations** pruned: every remaining bullet either has a
+      milestone id or an explicit waive (loader-panic bullet closed by
+      `validate_elf`; repo-files bullet closed)
 
 ### Hardening tests & supply chain
 
@@ -1628,12 +1639,15 @@ Evidence, not assertions.
       the two digests match. The ramdisk is a **trusted input** (the
       publisher is the person who ran the build) — no allowlist; the
       hash is how a reviewer confirms the image carries what they built
-- [ ] **Feature-gated test seams**: `crash`, verbose panics, etc.
-      (`crash-seam`, `verbose-sched` exist; list every seam in one
-      DESIGN table)
-- [ ] **CI matrix doc**: BIOS, UEFI (`OVMF_FD`), `-smp 2`, with/without
-      galfs disk, cache modes
-- [ ] **Coverage list**: which milestones each `bin/test-*` guards
+- [x] **Feature-gated test seams**: DESIGN → Testing strategy → Test
+      seams lists `crash-seam`, `verbose-sched`, `expect_panic`, inline
+      `login`, runner env knobs, and every `pub fn test_*` seam
+- [x] **CI matrix doc**: README → CI maps BIOS / UEFI (`OVMF_FD`),
+      `-smp 2`, disk on/off, transport, cache modes, and linker to the
+      named boot tests
+- [x] **Coverage list**: DESIGN → Testing strategy → Coverage maps all
+      70 test kernels (and the main / `gxld` image boots) to the boot
+      test and the milestone they guard
 - [x] **Host fuzz**: `parse_path` / `component_ok` moved to
       `galexy_core::path`; `path_test` sweeps every string up to length
       7 over a one-byte-per-class alphabet (~960k inputs) against an
@@ -1651,10 +1665,12 @@ Evidence, not assertions.
 
 Make “green on my machine” into “green in CI and for the reviewer”.
 
-- [ ] **Pinned toolchain** already — document `rustc -V` in README
-      reviewer section
-- [ ] **One-command review boot**: `cargo run` + disk + `OVMF_FD` notes;
-      script `scripts/review-smoke.sh` runs a focused subset
+- [x] **Pinned toolchain** already — `rustc -V` documented in README
+      "For reviewers"
+- [x] **One-command review boot**: `cargo run` + disk + `OVMF_FD` notes
+      in README; `scripts/review-smoke.sh` runs host suites,
+      `audit_strings`, and eleven boots across every axis (`--full` for
+      the whole suite)
 - [x] **GitHub Actions workflow** (`.github/workflows/ci.yml`): `host`
       job — fmt check, host tests (abi / core / crypto / galf / fsck /
       gxc / gxld), clippy on host crates, kernel bins, and userspace;
@@ -1687,46 +1703,48 @@ Make “green on my machine” into “green in CI and for the reviewer”.
       and `cargo clippy` unify features and flags differently and so
       pack different bytes — compare build-time and boot-time digests
       from the same invocation (the runner does)
-- [ ] **PR template**: test plan + STYLE secrets/GALF checklist
-- [ ] **Repo files**: `LICENSE` (owner picks; MIT or Apache-2.0
-      matches the dependency stance), `SECURITY.md` (how to report;
-      what is in scope per `THREAT.md`), `CHANGELOG.md` (one line per
-      merged milestone PR, starting at #62)
-- [ ] **`galfs.img` gitignore** verified; clean instructions if a bad
-      image breaks boots after a version bump
+- [x] **PR template**: `.github/PULL_REQUEST_TEMPLATE.md` — test plan,
+      STYLE secrets / GALF / IF=0 / ABI / docs checklist
+- [x] **Repo files**: `LICENSE` (MIT — owner's pick), `SECURITY.md`
+      (how to report; scope per `THREAT.md`), `CHANGELOG.md` (one line
+      per merged milestone PR, starting at #62)
+- [x] **`galfs.img` gitignore** verified (`*.img` in `.gitignore`);
+      clean instructions in README "For reviewers" → Disk
 
 ### Performance budgets & soak
 
 Solid means it does not fall over when exercised.
 
-- [ ] **Budgets doc**: target syscall latency class (order-of-magnitude),
-      console budget (already 512 B/tick), max tasks, max galfs mutate/s
-      on QEMU
+- [x] **Budgets doc**: `docs/PERF.md` — latency classes per operation,
+      console 512 B/tick, fixed capacities table (64 threads, 8 files,
+      16 proc Caps, 8 pipes, galfs limits), what is not budgeted, how
+      M64 measures
 - [ ] **Soak**: N-minute idle + periodic spawn/exit + galfs touch under
       QEMU; no leak in free frames / pipe slots / thread slots
 - [ ] **Steal fairness**: under load both CPUs do useful work
       (`test-smpstress` metrics or serial counters)
 - [ ] **Pathological input**: huge paste on password prompt; tight
       write loop on console (budget); deep path components
-- [ ] **Explicit non-goal**: desktop-class throughput — state it
+- [x] **Explicit non-goal**: desktop-class throughput — stated in
+      `PERF.md` and `THREAT.md`
 
 ### Scope freeze & explicit non-goals
 
 What we will tell a reviewer we are *not* doing — written down.
 
-- [ ] **No network stack** for review-rc1
-- [ ] **No GPU / multi-framebuffer**
-- [ ] **No POSIX compatibility claim** — galexy ABI only (process Caps,
+- [x] **No network stack** for review-rc1
+- [x] **No GPU / multi-framebuffer**
+- [x] **No POSIX compatibility claim** — galexy ABI only (process Caps,
       not a Linux PID/`waitpid` promise)
-- [ ] **No ambient process namespace** — no kill/wait/open by guessed
+- [x] **No ambient process namespace** — no kill/wait/open by guessed
       global integer id
-- [ ] **No MFA / networked IdP / PAM**
-- [ ] **No demand-paged swap**
-- [ ] **No multiprocessor device drivers** (keyboard/FB stay BSP)
-- [ ] **No secure boot / measured boot** (ramdisk hash optional in hardening below)
-- [ ] **No systemd/dbus** — Phase 6 init is a small supervised table
-- [ ] Each non-goal listed in `THREAT.md` with one-line rationale
-- [ ] ROADMAP Phase 5 updated to listed here under Milestone 45
+- [x] **No MFA / networked IdP / PAM**
+- [x] **No demand-paged swap**
+- [x] **No multiprocessor device drivers** (keyboard/FB stay BSP)
+- [x] **No secure boot / measured boot** (ramdisk hash optional in hardening below)
+- [x] **No systemd/dbus** — Phase 6 init is a small supervised table
+- [x] Each non-goal listed in `THREAT.md` with one-line rationale
+- [x] ROADMAP Phase 5 updated ("Where we stand" Ready row + item 9/10)
 
 ## Milestone 52 — Review release candidate
 
@@ -1740,14 +1758,15 @@ of Milestone 67.
 - [ ] Full suite green BIOS+UEFI; disk persist + corrupt recover + auth
       e2e + galfs capacity smoke
 - [ ] Default build: no `crash`, KDF live, encryption on if disk present
-- [ ] Fresh format walkthrough in README (login on every seat; grant demo)
+- [x] Fresh format walkthrough: README "For reviewers" (accounts, disk,
+      first `passwd`) + `docs/DEMO.md` (two seats, grant / revoke)
 - [ ] Tag `review-rc1` (or note in ROADMAP) with a short changelog
 - [ ] Freeze window: ABI changes require DESIGN + abi crate bump in the
       same PR
-- [ ] **STYLE.md audit**: PR checklist that secrets/GALF/IF=0 rules were
-      followed (short bullet list in the PR template or REVIEWER.md)
-- [ ] Phase 6 process/init milestones listed in ROADMAP (not required to
-      tag `review-rc1`, but design notes from M47 must not contradict them)
+- [x] **STYLE.md audit**: `.github/PULL_REQUEST_TEMPLATE.md` carries the
+      secrets / GALF / IF=0 / ABI / docs checklist
+- [x] Phase 6 process/init milestones listed in ROADMAP (53–55 ✅; the
+      M47 design notes in `PROCESS.md` are the ones they implemented)
 - [x] Phase 7 scheduling-complete milestones listed in ROADMAP (56–58;
       implementation not required for `review-rc1`)
 
@@ -2412,8 +2431,10 @@ items stay here with rationale.
       (`USER_DS_RPL3` reload on every ring-3 return tail)
 - [ ] CPU security features (SMEP, SMAP, UMIP, KASLR) are **absent**,
       not waived; Spectre / KPTI stance unwritten — **Milestone 63**
-- [ ] ELF loader panics on a hostile image instead of returning
-      `SysError` — **Milestone 63** (`bin/test-badelf` in Milestone 51)
+- [x] ~~ELF loader panics on a hostile image instead of returning
+      `SysError`~~ — CLOSED by Milestone 51 (`loader::validate_elf`
+      before any map; `bin/test-badelf` is the oracle). The wider
+      hostile-input sweep (every syscall, SMAP on) stays **Milestone 63**
 - [ ] PBKDF2 at 10 000 iterations is a debug-QEMU budget, not a
       production cost — **Milestone 63** (cost stored per actor)
 - [ ] Nothing is profiled; the suite runs TCG at `opt-level = 0`; no
@@ -2427,8 +2448,8 @@ items stay here with rationale.
       pipeline shape, no background jobs — **Milestone 66**
 - [ ] Shutdown bypasses init; no service table or `svc`; session id is
       not bound to the seat Cap — **Milestone 67**
-- [ ] No `LICENSE` / `SECURITY.md` / `CHANGELOG.md` yet (CI workflow,
-      clippy, and rustfmt baseline landed) — **Milestone 51**
+- [x] ~~No `LICENSE` / `SECURITY.md` / `CHANGELOG.md`~~ — CLOSED by
+      Milestone 51 (MIT; reporting + scope; one line per milestone PR)
 - [ ] No network stack, no USB — **Phase 10** (after `v1.0`)
 - [x] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
