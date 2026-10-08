@@ -20,7 +20,7 @@ use galexy_os::{
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
 const DONE: u64 = 0x10C0_0A11;
-const TRIPPED: u64 = 0x10C0_719;
+const TRIPPED: u64 = 0x010C_0719;
 /// Iterations of the poll loop, not milliseconds. Busy KDF ticks are ~1–2 ms.
 const POLL_LIMIT: u64 = 80_000;
 

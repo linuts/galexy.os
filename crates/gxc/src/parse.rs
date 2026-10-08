@@ -71,9 +71,8 @@ pub fn parse(tokens: &[Token]) -> Result<Program> {
 
         return Err(Error::at(
             p.offset(),
-            format!(
-                "unexpected token in `main` (gxr v0 allows `write_console(...);` and a trailing `i32`)"
-            ),
+            "unexpected token in `main` (gxr v0 allows `write_console(...);` and a trailing `i32`)"
+                .to_string(),
         ));
     }
 

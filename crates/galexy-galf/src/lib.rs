@@ -568,7 +568,7 @@ fn check_object_blocks(
             report.push(Issue::FileTooLarge { object: index });
             return;
         }
-        (obj.len as usize + BLOCK_SIZE - 1) / BLOCK_SIZE
+        (obj.len as usize).div_ceil(BLOCK_SIZE)
     } else if obj.len != 0 {
         report.push(Issue::DirHasLength { object: index });
         0
@@ -650,7 +650,7 @@ mod tests {
 
     #[test]
     fn layout_constants_fit_slot() {
-        assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * SECTOR);
+        // Slot fit is a `const _` assertion at the top of the crate.
         assert_eq!(ACTOR_ON_DISK, 66);
         assert_eq!(OBJECT_ON_DISK, 90);
         assert_eq!(SHARE_ON_DISK, 6);

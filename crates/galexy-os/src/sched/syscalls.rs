@@ -944,7 +944,7 @@ fn syscall_read_self(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if !cap.rights().contains(CapRights::PROC_INSPECT) {
         return SyscallResult::err(SysError::AccessDenied);
     }
-    copy_inspect(addr, len, |dst| crate::sched::task_self_inspect(dst))
+    copy_inspect(addr, len, crate::sched::task_self_inspect)
 }
 
 fn syscall_read_proc(cap: Cap, addr: u64, len: u64) -> SyscallResult {

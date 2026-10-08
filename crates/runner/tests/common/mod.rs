@@ -2,7 +2,7 @@
 //! returns (exit code, serial output).
 
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -60,7 +60,7 @@ fn serial_log_path(name: &str) -> PathBuf {
 /// `-smp 2 -cpu max`: the SMP substrate requires FSGSBASE (`-cpu max`;
 /// QEMU's default qemu64 model lacks it), and 2 cores exercise the per-CPU
 /// paths in EVERY test — single-core assumptions regress loudly.
-fn qemu_command(img_path: &str, serial_path: &PathBuf) -> Command {
+fn qemu_command(img_path: &str, serial_path: &Path) -> Command {
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.arg("-drive")
         .arg(format!("format=raw,file={img_path}"))
@@ -122,8 +122,8 @@ pub enum GalfsBackend {
 /// second boot of the same image.
 fn qemu_command_with_galfs(
     img_path: &str,
-    galfs_path: &PathBuf,
-    serial_path: &PathBuf,
+    galfs_path: &Path,
+    serial_path: &Path,
     cache: GalfsDiskCache,
     backend: GalfsBackend,
 ) -> Command {
@@ -354,7 +354,7 @@ fn newest_galfs_slot_off(data: &[u8]) -> usize {
     best_off.expect("expected at least one GALF slot after write boot")
 }
 
-fn corrupt_newest_galfs_slot(path: &PathBuf) {
+fn corrupt_newest_galfs_slot(path: &Path) {
     let mut data = std::fs::read(path).expect("read galfs.img");
     let off = newest_galfs_slot_off(&data);
     data[off + GALFS_DATA_TAG_OFF] ^= 0xFF;
@@ -366,7 +366,7 @@ fn corrupt_newest_galfs_slot(path: &PathBuf) {
 
 /// Simulate a crash mid-write: keep `GALF` magic + half a payload sector,
 /// zero the rest of the newest slot (older sibling stays intact).
-fn tear_newest_galfs_slot(path: &PathBuf) {
+fn tear_newest_galfs_slot(path: &Path) {
     let mut data = std::fs::read(path).expect("read galfs.img");
     let off = newest_galfs_slot_off(&data);
     let slot_end = off + GALFS_SLOT_SECTORS * GALFS_SECTOR;
@@ -381,7 +381,7 @@ fn tear_newest_galfs_slot(path: &PathBuf) {
     }
 }
 
-fn corrupt_all_galfs_slots(path: &PathBuf) {
+fn corrupt_all_galfs_slots(path: &Path) {
     let mut data = std::fs::read(path).expect("read galfs.img");
     let mut any = false;
     for slot in 0..2 {
@@ -401,7 +401,7 @@ fn corrupt_all_galfs_slots(path: &PathBuf) {
 
 fn boot_once_with_galfs(
     img_path: &str,
-    galfs_path: &PathBuf,
+    galfs_path: &Path,
     name: &str,
     cache: GalfsDiskCache,
     backend: GalfsBackend,

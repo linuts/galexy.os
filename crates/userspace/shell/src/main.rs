@@ -658,17 +658,13 @@ fn repl(kbd: Cap, cwd: &mut Cwd, must_change: &mut bool, history: &mut History) 
                             &mut draft_len,
                             &mut hist_idx,
                         ),
-                        b'D' => {
-                            if pos > 0 {
-                                pos -= 1;
-                                move_left(1);
-                            }
+                        b'D' if pos > 0 => {
+                            pos -= 1;
+                            move_left(1);
                         }
-                        b'C' => {
-                            if pos < len {
-                                pos += 1;
-                                move_right(1);
-                            }
+                        b'C' if pos < len => {
+                            pos += 1;
+                            move_right(1);
                         }
                         _ => {}
                     }
@@ -1926,7 +1922,7 @@ fn user_pass_op(
 fn passwd_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8], must_change: &mut bool) {
     let rest = trim(rest);
     // Never accept an inline password — always prompt + confirm masked.
-    if rest.iter().any(|b| *b == b' ') {
+    if rest.contains(&b' ') {
         write_console(b"usage: passwd [name]\n");
         prompt(cwd);
         return;

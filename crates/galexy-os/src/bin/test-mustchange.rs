@@ -16,7 +16,7 @@ use galexy_os::{
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
 const DONE: u64 = 0x10C0_0C43;
-const TRIPPED: u64 = 0x10C0_71A;
+const TRIPPED: u64 = 0x010C_071A;
 const POLL_LIMIT: u64 = 80_000;
 
 #[repr(C)]

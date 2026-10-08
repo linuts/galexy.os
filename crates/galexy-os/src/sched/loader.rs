@@ -94,6 +94,7 @@ pub(crate) fn spawn_launched_seat(
     spawn_launched_placed(name, bytes, grants, arg, tty, fs, parent_slot, true)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_launched_placed(
     name: &str,
     bytes: &[u8],

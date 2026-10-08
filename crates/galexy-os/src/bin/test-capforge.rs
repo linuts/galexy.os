@@ -16,7 +16,7 @@ use galexy_os::{
 
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
-const DONE: u64 = 0xF0_66E_0001;
+const DONE: u64 = 0x000F_066E_0001;
 const TICK_TIMEOUT: u64 = 4000;
 
 #[repr(C)]

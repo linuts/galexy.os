@@ -5,7 +5,7 @@ use super::TarCursor;
 
 /// The test's own copy of the private padding rule.
 fn ceil_to_block(size: usize) -> usize {
-    (size + BLOCK - 1) / BLOCK * BLOCK
+    size.div_ceil(BLOCK) * BLOCK
 }
 
 const BLOCK: usize = 512;

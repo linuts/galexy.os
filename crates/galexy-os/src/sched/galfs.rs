@@ -336,7 +336,7 @@ const PAYLOAD_LEN: usize = ACTOR_ON_DISK * ACTOR_SLOTS
     + BITMAP_BYTES
     + BLOCK_SLOTS * BLOCK_SIZE;
 const _: () = assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * block::SECTOR);
-const _: () = assert!(BLOCK_SLOTS % 8 == 0);
+const _: () = assert!(BLOCK_SLOTS.is_multiple_of(8));
 const _: () = assert!(FILE_BYTES <= u16::MAX as usize);
 /// Sectors both dual slots need past the LBA base (capacity gate).
 const DISK_MIN_SECTORS: u64 = (DISK_SECTORS * DISK_SLOT_COUNT) as u64;
@@ -769,7 +769,7 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
             best_gen = gen;
             best_slot = Some(slot);
             // Avoid `*best = *cand` — that materializes a Table on the stack.
-            copy_table(&*cand, &mut *best);
+            copy_table(&cand, &mut best);
         }
     }
     let Some(slot) = best_slot else {
@@ -780,7 +780,7 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
         };
     };
     let mut table = TABLE.lock();
-    copy_table(&*best, &mut *table);
+    copy_table(&best, &mut table);
     refresh_roots(&table);
     ACTIVE_SLOT.store(slot, Ordering::Release);
     ACTIVE_GEN.store(best_gen, Ordering::Release);
@@ -1184,7 +1184,7 @@ fn validate_object_blocks(table: &Table, obj: &Object, seen: &mut [bool; BLOCK_S
         if obj.len as usize > FILE_BYTES {
             return false;
         }
-        (obj.len as usize + BLOCK_SIZE - 1) / BLOCK_SIZE
+        (obj.len as usize).div_ceil(BLOCK_SIZE)
     } else if obj.len != 0 || obj.indirect != NO_BLOCK {
         return false;
     } else {
@@ -2466,7 +2466,7 @@ pub(crate) fn truncate(index: u16, new_len: usize) -> Result<(), SysError> {
         let keep = if new_len == 0 {
             0
         } else {
-            (new_len + BLOCK_SIZE - 1) / BLOCK_SIZE
+            new_len.div_ceil(BLOCK_SIZE)
         };
         for slot in keep..MAX_DATA_BLOCKS {
             let b = data_block(&table, i, slot);
@@ -2516,13 +2516,15 @@ pub(crate) fn truncate(index: u16, new_len: usize) -> Result<(), SysError> {
             // Roll back newly allocated data / indirect blocks.
             for s in 0..MAX_DATA_BLOCKS {
                 let now = data_block(&table, i, s);
-                let was = if s < DIRECT_BLOCKS {
-                    saved_directs[s]
-                } else if let Some(bytes) = saved_indirect_bytes {
-                    let ii = s - DIRECT_BLOCKS;
-                    u16::from_le_bytes([bytes[ii * 2], bytes[ii * 2 + 1]])
-                } else {
-                    NO_BLOCK
+                let was = match saved_directs.get(s) {
+                    Some(&direct) => direct,
+                    None => match saved_indirect_bytes {
+                        Some(bytes) => {
+                            let ii = s - DIRECT_BLOCKS;
+                            u16::from_le_bytes([bytes[ii * 2], bytes[ii * 2 + 1]])
+                        }
+                        None => NO_BLOCK,
+                    },
                 };
                 if now != was && now != NO_BLOCK {
                     free_block(&mut table, now);
