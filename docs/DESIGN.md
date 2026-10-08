@@ -167,8 +167,9 @@ headless boot is readable. Receive is the other direction: IRQ4 (vector
 36) drains the FIFO and `keyboard::push_char` delivers each byte to the
 active TTY. `\r` is Enter, a following `\n` is swallowed (CRLF is one
 key), DEL and BS are backspace, and bytes above ASCII are dropped. The
-UART lock is dropped before that delivery, and transmit harvests pending
-receive bytes while the FIFO is busy so a paste during a long log line
+UART lock is dropped before that delivery. One `_print` holds the lock
+for the whole line, so two CPUs cannot tear it, and transmit harvests
+pending receive bytes while the FIFO is busy so a paste during that hold
 cannot overrun the 16-byte FIFO. `serial_println!` also appends the
 line to a 32×96 dmesg ring. `read` of reserved cap `0x8007` (query
 grant, same rule as `stats`) returns the newest lines that fit.

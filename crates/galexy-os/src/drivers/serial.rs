@@ -42,32 +42,67 @@ pub fn init() {
     let _ = serial1().lock().init(config);
 }
 
-/// Blocking string write over COM1. Does not hold the UART: each chunk
-/// goes through [`send_harvesting`], which also pulls any bytes that
-/// arrived while transmit was busy.
-struct SerialWriter;
+/// How many receive bytes one transmit will hold before it has to deliver
+/// them. A formatted line keeps the UART lock the whole time (two CPUs
+/// must not tear a line); this absorbs what arrives while that lock is
+/// held. Anything beyond it stays in the FIFO until the lock drops and
+/// the receive IRQ runs.
+const RX_STASH: usize = 64;
 
-impl fmt::Write for SerialWriter {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        send_harvesting(s.as_bytes());
-        Ok(())
+/// Sends raw bytes over COM1 (byte-for-byte; used by the write syscall's
+/// console mirror). One call is one contiguous burst.
+pub fn write_bytes(bytes: &[u8]) {
+    let mut stash = [0u8; RX_STASH];
+    let got = interrupts::without_interrupts(|| {
+        let mut uart = serial1().lock();
+        let mut got = 0;
+        send_locked(&mut uart, bytes, &mut stash, &mut got);
+        harvest_rest(&mut uart, &mut stash, &mut got);
+        got
+    });
+    if got > 0 {
+        deliver_bytes(&stash[..got]);
     }
 }
 
-/// Sends raw bytes over COM1 (byte-for-byte; used by the write syscall's
-/// console mirror).
-pub fn write_bytes(bytes: &[u8]) {
-    send_harvesting(bytes);
-}
-
 /// Format-hook for the `serial_print!`/`serial_println!` macros.
+///
+/// The whole formatted line is transmitted under one UART-lock hold, so a
+/// second CPU's log cannot land in the middle of this one.
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
 
-    SerialWriter
+    struct Line<'a> {
+        uart: &'a mut Uart16550<PioBackend>,
+        stash: &'a mut [u8],
+        got: &'a mut usize,
+    }
+
+    impl fmt::Write for Line<'_> {
+        fn write_str(&mut self, s: &str) -> fmt::Result {
+            send_locked(self.uart, s.as_bytes(), self.stash, self.got);
+            Ok(())
+        }
+    }
+
+    let mut stash = [0u8; RX_STASH];
+    let got = interrupts::without_interrupts(|| {
+        let mut uart = serial1().lock();
+        let mut got = 0;
+        Line {
+            uart: &mut uart,
+            stash: &mut stash,
+            got: &mut got,
+        }
         .write_fmt(args)
         .expect("printing to serial failed");
+        harvest_rest(&mut uart, &mut stash, &mut got);
+        got
+    });
+    if got > 0 {
+        deliver_bytes(&stash[..got]);
+    }
 }
 
 /// COM1 receive interrupt (vector 36, ISA IRQ4). Drains the FIFO and
@@ -99,34 +134,25 @@ pub fn drain_rx() {
 /// The next `\n` is the second half of a `\r\n` and is not a second Enter.
 static DROP_LF: AtomicBool = AtomicBool::new(false);
 
-/// Transmits `bytes`, and while the transmitter FIFO is busy pulls any
-/// receive bytes so a paste during a long log line cannot overrun the
-/// 16-byte FIFO. The UART lock is not held across delivery.
-fn send_harvesting(bytes: &[u8]) {
+/// Transmits `bytes` on a UART the caller already holds. Pulls receive
+/// bytes into `stash` while the transmitter FIFO is busy.
+fn send_locked(uart: &mut Uart16550<PioBackend>, bytes: &[u8], stash: &mut [u8], got: &mut usize) {
     let mut offset = 0;
     while offset < bytes.len() {
-        let mut stash = [0u8; 32];
-        let (sent, got) = interrupts::without_interrupts(|| {
-            let mut uart = serial1().lock();
-            let got = pull_rx(&mut uart, &mut stash);
-            let sent = if got < stash.len() {
-                uart.send_bytes(&bytes[offset..])
-            } else {
-                0
-            };
-            let more = pull_rx(&mut uart, &mut stash[got..]);
-            (sent, got + more)
-        });
-        if got > 0 {
-            deliver_bytes(&stash[..got]);
-        }
-        if sent == 0 {
-            if got == 0 {
-                core::hint::spin_loop();
-            }
+        harvest_rest(uart, stash, got);
+        let n = uart.send_bytes(&bytes[offset..]);
+        if n == 0 {
+            core::hint::spin_loop();
         } else {
-            offset += sent;
+            offset += n;
         }
+    }
+}
+
+/// Fills the free tail of `stash` from the receive FIFO.
+fn harvest_rest(uart: &mut Uart16550<PioBackend>, stash: &mut [u8], got: &mut usize) {
+    if *got < stash.len() {
+        *got += pull_rx(uart, &mut stash[*got..]);
     }
 }
 
