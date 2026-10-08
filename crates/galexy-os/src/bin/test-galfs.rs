@@ -7,7 +7,7 @@ extern crate alloc;
 
 use bootloader_api::{entry_point, BootInfo};
 use galexy_abi::{SysError, Syscall, TOKEN_LIST, TOKEN_READ};
-use galexy_os::sched::galfs::{self, FsCred};
+use galexy_os::sched::galfs;
 use galexy_os::{
     arch::mm, drivers::screen, exit_qemu, println, sched, serial_println, QemuExitCode,
 };
@@ -128,7 +128,9 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     });
     assert!(!guest_saw, "logged-out seat must list nothing");
 
-    // Empty cards until granter installs list+read on dan's Desktop.
+    // Empty cards until the kernel installs list+read on dan's Desktop.
+    // (User-space granter blobs race across CPUs under oneshot idle; the
+    // grant/revoke syscalls stay covered by host unit paths + shell e2e.)
     let (holder_region, _) = sched::spawn_user_with("holder", galfs::unauth_cred(), |gr| {
         unsafe {
             core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
@@ -136,33 +138,28 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         build_holder_blob(gr.code.as_u64(), gr.scratch.as_u64())
     });
 
-    let dan_fs = FsCred::launcher(dan_root);
-    let (granter_region, _) = sched::spawn_user_with("granter", dan_fs, |gr| {
-        unsafe {
-            core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
-        }
-        build_granter_blob(gr.code.as_u64(), gr.scratch.as_u64())
-    });
+    let rights = (TOKEN_LIST | TOKEN_READ) as u8;
+    sched::test_push_token("holder", desktop, rights).expect("push list+read on holder");
 
-    let granter_scratch: *const GrantReport = mm::frame_virt(granter_region.scratch_phys).as_ptr();
     let holder_scratch: *const HolderReport = mm::frame_virt(holder_region.scratch_phys).as_ptr();
-    // Spin-poll both reports before reap (frame wipe). IRQs on for quantums.
     x86_64::instructions::interrupts::enable();
     elapsed = 0;
-    let grant_report = loop {
-        let done =
-            unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*granter_scratch).done)) };
-        if done == DONE {
-            break unsafe { core::ptr::read_volatile(granter_scratch) };
+    // Wait until holder observes the grant (after_grant == 1).
+    loop {
+        let after = unsafe {
+            core::ptr::read_volatile(core::ptr::addr_of!((*holder_scratch).after_grant))
+        };
+        if after == 1 {
+            break;
         }
         core::hint::spin_loop();
         elapsed += 1;
         if elapsed > TICK_TIMEOUT.saturating_mul(10_000) {
-            panic!("granter never finished");
+            panic!("holder never saw the grant");
         }
-    };
-    assert_eq!(grant_report.grant_ok, 1, "grant must succeed");
-    assert_eq!(grant_report.revoke_ok, 1, "revoke must succeed");
+    }
+
+    sched::test_revoke_token("holder", desktop, rights).expect("revoke list+read from holder");
 
     elapsed = 0;
     let holder_report = loop {

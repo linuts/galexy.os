@@ -2547,6 +2547,33 @@ pub(crate) fn task_kill(cap: Cap) -> Result<(), SysError> {
     })
 }
 
+/// Test helper: install `rights` on `object` for a live user task by name.
+/// Callable from the kernel main loop (slot 0) — no caller-card check.
+pub fn test_push_token(target: &str, object: u16, rights: u8) -> Result<(), SysError> {
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let Some(ti) = threads.iter().position(|t| {
+            t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
+        }) else {
+            return Err(SysError::NotFound);
+        };
+        galfs::push_token(&mut threads[ti].fs_tokens, object, rights)
+    })
+}
+
+/// Test helper: drop `rights` on `object` for a live user task by name.
+pub fn test_revoke_token(target: &str, object: u16, rights: u8) -> Result<(), SysError> {
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let Some(ti) = threads.iter().position(|t| {
+            t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
+        }) else {
+            return Err(SysError::NotFound);
+        };
+        galfs::revoke_token(&mut threads[ti].fs_tokens, object, rights)
+    })
+}
+
 /// Installs a galfs token on a live user task named `target`.
 ///
 /// The current task must already hold every bit in `rights` on the
