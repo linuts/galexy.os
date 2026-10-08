@@ -62,13 +62,15 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     let scratch: *const Report = mm::frame_virt(region.scratch_phys).as_ptr();
     let mut elapsed = 0u64;
+    // Copy the report before reap — exit frees (and wipes) the scratch tree.
     let report = loop {
+        sched::arm_timer_for_load();
         x86_64::instructions::hlt();
-        sched::reap();
         let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*scratch).done)) };
         if done == DONE {
             break unsafe { core::ptr::read_volatile(scratch) };
         }
+        sched::reap();
         elapsed += 1;
         if elapsed > TICK_TIMEOUT {
             panic!("capforge blob never finished");
