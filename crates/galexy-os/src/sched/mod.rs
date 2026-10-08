@@ -788,7 +788,7 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
         let fx = Box::into_raw(Box::new(FxArea::new()));
         let owner = init.owner.unwrap_or_else(next_cpu);
         let (name_bytes, name_len) = pack_name(init.name);
-        push_thread(Thread {
+        let slot = push_thread(Thread {
             name_bytes,
             name_len,
             state: AtomicU8::new(STATE_RUNNING),
@@ -830,7 +830,11 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
             last_input_tick: 0,
             console_budget_tick: 0,
             console_budget_used: 0,
-        })
+        });
+        // The record is RUNNING before the poke. An idle owner otherwise
+        // stays in `hlt` until its tickless deadline (up to a second).
+        poke_owner(owner);
+        slot
     })
 }
 
@@ -898,6 +902,7 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
         });
         serial_println!("[sched] thread '{}' ready (owner cpu {})", name, owner);
         let _ = _slot;
+        poke_owner(owner);
         owner
     })
 }
@@ -1191,6 +1196,7 @@ pub(crate) fn spawn_user_with_grants(
             kstack_top
         );
         let _ = _slot;
+        poke_owner(owner);
         (granted, owner)
     })
 }
@@ -4099,7 +4105,14 @@ fn wake_due_sleepers(threads: &mut [Thread], now: u64) {
 /// sees the runnable thread and arms a quantum.
 fn set_running(thread: &Thread) {
     thread.state.store(STATE_RUNNING, Ordering::Release);
-    crate::arch::cpu::kick(thread.owner as usize);
+    poke_owner(thread.owner);
+}
+
+/// Wake `owner` if it is another CPU. `kick` is a no-op for the caller
+/// and for a CPU that is not online yet, so spawn during BSP bring-up
+/// is safe. The thread must already be visible as `RUNNING`.
+fn poke_owner(owner: u8) {
+    crate::arch::cpu::kick(owner as usize);
 }
 
 const IO_NONE: u8 = 0;

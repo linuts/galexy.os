@@ -2501,7 +2501,8 @@ items stay here with rationale.
 - [x] ~~Intermittent SMP hang under host load~~ — CLOSED by Milestone
       63. A wake that lands while an idle CPU is arming its tickless
       deadline re-arms a quantum, and the owner is kicked with IPI
-      `0xF7` so it leaves `hlt`. If a CPU with runnable threads still
+      `0xF7` so it leaves `hlt` (including when spawn publishes a new
+      `RUNNING` thread onto an idle CPU). If a CPU with runnable threads still
       goes 2 s without entering the scheduler, the observer dumps that
       CPU's rotation, `armed_ms`, and the shootdown mailbox once
       (`[watchdog]`). The M51 symptom (soak round 2 after a child exit

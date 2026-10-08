@@ -996,8 +996,10 @@ entered the scheduler for 2 s is dumped once: rotation indexes,
 `armed_ms`, and any in-flight shootdown mailbox (`[watchdog]`). A
 wake that arrives while an idle CPU is programming its tickless
 deadline re-arms a quantum, and `cpu::kick` sends IPI `0xF7` so the
-owner leaves `hlt`. The dump does not panic and does not contain
-secrets. A long `IF=0` PBKDF2 can trip it once.
+owner leaves `hlt`. Spawn pokes the same way: a new `RUNNING` thread
+on an idle CPU must not wait for the next whole-second deadline.
+The dump does not panic and does not contain secrets. A long `IF=0`
+PBKDF2 can trip it once.
 
 **Secrets.** Login, useradd, passwd, and volume-unlock staging buffers
 are `wipe_bytes`'d before the syscall returns, including the error
