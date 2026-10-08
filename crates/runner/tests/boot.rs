@@ -1965,12 +1965,13 @@ fn shell_echo_status_typing_e2e() {
 }
 
 /// `help` during must-change (before `passwd`) — sectioned output.
+/// Sync on a late keys blurb so the console budget can drain across ticks.
 const HELP_DURING_MUST_CHANGE: &[(&str, &str)] = &[
     ("h", "h"),
     ("e", "e"),
     ("l", "l"),
     ("p", "p"),
-    ("ret", "Galexy.OS shell\n"),
+    ("ret", "history (saved on logout)"),
 ];
 
 #[test]
@@ -1983,7 +1984,7 @@ fn shell_help_typing_e2e() {
         &image("galexy-os"),
         &keys,
         "[boot] main loop ready",
-        "",
+        "default admin/admin must passwd",
         Duration::from_millis(30),
         Duration::from_secs(90),
     );
