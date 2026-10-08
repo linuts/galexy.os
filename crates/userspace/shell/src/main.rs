@@ -355,6 +355,89 @@ fn for_stat_line(blob: &[u8], prefix: &[u8], label: &[u8]) {
     }
 }
 
+/// Sectioned help — short command column + one-line blurb.
+fn show_help() {
+    write_console(b"Galexy.OS shell\n");
+    write_console(b"===============\n\n");
+
+    help_section(b"files");
+    help_row(b"ls", b"list directory");
+    help_row(b"cd <path>", b"change directory (.. / /name)");
+    help_row(b"echo [text]", b"print, or echo text >|>> file");
+    help_row(b"echo $?", b"last Cap-wait exit status");
+    help_row(b"cat <path>", b"print file");
+    help_row(b"touch <path>", b"create empty file");
+    help_row(b"mkdir <path>", b"create directory");
+    help_row(b"rm <path>", b"remove file or empty dir");
+    help_row(b"cp <src> <dst>", b"copy");
+    help_row(b"mv <src> <dst>", b"rename / move");
+    help_row(b"stat <path>", b"metadata");
+    help_row(b"truncate <path> <n>", b"set file length");
+    help_row(b"sync", b"flush galfs to disk");
+    write_console(b"\n");
+
+    help_section(b"session");
+    help_row(b"whoami", b"current user");
+    help_row(b"users", b"list accounts");
+    help_row(b"tokens", b"list access cards");
+    help_row(b"quota [user]", b"show object/byte limits");
+    help_row(b"quota set ...", b"quota set <user> <objs> <bytes>");
+    help_row(b"login [user]", b"password prompt (or inline pass)");
+    help_row(b"logout", b"return to login screen");
+    help_row(b"passwd [name]", b"masked Password: + Confirm:");
+    help_row(b"useradd <name>", b"create account (optional pass)");
+    help_row(b"userdel <name>", b"delete empty account");
+    help_row(b"su <user>", b"switch via admin / ALL card");
+    write_console(b"\n");
+
+    help_section(b"caps");
+    help_row(b"grant <r> <path> <task>", b"live card  (r w l c x a=all)");
+    help_row(b"revoke <r> <path> <task>", b"drop live card rights");
+    help_row(b"share <r> <path> <user>", b"durable home share");
+    help_row(b"unshare <r> <path> <user>", b"clear durable share");
+    write_console(b"\n");
+
+    help_section(b"system");
+    help_row(b"fetch", b"dashboard (alias: dashboard)");
+    help_row(b"stats", b"uptime / frames / heap / galfs");
+    help_row(b"tasks", b"cooperative tasks");
+    help_row(b"threads", b"preemptive thread ticks");
+    help_row(b"about", b"version blurb");
+    help_row(b"clear", b"clear screen");
+    help_row(b"shutdown", b"power off (admin)");
+    help_row(b"reboot", b"reset (admin)");
+    write_console(b"\n");
+
+    help_section(b"keys");
+    help_row(b"up / down", b"history (saved on logout)");
+    help_row(b"Esc / Ctrl-C", b"cancel a prompt");
+    help_row(b"F1-F12", b"switch consoles");
+    write_console(b"\n");
+
+    write_console(b"notes\n");
+    write_console(b"  default admin/admin must passwd before other commands\n");
+    write_console(b"  su admin restores a born-admin seat; login always needs a password\n");
+    write_console(b"  a bare program name loads it from the ramdisk\n");
+}
+
+fn help_section(title: &[u8]) {
+    write_console(title);
+    write_console(b"\n");
+}
+
+fn help_row(cmd: &[u8], blurb: &[u8]) {
+    write_console(b"  ");
+    write_console(cmd);
+    // Pad command column to 22 chars for a clean second column.
+    let mut pad = 22usize.saturating_sub(cmd.len());
+    while pad > 0 {
+        write_console(b" ");
+        pad -= 1;
+    }
+    write_console(blurb);
+    write_console(b"\n");
+}
+
 /// Reads a line. When `secret`, echoes `*` (never cleartext) so the COM1
 /// mirror of `write_console` cannot leak the password.
 fn read_line(kbd: Cap, buf: &mut [u8], secret: bool) -> LineRead {
@@ -606,24 +689,7 @@ fn dispatch(
         return None;
     }
     if line == b"help" {
-        write_console(b"commands: help, fetch, ls, echo, cat, touch, mkdir, cd, rm,\n");
-        write_console(b"cp, mv, truncate, stat, grant, revoke, share, unshare,\n");
-        write_console(b"whoami, users, tokens, quota, useradd, userdel,\n");
-        write_console(b"login, logout, passwd, su, sync, stats, tasks, threads,\n");
-        write_console(b"about, clear, echo $?\n");
-        write_console(b"fetch / dashboard - system glance (also shown after login)\n");
-        write_console(b"up/down arrows - recall history (saved to shell.history on logout)\n");
-        write_console(b"login [user] [pass] - omit pass for a masked Password: prompt\n");
-        write_console(b"passwd [name] - masked Password: + Confirm: (no inline secret)\n");
-        write_console(b"useradd <name> [pass] - omit pass for a masked Password: prompt\n");
-        write_console(b"quota [user] | quota set <user> <objects> <bytes>\n");
-        write_console(b"logout returns to the login screen; Esc/Ctrl-C cancels a prompt\n");
-        write_console(b"default admin/admin must passwd before other commands\n");
-        write_console(b"grant/revoke: <rights> <path> <task>  (r w l c x a=all)\n");
-        write_console(b"share/unshare: <rights> <path> <user> (durable; login reapplies)\n");
-        write_console(b"su <user>: admin or ALL card (no password); login uses a password\n");
-        write_console(b"su admin returns a born-admin seat; others need login admin\n");
-        write_console(b"power: shutdown, reboot (admin / launcher grant only)\n");
+        show_help();
         prompt(cwd);
         return None;
     }
