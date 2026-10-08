@@ -1356,6 +1356,15 @@ fn ramdisk_test_passes() {
         serial.contains("tar entry: 'banner.txt'"),
         "ramdisk entry marker missing; serial:\n{serial}"
     );
+    // Measurement: the kernel's boot-time SHA-256 of the archive equals the
+    // digest build.rs printed when it packed the tar (Milestone 51 repro
+    // note). A mismatch means the image does not carry the ramdisk you
+    // built.
+    let built = env!("GALEXY_RAMDISK_SHA256");
+    assert!(
+        serial.contains(&format!("[test-ramdisk] sha256 {built} (")),
+        "ramdisk digest mismatch: build.rs measured {built}; serial:\n{serial}"
+    );
 }
 
 #[test]

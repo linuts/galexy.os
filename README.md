@@ -11,7 +11,7 @@ Not a Linux clone. No POSIX claim. Authority is **capabilities** (and
 galfs access cards), not global file descriptors or PIDs.
 
 **Status (October 2026):** Milestones 1–50 and 53–61 are merged; the
-QEMU suite is 89 boots plus host tests, all green. The next two
+QEMU suite is 91 boots plus host tests, all green. The next two
 milestones (51–52) produce `review-rc1`; Phase 9 (63–67) is the
 hardening, performance, modern-platform, and userland work toward
 `v1.0`. The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md)
@@ -117,13 +117,13 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 ```sh
 cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxc -p gxld   # host suites
 cargo test -p runner --test audit_strings   # no "password" in any serial line
-cargo test -p runner --test boot -- --test-threads=1   # QEMU suite (89 boots, -smp 2)
+cargo test -p runner --test boot -- --test-threads=1   # QEMU suite (91 boots, -smp 2)
 ```
 
 UEFI cases need `OVMF_FD` if the default firmware path is absent. Disk
 and typing cases want `--test-threads=1`; the suite runs under TCG
 (no KVM yet — Milestone 64) so a full pass takes a while. Test kernels
-live under `crates/galexy-os/src/bin/` (68 today); the runner builds
+live under `crates/galexy-os/src/bin/` (70 today); the runner builds
 one image per binary and checks exit codes + serial.
 
 ### CI
@@ -167,7 +167,7 @@ crates/
   galexy-crypto/  PBKDF2-HMAC-SHA256, ChaCha20, HMAC (host-tested)
   galexy-galf/    GALF on-disk layout + sealed unlock (host-tested)
   galfs-fsck/     host fsck CLI over galfs.img
-  galexy-os/      kernel (lib + main + 68 test bins)
+  galexy-os/      kernel (lib + main + 70 test bins)
   userspace/      galexy-rt, init, shell, util, hello
   gxc/            mini Rust-subset compiler (gxr) — COMPILER.md
   runner/         image build, `cargo run`, QEMU boot tests

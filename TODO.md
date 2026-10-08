@@ -1610,25 +1610,42 @@ Paperwork a systems engineer expects before reading code.
 
 Evidence, not assertions.
 
-- [ ] **Negative suite**: path fuzz (host); grant/revoke confused-deputy
-      cases; pre-login spawn denied; bare spawn cannot write galfs
-- [ ] **Hostile ELF suite**: `bin/test-badelf` feeds the loader a
-      segment with `filesz > memsz`, a `memsz` past the user window, an
-      overlapping `PT_LOAD`, and a truncated header; each returns
-      `SysError`, never a panic (loader hardening itself is Milestone 63)
-- [ ] **Ramdisk measurement**: hash of the packed tar at build time;
-      kernel checks optional allowlist before `SPAWN_WAIT` inherit
-      (or document “trusted ramdisk” as a hard requirement)
+- [x] **Negative suite**: path fuzz (host, `galexy-core` `path_test`);
+      grant/revoke confused-deputy cases (`test-cards` +
+      `galexy-galf` `cards_test`); pre-login spawn denied and bare spawn
+      cannot create/open/remove in galfs (`test-negative`; the kernel
+      now refuses non-seat spawns from a task with no session root)
+- [x] **Hostile ELF suite**: `bin/test-badelf` forges `filesz > memsz`,
+      `memsz` past the user window, overlapping `PT_LOAD`, truncated
+      header and phdr table, W|X, bad entry, ET_DYN/ET_REL/ELFCLASS32
+      from the real `hello`; `loader::validate_elf` runs before the
+      loader in the `spawn` syscall and returns `BadValue` /
+      `Unsupported`, never a panic. Every ramdisk program still
+      validates (full page-table-level hardening stays Milestone 63)
+- [x] **Ramdisk measurement**: `build.rs` prints the SHA-256 of each
+      packed tar (`ramdisk`, `-crash`, `-gxld`) and writes `*.sha256`;
+      `test-ramdisk` measures the archive at boot and the runner asserts
+      the two digests match. The ramdisk is a **trusted input** (the
+      publisher is the person who ran the build) — no allowlist; the
+      hash is how a reviewer confirms the image carries what they built
 - [ ] **Feature-gated test seams**: `crash`, verbose panics, etc.
       (`crash-seam`, `verbose-sched` exist; list every seam in one
       DESIGN table)
 - [ ] **CI matrix doc**: BIOS, UEFI (`OVMF_FD`), `-smp 2`, with/without
       galfs disk, cache modes
 - [ ] **Coverage list**: which milestones each `bin/test-*` guards
-- [ ] **Host fuzz**: `parse_path` / component_ok under cargo-fuzz or a
-      small exhaustive generator in galexy-core tests
-- [ ] **Property tests**: grant∩ancestor closure; revoke exact-object;
-      dual-slot generation monotonicity
+- [x] **Host fuzz**: `parse_path` / `component_ok` moved to
+      `galexy_core::path`; `path_test` sweeps every string up to length
+      7 over a one-byte-per-class alphabet (~960k inputs) against an
+      independent oracle, with round-trip rendering and every
+      depth/length boundary
+- [x] **Property tests**: `galexy_galf::cards` (pure token algebra the
+      kernel re-exports) — grant∩ancestor closure vs an explicit
+      ancestry model, revoke exact-object, no summing across cards,
+      attenuation never adds bits; `galexy_galf::encode_slot` +
+      `slots_test` — newest generation wins in either slot order,
+      damaged newer slot falls back, torn alternating writes never move
+      the chosen generation backwards
 
 ### Build, CI, reproducibility, and tooling
 
@@ -1663,8 +1680,13 @@ Make “green on my machine” into “green in CI and for the reviewer”.
       pinned in `rust-toolchain.toml` (`nightly-2026-10-08`, rustc
       1.101.0-nightly 1d81eb4ad) so the baseline holds
 - [x] **Host tests** for abi/core (and crypto/galf/fsck/gxc/gxld) on every PR
-- [ ] **Repro notes**: ramdisk tar hash printed at build; image names
-      stable
+- [x] **Repro notes**: ramdisk tar hash printed at build (see above);
+      image names stable (`galexy-os`, `galexy-os-crashseam`,
+      `galexy-os-gxld`, `test-*`). Digests are stable across repeated
+      runs of the same cargo invocation, but `cargo build`, `cargo test`
+      and `cargo clippy` unify features and flags differently and so
+      pack different bytes — compare build-time and boot-time digests
+      from the same invocation (the runner does)
 - [ ] **PR template**: test plan + STYLE secrets/GALF checklist
 - [ ] **Repo files**: `LICENSE` (owner picks; MIT or Apache-2.0
       matches the dependency stance), `SECURITY.md` (how to report;
