@@ -27,6 +27,7 @@ are the only paths, no user heap or argv, no network.
 | Scheduler, time, block/wake (frozen v1) | [`docs/SCHEDULING.md`](docs/SCHEDULING.md) |
 | Mini Rust compiler / gxc | [`docs/COMPILER.md`](docs/COMPILER.md) |
 | Rust target + upstream `rustc` on Galexy | [`docs/RUSTC.md`](docs/RUSTC.md) |
+| `gxld` static linker | [`docs/LINKER.md`](docs/LINKER.md) |
 | How the kernel is wired | [`docs/DESIGN.md`](docs/DESIGN.md) |
 | Coding rules | [`docs/STYLE.md`](docs/STYLE.md) |
 | What’s next | [`docs/ROADMAP.md`](docs/ROADMAP.md) · [`TODO.md`](TODO.md) |
@@ -108,7 +109,7 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 - **Auth** — PBKDF2 passwords, lockout, idle logout, forced first `passwd`; every seat boots logged out; audit lines carry no secrets
 - **Init and seats** — userspace `init` is the orphan root and respawns F-key seats; Ctrl-C kills the TTY foreground job
 - **Scheduling** — RR + pin-at-spawn + idle steal; `sleep`; blocking keyboard and pipe reads park and wake (`docs/SCHEDULING.md`)
-- **gxc** — a Rust-subset compiler on the host that emits a hello ELF the loader runs (`docs/COMPILER.md`)
+- **gxc** — a frozen Rust-subset compiler on the host that emits a hello ELF the loader runs; a fixture, not the self-host path (`docs/COMPILER.md`)
 
 ## Tests
 
@@ -167,16 +168,16 @@ crates/
 - **Phase 6** ✅ — userspace init, seats under init, job Caps
   (shutdown through init and `svc` → Milestone 67)
 - **Phase 7** ✅ — scheduling complete (sleep / block-wake / policy) — SCHEDULING.md
-- **Phase 8** ✅ — mini Rust-subset compiler (`gxc`) for hello — COMPILER.md
+- **Phase 8** ✅ — mini Rust-subset compiler (`gxc`) for hello, now frozen — COMPILER.md
 - **Phase 9** — hardened (SMEP/SMAP/UMIP/KASLR, hostile ELF), fast
   (bench, KVM, LTO, IRQ completion), modern (q35, ECAM, virtio 1.x,
   MSI-X, TSC-deadline), full userland (heap, argv, clock, channels,
   jobs), init-owned shutdown → `v1.0`
 - **Phase 10** — network (virtio-net, small stack, sockets as Caps),
   after `v1.0`
-- **Phase 11** — Rust on Galexy: `x86_64-unknown-galexy` target, `std`
-  PAL, upstream `rustc` with the Cranelift backend compiling and
-  linking on-OS — RUSTC.md
+- **Phase 11** — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
+  static linker (LINKER.md), `std` PAL, upstream `rustc` with the
+  Cranelift backend compiling and linking on-OS — RUSTC.md
 
 Host-compile the gxr hello (not rustc):
 
