@@ -1964,6 +1964,62 @@ fn shell_echo_status_typing_e2e() {
     );
 }
 
+/// `help` during must-change (before `passwd`) — sectioned output.
+const HELP_DURING_MUST_CHANGE: &[(&str, &str)] = &[
+    ("h", "h"),
+    ("e", "e"),
+    ("l", "l"),
+    ("p", "p"),
+    ("ret", "Galexy.OS shell\n"),
+];
+
+#[test]
+fn shell_help_typing_e2e() {
+    // Login only — do not clear the default password so this also proves
+    // `help` is allowed under the must-change gate.
+    let mut keys = LOGIN_ADMIN_KEYS.to_vec();
+    keys.extend(HELP_DURING_MUST_CHANGE.iter().copied());
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "",
+        Duration::from_millis(30),
+        Duration::from_secs(90),
+    );
+    assert_passwords_masked(&serial);
+    assert!(
+        serial.contains("change the default password"),
+        "must-change banner missing after admin/admin; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("Galexy.OS shell\n"),
+        "typed `help` missing title; serial:\n{serial}"
+    );
+    for section in ["files\n", "session\n", "caps\n", "system\n", "keys\n"] {
+        assert!(
+            serial.contains(section),
+            "typed `help` missing section {section:?}; serial:\n{serial}"
+        );
+    }
+    assert!(
+        serial.contains("list directory") && serial.contains("flush galfs to disk"),
+        "typed `help` missing files blurbs; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("dashboard (alias: dashboard)"),
+        "typed `help` missing fetch row; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("history (saved on logout)"),
+        "typed `help` missing keys blurb; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("default admin/admin must passwd"),
+        "typed `help` missing notes; serial:\n{serial}"
+    );
+}
+
 /// Login dashboard + in-session up-arrow recall, then logout persists
 /// `shell.history` for the next login.
 const COMMAND_CENTER_KEYS: &[(&str, &str)] = &[
