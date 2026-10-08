@@ -78,7 +78,11 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
     let mut outer = sha256::Sha256::new();
     outer.update(&opad);
     outer.update(&inner_hash);
-    outer.finalize()
+    let mac = outer.finalize();
+    wipe_bytes(&mut key_block);
+    wipe_bytes(&mut ipad);
+    wipe_bytes(&mut opad);
+    mac
 }
 
 fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iters: u32, out: &mut [u8]) {
@@ -90,7 +94,9 @@ fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iters: u32, out: &mut [u8]) 
             let n = salt.len().min(252);
             msg[..n].copy_from_slice(&salt[..n]);
             msg[n..n + 4].copy_from_slice(&block_index.to_be_bytes());
-            hmac_sha256(password, &msg[..n + 4])
+            let mac = hmac_sha256(password, &msg[..n + 4]);
+            wipe_bytes(&mut msg);
+            mac
         };
         let mut u = block;
         for _ in 1..iters {
@@ -101,6 +107,8 @@ fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iters: u32, out: &mut [u8]) 
         }
         let n = (out.len() - offset).min(32);
         out[offset..offset + n].copy_from_slice(&block[..n]);
+        wipe_bytes(&mut block);
+        wipe_bytes(&mut u);
         offset += n;
         block_index = block_index.wrapping_add(1);
     }
