@@ -5,7 +5,7 @@ mod common;
 
 use common::{
     boot, boot_and_type, boot_and_type_uefi, boot_galfs_once, boot_liveness, boot_uefi,
-    boot_with_galfs,
+    boot_with_galfs, boot_with_galfs_crash,
     boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_part,
     boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio, image,
     GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
@@ -1127,6 +1127,50 @@ fn mustchange_test_passes() {
     assert!(
         serial.contains("[test-mustchange] passed"),
         "test-mustchange success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn crash_injection_picks_consistent_slot() {
+    let (killed, code, serial) = boot_with_galfs_crash(&image("test-crash"));
+    assert!(
+        killed.contains("[test-crash] mutating"),
+        "guest must announce the in-flight mutate; serial:\n{killed}"
+    );
+    assert!(
+        !killed.contains("[test-crash] committed-drop"),
+        "QEMU must die before the in-flight commit returns; serial:\n{killed}"
+    );
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "next boot should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("disk corrupt"),
+        "crash must not look like a corrupt volume; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-crash] passed"),
+        "consistent slot marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn ata_absent_returns_unsupported() {
+    let (code, serial) = boot(&image("test-ata"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-ata should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[PANIC]"),
+        "missing ATA slave must not panic; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-ata] passed"),
+        "test-ata success marker missing; serial:\n{serial}"
     );
 }
 

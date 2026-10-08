@@ -44,6 +44,9 @@ static READY: AtomicBool = AtomicBool::new(false);
 static PROBED: AtomicBool = AtomicBool::new(false);
 static CAPACITY: AtomicU64 = AtomicU64::new(0);
 static LOCK: Mutex<()> = Mutex::new(());
+/// When set, status/timeout failures log `[ata] I/O …` instead of panicking.
+/// Probe stays quiet so a missing slave is one line from [`present`].
+static LOG_IO: AtomicBool = AtomicBool::new(false);
 
 /// Primary IDE slave as a [`BlockDevice`] (galfs data disk).
 pub struct PrimarySlave;
@@ -169,6 +172,7 @@ pub fn read_sectors(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError> 
     }
     check_range(lba, dst.len())?;
     let _g = LOCK.lock();
+    LOG_IO.store(true, Ordering::Relaxed);
     let mut off = 0usize;
     while off < dst.len() {
         let n = (dst.len() - off).min(PIO_MAX_SECTORS);
@@ -188,6 +192,7 @@ pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
     }
     check_range(lba, src.len())?;
     let _g = LOCK.lock();
+    LOG_IO.store(true, Ordering::Relaxed);
     let mut off = 0usize;
     while off < src.len() {
         let n = (src.len() - off).min(PIO_MAX_SECTORS);
@@ -203,12 +208,13 @@ pub fn flush() -> Result<(), SysError> {
         return Err(SysError::Unsupported);
     }
     let _g = LOCK.lock();
+    LOG_IO.store(true, Ordering::Relaxed);
     select_drive(0);
     outb(COMMAND, CMD_FLUSH);
     wait_not_bsy()?;
     let status = inb(STATUS);
     if status & (SR_ERR | SR_DF) != 0 {
-        return Err(SysError::Unsupported);
+        return Err(note_io_error(status));
     }
     Ok(())
 }
@@ -235,6 +241,10 @@ fn pio_read(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError> {
             chunk[1] = (w >> 8) as u8;
         }
     }
+    let status = inb(STATUS);
+    if status & (SR_ERR | SR_DF) != 0 {
+        return Err(note_io_error(status));
+    }
     Ok(())
 }
 
@@ -256,7 +266,7 @@ fn pio_write(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
     wait_not_bsy()?;
     let status = inb(STATUS);
     if status & (SR_ERR | SR_DF) != 0 {
-        return Err(SysError::Unsupported);
+        return Err(note_io_error(status));
     }
     Ok(())
 }
@@ -265,13 +275,13 @@ fn wait_not_bsy() -> Result<(), SysError> {
     for _ in 0..1_000_000 {
         let s = inb(STATUS);
         if s & SR_BSY == 0 {
-            if s & SR_ERR != 0 {
-                return Err(SysError::Unsupported);
+            if s & (SR_ERR | SR_DF) != 0 {
+                return Err(note_io_error(s));
             }
             return Ok(());
         }
     }
-    Err(SysError::Unsupported)
+    Err(note_io_timeout())
 }
 
 fn wait_drq() -> Result<(), SysError> {
@@ -280,14 +290,28 @@ fn wait_drq() -> Result<(), SysError> {
         if s & SR_BSY != 0 {
             continue;
         }
-        if s & SR_ERR != 0 {
-            return Err(SysError::Unsupported);
+        if s & (SR_ERR | SR_DF) != 0 {
+            return Err(note_io_error(s));
         }
         if s & SR_DRQ != 0 {
             return Ok(());
         }
     }
-    Err(SysError::Unsupported)
+    Err(note_io_timeout())
+}
+
+fn note_io_error(status: u8) -> SysError {
+    if LOG_IO.load(Ordering::Relaxed) {
+        crate::serial_println!("[ata] I/O error status={:#x}", status);
+    }
+    SysError::Unsupported
+}
+
+fn note_io_timeout() -> SysError {
+    if LOG_IO.load(Ordering::Relaxed) {
+        crate::serial_println!("[ata] I/O timeout");
+    }
+    SysError::Unsupported
 }
 
 fn delay() {

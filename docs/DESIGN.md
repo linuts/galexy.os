@@ -198,7 +198,10 @@ touched. `present()` probes once via IDENTIFY (words 60–61 / 100–103 →
 `capacity_sectors()`); when the slave is absent or too small for both
 GALF dual slots, galfs stays RAM-only. Reads/writes reject LBAs past
 capacity. `flush()` issues FLUSH CACHE after a committed GALF slot
-write. The runner attaches a second raw image at `if=ide,index=1`
+write. ERR/DF and command timeout log `[ata] I/O error` or
+`[ata] I/O timeout` and return `Unsupported` — they do not panic.
+A missing slave returns `Unsupported` without that log (`test-ata`).
+The runner attaches a second raw image at `if=ide,index=1`
 without a snapshot (`cargo run` and the persistence tests) so writes
 survive across QEMU processes. Default `cache=writethrough`; the flush
 matrix also boots with `writeback` and `none`. `cargo run` prefers

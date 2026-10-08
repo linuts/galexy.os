@@ -697,6 +697,7 @@ fn sync_to_disk() -> bool {
             return false;
         }
     }
+    crate::serial_println!("[galfs] committing slot {}", next_slot);
     let d = disk();
     if d.write_sectors(lba, &*buf).is_err() {
         crate::serial_println!("[galfs] disk sync write failed");
