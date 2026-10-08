@@ -395,6 +395,39 @@ UDP / TCP stack (`smoltcp`-class, host-tested); sockets as Caps handed
 out by init, never an ambient `socket()`; `fetch`-style utilities over
 channels. A USB stack stays out until a device needs it.
 
+## Phase 11 — Rust on Galexy (upstream `rustc` as a tenant)
+
+Goal: make Galexy a real Rust target, then run upstream `rustc` on it.
+Plan and the honest gap analysis: `docs/RUSTC.md`. Checkboxes:
+`TODO.md` Milestones **68–72**. The lever is that upstream already
+built everything toolchain-side for new operating systems — custom
+target specs + `-Zbuild-std`, the `std` platform abstraction layer, a
+pure-Rust codegen backend (Cranelift), pure-Rust object / archive
+writers and a pure-Rust linker (`wild`). What remains is almost all
+kernel runtime surface: user heap, user threads with TLS and a futex,
+large files, bigger argv and open-file limits.
+
+1. **68 Target** — `x86_64-unknown-galexy.json`; userspace builds with
+   `-Zbuild-std`; `std` on the `unsupported` PAL (`restricted_std`) with
+   `galexy-rt`'s allocator over `Map`. No fork. Can start now
+2. **69 PAL** — `galexy-rust` fork with `sys/pal/galexy` modeled on
+   `uefi` / `xous`: alloc, stdio, time, args, fs, process, thread (new
+   `ThreadSpawn`, FS-base TLS), sync (new `Futex`). Sysroot shipped as
+   prebuilt `.rlib`s the Xous way. After Milestone 66
+3. **70 Capacity** — 2 GiB guest RAM, frame bitmap past 512 MiB, galfs
+   large-volume format, 64 open files, 4 KiB argv, sysroot on the
+   ramdisk. After `v1.0`
+4. **71 `rustc` for Galexy** — cross-built from the host with
+   `codegen-backends = ["cranelift"]` (LLVM never ported); the small
+   cfg-gated patch set (`memmap`, `jobserver`, `getrandom`, `stacker`,
+   target spec); `rustc --emit=obj hello.rs` on-OS matches the host
+5. **72 Link and run** — port `wild` (fallback: `gxld`, a static linker
+   over the `object` crate); `rustc hello.rs -o hello` in ring 3, the
+   shell runs it. The **Phase 11 gate**
+
+Non-goals: `cargo` on-OS, proc macros on-OS, rebuilding `rustc` or
+`std` on Galexy, LLVM / `lld` / `mrustc` / a libc, POSIX emulation.
+
 
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in
   place once no CPU is current on it and the switch-out tail has left

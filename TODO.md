@@ -2170,6 +2170,124 @@ The Milestone 53–54 follow-ons, finished.
 
 ---
 
+## Phase 11 — Rust on Galexy (upstream `rustc` as a tenant)
+
+Goal: Galexy becomes a real Rust target, then upstream `rustc` compiles
+and links `hello.rs` in ring 3. Plan, gap analysis, rejected paths and
+risks: `docs/RUSTC.md`. The toolchain side is reused from upstream
+(custom target spec, `std` PAL, Cranelift backend, `object` /
+`ar_archive_writer`, `wild`, `unwinding`); the work is kernel runtime
+surface. Milestone 68 needs no kernel change; 69 follows Milestone 66;
+70–72 follow `v1.0` and run under KVM (Milestone 64).
+
+## Milestone 68 — `x86_64-unknown-galexy` target (no fork)
+
+- [ ] `targets/x86_64-unknown-galexy.json`: `os = "galexy"`, no
+      `target_family`, `panic-strategy = "abort"`, static relocation
+      model, `rust-lld` gnu flavor, `executables = true`
+- [ ] All userspace crates build with `--target` the JSON +
+      `-Zbuild-std=core,alloc`; `galexy-rt` keys on
+      `cfg(target_os = "galexy")`; `x86_64-unknown-none` removed from
+      userspace build scripts
+- [ ] `-Zbuild-std=std,panic_abort` on the `unsupported` PAL;
+      `#![feature(restricted_std)]` (or `-Zcrate-attr`) on the graph;
+      `galexy-rt` `#[global_allocator]` over `Map` (Milestone 66)
+- [ ] `bin/test-std-min`: `HashMap<String, Vec<u32>>` + `format!` through
+      the console Cap; typed E2E
+- [ ] Docs: `RUSTC.md` Stage 1 ✅; README build line for the target
+
+## Milestone 69 — `std` PAL in a `galexy-rust` fork
+
+- [ ] Fork `rust-lang/rust` as `galexy-rust`, pinned to one nightly;
+      `library/std/build.rs` lists `galexy`; `sys/pal/mod.rs` selects
+      `pal/galexy`
+- [ ] PAL modules over `galexy-abi`: `alloc` (`Map`), `stdio` (console /
+      spawn-handed Caps), `time` (`Clock`), `args` (argv v2), `os` (env
+      empty, cwd in-process, `SysError` → `io::ErrorKind`), `fs`
+      (existing file syscalls; `read_dir` from the files snapshot),
+      `process` (`spawn_with` + `pipe` + `Wait`), `random` (`rdrand`)
+- [ ] Kernel: `Syscall::ThreadSpawn` / `ThreadExit` — new slot, same
+      CR3, fresh user + kernel stack, join via process Cap `Wait`;
+      design in `PROCESS.md` beside `Channel`; `bin/test-thread`
+- [ ] Kernel: `Syscall::Futex` — `wait(addr, expected)` / `wake(addr,
+      n)` on the Milestone 57 park / wake state; `bin/test-futex`
+- [ ] PAL `thread` + `thread_local_key` with the per-thread pointer in
+      FS base via user-mode `wrfsbase` (kernel never touches FS in ring
+      3); `sync` from `std`'s generic futex implementations
+- [ ] Positional `Write` (or documented seek-then-append) so
+      `File::write_at` / `seek` + `write` behave
+- [ ] Sysroot shipped the Xous way: `cargo build` of `library/sysroot`
+      → `.rlib`s copied into `lib/rustlib/x86_64-unknown-galexy/lib`;
+      `rustup toolchain link galexy`; `xtask sysroot` does it
+- [ ] `bin/test-std`: threads + `Mutex<Vec<_>>`, `std::fs` round-trip on
+      galfs, `Command::new("echo").output()`, monotonic `Instant`
+- [ ] One real crate ported with zero patches (`toml` or `regex` over a
+      ramdisk file)
+- [ ] Milestone 67 ABI freeze extended to `ThreadSpawn` / `Futex`
+- [ ] Every `galexy-rt` / PAL syscall stub is `#[inline(never)]
+      extern "C"` (cg_clif on-OS must never meet `asm!`)
+
+## Milestone 70 — Capacity for a compiler process
+
+- [ ] `-m 2G` in the runner and `cargo run`; frame bitmap past 512 MiB
+      (the Milestone 6 open box); `Map` budget per task up to 1 GiB
+- [ ] Spawn-time user stack size (default stays 4 pages; `rustc` asks
+      for 8 MiB on the thread it spawns itself)
+- [ ] galfs large-volume format v13: 4 KiB blocks, 32-bit lengths,
+      extents or double indirection, pool sized to the disk, files ≥
+      64 MiB; small format still readable; `fsck` for both. Fallback if
+      it lags: RAM-backed scratch volume behind the same `FileBody`
+- [ ] `MAX_OPEN_FILES` 8 → 64 (heap table at spawn, not in the IF=0
+      path); `SPAWN_ARG_MAX` 256 → 4 KiB via `user_copy`
+- [ ] Sysroot `.rlib`s packed into the ramdisk tar under `rust/`
+- [ ] `bin/test-big`: allocate 300 MiB, write and re-read a 20 MiB
+      file, hash check; `test-fsck` green on both formats
+- [ ] KVM-only marker for Phase 11 tests in the runner
+
+## Milestone 71 — `rustc` cross-built for Galexy (Cranelift only)
+
+- [ ] `bootstrap.toml` from cg_clif's `setup_rust_fork.sh`:
+      `codegen-backends = ["cranelift"]`, `llvm-tools = false`,
+      `full-bootstrap = true`, `download-ci-llvm = true` (host only);
+      `./x.py build --stage 1 compiler/rustc --target
+      x86_64-unknown-galexy`
+- [ ] `rustc_target`: builtin `x86_64_unknown_galexy` spec
+- [ ] Patches, cfg-gated on `target_os = "galexy"`:
+      `rustc_data_structures::memmap` read-into-`Vec`; `jobserver`
+      dummy via `[patch.crates-io]`; `getrandom_backend="rdrand"`;
+      `stacker` heap stacks verified; `rustc_driver_impl` signal paths
+      confirmed `cfg(unix)`-only; `psm` assembled with
+      `CC_x86_64_unknown_galexy=clang --target=x86_64-unknown-none-elf`
+- [ ] `panic=abort` MVP (`FatalError::raise` aborts after diagnostics);
+      `unwinding` crate for `panic=unwind` as a follow-on
+- [ ] `rustc` + `rustc_driver` + `rustc_codegen_cranelift` on the
+      ramdisk; `test-rustc-obj`: on-OS `rustc --emit=obj hello.rs`
+      symbol table and section sizes match the host cg_clif build;
+      `--print cfg`; one asserted type-error diagnostic
+
+## Milestone 72 — Link on Galexy, run the result (Phase 11 gate)
+
+- [ ] Try `wild` first: `fork` and `mimalloc` features off, `--threads=1`,
+      `memmap2` replaced by read-into-memory; static non-relocatable
+      output
+- [ ] Fallback `gxld`: static linker over the `object` crate — cg_clif
+      objects + rlib archives, seven relocation kinds (`64`, `32`,
+      `32S`, `PC32`, `PLT32`, `GOTPCREL(X)`, `TPOFF32`), on-demand
+      archive members, `R | RX | RW` `PT_LOAD`s at `USER_IMAGE_BASE`;
+      host unit tests diff against `wild` on the same inputs
+- [ ] `rustc_session`: galexy default `-Clinker=wild` (or `gxld`),
+      `linker-flavor = gnu`; spawned over `spawn_with` with stdio pipes
+- [ ] `test-rustc-hello`: in ring 3, `rustc hello.rs -o hello` on galfs,
+      `./hello` prints `hello from rustc on galexy`; a second on-OS
+      program using `std::fs` + `std::thread` runs
+- [ ] Docs: `RUSTC.md` stages ✅; README "Rust on Galexy" section;
+      `COMPILER.md` notes `gxc` is the subset compiler, `rustc` the
+      tenant
+- [ ] Stated non-goals: `cargo` on-OS, proc macros on-OS, rebuilding
+      `rustc` / `std` on Galexy, LLVM / `lld` / `mrustc` / libc
+
+---
+
 ## Known limitations / follow-ups
 
 Open bullets below are tracked by milestone id where planned. Waived

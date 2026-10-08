@@ -26,6 +26,7 @@ are the only paths, no user heap or argv, no network.
 | Process Caps, init, seats | [`docs/PROCESS.md`](docs/PROCESS.md) |
 | Scheduler, time, block/wake (frozen v1) | [`docs/SCHEDULING.md`](docs/SCHEDULING.md) |
 | Mini Rust compiler / gxc | [`docs/COMPILER.md`](docs/COMPILER.md) |
+| Rust target + upstream `rustc` on Galexy | [`docs/RUSTC.md`](docs/RUSTC.md) |
 | How the kernel is wired | [`docs/DESIGN.md`](docs/DESIGN.md) |
 | Coding rules | [`docs/STYLE.md`](docs/STYLE.md) |
 | What’s next | [`docs/ROADMAP.md`](docs/ROADMAP.md) · [`TODO.md`](TODO.md) |
@@ -173,6 +174,9 @@ crates/
   jobs), init-owned shutdown → `v1.0`
 - **Phase 10** — network (virtio-net, small stack, sockets as Caps),
   after `v1.0`
+- **Phase 11** — Rust on Galexy: `x86_64-unknown-galexy` target, `std`
+  PAL, upstream `rustc` with the Cranelift backend compiling and
+  linking on-OS — RUSTC.md
 
 Host-compile the gxr hello (not rustc):
 

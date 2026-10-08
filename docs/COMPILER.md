@@ -63,7 +63,7 @@ loader and runtime already understand. Do not invent a second ABI.
 
 | Project | Why not now |
 | --- | --- |
-| Full `rustc` / LLVM | Orders of magnitude too large; we already use host rustc for real programs |
+| Full `rustc` / LLVM | Orders of magnitude too large *for this phase*; we already use host rustc for real programs. Running upstream `rustc` (Cranelift backend, no LLVM) *on* Galexy is its own plan: `RUSTC.md` (Phase 11) |
 | [mrustc](https://github.com/thepowersgang/mrustc) | Bootstraps *full* rustc via C; wrong size for “hello on Galexy” |
 | `rustc_codegen_cranelift` as our product | Still needs full rustc frontend; useful later as a *host* build accelerator, not the Galexy compiler |
 
