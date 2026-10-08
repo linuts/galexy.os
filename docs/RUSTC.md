@@ -101,22 +101,25 @@ Error>` work in a Galexy program; `std::fs`, threads, `println!` do not.
 Exit: `bin/test-std-min` — a `std` crate that builds a `HashMap<String,
 Vec<u32>>`, formats it, and writes through the console Cap.
 
-### Stage 2 — `gxld`, the static linker (Milestone 69)
+### Stage 2 — `gxld`, the static linker (Milestone 69) ✅
 
-Full plan: `LINKER.md`. A `no_std + alloc` library that turns ELF64
-relocatable objects and `ar` archives into the `ET_EXEC` the loader
-already accepts, reading inputs with the `object` crate and taking the
-layout rules from `galexy-abi`. It absorbs `gxc::elf`, so `gxc` becomes
-a producer of relocatable objects and the linker becomes the one place
-that knows the loader contract. Proof is a differential test: host
-`rustc --emit=obj` of `hello`, `util` and `shell`, linked by `gxld` and
-by `rust-lld`, both booting through the same runner cases.
+Full plan and status: `LINKER.md`. A `no_std + alloc` library that
+turns ELF64 relocatable objects and `ar` archives into the `ET_EXEC`
+the loader already accepts, reading inputs with the `object` crate and
+taking the layout rules from `galexy-abi`. It absorbed `gxc::elf`, so
+`gxc` is a producer of relocatable objects and the linker is the one
+place that knows the loader contract. Proof is the differential image:
+`rustc -Clinker=gxld -Clinker-flavor=ld` re-links `hello`, `init`,
+`shell` and `util` from the exact objects and rlibs it hands
+`rust-lld`; `galexy-os-gxld` boots and passes the same typing tests.
 
-It comes this early because it is the only Phase 11 item with no
+It came this early because it is the only Phase 11 item with no
 kernel dependency and it de-risks Stage 6, the step most likely to fail.
+What Stage 6 adds on top is TLS (Stage 3), cg_clif's output shape, and
+the ring-3 wrapper (Stage 4) — not a new linker.
 
-Exit: `test-hellogxc` green through `gxld`; the differential suite green
-on three programs; hostile-input tests return `Err`.
+Exit (met): `test-hellogxc` green through `gxld`; `gxld_image_*_e2e`
+green; hostile-input tests return `Err`.
 
 ### Stage 3 — Real PAL in a rust-lang/rust fork (Milestone 70)
 

@@ -1974,7 +1974,7 @@ into the linker (Milestone 69).
 - [x] ~~Read `.gxr` from galfs; write ELF; `spawn` it~~ — dropped
 - [x] ~~Cranelift `no_std` path for `gxc`~~ — dropped; Cranelift arrives
       as `rustc`'s backend (Milestone 72)
-- [ ] `gxc` emits a relocatable object and links through `gxld`
+- [x] `gxc` emits a relocatable object and links through `gxld`
       (Milestone 69) — the only change `gxc` receives again
 
 ---
@@ -2208,34 +2208,55 @@ Plan: `docs/LINKER.md`. Static ELF64 linker for the loader's contract,
 `no_std + alloc`, host-tested against `rust-lld`. Only Phase 11 item
 with zero kernel dependencies; de-risks Milestone 73.
 
-- [ ] `crates/gxld` library: ELF64 relocatable input via `object`
-      (`read_core`, no `std`); `ar` archives with on-demand member pull
-- [ ] Symbol resolution: global / weak / local / COMMON, undefined
-      symbol error names the referencing object and section
-- [ ] Layout: `.text*` → RX, `.rodata*` → R, `.data*` + `.bss*` → RW,
-      page-aligned `PT_LOAD`s at `galexy_abi::USER_IMAGE_BASE`;
-      `.eh_frame`, `.debug_*`, `.comment`, `.note*` discarded in v0
-- [ ] Relocations: `R_X86_64_64`, `32`, `32S`, `PC32`, `PLT32` (as
-      `PC32`, no PLT), `GOTPCREL` / `GOTPCRELX` / `REX_GOTPCRELX` with a
-      synthesized GOT in the R segment; `TPOFF32` deferred to Milestone
-      70 (threads / TLS)
-- [ ] Output: `ET_EXEC`, entry `_start`, passes `gxc::validate_elf` and
-      the loader's `elf_bytes_wx_ok`; layout constants come from
-      `galexy-abi`, never retyped
-- [ ] `gxc` emits a relocatable object; `gxc::elf` deleted; `gxc build`
-      links through `gxld`; `test-hellogxc` unchanged
-- [ ] **Differential test (hard requirement)**: host `rustc --emit=obj`
-      of `hello`, `util`, and `shell` linked by `gxld` and by
-      `rust-lld`; both images boot and pass the same runner cases
-      (`test-realprogram`, `shell_*_e2e`); symbol addresses may differ,
-      behavior may not
-- [ ] Hostile input: fuzz-style host tests (truncated headers, overlapping
-      sections, out-of-range relocations) return `Err`, never panic
-- [ ] Non-goals written in `LINKER.md`: dynamic linking, `PT_INTERP`,
-      linker scripts, LTO, `--gc-sections`, non-x86_64
+- [x] `crates/gxld` library: ELF64 relocatable input via `object`
+      (`read_core` + `elf` + `archive`, no `std`); `ar` archives with
+      on-demand member pull (strong undefined references pull; weak do
+      not; `--whole-archive` loads all); `lib.rmeta` skipped
+- [x] Symbol resolution: global / weak / local / COMMON, COMDAT groups
+      (first claimer wins), duplicate strong definitions are an error,
+      undefined symbol error names the referencing object and section
+- [x] `--gc-sections` (rustc always passes it): liveness from `_start`
+      plus `SHF_GNU_RETAIN`; undefined symbols are only an error when a
+      live section references them (same rule as `lld`)
+- [x] Layout: `SHF_EXECINSTR` → RX, `SHF_WRITE` → RW (`NOBITS` as
+      bss tail, COMMON after it), else R; three page-aligned disjoint
+      `PT_LOAD`s at `galexy_abi::USER_IMAGE_BASE`, headers inside the R
+      segment; `.eh_frame`, `.gcc_except_table`, `.debug_*`,
+      `.comment`, `.note*`, `.llvm_addrsig` discarded in v0
+- [x] Relocations: `R_X86_64_64`, `32`, `32S`, `PC32`, `PC64`, `PLT32`
+      (direct, no PLT), `GOTPCREL` / `GOTPCRELX` / `REX_GOTPCRELX` /
+      `CODE_4_GOTPCRELX` with a synthesized GOT in the R segment,
+      `GOTPC32`, `SIZE32` / `SIZE64`; every 32-bit field range-checked;
+      undefined weak PC-relative resolves to the location itself;
+      `TPOFF32` / TLS sections / `REL` / `.init_array` are
+      `Unsupported` errors (TLS → Milestone 70)
+- [x] Output: `ET_EXEC`, entry `_start`, `gxld::validate` mirrors the
+      loader's rules (W^X, page-aligned disjoint segments, entry inside
+      the window); layout constants come from `galexy-abi`, never retyped
+- [x] `gxld` binary: the GNU-ld argument subset `rustc
+      -Clinker-flavor=ld` emits, `@argfile`, `-l` search; dynamic-only
+      flags accepted and ignored so `rustc` drives it unchanged
+- [x] `gxc` emits a relocatable object (`gxc build -c`); `gxc::elf`
+      deleted; `gxc build` links through the `gxld` library;
+      `test-hellogxc` green; `gxc build -c` + `gxld` CLI is
+      byte-identical to `gxc build`
+- [x] **Differential test (hard requirement)**: `runner/build.rs`
+      builds `gxld` and re-links `hello`, `init`, `shell` and every
+      `util` binary with `-Clinker=gxld` (the exact objects and rlibs
+      rustc hands `rust-lld`), packs `ramdisk-gxld.tar` and the
+      `galexy-os-gxld` BIOS + UEFI image; `gxld_image_run_hello_typing_e2e`
+      and `gxld_image_util_typing_e2e` type the same keys as the
+      `rust-lld` image and assert the same output and no ring-3 fault
+- [x] Hostile input: host tests over hand-built relocatables and
+      archives (truncated at every header boundary, garbage, relocation
+      past its section, unknown relocation type, TLS, bad archive member)
+      return `Err`, never panic
+- [x] Non-goals written in `LINKER.md`: dynamic linking, `PT_INTERP`,
+      `PT_DYNAMIC`, PLT, linker scripts, LTO, relaxation, string
+      merging, non-x86_64
 - [ ] Ring-3 `gxld` program is **not** this milestone (needs user heap +
-      large files → Milestone 71); the crate must compile for the
-      Galexy target so it is a thin `main` later
+      large files → Milestone 71); the crate is `no_std + alloc` so it
+      is a thin `main` later
 
 ## Milestone 70 — `std` PAL in a `galexy-rust` fork
 
