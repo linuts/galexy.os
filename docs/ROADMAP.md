@@ -325,15 +325,16 @@ Non-goals for this phase: full POSIX `nanosleep`/`clock_*` surface,
 multi-priority scheduling classes, realtime guarantees, tickless *busy*
 (only idle stretches today; busy stays quantum-paced).
 
-## Phase 8 — Mini Rust compiler (hello world) ✅ (on-OS compile → Milestone 62)
+## Phase 8 — Mini Rust compiler (hello world) ✅ (frozen; on-OS compile → Phase 11)
 
 Goal: a **Galexy-owned** tiny Rust-subset compiler that emits a static
 ELF the existing loader will run — enough for hello through the console
-Cap. Host `rustc` keeps building real programs (`shell`, utils); `gxc`
-is the learning/self-host path. Plan: `docs/COMPILER.md`. Concrete
-checkboxes: `TODO.md` Milestones **59–61** (on-OS compile **62**).
-Style: `docs/STYLE.md` → Compiler. Orthogonal to Phase 7 — neither
-blocks the other's planning.
+Cap. Host `rustc` keeps building real programs (`shell`, utils). `gxc`
+was the learning path and is now **frozen at gxr v0** as a fixture;
+the self-host path is upstream `rustc` (Phase 11). Plan:
+`docs/COMPILER.md`. Checkboxes: `TODO.md` Milestones **59–61** ✅;
+**62** (on-OS `gxc`) is superseded by Phase 11. Style: `docs/STYLE.md`
+→ Compiler.
 
 Reuse before inventing: `galexy-abi` + `galexy-rt` + ELF loader + existing
 `hello` tests; Cranelift and/or `object`/`iced-x86` for codegen/ELF;
@@ -346,11 +347,12 @@ for a Cranelift-backed subset shape. Not mrustc, not full rustc-in-tree.
    syscall prelude matching `write` / `exit`
 3. **61 Hello via gxc** ✅ — `hello.gxr` → ramdisk `hello-gxc` +
    `test-hellogxc`; rustc-built `hello` stays green beside it
-4. **62 On-OS gxc** *(follow-on)* — ring-3 compile from galfs when the
-   host path is boring
+4. **62 On-OS gxc** *superseded* — on-OS compilation is `rustc`
+   (Phase 11); `gxc` only changes once more, to emit a relocatable
+   object for `gxld` (Milestone 69)
 
 Non-goals for this phase: Rust/cargo parity, compiling the kernel or
-shell with `gxc`, LLVM/mrustc in-tree, kernel JIT.
+shell with `gxc`, LLVM/mrustc in-tree, kernel JIT, growing gxr.
 
 ## Phase 9 — Hardened, fast, modern (`v1.0`)
 
@@ -398,32 +400,38 @@ channels. A USB stack stays out until a device needs it.
 ## Phase 11 — Rust on Galexy (upstream `rustc` as a tenant)
 
 Goal: make Galexy a real Rust target, then run upstream `rustc` on it.
-Plan and the honest gap analysis: `docs/RUSTC.md`. Checkboxes:
-`TODO.md` Milestones **68–72**. The lever is that upstream already
-built everything toolchain-side for new operating systems — custom
-target specs + `-Zbuild-std`, the `std` platform abstraction layer, a
-pure-Rust codegen backend (Cranelift), pure-Rust object / archive
-writers and a pure-Rust linker (`wild`). What remains is almost all
-kernel runtime surface: user heap, user threads with TLS and a futex,
-large files, bigger argv and open-file limits.
+Plan and the honest gap analysis: `docs/RUSTC.md`; the linker:
+`docs/LINKER.md`. Checkboxes: `TODO.md` Milestones **68–73**. The lever
+is that upstream already built everything toolchain-side for new
+operating systems — custom target specs + `-Zbuild-std`, the `std`
+platform abstraction layer, a pure-Rust codegen backend (Cranelift),
+pure-Rust object / archive readers and writers. What remains is almost
+all kernel runtime surface: user heap, user threads with TLS and a
+futex, large files, bigger argv and open-file limits — plus one static
+linker, which is the only piece with no kernel dependency and so comes
+first.
 
 1. **68 Target** — `x86_64-unknown-galexy.json`; userspace builds with
    `-Zbuild-std`; `std` on the `unsupported` PAL (`restricted_std`) with
    `galexy-rt`'s allocator over `Map`. No fork. Can start now
-2. **69 PAL** — `galexy-rust` fork with `sys/pal/galexy` modeled on
+2. **69 `gxld`** — static ELF64 linker as a `no_std + alloc` library over
+   the `object` crate; absorbs `gxc::elf`; proven by a `rust-lld`
+   differential test on `hello`, `util`, `shell`. Host-only; can start
+   now
+3. **70 PAL** — `galexy-rust` fork with `sys/pal/galexy` modeled on
    `uefi` / `xous`: alloc, stdio, time, args, fs, process, thread (new
    `ThreadSpawn`, FS-base TLS), sync (new `Futex`). Sysroot shipped as
    prebuilt `.rlib`s the Xous way. After Milestone 66
-3. **70 Capacity** — 2 GiB guest RAM, frame bitmap past 512 MiB, galfs
+4. **71 Capacity** — 2 GiB guest RAM, frame bitmap past 512 MiB, galfs
    large-volume format, 64 open files, 4 KiB argv, sysroot on the
-   ramdisk. After `v1.0`
-4. **71 `rustc` for Galexy** — cross-built from the host with
+   ramdisk; ring-3 `gxld` over Caps. After `v1.0`
+5. **72 `rustc` for Galexy** — cross-built from the host with
    `codegen-backends = ["cranelift"]` (LLVM never ported); the small
    cfg-gated patch set (`memmap`, `jobserver`, `getrandom`, `stacker`,
    target spec); `rustc --emit=obj hello.rs` on-OS matches the host
-5. **72 Link and run** — port `wild` (fallback: `gxld`, a static linker
-   over the `object` crate); `rustc hello.rs -o hello` in ring 3, the
-   shell runs it. The **Phase 11 gate**
+6. **73 Link and run** — `gxld` links cg_clif output (fallback: port
+   `wild`); `rustc hello.rs -o hello` in ring 3, the shell runs it. The
+   **Phase 11 gate**
 
 Non-goals: `cargo` on-OS, proc macros on-OS, rebuilding `rustc` or
 `std` on Galexy, LLVM / `lld` / `mrustc` / a libc, POSIX emulation.

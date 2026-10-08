@@ -8,6 +8,24 @@ This document plans a **small Galexy-owned compiler** — just enough to
 turn a tiny Rust-shaped program into a runnable hello ELF. It is **not**
 a plan to vendor or reimplement full `rustc`.
 
+## Status — frozen at gxr v0
+
+Phase 8 delivered what `gxc` was for: a Galexy-owned compiler that
+emits an ELF the loader runs (`hello-gxc`, `test-hellogxc`). The
+language does **not** grow from here. Upstream `rustc` on Galexy is the
+self-host path (`RUSTC.md`, Phase 11); growing a subset compiler toward
+Rust would compete with that port and never converge. What `gxc` is
+now:
+
+- A **fixture**: the second, independent producer of loader-conformant
+  ELFs. Bug fixes only; `test-hellogxc` stays green.
+- The **first client of the linker** (`LINKER.md`, Milestone 69): its
+  `elf.rs` becomes `gxld`'s layout code, and `gxc` emits a relocatable
+  object instead of a finished executable. That is the only change it
+  receives again.
+- Milestone 62 (on-OS `gxc`) is **superseded**; a ring-3 compile is
+  `rustc` (Milestone 72–73), not `gxc`.
+
 | Layer | Mechanism | Answers |
 | --- | --- | --- |
 | Source | Tiny Rust subset (“gxr”) | What syntax is accepted? |
@@ -16,8 +34,8 @@ a plan to vendor or reimplement full `rustc`.
 | Object | Static ELF64 @ `USER_IMAGE_BASE` | Can the Galexy loader map it? |
 | Runtime | Syscall stubs matching `galexy-rt` | `write` + `exit` for hello |
 
-Checkboxes: `TODO.md` Phase 8 — Milestones **59–61** (on-OS compile is
-**62**, optional follow-on). Style: `docs/STYLE.md` → Compiler. ABI and
+Checkboxes: `TODO.md` Phase 8 — Milestones **59–61** ✅ (**62**
+superseded by Phase 11). Style: `docs/STYLE.md` → Compiler. ABI and
 loader contracts stay in `galexy-abi` / `DESIGN.md`.
 
 ## Success for v1
@@ -57,7 +75,7 @@ loader and runtime already understand. Do not invent a second ABI.
 | [Cranelift](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift) | Host-side x64 codegen without LLVM; later on-OS if `no_std` path is solid | Full Wasmtime / WASI stack |
 | [rustc-lite](https://github.com/suhteevah/rustc-lite) (ClaudioOS) | Shape of a tiny Cranelift-backed subset compiler; MIT/Apache-2.0 | Whole frontend as a black box — evaluate, then **vendor or reimplement** the slices we need with attribution |
 | [`object`](https://crates.io/crates/object) + [`iced-x86`](https://crates.io/crates/iced-x86) | ELF64 emit / instruction encode without binutils (pattern used by hobby compilers such as NCC-Rust) | PE/Mach-O backends we do not need |
-| Upstream Cranelift `no_std` work | Future on-OS compile (Milestone 62) | Blocking v1 on host |
+| Upstream Cranelift `no_std` work | ~~Future on-OS compile~~ — superseded; Cranelift arrives as `rustc`'s backend (`RUSTC.md`) | Blocking v1 on host |
 
 ### Explicitly out of scope for v1
 
@@ -122,9 +140,10 @@ compatible.”
   → ramdisk / galfs → spawn
 ```
 
-**Host-first:** `gxc` is a Linux host binary in the workspace. On-OS
-self-host (compile under Galexy) waits until the subset + ELF path is
-boring and galfs/shell can hold sources (Milestone 62).
+**Host-only:** `gxc` is a Linux host binary in the workspace and stays
+one. On-OS compilation is upstream `rustc` (`RUSTC.md`). Once `gxld`
+lands (Milestone 69) the last two pipeline steps become "ELF64
+relocatable object → `gxld` → `ET_EXEC`".
 
 ## Runtime contract (must match loader)
 
@@ -150,7 +169,8 @@ QEMU suite (serial line + exit 0). Prefer a **second** ramdisk name
 | **59** ✅ | Language slice frozen; `gxc` crate; lex/parse/check + host tests |
 | **60** ✅ | Codegen + ELF emit at `USER_IMAGE_BASE`; prelude syscalls |
 | **61** ✅ | `hello.gxr` → ramdisk `hello-gxc` + `test-hellogxc` in QEMU |
-| **62** *(follow-on)* | Port `gxc` (or a no_std core) to ring-3; compile from galfs |
+| **62** *superseded* | ~~Port `gxc` to ring-3~~ — on-OS compile is `rustc` (Phase 11); `gxc` frozen |
+| **69** (Phase 11) | `gxc` emits a relocatable object; `gxld` links it (`LINKER.md`) |
 
 ## Suggested crate layout (when coding starts)
 
@@ -192,4 +212,6 @@ trusts (ramdisk / later signed measure — Milestone 51).
 | `SCHEDULING.md` | Runtime scheduling (orthogonal; parallel track) |
 | `STYLE.md` | Coding rules for `gxc` when it lands |
 | `ROADMAP.md` Phase 8 | Direction-level bullets |
-| `TODO.md` 59–62 | Checkboxes |
+| `TODO.md` 59–62 | Checkboxes (62 superseded) |
+| `LINKER.md` | `gxld`, the static linker `gxc` will emit objects for |
+| `RUSTC.md` | Upstream `rustc` on Galexy — the self-host path |
