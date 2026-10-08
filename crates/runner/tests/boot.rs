@@ -2012,6 +2012,10 @@ fn shell_help_typing_e2e() {
         "typed `help` missing fetch row; serial:\n{serial}"
     );
     assert!(
+        serial.contains("masked password + confirm prompts"),
+        "typed `help` missing passwd blurb; serial:\n{serial}"
+    );
+    assert!(
         serial.contains("history (saved on logout)"),
         "typed `help` missing keys blurb; serial:\n{serial}"
     );
