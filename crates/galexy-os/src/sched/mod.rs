@@ -2178,7 +2178,7 @@ pub(crate) fn task_write_ex(cap: Cap, src: &[u8]) -> Result<IoOp, SysError> {
         }
     })?;
     if galfs_wrote {
-        galfs::sync();
+        galfs::mark_dirty();
     }
     if let Some(id) = wake_pipe {
         wake_pipe_waiters(id);
@@ -2230,7 +2230,7 @@ pub(crate) fn task_create(name: &str, replace: bool) -> Result<Cap, SysError> {
             }
         }
     })?;
-    galfs::sync();
+    galfs::mark_dirty();
     Ok(cap)
 }
 
@@ -2278,7 +2278,7 @@ pub(crate) fn task_remove(name: &str) -> Result<(), SysError> {
         }
         Ok(())
     })?;
-    galfs::sync();
+    galfs::mark_dirty();
     Ok(())
 }
 
@@ -2310,7 +2310,7 @@ pub(crate) fn task_rename(old: &str, new: &str) -> Result<(), SysError> {
         }
         galfs::rename(thread.fs_root, &thread.fs_tokens, old, new)
     })?;
-    galfs::sync();
+    galfs::mark_dirty();
     Ok(())
 }
 
@@ -2343,7 +2343,7 @@ pub(crate) fn task_truncate(cap: Cap, new_len: u64) -> Result<(), SysError> {
             FileBody::Archive(_) | FileBody::Pipe { .. } => Err(SysError::Unsupported),
         }
     })?;
-    galfs::sync();
+    galfs::mark_dirty();
     Ok(())
 }
 
@@ -2934,7 +2934,7 @@ pub(crate) fn task_useradd(name: &str, password: &[u8]) -> Result<(), SysError> 
         let _ = galfs::add_user(name, password)?;
         Ok(())
     })?;
-    galfs::sync();
+    galfs::mark_dirty();
     Ok(())
 }
 
@@ -3123,7 +3123,7 @@ pub(crate) fn task_userdel(name: &str) -> Result<(), SysError> {
         }
         Ok(())
     })?;
-    galfs::sync();
+    galfs::mark_dirty();
     Ok(())
 }
 

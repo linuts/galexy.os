@@ -169,20 +169,29 @@ cover `base + 2 × DISK_SECTORS`.
 
 | Property | Behavior |
 | --- | --- |
-| Dual slot | Mutate writes the **inactive** slot, then flush |
+| Dual slot | Commit writes the **inactive** slot, then flush |
 | Generation | Newer gen wins on load |
 | Crash | Mid-write leaves the previous slot intact |
 | Version | Layout bump **refuses** old images (no silent reinterpret) |
 
 ### Commit ordering and flush
 
-Every durable mutate encodes the **whole** sealed slot (actors, objects,
+Mutates update the in-RAM table and mark it **dirty**. A coalesced
+commit (write-back) encodes the **whole** sealed slot (actors, objects,
 shares, bitmap, and data blocks) into the inactive LBA range, issues
-`BlockDevice::write_sectors`, then `BlockDevice::flush` (ATA FLUSH CACHE
-today) **before** publishing the new generation in RAM. There is no
-separate “data then metadata” path: file bytes and directory metadata
-share one AEAD payload, so a torn write cannot leave a newer directory
-pointing at uncommitted blocks.
+`BlockDevice::write_sectors`, then `BlockDevice::flush` **before**
+publishing the new generation in RAM. Commits run on:
+
+- the kernel main loop's 1 Hz tick (`sync_if_dirty`)
+- `Syscall::Sync` / shell `sync`
+- power-off / reboot
+- explicit `galfs::sync()` in tests
+
+Crash window: up to about one second of unflushed mutates (plus any
+work after the last tick). There is no separate “data then metadata”
+path: file bytes and directory metadata share one AEAD payload, so a
+torn write cannot leave a newer directory pointing at uncommitted
+blocks.
 
 Flush matrix (runner): `boot_with_galfs` uses `cache=writethrough`;
 `galfs_disk_persists_writeback_cache` / `_none_cache` repeat the
@@ -218,8 +227,9 @@ v11 refuses older images; delete `galfs.img` or let format recreate.
    mutates that need a mount). Serial: `disk corrupt; refusing silent
    format`.
 4. Mutates (`create` / `remove` / `append` / `rename` / `truncate` /
-   `useradd` / `userdel` / `passwd`, …) sync the inactive slot + flush
-   when disk-backed. `Syscall::Sync` / shell `sync` is an extra barrier.
+   `useradd` / `userdel` / `passwd`, …) mark the table dirty when
+   disk-backed; the 1 Hz tick / `Syscall::Sync` / power-off commit the
+   inactive slot + flush.
 5. `userdel` refuses `admin`, non-empty trees, and roots still in use;
    clears tokens and durable shares that named that actor’s objects.
 
@@ -270,7 +280,8 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 
 ### Durability (landed)
 
-- Every mutate syncs the inactive dual slot + flush; `sync` syscall barrier
+- Write-back: mutates dirty the table; 1 Hz / `sync` / power commit the
+  inactive dual slot + flush
 - Boot logs slot/gen; recovery from a bad sibling is explicit
 - Both-bad GALF magic → no silent format; volume stays unavailable
 - Live `validate_table` smoke (`test-fsck`); host `galfs-fsck` / `galexy-galf`

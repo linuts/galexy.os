@@ -183,6 +183,8 @@ pub fn capacity_sectors() -> u64 {
 }
 
 /// Reads `dst.len()` sectors starting at `lba`.
+///
+/// Batches physically contiguous runs like [`write_sectors`].
 pub fn read_sectors(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError> {
     if dst.is_empty() {
         return Err(SysError::BadValue);
@@ -191,13 +193,24 @@ pub fn read_sectors(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError> 
         return Err(SysError::Unsupported);
     }
     check_range(lba, dst.len())?;
-    for (i, sector) in dst.iter_mut().enumerate() {
-        xfer(VIRTIO_BLK_T_IN, lba + i as u32, sector.as_mut_ptr(), SECTOR)?;
+    let mut i = 0usize;
+    while i < dst.len() {
+        let n = contiguous_sectors(&dst[i..]);
+        xfer(
+            VIRTIO_BLK_T_IN,
+            lba + i as u32,
+            dst[i].as_mut_ptr(),
+            n * SECTOR,
+        )?;
+        i += n;
     }
     Ok(())
 }
 
 /// Writes `src.len()` sectors starting at `lba`.
+///
+/// Batches physically contiguous runs (same mapped page) into one virtio
+/// request so a 288-sector GALF slot is dozens of kicks, not 288.
 pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
     if src.is_empty() {
         return Err(SysError::BadValue);
@@ -206,16 +219,44 @@ pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
         return Err(SysError::Unsupported);
     }
     check_range(lba, src.len())?;
-    for (i, sector) in src.iter().enumerate() {
-        // SAFETY: xfer only reads `len` bytes for OUT; sector lives for the call.
+    let mut i = 0usize;
+    while i < src.len() {
+        let n = contiguous_sectors(&src[i..]);
+        // SAFETY: xfer only reads `n * SECTOR` bytes for OUT; slice lives for the call.
         xfer(
             VIRTIO_BLK_T_OUT,
             lba + i as u32,
-            sector.as_ptr().cast_mut(),
-            SECTOR,
+            src[i].as_ptr().cast_mut(),
+            n * SECTOR,
         )?;
+        i += n;
     }
     Ok(())
+}
+
+/// How many leading sectors of `src` share one physically contiguous run.
+fn contiguous_sectors(src: &[[u8; SECTOR]]) -> usize {
+    if src.is_empty() {
+        return 0;
+    }
+    let base_virt = VirtAddr::new(core::ptr::from_ref(&src[0]) as u64);
+    let Some(base_phys) = mm::translate(base_virt) else {
+        return 1;
+    };
+    let page_left = (0x1000 - (base_phys.as_u64() as usize & 0xFFF)) / SECTOR;
+    let max = src.len().min(page_left.max(1));
+    let mut n = 1usize;
+    while n < max {
+        let v = VirtAddr::new(core::ptr::from_ref(&src[n]) as u64);
+        let Some(p) = mm::translate(v) else {
+            break;
+        };
+        if p.as_u64() != base_phys.as_u64() + (n * SECTOR) as u64 {
+            break;
+        }
+        n += 1;
+    }
+    n
 }
 
 /// Issues a virtio-blk FLUSH.

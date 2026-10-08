@@ -283,6 +283,8 @@ impl History {
             let _ = write(cap, b"\n");
         }
         let _ = close(cap);
+        // One barrier so logout does not race the 1 Hz write-back tick.
+        let _ = sync();
     }
 }
 

@@ -66,6 +66,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         if second != last_second {
             last_second = second;
             shell::render_status_bar();
+            // Write-back: coalesce dirty galfs mutates into one dual-slot flush/sec.
+            sched::galfs::sync_if_dirty();
         }
         // A queued launch loads on this loop (kernel page table). The
         // in-kernel editor only consumes keys when no ring-3 shell owns them.
