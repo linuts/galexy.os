@@ -19,12 +19,12 @@ is *does not fall over when exercised*, not *fast*.
 | galfs mutate (`create`, `write`, `remove`, `rename`) on the RAM table | **tens of microseconds** class | fixed tables, no heap, no disk | `galfs_test_passes` |
 | galfs mutate with a disk | **milliseconds** class: one AEAD over the 288-sector slot plus a flush | every mutate publishes a sealed slot; the cost is the seal, not the data | `galfs_disk_*`, `shell_query_typing_e2e` (`sync`) |
 | galfs mutate rate on QEMU (TCG, disk) | **≥ 10 / s** sustained; the suite's capacity smoke does hundreds per boot | slot seal dominates; PIO IDE and the virtio 10 M-spin poll are M64 items | `blocks_test_passes`, `quota_test_passes`, `indirect_test_passes` |
-| Console output | **512 bytes per task per tick**; excess returns success with `0` copied | one flooding task cannot starve a seat or hide audit lines | `audit_console_test_passes`, `shell_util_typing_e2e` (`linger`) |
+| Console output | **512 bytes per task per tick**; excess returns success with `0` copied | one flooding task cannot starve a seat or hide audit lines | `pathological_test_passes` (3 000-call flood: admitted ≤ 512 × (ticks + 2), never an error), `shell_util_typing_e2e` (`linger`) |
 | Keyboard | ring of 64 keys per TTY; overflow drops the newest and counts | typing never blocks an IRQ | `audit_console_test_passes` |
-| Spawn (ELF validate + map + first schedule) | **single-digit ms** class under TCG for the ~100 KiB userspace images | page-by-page map of PT_LOADs; no copy of the ramdisk | `treechurn_test_passes` (many spawn/exit cycles), `smpstress_test_passes` |
+| Spawn (ELF validate + map + first schedule) | **single-digit ms** class under TCG for the ~100 KiB userspace images | page-by-page map of PT_LOADs; no copy of the ramdisk | `treechurn_test_passes` (many spawn/exit cycles), `soak_test_passes` (ten spawn/wait/exit rounds with exact table closure), `smpstress_test_passes` |
 | Login (PBKDF2 10 000 iterations) | **≈ 1 s** TCG debug; milliseconds on KVM / release | deliberate; M63 stores cost per actor so production formats higher | `users_test_passes`, `lockout_test_passes` |
 | Boot to login prompt | **≤ 5 s** TCG debug without disk; + unlock prompt with a sealed disk | the runner's boot tests fail on a 60 s timeout, so this has headroom | every boot test |
-| Idle | CPU halts with the LAPIC armed to the next second; no periodic tick | tickless idle keeps `timer_ticks` honest under TCG | `main_kernel_boots_and_timer_ticks`, `idle_test_passes` |
+| Idle | CPU halts with the LAPIC armed to the next second; no periodic tick | tickless idle keeps `timer_ticks` honest under TCG | `main_kernel_boots_and_timer_ticks`, `idle_test_passes`, `fairness_test_passes` (an idle AP wakes and steals) |
 
 ## Capacities (fixed tables)
 

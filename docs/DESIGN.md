@@ -1066,7 +1066,7 @@ them on; `audit_strings` and the e2e boots run against that image.
 
 | Seam | Kind | Where | What it changes | Who turns it on |
 | --- | --- | --- | --- | --- |
-| `crash-seam` | Cargo feature on `shell` | `userspace/shell` | adds the `crash` command (commit `keep`, start a second mutate, get killed) | `runner/build.rs` builds a second ramdisk (`ramdisk-crash.tar`) and the `galexy-os-crashseam-*` image for `crash_injection_picks_consistent_slot` |
+| `crash-seam` | Cargo feature on `shell` | `userspace/shell` | adds the `crash` command (commit `keep`, start a second mutate, get killed) | `runner/build.rs` builds a second ramdisk (`ramdisk-crash.tar`) and the `galexy-os-crashseam-*` image for `crash_injection_picks_consistent_slot`; `default_image_has_no_crash_seam_e2e` proves the main image lacks it |
 | `verbose-sched` | Cargo feature on `galexy-os` | `sched/mod.rs` | prints an idle-steal trace line per steal | nobody in the suite; a developer flag. The one-line `[sched] reap` count is unconditional because the suite reads it |
 | `expect_panic` | runtime registration | `galexy_os::test` | a panic exits QEMU with `Success` instead of `Failed` | `bin/test-should-panic`, `bin/test-memory` (allocator exhaustion) |
 | Inline `login user pass` | shell command form | `userspace/shell` | password on the command line (no masked prompt) | scripted typing e2e; production UX is the masked prompt (`AUTH.md`) |
@@ -1079,7 +1079,7 @@ instead of `rust-lld` — a build axis, not a behaviour switch.
 
 ### Coverage: which milestone each test kernel guards
 
-One row per `crates/galexy-os/src/bin/test-*.rs` (70). The boot test is
+One row per `crates/galexy-os/src/bin/test-*.rs` (73). The boot test is
 the `runner/tests/boot.rs` function that boots it; the milestone is the
 one whose promise breaks first if the kernel goes red. Typing e2e boots
 (`shell_*_typing_e2e`, `gxld_image_*`, `util_typing_e2e_on`) run the
@@ -1115,7 +1115,8 @@ main image and are listed at the end.
 | `test-sleep`, `test-idle` | `sleep_test_passes`, `idle_test_passes` | M56 time and deadlines, M58 policy freeze |
 | `test-hellogxc` | `hellogxc_test_passes` | M61 hello via `gxc`, M69 `gxld` link |
 | `test-badelf`, `test-negative` | `badelf_test_passes`, `negative_test_passes` | M51 hostile ELF oracle and negative suite (loader hardening itself: M63) |
-| main image | `main_kernel_boots_and_timer_ticks`, `uefi_image_boots_and_timer_ticks`, `shell_*_typing_e2e`, `shell_run_hello_typing_e2e_uefi`, `shell_tty_switch_e2e`, `util_typing_e2e_on`, `assert_passwords_masked` | M21 / M29 / M33 / M40 / M43 / M50 / M54 seats, shell, utilities, masked prompts |
+| `test-soak`, `test-fairness`, `test-pathological` | `soak_test_passes`, `fairness_test_passes`, `pathological_test_passes` | M51 soak (exact table closure per round), steal fairness under load, console-budget flood |
+| main image | `main_kernel_boots_and_timer_ticks`, `uefi_image_boots_and_timer_ticks`, `shell_*_typing_e2e`, `shell_run_hello_typing_e2e_uefi`, `shell_tty_switch_e2e`, `util_typing_e2e_on`, `assert_passwords_masked` | M21 / M29 / M33 / M40 / M43 / M50 / M54 seats, shell, utilities, masked prompts; `shell_password_paste_typing_e2e` (M51 pathological input) and `default_image_has_no_crash_seam_e2e` (M52 default-build audit) |
 | `gxld` image | `gxld_image_run_hello_typing_e2e`, `gxld_image_util_typing_e2e` | M69 linker differential |
 
 Host suites (no QEMU): `galexy-abi` (table integrity), `galexy-core`

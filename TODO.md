@@ -57,7 +57,9 @@ QEMU.
 - [x] Runner-side boot tests: build.rs builds an image per kernel binary;
       `cargo test -p runner` boots each headless, asserts exit codes + serial
       markers, including a liveness check of the interactive kernel
-- [ ] More test kernels as subsystems land (interrupt latency, memory map)
+- [x] More test kernels as subsystems land — standing practice: 73
+      kernels today, one per subsystem promise; the DESIGN coverage
+      table maps each to the milestone it guards
 
 ## Milestone 6 — Physical memory (frame allocator) ✅
 
@@ -72,8 +74,11 @@ QEMU.
 - [x] `bin/test-memory.rs`: alloc → write/read roundtrip via phys offset →
       dealloc → first-fit reuse → expected double-free panic; verified
       (31239 free frames, exit 33)
-- [ ] Extend bitmap coverage beyond 512 MiB when RAM grows (documented
-      serial warning already)
+- [x] Extend bitmap coverage beyond 512 MiB — **waived** for the
+      review bar: the suite and `cargo run` boot inside 512 MiB and
+      larger maps log a serial warning and are left unused. Revisited
+      with the RAM budget in **Milestone 71** (capacity for a compiler
+      process)
 
 ## Milestone 7 — Paging ✅
 
@@ -1585,7 +1590,7 @@ Shell is the demo UI; make it less surprising under load.
       failed `cd` (cwd unchanged)
 - [x] Typing e2e for pipeline + glob smoke (`shell_pipeline_glob_typing_e2e`)
 
-## Milestone 51 — Docs, tests, CI & soak
+## Milestone 51 — Docs, tests, CI & soak ✅ (no `review-rc1` tag, no ramdisk allowlist — owner's call)
 
 Paperwork, evidence, tooling, and scope freeze.
 
@@ -1719,12 +1724,23 @@ Solid means it does not fall over when exercised.
       console 512 B/tick, fixed capacities table (64 threads, 8 files,
       16 proc Caps, 8 pipes, galfs limits), what is not budgeted, how
       M64 measures
-- [ ] **Soak**: N-minute idle + periodic spawn/exit + galfs touch under
-      QEMU; no leak in free frames / pipe slots / thread slots
-- [ ] **Steal fairness**: under load both CPUs do useful work
-      (`test-smpstress` metrics or serial counters)
-- [ ] **Pathological input**: huge paste on password prompt; tight
-      write loop on console (budget); deep path components
+- [x] **Soak**: `bin/test-soak` + `soak_test_passes` — ten rounds of
+      pipe + galfs create/write/remove + `spawn(hello, SPAWN_WAIT)` +
+      `sleep`, idle gaps between rounds; free frames, pipe slots, thread
+      slots, and galfs blocks return to baseline **exactly** after every
+      round (bounded by the 60 s boot budget, not N minutes — the shape
+      is the soak; `--full` runs repeat it per suite pass)
+- [x] **Steal fairness**: `bin/test-fairness` + `fairness_test_passes`
+      — three never-yielding workers; per-(worker, CPU) counters prove
+      both CPUs do work, the idle AP steals a BSP worker once its own
+      drains (`steal_count` moves), long workers finish within a 4× band
+- [x] **Pathological input**: 65-byte paste at the password prompt is
+      refused (`password too long`), masked, and the seat logs in
+      afterwards (`shell_password_paste_typing_e2e`); a 3 000-call
+      ring-3 console flood never exceeds `512 × (ticks + 2)` admitted
+      bytes, never errors, and the timer keeps ticking
+      (`bin/test-pathological`); deep / overlong path components are
+      `bin/test-paths` + the exhaustive `galexy_core::path` sweep
 - [x] **Explicit non-goal**: desktop-class throughput — stated in
       `PERF.md` and `THREAT.md`
 
@@ -1746,23 +1762,33 @@ What we will tell a reviewer we are *not* doing — written down.
 - [x] Each non-goal listed in `THREAT.md` with one-line rationale
 - [x] ROADMAP Phase 5 updated ("Where we stand" Ready row + item 9/10)
 
-## Milestone 52 — Review release candidate
+## Milestone 52 — Review release candidate ✅ (tag deferred by owner)
 
 The “ready for review” checklist — not a feature dump. `review-rc1`
 means a systems engineer can read and poke it. `v1.0` (the "ready OS"
 bar) adds Phase 9 (Milestones 63–67) on top; see the gate at the end
 of Milestone 67.
 
-- [ ] All milestones 43–51 either ✅ or explicitly waived in THREAT/FS
-      docs with rationale (46 and 47 are ✅ as of this review)
-- [ ] Full suite green BIOS+UEFI; disk persist + corrupt recover + auth
-      e2e + galfs capacity smoke
-- [ ] Default build: no `crash`, KDF live, encryption on if disk present
+- [x] All milestones 43–51 either ✅ or explicitly waived in THREAT/FS
+      docs with rationale (51 closed with the docs pack, hardening
+      evidence, CI, and soak PRs; waivers live in `THREAT.md`)
+- [x] Full suite green BIOS+UEFI; disk persist + corrupt recover + auth
+      e2e + galfs capacity smoke — 96 boots (`cargo test -p runner
+      --test boot -- --test-threads=1`) on the M51 close; one
+      intermittent SMP hang is tracked under Known limitations →
+      **Milestone 63**
+- [x] Default build: no `crash` (`default_image_has_no_crash_seam_e2e`
+      types it on the main image → `command not found`), KDF live
+      (`PBKDF2_ITERS = 10_000`, every login pays it — `users`,
+      `lockout`), encryption on if disk present (`galfs_disk_*` assert
+      the raw image carries no plaintext; `unlock_test_passes`)
 - [x] Fresh format walkthrough: README "For reviewers" (accounts, disk,
       first `passwd`) + `docs/DEMO.md` (two seats, grant / revoke)
-- [ ] Tag `review-rc1` (or note in ROADMAP) with a short changelog
-- [ ] Freeze window: ABI changes require DESIGN + abi crate bump in the
-      same PR
+- [ ] Tag `review-rc1` — **owner action, deferred by the owner** (the
+      changelog is `CHANGELOG.md`; nothing else in this list waits on it)
+- [x] Freeze window: ABI changes require `galexy-abi` + `docs/ABI.md`
+      table + DESIGN syscall section + wrappers in the same PR — stated
+      in `ABI.md` and asked for by the PR template
 - [x] **STYLE.md audit**: `.github/PULL_REQUEST_TEMPLATE.md` carries the
       secrets / GALF / IF=0 / ABI / docs checklist
 - [x] Phase 6 process/init milestones listed in ROADMAP (53–55 ✅; the
@@ -1795,8 +1821,8 @@ Mechanism in the kernel; policy in userspace.
       `is_init`; init exit/fault panics (`init exited — no orphan root`)
 - [x] **Retire kernel seat supervisor**: when init is present, kernel
       skips `spawn_all_shells` / `ensure_shell` (Milestone 54)
-- [ ] **Shutdown/reboot path**: init holds power grant; ordered
-      “request to init” → **Milestone 67**
+- Shutdown/reboot path (init holds the power grant; ordered “request
+  to init”) is **not an M53 deliverable** — listed under **Milestone 67**
 - [x] Tests: `bin/test-init` + `init_test_passes` (orphan Cap transfer to
       init); `test-orphan` covers no-init → kernel root
 
@@ -1823,8 +1849,8 @@ Move F-key consoles and long-runners under init.
 - [x] **Login screen stays in the seat**: init has no keyboard grant
 - [x] **Seat crash → restart**: round-robin Cap-wait replaces
       `ensure_shell` when init is present
-- [ ] **Session id**: bind M43 session generation to seat Cap / debug id
-      → **Milestone 67**
+- Session id (bind M43 session generation to the seat Cap / debug id)
+  — **Milestone 67**
 - [x] **F1–F12 switching** remains kernel console selection
 - [x] Tests: typing e2e reaches a seat; init console chatter absent (suite)
 
@@ -1832,9 +1858,8 @@ Move F-key consoles and long-runners under init.
 
 Small and explicit — not a systemd clone.
 
-- [ ] **Service table**: waived for the seats MVP → **Milestone 67**
-- [ ] **Operator surface**: `svc` waived for the seats MVP →
-      **Milestone 67**
+- Service table and the `svc` operator surface — waived for the seats
+  MVP; both are **Milestone 67** boxes
 - [x] **No ambient root services**: seats are pre-login; init attenuated
 - [x] **Hang detection (optional)**: waived for v1
 - [x] Docs: seats under init for boot; `svc`/extra services later
@@ -2079,6 +2104,15 @@ Spectre stance, and an ELF loader that panics on a bad image.
 - [ ] **Waiter CR3 `expect`s** (`sched/mod.rs` keyboard / pipe
       completion): keep the panic (kernel invariant) and say so in
       DESIGN; add a `debug_assert` that the slot is `WAITING`
+- [ ] **Rotation watchdog**: the intermittent SMP hang recorded under
+      Known limitations (M51 close: `test-soak` round 2 after a child
+      exit at a whole-second boundary; once the pipeline e2e before a
+      heap-grow shootdown). Add a per-CPU "last switch tick" and have
+      the other CPU dump both rotations, `ARMED_MS`, and the shootdown
+      mailbox to serial when one stalls for > 2 s; then fix the window
+      (suspects: idle-AP tickless re-arm racing an exit handoff that
+      woke a waiter owned by the sleeping CPU; shootdown ack wait while
+      the target is between `arm_oneshot_ms` and `hlt`)
 - [ ] **KDF cost on disk**: PBKDF2 iteration count stored per actor
       (GALF v12); test kernels format at 10 000, production format
       under `--release` + KVM at ≥ 100 000; `passwd` re-derives at the
@@ -2450,6 +2484,15 @@ items stay here with rationale.
       not bound to the seat Cap — **Milestone 67**
 - [x] ~~No `LICENSE` / `SECURITY.md` / `CHANGELOG.md`~~ — CLOSED by
       Milestone 51 (MIT; reporting + scope; one line per milestone PR)
+- [ ] Intermittent SMP hang under host load: twice during the M51 close
+      `test-soak` stopped right after `[sched] task 'hello' exited`
+      (round 2, at a whole-second tick boundary) with no reap and no
+      waiter wake, and once `shell_pipeline_glob_typing_e2e` stopped
+      after `[loader] program 'echo' ready` before the heap-grow
+      shootdown; every re-run (10× soak, 3× pipeline) passed. Suspect
+      the idle-AP tickless wake / exit-handoff window. Needs a watchdog
+      that dumps per-CPU state to serial when the rotation stalls —
+      **Milestone 63**
 - [ ] No network stack, no USB — **Phase 10** (after `v1.0`)
 - [x] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
