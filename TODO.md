@@ -1512,7 +1512,7 @@ Freeze concurrency rules so review does not invent races.
 - [x] **No lock in shootdown handler** reaffirmed; new IPI handlers follow
       the same rule
 
-## Milestone 49 — Console, audit & operator UX
+## Milestone 49 — Console, audit & operator UX ✅
 
 Human path plus the evidence trail.
 
@@ -1520,37 +1520,43 @@ Human path plus the evidence trail.
 
 Human-facing paths reviewers will exercise for an hour.
 
-- [ ] **Blinking text cursor** on the active TTY
-- [ ] **Keyboard overflow**: count drops; optional serial warning;
-      document bound
+- [x] **Blinking text cursor** on the active TTY (500 ms underscore;
+      cleared before the next glyph; idle wake capped at the blink edge)
+- [x] **Keyboard overflow**: `QUEUE_CAPACITY` 64 drops the newest key,
+      counts it, and warns on the first drop and every 16th
 - [x] **PC speaker BEL**: console `write` of `0x07` beeps (`arch::speaker`);
       shell emits BEL on command-not-found
-- [ ] **CSI / control policy**: list supported sequences; reject set
-      stays intentional (BEL handled as beep, not a CSI)
-- [ ] **Per-TTY scrollback** bound documented (cell grid size)
-- [ ] **Password star-prompt** integration with Milestone 43 secret prompts
-- [ ] **Ctrl-C / Ctrl-D** semantics documented (line cancel vs EOF)
-- [ ] **UTF-8**: console remains byte/ASCII-centric for review; document
-      non-goal for full Unicode editing
-- [ ] Manual script: “reviewer demo” — create user, grant card, dual TTY
+- [x] **CSI / control policy**: documented in `DESIGN.md` (H/f, A–D, J, K,
+      SGR). Other finals are ignored. BEL is a beep, not a CSI
+- [x] **Per-TTY scrollback** bound documented (128×200 cell grid; the
+      top line is discarded on scroll; no extra history)
+- [x] **Password star-prompt** integration with Milestone 43 secret prompts
+      (`login`, volume unlock, `passwd`; COM1 sees stars)
+- [x] **Ctrl-C / Ctrl-D** semantics documented (prompt cancel or job
+      kill vs ignored; Ctrl-D is not EOF)
+- [x] **UTF-8**: console remains byte/ASCII-centric for review; full
+      Unicode editing is a documented non-goal
+- [x] Manual script: “reviewer demo” — `docs/DEMO.md` (create user,
+      grant card, dual TTY)
 
 ### Audit, logging, and diagnostics
 
 If it is not logged, it did not happen in a review.
 
-- [ ] **Auth audit lines** (serial): login ok/fail, logout, passwd,
+- [x] **Auth audit lines** (serial): login ok/fail, logout, passwd,
       useradd/userdel, su, lockout — no password material
-- [ ] **Token audit**: grant/revoke with actor, path, rights, target task
-- [ ] **Panic / fault reports**: keep task-kill path; ensure serial
-      breadcrumbs include task name + rip
-- [ ] **`dmesg`-lite**: ring buffer of recent kernel lines readable from
-      a query cap or `dmesg` util (even if it only mirrors serial)
-- [ ] **Debug vs release**: feature flags for verbose sched steal/reap
-      logs
-- [ ] **Rate-limit audit spam**: repeated failed logins do not fill the
-      dmesg ring to the exclusion of faults
-- [ ] **No secrets in audits**: red-team the format strings; add a grep
-      CI check for `password` in serial helpers if practical
+- [x] **Token audit**: grant/revoke with actor, path, rights, target task
+- [x] **Panic / fault reports**: task-kill path kept; serial line includes
+      task name + RIP (`raw+16`) plus err/cr2
+- [x] **`dmesg`-lite**: 32×96 ring filled by `serial_println!`, reserved
+      cap `0x8007`, shell `dmesg` after login (query grant)
+- [x] **Debug vs release**: non-default `verbose-sched` gates the
+      idle-steal serial line. The one-line reap count and tree-free
+      breadcrumbs stay in every build (`test-threadexit`, `test-treechurn`)
+- [x] **Rate-limit audit spam**: consecutive `login fail` lines collapse
+      to one dmesg entry
+- [x] **No secrets in audits**: `audit_strings` host test rejects
+      `password` inside any `serial_println!` invocation
 
 ## Milestone 50 — Shell for real demos
 
@@ -1954,9 +1960,10 @@ items stay here with rationale.
             on the BSP (Milestone 48 concurrency note)
 - [ ] SYSCALL leaves DS/ES/FS/GS as kernel bootstrap selectors when the
       task resumes in ring 3 — **Milestone 47**
-- [ ] `write` still rejects controls outside the console subset
+- [x] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
-      ESC). Blinking cursor + CSI policy — **Milestone 49**
+      ESC, BEL). CSI policy and the blinking cursor are Milestone 49
+      (`DESIGN.md`). The reject set stays intentional
 - [x] ~~There is no glob or disk-backed store yet~~ — disk-backed store
       CLOSED by Milestone 38; glob — **Milestone 50**
 - [x] ~~`run` leaks the task name, and freed slots panic the table at
@@ -1967,8 +1974,9 @@ items stay here with rationale.
 - [ ] Framebuffer is used as the bootloader mapped it (deliberate — BootInfo
       exposes no physical framebuffer address) — **waive** unless isolation
       work needs a physical FB remap
-- [ ] Screen: text-mode cursor (blinking) — **Milestone 49**
-- [ ] Keyboard queue overflow silently drops keys — **Milestone 49**
+- [x] Screen: text-mode cursor (blinking) — **Milestone 49**
+- [x] Keyboard queue overflow drops the newest key, counts it, and
+      warns — **Milestone 49**
 - [x] Cooperative-scheduler nits: `run()` sweep fairness mid-sweep;
       TaskCtx's 8 fixed u64 slots — waived in the Milestone 48
       concurrency note (preemptive threads run user code)
@@ -1981,7 +1989,7 @@ items stay here with rationale.
 - [x] Storage stack — **Milestone 46**
 - [ ] Process/ABI/caps (process-Cap foundation) — **Milestone 47**
 - [x] Memory/safety/concurrency — **Milestone 48**
-- [ ] Console/audit — **Milestone 49**
+- [x] Console/audit — **Milestone 49**
 - [ ] Shell demos — **Milestone 50**
 - [ ] Docs/tests/CI/soak — **Milestone 51**
 - [ ] Review RC — **Milestone 52**

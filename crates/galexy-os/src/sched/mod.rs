@@ -2664,7 +2664,9 @@ pub(crate) fn task_grant(path: &str, rights: u8, target: &str) -> Result<(), Sys
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    interrupts::without_interrupts(|| {
+    let mut actor_buf = [0u8; 32];
+    let mut actor_len = 0usize;
+    let result = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let (fs_root, fs_tokens) = {
             let caller = threads.get(slot - 1).ok_or(SysError::BadCap)?;
@@ -2674,6 +2676,7 @@ pub(crate) fn task_grant(path: &str, rights: u8, target: &str) -> Result<(), Sys
             deny_must_change(caller)?;
             (caller.fs_root, caller.fs_tokens)
         };
+        actor_len = galfs::name_of_root(fs_root, &mut actor_buf).unwrap_or(0);
         let need = rights & galfs::RIGHT_ALL;
         if need == 0 {
             return Err(SysError::BadValue);
@@ -2685,7 +2688,9 @@ pub(crate) fn task_grant(path: &str, rights: u8, target: &str) -> Result<(), Sys
             return Err(SysError::NotFound);
         };
         galfs::push_token(&mut threads[ti].fs_tokens, object, rights)
-    })
+    });
+    log_token("grant", &actor_buf, actor_len, path, rights, target, &result);
+    result
 }
 
 /// Drops galfs token rights on a live user task named `target`.
@@ -2694,7 +2699,9 @@ pub(crate) fn task_revoke(path: &str, rights: u8, target: &str) -> Result<(), Sy
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    interrupts::without_interrupts(|| {
+    let mut actor_buf = [0u8; 32];
+    let mut actor_len = 0usize;
+    let result = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let (fs_root, fs_tokens) = {
             let caller = threads.get(slot - 1).ok_or(SysError::BadCap)?;
@@ -2704,6 +2711,7 @@ pub(crate) fn task_revoke(path: &str, rights: u8, target: &str) -> Result<(), Sy
             deny_must_change(caller)?;
             (caller.fs_root, caller.fs_tokens)
         };
+        actor_len = galfs::name_of_root(fs_root, &mut actor_buf).unwrap_or(0);
         let need = rights & galfs::RIGHT_ALL;
         if need == 0 {
             return Err(SysError::BadValue);
@@ -2715,7 +2723,43 @@ pub(crate) fn task_revoke(path: &str, rights: u8, target: &str) -> Result<(), Sy
             return Err(SysError::NotFound);
         };
         galfs::revoke_token(&mut threads[ti].fs_tokens, object, rights)
-    })
+    });
+    log_token("revoke", &actor_buf, actor_len, path, rights, target, &result);
+    result
+}
+
+/// Serial line for grant/revoke. No password bytes. Rights are the raw
+/// mask (`RIGHT_READ` = 1 … `RIGHT_ONCE` = 128).
+fn log_token(
+    op: &str,
+    actor_buf: &[u8],
+    actor_len: usize,
+    path: &str,
+    rights: u8,
+    target: &str,
+    result: &Result<(), SysError>,
+) {
+    let actor = core::str::from_utf8(&actor_buf[..actor_len]).unwrap_or("-");
+    let actor = if actor.is_empty() { "-" } else { actor };
+    match result {
+        Ok(()) => serial_println!(
+            "[auth] {} actor={} path={} rights={:#x} target={}",
+            op,
+            actor,
+            path,
+            rights,
+            target
+        ),
+        Err(err) => serial_println!(
+            "[auth] {} fail actor={} path={} rights={:#x} target={} err={}",
+            op,
+            actor,
+            path,
+            rights,
+            target,
+            *err as u64
+        ),
+    }
 }
 
 /// Creates a pipe and installs both ends in the caller's file table.
@@ -3052,7 +3096,7 @@ pub(crate) fn task_useradd(name: &str, password: &[u8]) -> Result<(), SysError> 
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    interrupts::without_interrupts(|| {
+    let added = interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
         let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
         if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
@@ -3064,9 +3108,18 @@ pub(crate) fn task_useradd(name: &str, password: &[u8]) -> Result<(), SysError> 
         deny_must_change(thread)?;
         let _ = galfs::add_user(name, password)?;
         Ok(())
-    })?;
-    galfs::mark_dirty();
-    Ok(())
+    });
+    match added {
+        Ok(()) => {
+            serial_println!("[auth] useradd user={}", name);
+            galfs::mark_dirty();
+            Ok(())
+        }
+        Err(err) => {
+            serial_println!("[auth] useradd fail user={} err={}", name, err as u64);
+            Err(err)
+        }
+    }
 }
 
 /// Password login: replace the caller's session with `ALL` on `name`'s root.
@@ -3266,7 +3319,11 @@ pub(crate) fn task_passwd(name: Option<&str>, password: &[u8]) -> Result<(), Sys
         }
     })?;
     let name_str = core::str::from_utf8(&name_buf[..name_len]).map_err(|_| SysError::BadValue)?;
-    galfs::set_password(name_str, password)?;
+    if let Err(err) = galfs::set_password(name_str, password) {
+        serial_println!("[auth] passwd fail user={} err={}", name_str, err as u64);
+        return Err(err);
+    }
+    serial_println!("[auth] passwd user={}", name_str);
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
@@ -3290,7 +3347,7 @@ pub(crate) fn task_userdel(name: &str) -> Result<(), SysError> {
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    interrupts::without_interrupts(|| {
+    let removed = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
         if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
@@ -3328,10 +3385,19 @@ pub(crate) fn task_userdel(name: &str) -> Result<(), SysError> {
             galfs::drop_tokens_on(&mut thread.fs_tokens, objs);
         }
         Ok(())
-    })?;
-    lockout::clear_actor(name);
-    galfs::mark_dirty();
-    Ok(())
+    });
+    match removed {
+        Ok(()) => {
+            serial_println!("[auth] userdel user={}", name);
+            lockout::clear_actor(name);
+            galfs::mark_dirty();
+            Ok(())
+        }
+        Err(err) => {
+            serial_println!("[auth] userdel fail user={} err={}", name, err as u64);
+            Err(err)
+        }
+    }
 }
 
 /// Card-based identity switch: replace tokens with `ALL` on `name`'s root.
@@ -3561,6 +3627,30 @@ fn proc_slot(cap: Cap) -> Result<usize, SysError> {
 /// The current rotation slot (0 = main loop; otherwise thread index + 1).
 pub fn current_slot() -> usize {
     cpu_sched().current.load(Ordering::Relaxed)
+}
+
+/// Copies the faulting task's name into `out`.
+///
+/// Uses `try_lock` so a fault that already holds [`THREADS`] still
+/// reports. The main loop is `"main"`.
+pub fn fault_task_name(out: &mut [u8]) -> &str {
+    let slot = current_slot();
+    if slot == 0 {
+        return "main";
+    }
+    let Some(threads) = THREADS.try_lock() else {
+        return "busy";
+    };
+    let Some(thread) = threads.get(slot - 1) else {
+        return "?";
+    };
+    let n = (thread.name_len as usize).min(out.len());
+    if n == 0 {
+        return "?";
+    }
+    out[..n].copy_from_slice(&thread.name_bytes[..n]);
+    drop(threads);
+    core::str::from_utf8(&out[..n]).unwrap_or("?")
 }
 
 /// Console the running task writes. The main loop is TTY 0.
@@ -3861,6 +3951,10 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
                     t.owner = my_cpu;
                     t.stolen_at.store(now, Ordering::Relaxed);
                     STEALS.fetch_add(1, Ordering::Relaxed);
+                    // Production serial stays quiet. `verbose-sched` is
+                    // the trace; `test-smpstress` proves the owner flip
+                    // without this line.
+                    #[cfg(feature = "verbose-sched")]
                     serial_println!(
                         "[sched] cpu {} stole '{}' (slot {}) from cpu {} (enters next tick)",
                         my_cpu,
@@ -3868,6 +3962,8 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
                         slot_no,
                         victim
                     );
+                    #[cfg(not(feature = "verbose-sched"))]
+                    let _ = (my_cpu, victim, slot_no);
                     break;
                 }
             }
@@ -4359,10 +4455,19 @@ fn ms_until_next_sleep() -> Option<u32> {
 /// Device IRQs still wake the CPU early; the next halt re-arms. The IRQ
 /// path itself always re-arms a quantum (preempt fairness).
 pub fn arm_timer_for_load() {
+    arm_timer_capped(u32::MAX);
+}
+
+/// Like [`arm_timer_for_load`], but an idle CPU also wakes within `cap_ms`.
+///
+/// The BSP main loop passes the time until the next 500 ms cursor edge so
+/// the underscore can blink while the seat is idle. Busy CPUs ignore the
+/// cap and keep the preempt quantum.
+pub fn arm_timer_capped(cap_ms: u32) {
     if cpu_has_runnable() {
         crate::arch::apic::arm_oneshot_ms(crate::arch::apic::quantum_ms());
     } else {
-        let idle = crate::arch::apic::idle_deadline_ms();
+        let idle = crate::arch::apic::idle_deadline_ms().min(cap_ms.max(1));
         let ms = match ms_until_next_sleep() {
             Some(s) => idle.min(s).max(1),
             None => idle,

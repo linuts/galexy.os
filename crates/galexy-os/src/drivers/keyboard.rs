@@ -6,7 +6,7 @@
 //! screen lock. Locks are kept tiny and never nested, so this is safe to
 //! call from interrupt context.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 use galexy_core::Ring;
 use pc_keyboard::{layouts, DecodedKey, HandleControl, KeyCode, PS2Keyboard, ScancodeSet1};
@@ -17,7 +17,10 @@ use x86_64::instructions::port::Port;
 pub const TTY_COUNT: usize = 12;
 
 /// Keyboard queue capacity in characters, per TTY.
-const QUEUE_CAPACITY: usize = 64;
+///
+/// A full queue drops the newest character. [`drops`] counts those
+/// losses; the first drop and every 16th print one serial line.
+pub const QUEUE_CAPACITY: usize = 64;
 
 /// No TTY switch is waiting.
 const SWITCH_NONE: u8 = 0xff;
@@ -41,6 +44,8 @@ static UNGOTS: Mutex<[Option<char>; TTY_COUNT]> = Mutex::new([None; TTY_COUNT]);
 static ACTIVE: AtomicU8 = AtomicU8::new(0);
 /// TTY the main loop should paint. `SWITCH_NONE` means nothing is waiting.
 static PENDING: AtomicU8 = AtomicU8::new(SWITCH_NONE);
+/// Characters dropped because a TTY queue was full.
+static DROPS: AtomicU64 = AtomicU64::new(0);
 
 /// Brings the PS/2 controller's first port (keyboard) online: the enable
 /// command + stale-buffer drain. Formerly part of `arch::pics::init` — it
@@ -87,8 +92,9 @@ pub fn add_scancode(scancode: u8) {
                 if c == '\u{3}' && crate::sched::interrupt_foreground(tty as u8) {
                     return;
                 }
-                // Overflow drops the key by design; not an error for the decoder.
-                let _ = KEY_QUEUES[tty].lock().push(c);
+                // Overflow drops the newest key. The queue lock is not held
+                // across the serial warning.
+                enqueue(tty, c);
                 // Milestone 57: wake a reader parked on this TTY.
                 crate::sched::wake_keyboard_waiters(tty as u8);
             }
@@ -99,11 +105,8 @@ pub fn add_scancode(scancode: u8) {
                     // Arrow keys become CSI so the ring-3 shell can browse
                     // history (ESC [ A/B) without a custom scancode ABI.
                     let tty = (ACTIVE.load(Ordering::Relaxed) as usize).min(TTY_COUNT - 1);
-                    {
-                        let mut q = KEY_QUEUES[tty].lock();
-                        for c in seq.chars() {
-                            let _ = q.push(c);
-                        }
+                    for c in seq.chars() {
+                        enqueue(tty, c);
                     }
                     crate::sched::wake_keyboard_waiters(tty as u8);
                 }
@@ -131,6 +134,45 @@ fn tty_index(key: KeyCode) -> Option<u8> {
         _ => return None,
     };
     Some(index)
+}
+
+/// Pushes one character. A full queue increments [`drops`] and, on the
+/// first drop and every 16th, prints a rate-limited serial line.
+fn enqueue(tty: usize, c: char) {
+    let stored = KEY_QUEUES[tty].lock().push(c).is_some();
+    if !stored {
+        note_drop();
+    }
+}
+
+fn note_drop() {
+    let n = DROPS.fetch_add(1, Ordering::Relaxed) + 1;
+    if n == 1 || n.is_multiple_of(16) {
+        crate::serial_println!("[kbd] queue full; dropped {} (cap {})", n, QUEUE_CAPACITY);
+    }
+}
+
+/// Characters dropped because a per-TTY queue was full.
+pub fn drops() -> u64 {
+    DROPS.load(Ordering::Relaxed)
+}
+
+/// Pushes `n` characters into `tty` the way a full keyboard IRQ would.
+/// Returns how many of those pushes were dropped. Test kernels use this
+/// instead of a PS/2 flood.
+pub fn test_inject(tty: u8, n: usize) -> u64 {
+    let tty = (tty as usize).min(TTY_COUNT - 1);
+    let before = drops();
+    for i in 0..n {
+        let c = char::from(b'a' + (i as u8 % 26));
+        enqueue(tty, c);
+    }
+    drops().saturating_sub(before)
+}
+
+/// Discards every queued character on `tty` (including one ungot key).
+pub fn test_drain(tty: u8) {
+    while pop_key_tty(tty).is_some() {}
 }
 
 /// CSI sequences for cursor keys (`ESC [ A` … `D`).

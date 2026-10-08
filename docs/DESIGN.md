@@ -139,14 +139,39 @@ columns. CR returns to column 0. ESC introduces a fixed-size CSI parser
 (no allocation): SGR colors 30–37 and 90–97 plus reset, cursor position
 and movement (`H`/`f`/`A`–`D`), erase in display (`J` 0 and 2), and
 erase in line (`K` 0 and 2). The parser state survives a split `write`
-and is saved with the TTY. A blinking cursor is still future.
+and is saved with the TTY. The shown TTY draws a two-pixel underscore
+at the cursor on a 500 ms phase (`timer_ticks / 500`). The main loop
+wakes an idle CPU at that edge. The mark is cleared before the next
+glyph so a block cannot stick on a cell the cursor has left.
+
+Each TTY's cell grid is the scrollback: `TTY_ROWS` (128) by `TTY_COLS`
+(200). Scrolling drops the top line. There is no extra history buffer.
+
+Supported controls, and nothing else: tab, CR, LF, backspace (`0x08`),
+form feed (`0x0c`), ESC, and the CSI subset above. ASCII BEL (`0x07`)
+is a PC-speaker beep in the console writer, not a CSI and not a glyph.
+Other CSI final bytes are consumed and ignored. The console stays
+byte/ASCII-centric: the keyboard may deliver a Unicode scalar, but the
+shell line editor accepts only ASCII graphic characters (and space
+outside a secret prompt). Full Unicode editing is a non-goal.
+
+Ctrl-C (`U+0003`) cancels a shell prompt, or, when a TTY foreground job
+Cap is live, kills that job and is not queued. Ctrl-D (`U+0004`) is
+not end-of-file; the line editor ignores it. Esc cancels a prompt.
 
 ### serial — "the side channel" (`drivers/`)
 
 `uart_16550` at COM1. Used for panics, boot info, and debug output. **Rule:**
 nothing user-facing ever prints here; it's invisible to the OS user by
 design. The serial writer shares no lock with the screen, so interrupt
-handlers can log through it safely.
+handlers can log through it safely. `serial_println!` also appends the
+line to a 32×96 dmesg ring. `read` of reserved cap `0x8007` (query
+grant, same rule as `stats`) returns the newest lines that fit.
+Consecutive lines containing `login fail` collapse to one ring entry
+so a lockout storm cannot evict a fault. The shell builtin is `dmesg`
+(pre-login has no query grant, so that read is denied). Idle-steal
+tracing is the non-default `verbose-sched` feature; the one-line reap
+count and tree-free breadcrumbs stay in every build.
 
 ### keyboard — "the input decoder" (`drivers/`)
 
@@ -166,7 +191,9 @@ shell `read`s the keyboard capability (`reserved::KEYBOARD_INDEX`, READ)
 and gets the queue of the TTY it was started on. A zero-length success
 means that queue is empty, not that input ended. A short read that
 cannot fit the next character's UTF-8 puts that character back
-(`unget_key_tty`).
+(`unget_key_tty`). Each queue holds 64 characters (`QUEUE_CAPACITY`).
+A full queue drops the newest character, counts the drop, and prints
+`[kbd] queue full` on the first drop and every 16th.
 
 ```rust
 pub fn add_scancode(scancode: u8)   // called from the IRQ handler only
@@ -945,7 +972,8 @@ IRQ that already has IF=0) around the acquire.
 | Heap `INNER` | nothing else; growth drops it before shootdown | yes |
 | `ATA` / virtio `DEV` then `DMA` | nothing else | with the caller (syscall or BSP) |
 | Screen `SCREEN` / `GRIDS` | nothing else | BSP; IRQ handlers do not take it |
-| Keyboard queue | nothing else | IRQ may push; readers gate |
+| Keyboard queue | nothing else (drop warning takes `DMESG` after the queue lock drops) | IRQ may push; readers gate |
+| `DMESG` | nothing else | with `serial_println!`; never acquired before `THREADS` |
 | `SCHED`, `RAMDISK`, `PIPES`, `PENDING_SPAWN` | not `THREADS` | yes when called from preemptable code |
 | Shootdown handler | **no lock** | runs at IPI; initiator holds none across the broadcast |
 

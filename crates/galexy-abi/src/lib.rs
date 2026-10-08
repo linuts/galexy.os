@@ -219,6 +219,15 @@ pub mod reserved {
     pub const fn files(rights: super::CapRights) -> Cap {
         Cap::new(FILES_INDEX, rights)
     }
+
+    /// Recent kernel log lines. `read` copies a fresh snapshot (newest
+    /// lines that fit). Same grant rule as [`STATS_INDEX`].
+    pub const DMESG_INDEX: u64 = 0x8007;
+
+    /// The dmesg capability.
+    pub const fn dmesg(rights: super::CapRights) -> Cap {
+        Cap::new(DMESG_INDEX, rights)
+    }
 }
 
 /// `power` operand: turn the machine off (ACPI S5).

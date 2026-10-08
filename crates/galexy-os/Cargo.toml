@@ -3,6 +3,11 @@ name = "galexy-os"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# Idle-steal tracing. Off in production images; the one-line reap count
+# stays in every build because the suite treats it as lifecycle evidence.
+verbose-sched = []
+
 [dependencies]
 bootloader_api = "0.11"
 galexy-abi = { path = "../galexy-abi" }

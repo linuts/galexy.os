@@ -196,12 +196,17 @@ unsafe extern "C" fn page_fault_sched(frame: *mut Context) -> u64 {
     // SAFETY: the frame is on the faulting task's mapped stack.
     let cs = unsafe { raw.add(17).read() };
     let err = unsafe { raw.add(15).read() };
+    let rip = unsafe { raw.add(16).read() };
+    let mut name_buf = [0u8; 64];
+    let task = super::fault_task_name(&mut name_buf);
     if cs & 0b11 == 3 {
         // Ring-3 fault: the task dies, the kernel lives. Tombstone +
         // rotate (guaranteed switch — the dead task is never main).
         let cr2 = x86_64::registers::control::Cr2::read();
         crate::serial_println!(
-            "[pf] ring-3 task fault: err={:#x}, cr2={:#?} — killing the task",
+            "[pf] ring-3 task fault: task={} rip={:#x} err={:#x} cr2={:#?} — killing the task",
+            task,
+            rip,
             err,
             cr2
         );
@@ -210,7 +215,9 @@ unsafe extern "C" fn page_fault_sched(frame: *mut Context) -> u64 {
         // Ring-0 fault: kernel bug or a test-installed seam. Report
         // precisely, then park (the faulting instruction would refault).
         crate::serial_println!(
-            "[pf] PAGE FAULT in ring 0, err={:#x}, cr2={:#?}",
+            "[pf] PAGE FAULT in ring 0: task={} rip={:#x} err={:#x} cr2={:#?}",
+            task,
+            rip,
             err,
             x86_64::registers::control::Cr2::read()
         );
