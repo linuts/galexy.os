@@ -1672,7 +1672,9 @@ Mechanism in the kernel; policy in userspace.
 - [x] **Restart policy (v1)**: restart on Cap-wait (round-robin)
 - [x] **Caps/tokens for children**: `Grants::init`; seats get
       `pre_login` + unauth creds
-- [x] **Logging**: `[init] ready` / `[init] seats up` / seat restart
+- [x] **Logging**: init stays **off the console** (shared TTY 0 with F1);
+      kernel serial has spawn markers. Earlier `[init] ready` / `seats up`
+      raced the login prompt.
 - [x] Docs: PROCESS / DESIGN M53–54 cutover
 
 ## Milestone 54 — Seats & service supervision ✅
@@ -1689,8 +1691,7 @@ Move F-key consoles and long-runners under init.
 - [ ] **Session id**: bind M43 session generation to seat Cap / debug id
       — follow-on polish
 - [x] **F1–F12 switching** remains kernel console selection
-- [x] Tests: boot with init prints `[init] seats up`; typing e2e still
-      reaches a seat (suite)
+- [x] Tests: typing e2e reaches a seat; init console chatter absent (suite)
 
 ### Service supervision (lite)
 
