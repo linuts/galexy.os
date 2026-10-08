@@ -63,8 +63,8 @@ that object (or an ancestor). `revoke` clears an exact-object token
 slot.
 
 **Paths do not grant rights.** Parsing `/eve@/` finds eve’s root; you
-still need a card (or a documented admin operator path — Milestone 43
-narrows the blanket bypass).
+still need a card. Admin `su <actor>` installs `ALL` on that root;
+admin’s own root token does not cover foreign trees.
 
 ## Paths
 

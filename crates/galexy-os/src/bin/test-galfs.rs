@@ -58,6 +58,21 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     };
     sched::ramdisk::init(archive);
 
+    let mut toks = [galfs::Token::empty(); galfs::TOKEN_SLOTS];
+    toks[0] = galfs::Token {
+        object: 1,
+        rights: galfs::RIGHT_ALL,
+    };
+    galfs::attenuate_tokens(&mut toks, galfs::RIGHT_READ);
+    assert_eq!(toks[0].rights, galfs::RIGHT_READ, "spawn mask keeps read");
+    galfs::attenuate_tokens(&mut toks, 0);
+    assert_eq!(toks[0].rights, galfs::RIGHT_READ, "mask 0 does not widen");
+    toks[0].rights = galfs::RIGHT_ALL | galfs::RIGHT_ONCE;
+    assert!(galfs::consume_once(&mut toks, 1), "once card consumed");
+    assert!(!toks[0].is_live(), "once card slot cleared");
+    assert!(sched::idle_due(1, 1 + sched::IDLE_LOGOUT_MS));
+    assert!(!sched::idle_due(0, sched::IDLE_LOGOUT_MS));
+
     let dan_root = galfs::add_user("dan", b"dan-pass").expect("add dan");
     let desktop = galfs::find_under(dan_root, "Desktop").expect("dan Desktop");
     let _secret = galfs::create_file_under(desktop, "secret").expect("secret");
@@ -98,7 +113,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         "open of /dan@Desktop/secret is AccessDenied without a token"
     );
 
-    // Operator seat: logged-in admin may list foreign trees without a card.
+    // Admin root ALL does not cover foreign trees. A card (or `su`) is required.
     let mut saw = false;
     galfs::for_each_visible(
         galfs::admin_cred().root,
@@ -109,7 +124,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
             }
         },
     );
-    assert!(saw, "admin operator must list dan's tree");
+    assert!(!saw, "admin must not list dan's tree without a card");
 
     // Guest listing stays empty — cards, not the path string, grant rights.
     let mut guest_saw = false;
@@ -137,9 +152,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     elapsed = 0;
     // Wait until holder observes the grant (after_grant == 1).
     loop {
-        let after = unsafe {
-            core::ptr::read_volatile(core::ptr::addr_of!((*holder_scratch).after_grant))
-        };
+        let after =
+            unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*holder_scratch).after_grant)) };
         if after == 1 {
             break;
         }

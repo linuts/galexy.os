@@ -7,8 +7,8 @@ extern crate alloc;
 
 use bootloader_api::{entry_point, BootInfo};
 use galexy_abi::{
-    SysError, Syscall, USER_ADD, USER_DEL, USER_LOGIN, USER_LOGOUT, USER_SU, USER_USERS,
-    USER_WHOAMI,
+    SysError, Syscall, USER_ADD, USER_DEL, USER_LOGIN, USER_LOGOUT, USER_PASSWD, USER_SU,
+    USER_USERS, USER_WHOAMI,
 };
 use galexy_os::{
     arch::mm, drivers::screen, exit_qemu, println, sched, serial_println, QemuExitCode,
@@ -219,6 +219,10 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     );
     store(&mut code, 2, 0xa8);
 
+    // Default admin password blocks userdel until passwd. A failed
+    // passwd leaves del_ok at 0.
+    call_passwd_self(&mut code, secret_addr, secret.len() as u64);
+
     call_user_name(&mut code, eve_addr, eve.len() as u64, USER_DEL);
     store(&mut code, 2, 0xb0);
 
@@ -298,6 +302,17 @@ fn call_user(code: &mut alloc::vec::Vec<u8>, addr: u64, len: u64, op: u64) {
 
 fn call_user_name(code: &mut alloc::vec::Vec<u8>, addr: u64, len: u64, op: u64) {
     call_user(code, addr, len, op);
+}
+
+/// `passwd` of the current actor (`RSI` length 0).
+fn call_passwd_self(code: &mut alloc::vec::Vec<u8>, pass: u64, pass_len: u64) {
+    mov_eax(code, Syscall::User as u32);
+    code.extend_from_slice(&[0x48, 0x31, 0xFF]); // xor rdi, rdi
+    code.extend_from_slice(&[0x48, 0x31, 0xF6]); // xor rsi, rsi
+    mov_r64_imm(code, 2, USER_PASSWD);
+    mov_r64_imm(code, 8, pass);
+    mov_r64_imm(code, 9, pass_len);
+    code.extend_from_slice(&[0x0F, 0x05]);
 }
 
 fn call_user_pass(

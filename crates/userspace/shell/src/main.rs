@@ -23,7 +23,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
     arg, close, create, create_replace, entry, files_cap, grant, keyboard_cap, open, read, reboot,
-    revoke, shutdown, spawn_with, share, stats_cap, sync, tasks_cap, threads_cap, unshare, user,
+    revoke, share, shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, user,
     user_login, user_logout, user_name, user_name_pass, user_passwd, user_quota, user_setquota,
     wait, write, write_console, yield_now,
 };
@@ -143,7 +143,8 @@ fn login_screen(kbd: Cap, tty: u8) -> Option<bool> {
                     }
                     LineRead::Line(n) => n,
                 };
-                let default_admin = &name[..nlen] == b"admin" && &pass[..plen] == ADMIN_DEFAULT_PASS;
+                let default_admin =
+                    &name[..nlen] == b"admin" && &pass[..plen] == ADMIN_DEFAULT_PASS;
                 let result = user_login(&name[..nlen], &pass[..plen]);
                 wipe(&mut pass);
                 if result.ok {
@@ -685,8 +686,10 @@ fn dispatch(
         prompt(cwd);
         return None;
     }
+    // Compiled out of release images. The supervisor e2e boots a ramdisk
+    // whose shell was built with `--features crash-seam`.
+    #[cfg(feature = "crash-seam")]
     if line == b"crash" {
-        // Test seam: a null read kills this task. The kernel loads a new shell.
         unsafe {
             core::ptr::read_volatile(core::ptr::null::<u8>());
         }
@@ -797,7 +800,14 @@ fn dispatch(
         return None;
     }
     if let Some(rest) = arg_of(line, b"useradd") {
-        user_pass_op(kbd, cwd, rest, galexy_abi::USER_ADD, b"useradd", must_change);
+        user_pass_op(
+            kbd,
+            cwd,
+            rest,
+            galexy_abi::USER_ADD,
+            b"useradd",
+            must_change,
+        );
         return None;
     }
     if let Some(rest) = arg_of(line, b"userdel") {
@@ -805,7 +815,14 @@ fn dispatch(
         return None;
     }
     if let Some(rest) = arg_of(line, b"login") {
-        user_pass_op(kbd, cwd, rest, galexy_abi::USER_LOGIN, b"login", must_change);
+        user_pass_op(
+            kbd,
+            cwd,
+            rest,
+            galexy_abi::USER_LOGIN,
+            b"login",
+            must_change,
+        );
         return None;
     }
     if line == b"logout" {
@@ -1104,11 +1121,7 @@ fn do_share(cwd: &Cwd, rest: &[u8], is_share: bool) {
         unshare(&full[..n], rights, user)
     };
     if !result.ok {
-        write_console(if is_share {
-            b"share: "
-        } else {
-            b"unshare: "
-        });
+        write_console(if is_share { b"share: " } else { b"unshare: " });
         match SysError::from_code(result.value) {
             SysError::NotFound => write_console(b"not found\n"),
             SysError::AccessDenied => write_console(b"access denied\n"),
@@ -1121,10 +1134,7 @@ fn do_share(cwd: &Cwd, rest: &[u8], is_share: bool) {
 }
 
 /// Shared parse for grant/revoke/share/unshare: `<rights> <path> <target>`.
-fn parse_rights_path_target<'a>(
-    rest: &'a [u8],
-    usage: &[u8],
-) -> Option<(u64, &'a [u8], &'a [u8])> {
+fn parse_rights_path_target<'a>(rest: &'a [u8], usage: &[u8]) -> Option<(u64, &'a [u8], &'a [u8])> {
     let Some(sp1) = rest.iter().position(|b| *b == b' ') else {
         write_console(usage);
         return None;
@@ -1477,9 +1487,8 @@ fn user_pass_op(
         pass_inline
     };
 
-    let default_admin = op == galexy_abi::USER_LOGIN
-        && name == b"admin"
-        && pass == ADMIN_DEFAULT_PASS;
+    let default_admin =
+        op == galexy_abi::USER_LOGIN && name == b"admin" && pass == ADMIN_DEFAULT_PASS;
     let result = if op == galexy_abi::USER_LOGIN {
         user_login(name, pass)
     } else {
@@ -1712,14 +1721,7 @@ fn spawn_and_prompt(cwd: &Cwd, program: &[u8], arg: &[u8], grants: u64, wait_exi
         LAST_STATUS.store(code, Ordering::Relaxed);
     } else if wait_exit {
         let waited = wait(Cap::from_bits(result.value));
-        LAST_STATUS.store(
-            if waited.ok {
-                waited.value
-            } else {
-                1
-            },
-            Ordering::Relaxed,
-        );
+        LAST_STATUS.store(if waited.ok { waited.value } else { 1 }, Ordering::Relaxed);
     } else {
         // Fire-and-forget: drop the Cap so an exited child can be reaped.
         let _ = close(Cap::from_bits(result.value));

@@ -89,6 +89,11 @@ pub const RIGHT_LIST: u8 = 4;
 pub const RIGHT_CREATE: u8 = 8;
 pub const RIGHT_REMOVE: u8 = 16;
 pub const RIGHT_ALL: u8 = RIGHT_READ | RIGHT_WRITE | RIGHT_LIST | RIGHT_CREATE | RIGHT_REMOVE;
+/// Task-local flag: revoke this card on the first card-based `su` it authorizes.
+pub const RIGHT_ONCE: u8 = 128;
+/// Stored in bit 15 of `Actor::max_objects` (quotas use the low 15 bits).
+/// Set while `admin`'s password is still the default. Not a GALF version bump.
+const MUST_CHANGE_BIT: u16 = 0x8000;
 
 #[derive(Clone, Copy)]
 pub struct Token {
@@ -168,9 +173,19 @@ impl Actor {
         self.used && n == name.len() && &self.name[..n] == name.as_bytes()
     }
 
+    fn object_limit(self) -> u32 {
+        (self.max_objects & !MUST_CHANGE_BIT) as u32
+    }
+
     fn set_password(&mut self, password: &[u8]) {
         crate::arch::rand::fill_bytes(&mut self.salt);
         hash_password(password, &self.salt, &mut self.pass_hash);
+        // Default admin password keeps the must-change flag across reboot.
+        if self.name_is(ADMIN_NAME) && password == ADMIN_DEFAULT_PASSWORD.as_bytes() {
+            self.max_objects |= MUST_CHANGE_BIT;
+        } else {
+            self.max_objects &= !MUST_CHANGE_BIT;
+        }
     }
 
     fn check_password(&self, password: &[u8]) -> bool {
@@ -1345,6 +1360,48 @@ pub fn holds_all(root: u16, tokens: &[Token; TOKEN_SLOTS], object: u16) -> bool 
     token_allows(&table, &cred, object, RIGHT_ALL)
 }
 
+/// True when actor `root` still has the default-admin must-change flag.
+pub fn actor_must_change(root: u16) -> bool {
+    if root == NO_OBJECT {
+        return false;
+    }
+    let table = TABLE.lock();
+    table.actors.iter().any(|a| {
+        a.used && a.root == root && a.max_objects & MUST_CHANGE_BIT != 0
+    })
+}
+
+/// AND inherited token rights with `mask`. `mask == 0` keeps every right.
+/// A token whose rights fall to zero is dropped.
+pub fn attenuate_tokens(tokens: &mut [Token; TOKEN_SLOTS], mask: u8) {
+    if mask == 0 {
+        return;
+    }
+    let mask = mask & RIGHT_ALL;
+    for token in tokens.iter_mut() {
+        if !token.is_live() {
+            continue;
+        }
+        let once = token.rights & RIGHT_ONCE;
+        token.rights = (token.rights & RIGHT_ALL & mask) | once;
+        if token.rights & RIGHT_ALL == 0 {
+            *token = Token::empty();
+        }
+    }
+}
+
+/// Drops a one-shot card that names `object` exactly. Returns whether one was removed.
+pub fn consume_once(tokens: &mut [Token; TOKEN_SLOTS], object: u16) -> bool {
+    let mut hit = false;
+    for token in tokens.iter_mut() {
+        if token.is_live() && token.object == object && token.rights & RIGHT_ONCE != 0 {
+            *token = Token::empty();
+            hit = true;
+        }
+    }
+    hit
+}
+
 /// Adds an actor and an empty root. Test and boot only.
 pub fn add_actor_named(name: &str, password: &[u8]) -> Result<u16, SysError> {
     if !password_ok(password) {
@@ -1381,7 +1438,7 @@ fn can_add_object(table: &Table, ai: usize) -> bool {
         return false;
     }
     let (used, _) = actor_usage(table, ai);
-    used < table.actors[ai].max_objects as u32
+    used < table.actors[ai].object_limit()
 }
 
 fn can_add_bytes(table: &Table, ai: usize, extra: u32) -> bool {
@@ -1447,14 +1504,15 @@ fn add_actor(table: &mut Table, name: &str, password: &[u8]) -> Result<u16, SysE
 
 /// Sets durable object/byte limits for actor `name`. Admin-only at the syscall layer.
 pub fn set_actor_quota(name: &str, max_objects: u16, max_bytes: u32) -> Result<(), SysError> {
-    if max_objects == 0 {
+    if max_objects == 0 || max_objects & MUST_CHANGE_BIT != 0 {
         return Err(SysError::BadValue);
     }
     let mut table = TABLE.lock();
     let Some(actor) = table.actors.iter_mut().find(|a| a.used && a.name_is(name)) else {
         return Err(SysError::NotFound);
     };
-    actor.max_objects = max_objects;
+    let keep = actor.max_objects & MUST_CHANGE_BIT;
+    actor.max_objects = max_objects | keep;
     actor.max_bytes = max_bytes;
     drop(table);
     mark_dirty();
@@ -1471,7 +1529,7 @@ pub fn actor_quota(name: &str) -> Result<(u32, u32, u32, u32), SysError> {
     let actor = &table.actors[ai];
     Ok((
         used_o,
-        actor.max_objects as u32,
+        actor.object_limit(),
         used_b,
         actor.max_bytes,
     ))
@@ -1491,7 +1549,7 @@ pub fn root_quota(root: u16) -> Result<(u32, u32, u32, u32), SysError> {
     let actor = &table.actors[ai];
     Ok((
         used_o,
-        actor.max_objects as u32,
+        actor.object_limit(),
         used_b,
         actor.max_bytes,
     ))
@@ -1750,13 +1808,17 @@ fn covers_object(table: &Table, ancestor: u16, object: u16) -> bool {
 }
 
 /// Whether `cred` holds `need` on `object` or an ancestor.
+///
+/// Admin is not a blanket bypass. `useradd` / `userdel` / `passwd` of
+/// another account stay admin-only via [`is_admin_root`]. Foreign trees
+/// need an explicit card (or `su`, which installs `ALL` on that root).
 fn token_allows(table: &Table, cred: &FsCred, object: u16, need: u8) -> bool {
-    // Logged-in admin may mint and use any card (operator seat).
-    if need != 0 && is_admin_root(cred.root) {
-        return true;
+    let need = need & RIGHT_ALL;
+    if need == 0 {
+        return false;
     }
     for token in &cred.tokens {
-        if !token.is_live() || token.rights & need != need {
+        if !token.is_live() || token.rights & RIGHT_ALL & need != need {
             continue;
         }
         if covers_object(table, token.object, object) {
@@ -2174,7 +2236,7 @@ pub(crate) fn rename(
         let (need_o, need_b) = subtree_usage(&table, src);
         let dest = new_actor as usize;
         let (have_o, have_b) = actor_usage(&table, dest);
-        if have_o.saturating_add(need_o) > table.actors[dest].max_objects as u32
+        if have_o.saturating_add(need_o) > table.actors[dest].object_limit()
             || have_b.saturating_add(need_b) > table.actors[dest].max_bytes
         {
             return Err(SysError::NoResource);
@@ -2361,13 +2423,10 @@ pub(crate) fn stat(
 }
 
 fn held_rights(table: &Table, cred: &FsCred, object: u16) -> u8 {
-    if is_admin_root(cred.root) {
-        return RIGHT_ALL;
-    }
     let mut rights = 0u8;
     for token in &cred.tokens {
         if token.is_live() && covers_object(table, token.object, object) {
-            rights |= token.rights;
+            rights |= token.rights & RIGHT_ALL;
         }
     }
     rights

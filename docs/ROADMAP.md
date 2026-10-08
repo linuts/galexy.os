@@ -229,9 +229,9 @@ demos, and kernel edges a reviewer will poke. Concrete checkboxes live in
 `TODO.md` Milestones **43–52** (ten milestones; subsections keep the full
 checklist). Style: `docs/STYLE.md`.
 
-1. **43 Auth hardening** — KDF/CSPRNG, no-echo prompts, lockout (landed),
-   idle logout polish, narrow admin bypass, monotonic time for cool-downs
-   (login-on-boot + `logout` already shipped with no guest account)
+1. **43 Auth hardening** ✅ — KDF/CSPRNG, no-echo prompts, lockout, idle
+   logout, kernel must-change, session generation, narrow admin bypass,
+   spawn rights mask. Monotonic time only (no wall clock). Argon2id waived
 2. **44 Sealed GALF** — volume key + AEAD; boot unlock
 3. **45 galfs for real usage** — extents/capacity, rename/truncate/stat,
    sync/refuse-format, quotas, host fsck, durable shares, single-indirect

@@ -228,7 +228,8 @@ pub const POWER_REBOOT: u64 = 1;
 
 /// `spawn` grant bit (`r10`): also give the new task the query caps.
 ///
-/// The child always receives the console. Any other bit is rejected.
+/// The child always receives the console. Bits other than the spawn
+/// flags and the rights mask ([`SPAWN_RIGHTS_BITS`]) are rejected.
 /// Keyboard, the loader, and power stay with the shell.
 pub const SPAWN_GRANT_QUERY: u64 = 1;
 /// `spawn` grant bit (`r10`): park the caller until the child exits
@@ -241,6 +242,13 @@ pub const SPAWN_WAIT: u64 = 2;
 /// [`SPAWN_WAIT`] — Cap-wait utilities set inherit and call
 /// [`Syscall::Wait`] on the returned Cap.
 pub const SPAWN_INHERIT: u64 = 4;
+/// `spawn` `r10` bits 8..15: when non-zero, each inherited token's rights
+/// are ANDed with this mask (0 in the mask keeps the parent's full set).
+/// Bare spawn (no [`SPAWN_INHERIT`] and no [`SPAWN_WAIT`]) stays empty
+/// regardless of the mask.
+pub const SPAWN_RIGHTS_SHIFT: u64 = 8;
+/// Mask covering [`SPAWN_RIGHTS_SHIFT`]..+8.
+pub const SPAWN_RIGHTS_BITS: u64 = 0xff << SPAWN_RIGHTS_SHIFT;
 
 /// `grant` rights (`RDX`): read the object.
 pub const TOKEN_READ: u64 = 1;
@@ -252,8 +260,12 @@ pub const TOKEN_LIST: u64 = 4;
 pub const TOKEN_CREATE: u64 = 8;
 /// `grant` rights: remove the object.
 pub const TOKEN_REMOVE: u64 = 16;
-/// Every galfs token right. Any other bit in `grant`'s `RDX` is `BadValue`.
+/// Every galfs token right. Any other bit in `grant`'s `RDX` is `BadValue`,
+/// except [`TOKEN_ONCE`].
 pub const TOKEN_ALL: u64 = TOKEN_READ | TOKEN_WRITE | TOKEN_LIST | TOKEN_CREATE | TOKEN_REMOVE;
+/// `grant` flag (`RDX` bit 7): the card is revoked on the first card-based
+/// `su` that it authorizes. Not a filesystem right; `share` rejects it.
+pub const TOKEN_ONCE: u64 = 128;
 
 /// `seek` whence (`RDX`): set the cursor to `offset`.
 pub const SEEK_SET: u64 = 0;
@@ -378,7 +390,7 @@ pub enum Syscall {
     /// blob address, `R9` = blob length (at most 256; **single arg blob**
     /// — no argv/env vector until a later ABI bump), `R10` = grant bits
     /// ([`SPAWN_GRANT_QUERY`], [`SPAWN_WAIT`], [`SPAWN_INHERIT`], or a
-    /// combination).
+    /// combination, plus an optional rights mask in [`SPAWN_RIGHTS_BITS`]).
     /// Returns: `SyscallResult` — without [`SPAWN_WAIT`], `rax` is a
     /// process Cap ([`PROC_CAP_BASE`] + slot) with [`CapRights::PROC_PARENT`];
     /// with [`SPAWN_WAIT`], `rax` is the child's exit code (the Cap is still
