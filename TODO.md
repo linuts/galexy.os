@@ -2230,7 +2230,7 @@ Programs today get one 256-byte argument, no heap, pipes only, and
 - [ ] **Utilities**: `head`, `tail`, `wc`, `grep` (fixed string),
       `uptime`, `ls -l` via `stat`; each with the one-line trust note
       STYLE requires
-- [ ] **Editor**: `nano`, a screen editor over one text file (16 KiB
+- [x] **Editor**: `nano`, a screen editor over one text file (16 KiB
       buffer in the program image). The shell passes
       `SPAWN_GRANT_KEYBOARD` and Cap-waits. `shell_nano_typing_e2e`
       covers insert, arrows, save, reload, and `cat`
