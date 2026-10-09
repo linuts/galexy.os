@@ -8,6 +8,14 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#85](https://github.com/linuts/galexy.os/pull/85) — M66 — per-task
+  `Map` heap (32 pages) with a `galexy-rt` bump allocator; `Clock`;
+  capability channels (`Channel` / `Send` / `Recv`); NUL-separated argv
+  in the 256-byte spawn blob; shell pipelines, `jobs` / `fg`, tab
+  completion, `history`, and Shift+PgUp scrollback; `head`, `tail`,
+  `wc`, `grep`, `uptime`, and `ls -l`. `Map`, `Clock`, `Channel`,
+  `Send`, and `Recv` stay experimental until Milestone 67. `Sleep` is
+  unchanged
 - [#84](https://github.com/linuts/galexy.os/pull/84) — M65 — `-M q35`
   by default; PCIe ECAM when ACPI publishes `MCFG`; virtio-blk 1.x with
   MSI-X (legacy I/O BAR logs `legacy IO BAR`); virtio-input keyboard

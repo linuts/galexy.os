@@ -13,8 +13,8 @@ what is true today and which milestone closes the gap.
 | **Secure** | Capabilities everywhere (26 syscalls, no ambient PID / fd); PBKDF2 passwords, lockout, idle logout, must-change; sealed dual-slot GALF (ChaCha20 + HMAC); W^X user maps, NX, guard pages, kstack canary, stack/secret wipe; TOCTOU-safe copies; lock-order table; audit lines without secrets; zero `static mut`; SMEP / SMAP / UMIP when CPUID reports them; kernel KASLR in P4 indexes 1..=24; Spectre v1 mask on dispatch; per-actor KDF cost (GALF v12) | KPTI / IBRS / MDS / CET waived for v1.0 (single-tenant guest, kernel half stays mapped; `THREAT.md`) |
 | **Fast** | Deadline one-shot LAPIC, tickless idle, idle steal, park/wake for sleep / keyboard / pipe / virtio-blk; IF=0 syscall path never allocates; console budget; release profile (`opt-level = 3`, fat LTO); KVM when `/dev/kvm` is writable; `test-bench` numbers in `PERF.md`; pipe ends move at spawn | PCID and a new heap allocator waived (`PERF.md`: yield does not switch CR3 and does not allocate). ATA PIO stays the legacy disk fallback. Desktop-class throughput is a non-goal |
 | **Modern only** | `-M q35` default; PCIe ECAM when `MCFG` is present; virtio 1.x + MSI-X; virtio-input keyboard; HPET (else PIT) calibration with a CPUID 0x15/0x16 cross-check; x2APIC and TSC-deadline when CPUID reports them; 8259 mask-only when the FADT says the pair is absent | Named fallbacks stay: PS/2, PIO IDE on `-M pc`, legacy virtio I/O BAR, port PCI config. QEMU TCG through 8.2 does not enumerate x2APIC; TCG still does not enumerate TSC-deadline. 5-level paging, huge user pages, USB, GPU beyond GOP, and network stay out (Phase 10 / non-goals) |
-| **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, one pipeline, glob; 13 utilities (including `nano`); galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; gxc hello | No user heap, argv, clock read, or IPC beyond pipes; one pipeline shape; no background jobs → **66**. Shutdown bypasses init; no service table → **67**. Network and USB → **Phase 10** |
-| **Ready** | 78 QEMU test kernels, 106 runner boots (includes `nano`, `test-bench`, legacy virtio, and PS/2 typing), host suites green; CI workflow (`host` + `qemu` jobs, release images); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 and 63–65 closed (`review-rc1` tag is the owner's call). Next: the **v1.0 gate** via **66 → 67** |
+| **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, pipelines, background jobs, tab completion; utilities including `nano`, `head`, `tail`, `wc`, `grep`, `uptime`; per-task heap, argv, `Clock`, capability channels; galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; gxc hello | Shutdown bypasses init; no service table → **67**. Network and USB → **Phase 10** |
+| **Ready** | 80 QEMU test kernels, 109 runner boots (includes `nano`, `test-userheap`, `test-channel`, `test-bench`, legacy virtio, and PS/2 typing), host suites green; CI workflow (`host` + `qemu` jobs, release images); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 and 63–66 closed (`review-rc1` tag is the owner's call). Next: the **v1.0 gate** via **67** |
 
 Order of work: **51 → 52** (`review-rc1`), then **63 → 64 → 65 → 66 →
 67** (`v1.0`). Security first because every later change should land
@@ -391,10 +391,11 @@ the machine.
    TSC-deadline and x2APIC when CPUID reports them, 8259 mask-only when
    the FADT says the pair is absent. PIT, i8042, PIO IDE, legacy virtio,
    and `-M pc` stay as named fallbacks with one regression case each
-4. **66 Userland completeness** — user heap (`Map`) + `galexy-rt`
+4. **66 Userland completeness** ✅ — user heap (`Map`) + `galexy-rt`
    allocator, argv vector, `Clock`, capability channels carrying Caps,
    N-stage pipelines and background jobs, tab completion, scrollback,
-   `head` / `tail` / `wc` / `grep` / `uptime` / `ls -l`
+   `head` / `tail` / `wc` / `grep` / `uptime` / `ls -l`. `Map`, `Clock`,
+   `Channel`, `Send`, and `Recv` stay experimental until 67
 5. **67 Init owns shutdown and services** — ordered shutdown through
    init, service table with backoff, `svc`, session id on the seat Cap,
    ABI freeze for process Caps / `Map` / `Clock` / `Channel`; the

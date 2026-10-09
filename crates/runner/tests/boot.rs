@@ -2506,6 +2506,11 @@ const PIPE_GLOB_KEYS: &[(&str, &str)] = &[
 
 /// Pipelines, `uptime`, `ls -l`, `history`, and a background job.
 const USERLAND_KEYS: &[(&str, &str)] = &[
+    ("b", "b"),
+    ("a", "a"),
+    ("n", "n"),
+    ("tab", "banner.txt "),
+    ("ret", ": command not found"),
     ("e", "e"),
     ("c", "c"),
     ("h", "h"),

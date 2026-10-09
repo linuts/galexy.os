@@ -86,7 +86,7 @@ system is the preemptive thread/user-task rotation.
 
 | Clock | Source | Use |
 | --- | --- | --- |
-| Monotonic | `timer_ticks()` (≈ 1 ms units) | Auth cool-downs, sleep, uptime, audits |
+| Monotonic | `timer_ticks()` (≈ 1 ms units) | Auth cool-downs, sleep, `Clock`, uptime, audits |
 | Wall clock | Optional / waived | Not required for scheduling |
 
 Rules reviewers need:

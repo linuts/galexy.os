@@ -1045,7 +1045,7 @@ IRQ that already has IF=0) around the acquire.
 
 | Lock | May hold while taking | IRQ-gate |
 | --- | --- | --- |
-| `THREADS` | galfs `TABLE`, then `VOLUME_KEY`, then `VOLUME_PASS` | yes |
+| `THREADS` | galfs `TABLE`, then `VOLUME_KEY`, then `VOLUME_PASS`, then `CHANS` | yes |
 | galfs `TABLE` | `DISK_BUF` only while encoding; not `THREADS` | yes, on the syscall path |
 | `VOLUME_KEY` | `VOLUME_PASS` | with the caller |
 | `LOCKOUT` | nothing above | yes; never under `THREADS` or `TABLE` |
@@ -1056,6 +1056,7 @@ IRQ that already has IF=0) around the acquire.
 | Keyboard queue | nothing else (drop warning takes `DMESG` after the queue lock drops) | IRQ may push; readers gate |
 | `DMESG` | nothing else | with `serial_println!`; never acquired before `THREADS` |
 | COM1 `SERIAL1` | nothing (received bytes are delivered after it drops) | TX path gates; the receive IRQ takes it |
+| `CHANS` | nothing else | yes; only after `THREADS` |
 | `SCHED`, `RAMDISK`, `PIPES`, `PENDING_SPAWN` | not `THREADS` | yes when called from preemptable code |
 | Shootdown handler | **no lock** | runs at IPI; initiator holds none across the broadcast |
 
@@ -1159,6 +1160,7 @@ main image and are listed at the end.
 | `test-ata` | `ata_absent_returns_unsupported` | M45 ATA error propagation |
 | `test-users`, `test-mustchange`, `test-lockout`, `test-idle`, `test-unlock` | `users_test_passes`, `mustchange_test_passes`, `lockout_test_passes`, `idle_test_passes`, `unlock_test_passes` | M37 / M42 / M43 auth, M44 sealed unlock |
 | `test-pipe` | `pipe_test_passes` | M36 pipes + `give`, M57 block/wake |
+| `test-userheap`, `test-channel` | `userheap_test_passes`, `channel_test_passes` | M66 per-task `Map` budget and reap, `Clock`, channel send/recv and `give` |
 | `test-proccap`, `test-selfcap`, `test-procgive`, `test-procbudget`, `test-capforge`, `test-orphan` | `proccap_test_passes`, `selfcap_test_passes`, `procgive_test_passes`, `procbudget_test_passes`, `capforge_test_passes`, `orphan_test_passes` | M47 process Caps and forge battery |
 | `test-init`, `test-jobcap` | `init_test_passes`, `jobcap_test_passes` | M53 init orphan root, M55 job Cap / Ctrl-C |
 | `test-sleep`, `test-idle` | `sleep_test_passes`, `idle_test_passes` | M56 time and deadlines, M58 policy freeze |
@@ -1173,6 +1175,18 @@ Host suites (no QEMU): `galexy-abi` (table integrity), `galexy-core`
 (`Ring`, tar, `parse_path` exhaustive sweep), `galexy-crypto`
 (vectors), `galexy-galf` (slot round trip, generation monotonicity,
 token algebra properties), `galfs-fsck`, `gxc`, `gxld`.
+
+## User heap, clock, and channels (Milestone 66)
+
+`Map` appends NX|RW|user pages 512 MiB above the task's image base, at
+most 32 pages. The syscall returns the new base. Reap walks that P4
+slot, so the frames return with the tree. `galexy-rt` bumps an
+allocator over the region; `dealloc` does not unmap. `Clock` reads
+`timer_ticks` and does not change `Sleep`. `Channel` / `Send` / `Recv`
+are in `docs/PROCESS.md`: one queued message, up to 256 bytes and two
+file Caps, `Recv` parks. All five stay experimental until Milestone 67.
+`SPAWN_NO_FG` (r10 bit 5) keeps a background spawn off the TTY's Ctrl-C
+slot until `fg` Cap-waits it.
 
 ## Process Caps (Milestone 47)
 
