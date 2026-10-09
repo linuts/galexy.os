@@ -2434,6 +2434,98 @@ fn shell_util_typing_e2e() {
     util_typing_e2e_on("galexy-os");
 }
 
+/// `nano note`: type two lines, move with the arrows, save, leave, reopen,
+/// append `!`, save again, then `cat` the file. The status marker
+/// `@line,col@` is 1-based and is reprinted on every redraw, so each key
+/// syncs on the marker from that redraw.
+#[test]
+fn shell_nano_typing_e2e() {
+    nano_typing_e2e_on("galexy-os");
+}
+
+/// Same keystrokes on the `gxld`-linked ramdisk.
+#[test]
+fn gxld_image_nano_typing_e2e() {
+    nano_typing_e2e_on("galexy-os-gxld");
+}
+
+const NANO_KEYS: &[(&str, &str)] = &[
+    ("n", "n"),
+    ("a", "a"),
+    ("n", "n"),
+    ("o", "o"),
+    ("spc", " "),
+    ("n", "n"),
+    ("o", "o"),
+    ("t", "t"),
+    ("e", "e"),
+    ("ret", "@1,1@"),
+    ("h", "@1,2@"),
+    ("i", "@1,3@"),
+    ("left", "@1,2@"),
+    ("right", "@1,3@"),
+    ("ret", "@2,1@"),
+    ("y", "@2,2@"),
+    ("o", "@2,3@"),
+    ("ctrl+o", "Wrote 5"),
+    ("ctrl+x", "admin@galexy> "),
+    ("n", "n"),
+    ("a", "a"),
+    ("n", "n"),
+    ("o", "o"),
+    ("spc", " "),
+    ("n", "n"),
+    ("o", "o"),
+    ("t", "t"),
+    ("e", "e"),
+    ("ret", "@1,1@"),
+    ("ctrl+e", "@1,3@"),
+    ("shift+1", "@1,4@"),
+    ("ctrl+o", "Wrote 6"),
+    ("ctrl+x", "admin@galexy> "),
+    ("c", "c"),
+    ("a", "a"),
+    ("t", "t"),
+    ("spc", " "),
+    ("n", "n"),
+    ("o", "o"),
+    ("t", "t"),
+    ("e", "e"),
+    ("ret", "hi!\nyo\n"),
+];
+
+fn nano_typing_e2e_on(image_name: &str) {
+    let keys = with_login(NANO_KEYS);
+    let serial = boot_and_type(
+        &image(image_name),
+        &keys,
+        "[boot] main loop ready",
+        "hi!\nyo\n",
+        Duration::from_millis(30),
+        Duration::from_secs(240),
+    );
+    assert!(
+        serial.contains("Wrote 5"),
+        "nano did not save the first buffer; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("Wrote 6"),
+        "nano did not save the reopened buffer; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("hi!\nyo\n"),
+        "cat did not print the edited file; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("nano: keyboard denied"),
+        "nano was spawned without the keyboard grant; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[pf] ring-3 task fault"),
+        "nano faulted; serial:\n{serial}"
+    );
+}
+
 /// Milestone 69 differential: the `galexy-os-gxld` image carries init,
 /// shell, hello and every util re-linked by `gxld` from the exact objects
 /// and rlibs rustc hands `rust-lld`. Same keystrokes, same output.

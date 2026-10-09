@@ -118,7 +118,8 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(SPAWN_GRANT_QUERY, 1);
     assert_eq!(SPAWN_WAIT, 2);
     assert_eq!(SPAWN_INHERIT, 4);
-    assert_eq!(SPAWN_WITH_CAPS, 8);
+    assert_eq!(SPAWN_GRANT_KEYBOARD, 8);
+    assert_eq!(SPAWN_WITH_CAPS, 16);
     assert_eq!(SPAWN_CAP_SHIFT, 16);
     assert_eq!(SPAWN_CAP_NONE, 0xF);
     assert_eq!(SPAWN_RIGHTS_SHIFT, 8);

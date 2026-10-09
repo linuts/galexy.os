@@ -747,9 +747,10 @@ snapshot (no cursor; the syscall renders into a stack buffer so it does
 not allocate). The files snapshot is the ramdisk's regular names, then each
 galfs path the task's tokens may list (`Desktop/`, `dan@Desktop/notes`),
 one per line. The shell keeps the current directory and accepts a leading
-`/` plus `owner@` on the first component. `echo`, `cat`, `touch`, `mkdir`, `rm`, and `ls` are ramdisk
+`/` plus `owner@` on the first component. `echo`, `cat`, `nano`, `touch`, `mkdir`, `rm`, and `ls` are ramdisk
 programs: the shell composes the path and `spawn`s them. `ls` and `rm`
 also receive the query grant, so they can read the files snapshot.
+`nano` also receives the keyboard grant and the shell Cap-waits on it.
 `cd` stays in the shell, because that path lives there. A program name
 on its own is a launch: `spawn` on the loader cap (EXEC) parks the
 caller (`STATE_WAITING`) until the main loop has loaded the ELF, then
@@ -759,14 +760,16 @@ after they finish; bare program names (`hello`, `linger`) drop the Cap
 (fire-and-forget). `SPAWN_WAIT` still parks until exit as a convenience
 (Cap remains installed). `r8`/`r9` are an optional argument, at most 256
 bytes, copied onto the child's stack (`rdi` is the address, `rsi` the
-length). `r10` bits are `SPAWN_GRANT_QUERY`, `SPAWN_WAIT`, and/or
-`SPAWN_INHERIT`. Any other bit is `BadValue`.
+length). `r10` bits are `SPAWN_GRANT_QUERY`, `SPAWN_WAIT`,
+`SPAWN_INHERIT`, and/or `SPAWN_GRANT_KEYBOARD` (bit 3). Any other bit
+outside the rights mask is `BadValue`.
 User `spawn` rejects the F-key shell names (`shell`…`shell12`) and
 rejects a name that already has a live task (`NoResource`), so typing
 `shell` cannot start a second keyboard-less shell that spins. The child
 always receives the console, and it writes the console of the task that
-spawned it. Keyboard, the loader, and power stay with the shell once it
-is logged in. Boot starts one shell on each F-key, pinned to the BSP,
+spawned it. `SPAWN_GRANT_KEYBOARD` also gives the child the keyboard
+so an interactive program (`nano`) can read keys while the shell
+Cap-waits. The loader and power stay with the shell once it is logged in. Boot starts one shell on each F-key, pinned to the BSP,
 logged out (pre-login grants, no tokens, login banner with 1-based TTY).
 Password login restores loader/query (and power for admin). F1's shell
 is named `shell`; the others are `shell2` through `shell12`. F1–F12

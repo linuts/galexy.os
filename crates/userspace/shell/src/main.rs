@@ -7,7 +7,8 @@
 //! Bare launches share this console — there is no background job.
 //! `echo text | cat` is a pipe moved into the children at spawn. A `*` word expands to
 //! names in the current directory from the files snapshot.
-//! `echo`, `cat`, `touch`, `mkdir`, `rm`, and `ls` are those utilities.
+//! `echo`, `cat`, `nano`, `touch`, `mkdir`, `rm`, and `ls` are those utilities.
+//! `nano` also receives the keyboard grant and Cap-waits, so it can edit.
 //! The kernel keeps the status bar and the screen, and loads this shell
 //! again if it faults. The current directory lives here and starts over
 //! at `/` after a restart. Archive names stay at `/`. A path may begin
@@ -412,6 +413,7 @@ fn show_help() {
     help_row(b"echo [text]", b"print, or echo text >|>> file");
     help_row(b"echo $?", b"last Cap-wait exit status");
     help_row(b"cat <path>", b"print file");
+    help_row(b"nano <path>", b"edit a file (Ctrl-O save, Ctrl-X exit)");
     help_row(b"touch <path>", b"create empty file");
     help_row(b"mkdir <path>", b"create directory");
     help_row(b"rm <path>", b"remove file or empty dir");
@@ -941,6 +943,10 @@ fn dispatch(
         cat(cwd, name);
         return None;
     }
+    if let Some(name) = arg_of(line, b"nano") {
+        nano(cwd, name);
+        return None;
+    }
     if let Some(name) = arg_of(line, b"touch") {
         touch(cwd, name);
         return None;
@@ -1331,6 +1337,23 @@ fn redirection(rest: &[u8]) -> Option<(&[u8], &[u8], bool)> {
         return Some((trim(&rest[..at]), trim(&rest[at + 3..]), false));
     }
     None
+}
+
+fn nano(cwd: &Cwd, name: &[u8]) {
+    let name = trim(name);
+    if name.is_empty() || !path_arg_ok(name) {
+        write_console(b"nano: usage: nano <path>\n");
+        prompt(cwd);
+        return;
+    }
+    let mut path = [0u8; PATH_MAX];
+    let Some(n) = compose(cwd, name, false, &mut path) else {
+        write_console(b"nano: path too long\n");
+        prompt(cwd);
+        return;
+    };
+    let grants = galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_KEYBOARD;
+    spawn_and_prompt(cwd, b"nano", &path[..n], grants, true);
 }
 
 fn cat(cwd: &Cwd, name: &[u8]) {
