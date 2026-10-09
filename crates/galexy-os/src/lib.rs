@@ -105,6 +105,17 @@ pub fn init() {
 /// bare metal simply parks after the write.
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    // Interrupts off: nothing may preempt the report, and a panic inside an
+    // IRQ-gated section must not be re-entered by its own timer. Then drop
+    // any hold this CPU had on the UART / dmesg so the line always lands —
+    // silence after the last serial line must mean a deadlock, never a
+    // panic that could not print (galexy.os#86).
+    x86_64::instructions::interrupts::disable();
+    // SAFETY: panic path; this handler never returns to a lock holder.
+    unsafe {
+        drivers::serial::force_unlock_for_panic();
+        drivers::dmesg::force_unlock_for_panic();
+    }
     serial_println!("[PANIC] {}", info);
     let expected = EXPECTED_PANIC.lock().take();
     let location = info.location().map(|loc| loc.file());

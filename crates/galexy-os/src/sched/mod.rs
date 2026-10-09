@@ -2193,14 +2193,10 @@ fn transfer_orphans_to_init(threads: &mut [Thread], dead_slot: u8, dead_index: u
         }
         return;
     };
-    let mut moved = alloc::vec::Vec::new();
-    for slot in threads[dead_index].procs.iter_mut() {
-        if let Some(handle) = slot.take() {
-            moved.push(handle);
-        }
-    }
+    // Take the whole array (Copy): no heap allocation under THREADS.
+    let moved = core::mem::replace(&mut threads[dead_index].procs, [None; MAX_PROC_CAPS]);
     let ii = init_slot as usize - 1;
-    for handle in moved {
+    for handle in moved.into_iter().flatten() {
         let ci = handle.child_slot as usize;
         if ci == 0 || ci > threads.len() {
             continue;
@@ -5243,10 +5239,15 @@ pub fn wake_pipe_waiters(id: u8) {
         let mut threads = THREADS.lock();
         // Alternate reader/writer passes: a completed write frees data for
         // readers, and a completed read frees space for writers.
+        // Fixed-size waiter lists: this runs under THREADS on the IF=0
+        // syscall path, where a heap allocation must not happen (it can
+        // grow the heap and broadcast while the lock is held).
         for _ in 0..MAX_THREADS {
-            let mut readers = alloc::vec::Vec::new();
-            let mut writers = alloc::vec::Vec::new();
-            for (i, t) in threads.iter().enumerate() {
+            let mut readers = [0usize; MAX_THREADS];
+            let mut writers = [0usize; MAX_THREADS];
+            let mut nr = 0usize;
+            let mut nw = 0usize;
+            for (i, t) in threads.iter().enumerate().take(MAX_THREADS) {
                 if t.state.load(Ordering::Acquire) != STATE_WAITING {
                     continue;
                 }
@@ -5254,19 +5255,25 @@ pub fn wake_pipe_waiters(id: u8) {
                     continue;
                 }
                 match t.io_kind.load(Ordering::Acquire) {
-                    IO_PIPE_READ => readers.push(i),
-                    IO_PIPE_WRITE => writers.push(i),
+                    IO_PIPE_READ => {
+                        readers[nr] = i;
+                        nr += 1;
+                    }
+                    IO_PIPE_WRITE => {
+                        writers[nw] = i;
+                        nw += 1;
+                    }
                     _ => {}
                 }
             }
-            let before = readers.len() + writers.len();
+            let before = nr + nw;
             if before == 0 {
                 break;
             }
-            for i in readers {
+            for &i in &readers[..nr] {
                 complete_pipe_read(&mut threads, i);
             }
-            for i in writers {
+            for &i in &writers[..nw] {
                 complete_pipe_write(&mut threads, i);
             }
             let mut still = 0usize;

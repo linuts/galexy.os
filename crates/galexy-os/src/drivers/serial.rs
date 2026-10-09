@@ -25,6 +25,22 @@ fn serial1() -> &'static Mutex<Uart16550<PioBackend>> {
     SERIAL1.call_once(|| Mutex::new(unsafe { Uart16550::new_port(0x3F8).unwrap() }))
 }
 
+/// Panic path only: drops whatever hold `SERIAL1` is under so `[PANIC]`
+/// can print. A panic raised while this CPU held the UART (a `Display`
+/// impl inside `serial_println!`, say) would otherwise re-take the lock
+/// and go silent, and silence after the last line is indistinguishable
+/// from an IF=0 deadlock (galexy.os#86). Tearing another CPU's line at
+/// panic time is the lesser evil: the machine is about to exit.
+///
+/// # Safety
+/// Only from the panic handler, which never returns to the holder.
+pub unsafe fn force_unlock_for_panic() {
+    if let Some(uart) = SERIAL1.get() {
+        // SAFETY: caller contract above.
+        unsafe { uart.force_unlock() };
+    }
+}
+
 /// Initializes COM1 (8-N-1, FIFO on, receive interrupt armed).
 ///
 /// The I/O APIC route is wired later (`arch::ioapic`); until then the
