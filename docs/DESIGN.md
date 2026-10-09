@@ -793,8 +793,11 @@ load stays on the main loop because the loader allocates and a syscall
 runs with interrupts off.
 Without `SPAWN_WAIT`, the waiter is marked runnable when that load
 finishes (Cap bits in `rax`). With it, the child's exit wakes the
-waiter (exit code in `rax`). `wait(cap)` / `kill(cap)` are the Cap
-syscalls. If one of those
+waiter (exit code in `rax`). The child stays parked until that Cap is
+installed and, when waiting, until `wait_child_slot` names it — a
+short program on the other CPU would otherwise exit before the parent
+is linked, and the exit would wake nobody. `wait(cap)` / `kill(cap)`
+are the Cap syscalls. If one of those
 shells is not running or waiting, the main loop loads that shell again
 with the launcher grants and admin's root token. Other tasks keep
 running. The new shell starts at `/`. `power` on the power cap (POWER right) shuts the

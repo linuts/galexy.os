@@ -1793,7 +1793,11 @@ pub fn drain_spawn() {
     };
     // Seats share the `shell` ELF under twelve reserved names.
     let elf_name = if seat { "shell" } else { name };
-    let hold = cap0 != 0xFF;
+    // Always defer the first instruction. File Caps have to land first,
+    // and a `SPAWN_WAIT` parent must be linked (`wait_child_slot`) before
+    // the child can exit. Publishing early lets the other CPU run a short
+    // program to completion in the gap; the exit then wakes nobody and
+    // the parent parks forever (`test-soak`'s `hello`).
     let child_slot = if let Some(bytes) = ramdisk::find(elf_name) {
         let spawned = if seat {
             loader::spawn_launched_seat(
@@ -1804,7 +1808,7 @@ pub fn drain_spawn() {
                 tty,
                 fs,
                 waiter_slot,
-                hold,
+                true,
             )
         } else {
             loader::spawn_launched(
@@ -1815,7 +1819,7 @@ pub fn drain_spawn() {
                 tty,
                 fs,
                 waiter_slot,
-                hold,
+                true,
             )
         };
         match spawned {

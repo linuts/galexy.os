@@ -13,9 +13,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
   capability channels (`Channel` / `Send` / `Recv`); NUL-separated argv
   in the 256-byte spawn blob; shell pipelines, `jobs` / `fg`, tab
   completion, `history`, and Shift+PgUp scrollback; `head`, `tail`,
-  `wc`, `grep`, `uptime`, and `ls -l`. `Map`, `Clock`, `Channel`,
-  `Send`, and `Recv` stay experimental until Milestone 67. `Sleep` is
-  unchanged
+  `wc`, `grep`, `uptime`, and `ls -l`. Syscall spawn keeps the child
+  parked until the parent is linked, so `SPAWN_WAIT` cannot miss a
+  fast exit on the other CPU. `Map`, `Clock`, `Channel`, `Send`, and
+  `Recv` stay experimental until Milestone 67. `Sleep` is unchanged
 - [#84](https://github.com/linuts/galexy.os/pull/84) — M65 — `-M q35`
   by default; PCIe ECAM when ACPI publishes `MCFG`; virtio-blk 1.x with
   MSI-X (legacy I/O BAR logs `legacy IO BAR`); virtio-input keyboard
