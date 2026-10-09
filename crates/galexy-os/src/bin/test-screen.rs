@@ -143,6 +143,25 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         "last text row must be cleared by the scroll"
     );
 
+    // The scrolled-off 'A' stays in the spare grid rows. Shift+PageUp
+    // (set-1: shift 0x2A, PageUp E0 49) paints it back; PageDown returns
+    // to the live view, which is still blank at the top.
+    galexy_os::drivers::keyboard::add_scancode(0x2A);
+    galexy_os::drivers::keyboard::add_scancode(0xE0);
+    galexy_os::drivers::keyboard::add_scancode(0x49);
+    screen::apply_scrollback();
+    let restored = unsafe { region_max_intensity(addr, info, 0, 0, CHAR_WIDTH, 16) };
+    assert!(
+        restored >= 200,
+        "Shift+PageUp should show the scrolled glyph (intensity {restored})"
+    );
+    galexy_os::drivers::keyboard::add_scancode(0xE0);
+    galexy_os::drivers::keyboard::add_scancode(0x51);
+    screen::apply_scrollback();
+    let live_top = unsafe { region_max_intensity(addr, info, 0, 0, info.width, LINE_HEIGHT) };
+    assert_eq!(live_top, 0, "Shift+PageDown must return to the live view");
+    galexy_os::drivers::keyboard::add_scancode(0xAA);
+
     let status_y = (rows - 1) * LINE_HEIGHT;
     let status = unsafe { region_max_intensity(addr, info, 0, status_y, CHAR_WIDTH, 16) };
     assert!(

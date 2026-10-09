@@ -13,6 +13,7 @@
 use core::arch::asm;
 use core::cell::UnsafeCell;
 use core::panic::PanicInfo;
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 use galexy_abi::{Cap, CapRights, Syscall, SyscallResult};
 
@@ -584,6 +585,46 @@ pub unsafe fn init_arg(ptr: *const u8, len: usize) {
         }
         *STARTUP_ARG.len.get() = n;
     }
+    // Probe stdout before `main` opens anything, so slot 0 is not mistaken
+    // for a pipe the program itself created.
+    init_stdio();
+}
+
+/// One NUL-separated argument from [`args`].
+pub struct Args {
+    rest: &'static [u8],
+}
+
+impl Iterator for Args {
+    type Item = &'static [u8];
+
+    fn next(&mut self) -> Option<&'static [u8]> {
+        loop {
+            if self.rest.is_empty() {
+                return None;
+            }
+            if let Some(i) = self.rest.iter().position(|b| *b == 0) {
+                let head = &self.rest[..i];
+                self.rest = &self.rest[i + 1..];
+                if head.is_empty() {
+                    continue;
+                }
+                return Some(head);
+            }
+            let head = self.rest;
+            self.rest = &[];
+            return Some(head);
+        }
+    }
+}
+
+/// NUL-separated arguments from the spawn blob.
+///
+/// No interior NUL means one argument, so a binary protocol such as
+/// `echo`'s mode byte still arrives as a single slice. Empty pieces and
+/// a trailing NUL are skipped. There is no environment vector.
+pub fn args() -> Args {
+    Args { rest: arg() }
 }
 
 /// The argument the launcher passed, or an empty slice.
@@ -607,6 +648,220 @@ pub fn yield_now() -> SyscallResult {
 pub fn sleep_ms(ms: u64) -> SyscallResult {
     syscall(Syscall::Sleep as u64, ms, 0, 0)
 }
+
+/// Grows this task's heap by `pages` 4 KiB frames.
+///
+/// On success, `value` is the base virtual address of the new pages.
+/// Experimental until Milestone 67.
+pub fn map_pages(pages: u64) -> SyscallResult {
+    syscall(Syscall::Map as u64, pages, 0, 0)
+}
+
+/// Monotonic milliseconds since boot (the same counter as [`sleep_ms`]).
+///
+/// Experimental until Milestone 67. `sleep` stays the stable wait.
+pub fn clock_ms() -> u64 {
+    let got = syscall(Syscall::Clock as u64, 0, 0, 0);
+    if got.ok {
+        got.value
+    } else {
+        0
+    }
+}
+
+/// Creates a capability channel. On success, `out` is `[end0, end1]`.
+///
+/// Experimental until Milestone 67.
+pub fn channel(out: &mut [u64; 2]) -> SyscallResult {
+    syscall(Syscall::Channel as u64, out.as_mut_ptr() as u64, 0, 0)
+}
+
+/// Queues one channel message. `cap0` / `cap1` are file Cap bits to move,
+/// or `0` for none. Does not park. Experimental until Milestone 67.
+pub fn chan_send(cap: Cap, bytes: &[u8], cap0: u64, cap1: u64) -> SyscallResult {
+    syscall_r8r9(
+        Syscall::Send as u64,
+        cap.bits(),
+        bytes.as_ptr() as u64,
+        bytes.len() as u64,
+        cap0,
+        cap1,
+    )
+}
+
+/// Takes one channel message into `buf`, or parks until one arrives.
+///
+/// `caps_out` receives two Cap words when the message carries them. Pass
+/// `None` to refuse a message that has Caps. Experimental until Milestone 67.
+pub fn chan_recv(cap: Cap, buf: &mut [u8], caps_out: Option<&mut [u64; 2]>) -> SyscallResult {
+    let caps_addr = match caps_out {
+        Some(slot) => slot.as_mut_ptr() as u64,
+        None => 0,
+    };
+    syscall_r8r9(
+        Syscall::Recv as u64,
+        cap.bits(),
+        buf.as_mut_ptr() as u64,
+        buf.len() as u64,
+        caps_addr,
+        0,
+    )
+}
+
+fn syscall_r8r9(number: u64, a0: u64, a1: u64, a2: u64, r8: u64, r9: u64) -> SyscallResult {
+    let value: u64;
+    let ok: u64;
+    // SAFETY: same syscall entry as [`syscall`]. r8/r9 are the extra args;
+    // rcx/r11 are clobbered by the instruction.
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") number => value,
+            inlateout("rdx") a2 => ok,
+            in("rdi") a0,
+            in("rsi") a1,
+            in("r8") r8,
+            in("r9") r9,
+            lateout("rcx") _,
+            lateout("r11") _,
+            options(nostack),
+        );
+    }
+    SyscallResult { ok: ok != 0, value }
+}
+
+/// Where [`write_std`] sends bytes. `0xFF` is the console.
+static STDOUT_SLOT: AtomicU8 = AtomicU8::new(0xFF);
+
+/// Probes the file table for a pipe spawn installed as stdout.
+///
+/// Slot 1 writable means a middle pipeline stage (stdin in 0, stdout in 1).
+/// Slot 0 writable means a producer (stdout only). Otherwise the console.
+/// An empty write does not block.
+pub fn init_stdio() {
+    let probe = [0u8; 1];
+    let slot1 = Cap::new(galexy_abi::FILE_CAP_BASE + 1, CapRights::WRITE);
+    let mid = syscall(
+        Syscall::Write as u64,
+        slot1.bits(),
+        probe.as_ptr() as u64,
+        0,
+    );
+    if mid.ok {
+        STDOUT_SLOT.store(1, Ordering::Relaxed);
+        return;
+    }
+    let slot0 = Cap::new(galexy_abi::FILE_CAP_BASE, CapRights::WRITE);
+    let prod = syscall(
+        Syscall::Write as u64,
+        slot0.bits(),
+        probe.as_ptr() as u64,
+        0,
+    );
+    if prod.ok {
+        STDOUT_SLOT.store(0, Ordering::Relaxed);
+        return;
+    }
+    STDOUT_SLOT.store(0xFF, Ordering::Relaxed);
+}
+
+/// Writes to the stdout pipe when spawn installed one, else the console.
+pub fn write_std(bytes: &[u8]) -> SyscallResult {
+    let slot = STDOUT_SLOT.load(Ordering::Relaxed);
+    if slot == 0xFF {
+        return write_console(bytes);
+    }
+    let cap = Cap::new(
+        galexy_abi::FILE_CAP_BASE + u64::from(slot),
+        CapRights::WRITE,
+    );
+    let mut off = 0usize;
+    while off < bytes.len() {
+        let got = write(cap, &bytes[off..]);
+        if !got.ok {
+            return got;
+        }
+        let n = got.value as usize;
+        if n == 0 {
+            return SyscallResult {
+                ok: true,
+                value: off as u64,
+            };
+        }
+        off += n;
+    }
+    SyscallResult {
+        ok: true,
+        value: bytes.len() as u64,
+    }
+}
+
+/// Bump allocator over [`map_pages`]. `dealloc` does not unmap.
+struct BumpAlloc;
+
+static HEAP_CURSOR: AtomicUsize = AtomicUsize::new(0);
+static HEAP_END: AtomicUsize = AtomicUsize::new(0);
+static HEAP_PAGES: AtomicUsize = AtomicUsize::new(0);
+
+fn heap_align(value: usize, align: usize) -> usize {
+    let align = align.max(1);
+    (value + align - 1) & !(align - 1)
+}
+
+fn heap_grow() -> bool {
+    if HEAP_PAGES.load(Ordering::Relaxed) >= galexy_abi::USER_HEAP_PAGES as usize {
+        return false;
+    }
+    let got = map_pages(1);
+    if !got.ok {
+        return false;
+    }
+    let base = got.value as usize;
+    let end = HEAP_END.load(Ordering::Relaxed);
+    if HEAP_CURSOR.load(Ordering::Relaxed) == 0 {
+        HEAP_CURSOR.store(base, Ordering::Relaxed);
+        HEAP_END.store(base + 4096, Ordering::Relaxed);
+    } else if base == end {
+        HEAP_END.store(base + 4096, Ordering::Relaxed);
+    } else {
+        HEAP_PAGES.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    HEAP_PAGES.fetch_add(1, Ordering::Relaxed);
+    true
+}
+
+// SAFETY: one task owns this image. `alloc` returns null when the 32-page
+// budget is exhausted. `dealloc` intentionally leaks the mapping.
+unsafe impl core::alloc::GlobalAlloc for BumpAlloc {
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+        let size = layout.size();
+        let align = layout.align();
+        if size == 0 {
+            return align as *mut u8;
+        }
+        loop {
+            let cursor = HEAP_CURSOR.load(Ordering::Relaxed);
+            let end = HEAP_END.load(Ordering::Relaxed);
+            if cursor != 0 {
+                let aligned = heap_align(cursor, align);
+                let next = aligned.saturating_add(size);
+                if next >= aligned && next <= end {
+                    HEAP_CURSOR.store(next, Ordering::Relaxed);
+                    return aligned as *mut u8;
+                }
+            }
+            if !heap_grow() {
+                return core::ptr::null_mut();
+            }
+        }
+    }
+
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
+}
+
+#[global_allocator]
+static HEAP: BumpAlloc = BumpAlloc;
 
 /// Exits the calling task with `code` (never returns).
 pub fn exit(code: u64) -> ! {

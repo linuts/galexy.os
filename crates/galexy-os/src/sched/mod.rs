@@ -9,6 +9,7 @@
 //!   audit rule in `docs/DESIGN.md`: *locks held by preemptable code must be
 //!   held with interrupts off*.
 
+pub mod channel;
 pub mod context;
 pub mod demo;
 pub mod galfs;
@@ -190,19 +191,21 @@ const MAX_OPEN_FILES: usize = 8;
 
 /// Where an open file's bytes live. The per-task slot only keeps the cursor.
 #[derive(Clone, Copy)]
-enum FileBody {
+pub(crate) enum FileBody {
     /// Immutable archive bytes. The slice lives in the ramdisk.
     Archive(&'static [u8]),
     /// Index into [`galfs`] object table. The bytes are writable.
     Galfs(u16),
     /// Anonymous pipe end.
     Pipe { id: u8, end: pipe::PipeEnd },
+    /// Capability-channel endpoint (`0` or `1`).
+    Channel { id: u8, end: u8 },
 }
 
 /// One open file. Archive bytes live in the bootloader's ramdisk; galfs
 /// bytes live in the global table. Only the cursor is per-open.
 #[derive(Clone, Copy)]
-struct OpenFile {
+pub(crate) struct OpenFile {
     body: FileBody,
     offset: usize,
     /// Authoritative rights. The handle's upper half is a snapshot; a call
@@ -434,6 +437,11 @@ struct Thread {
     console_budget_tick: u64,
     /// Console bytes written during [`console_budget_tick`].
     console_budget_used: u32,
+    /// Heap pages this task has `map`ped (Milestone 66). Reap frees them
+    /// with the rest of the user tree.
+    heap_pages: u16,
+    /// Second user pointer for a parked channel `recv` (cap-out buffer).
+    io_extra: AtomicU64,
 }
 
 impl Thread {
@@ -715,8 +723,14 @@ pub fn reap() {
             // and Caps die with this task (legacy test path).
             let dead_slot = (i + 1) as u8;
             transfer_orphans_to_init(&mut threads, dead_slot, i);
-            // File/process caps die with the task. Bump gen so foreign Caps fail.
-            threads[i].files = [None; MAX_OPEN_FILES];
+            // File/process caps die with the task. Pipe and channel ends
+            // are closed so a peer is not stuck and the tables return to
+            // empty. Bump gen so foreign Caps fail.
+            for slot in threads[i].files.iter_mut() {
+                if let Some(file) = slot.take() {
+                    release_file(file);
+                }
+            }
             threads[i].procs = [None; MAX_PROC_CAPS];
             threads[i].cap_gen.fetch_add(1, Ordering::AcqRel);
             threads[i].exit_waited.store(false, Ordering::Relaxed);
@@ -759,6 +773,13 @@ pub fn reap() {
         drop(threads);
         if freed > 0 {
             serial_println!("[sched] reaped {} thread stack(s)", freed);
+            // Peers parked on a pipe or channel this task still held.
+            for id in 0..pipe::PIPE_SLOTS {
+                wake_pipe_waiters(id as u8);
+            }
+            for id in 0..channel::CHAN_SLOTS {
+                wake_channel_waiters(id as u8);
+            }
         }
     });
 }
@@ -851,6 +872,8 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
             last_input_tick: 0,
             console_budget_tick: 0,
             console_budget_used: 0,
+            heap_pages: 0,
+            io_extra: AtomicU64::new(0),
         });
         // The record is RUNNING before the poke. An idle owner otherwise
         // stays in `hlt` until its tickless deadline (up to a second).
@@ -924,6 +947,8 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             last_input_tick: 0,
             console_budget_tick: 0,
             console_budget_used: 0,
+            heap_pages: 0,
+            io_extra: AtomicU64::new(0),
         });
         serial_println!("[sched] thread '{}' ready (owner cpu {})", name, owner);
         let _ = _slot;
@@ -1211,6 +1236,8 @@ pub(crate) fn spawn_user_with_grants(
             last_input_tick: 0,
             console_budget_tick: 0,
             console_budget_used: 0,
+            heap_pages: 0,
+            io_extra: AtomicU64::new(0),
         });
         serial_println!(
             "[sched] user task '{}' ready (own tree cr3={:#x}, p4={}, code @ {:#x}, kstack top {:#x})",
@@ -1519,6 +1546,8 @@ struct PendingSpawn {
     cap0: u8,
     /// Second moved file, or `0xFF`.
     cap1: u8,
+    /// Do not publish the child as the TTY foreground (shell `cmd &`).
+    no_fg: bool,
     armed: bool,
 }
 
@@ -1538,6 +1567,7 @@ static PENDING_SPAWN: Mutex<PendingSpawn> = Mutex::new(PendingSpawn {
     waiter_slot: 0,
     cap0: 0xFF,
     cap1: 0xFF,
+    no_fg: false,
     armed: false,
 });
 
@@ -1560,6 +1590,7 @@ pub(crate) fn task_spawn(
     inherit: bool,
     rights_mask: u8,
     caps: [u8; 2],
+    no_fg: bool,
 ) -> Result<(), SysError> {
     if name.len() > 64 || arg.len() > ARG_MAX {
         return Err(SysError::BadValue);
@@ -1641,6 +1672,7 @@ pub(crate) fn task_spawn(
         pending.waiter_slot = slot as u8;
         pending.cap0 = caps[0];
         pending.cap1 = caps[1];
+        pending.no_fg = no_fg;
         // Seats start logged out (no cards). Utilities inherit the session.
         // Bare programs keep the root for path context but hold no cards.
         pending.fs = if seat {
@@ -1692,6 +1724,7 @@ pub fn drain_spawn() {
         let waiter_slot = pending.waiter_slot;
         let cap0 = pending.cap0;
         let cap1 = pending.cap1;
+        let no_fg = pending.no_fg;
         pending.armed = false;
         Some((
             len,
@@ -1708,6 +1741,7 @@ pub fn drain_spawn() {
             waiter_slot,
             cap0,
             cap1,
+            no_fg,
         ))
     });
     let Some((
@@ -1725,6 +1759,7 @@ pub fn drain_spawn() {
         waiter_slot,
         cap0,
         cap1,
+        no_fg,
     )) = queued
     else {
         return;
@@ -1842,15 +1877,18 @@ pub fn drain_spawn() {
             return;
         };
         // Milestone 55: seat (or any) spawn makes the child the TTY's
-        // foreground job Cap target for Ctrl-C.
-        if let Some(w) = threads.get(waiter_slot as usize - 1) {
-            let tty = w.tty as usize;
-            if tty < FG_SLOTS.len() {
-                let gen = threads[child_slot as usize - 1]
-                    .cap_gen
-                    .load(Ordering::Acquire);
-                FG_SLOTS[tty].store(child_slot, Ordering::Release);
-                FG_GENS[tty].store(gen, Ordering::Release);
+        // foreground job Cap target for Ctrl-C. `SPAWN_NO_FG` skips that
+        // so a background job is not what Ctrl-C kills.
+        if !no_fg {
+            if let Some(w) = threads.get(waiter_slot as usize - 1) {
+                let tty = w.tty as usize;
+                if tty < FG_SLOTS.len() {
+                    let gen = threads[child_slot as usize - 1]
+                        .cap_gen
+                        .load(Ordering::Acquire);
+                    FG_SLOTS[tty].store(child_slot, Ordering::Release);
+                    FG_GENS[tty].store(gen, Ordering::Release);
+                }
             }
         }
         if wait_exit {
@@ -2315,6 +2353,7 @@ fn task_read_inner(cap: Cap, dst: &mut [u8]) -> Result<IoOp, SysError> {
                     pipe::ReadResult::WouldBlock => IoOp::ParkPipe { id, read: true },
                 }
             }
+            FileBody::Channel { .. } => return Err(SysError::Unsupported),
         };
         if let IoOp::Ready(n) = op {
             if !matches!(file.body, FileBody::Pipe { .. }) {
@@ -2378,7 +2417,7 @@ pub(crate) fn task_write_ex(cap: Cap, src: &[u8]) -> Result<IoOp, SysError> {
                     pipe::WriteResult::Closed => Err(SysError::Unsupported),
                 }
             }
-            FileBody::Archive(_) => Err(SysError::Unsupported),
+            FileBody::Archive(_) | FileBody::Channel { .. } => Err(SysError::Unsupported),
         }
     })?;
     if galfs_wrote {
@@ -2548,7 +2587,9 @@ pub(crate) fn task_truncate(cap: Cap, new_len: u64) -> Result<(), SysError> {
                 }
                 Ok(())
             }
-            FileBody::Archive(_) | FileBody::Pipe { .. } => Err(SysError::Unsupported),
+            FileBody::Archive(_) | FileBody::Pipe { .. } | FileBody::Channel { .. } => {
+                Err(SysError::Unsupported)
+            }
         }
     })?;
     galfs::mark_dirty();
@@ -2578,6 +2619,304 @@ pub(crate) fn task_stat(name: &str, out: &mut [u8]) -> Result<usize, SysError> {
     })
 }
 
+/// Closes a pipe or channel end. Other bodies are just dropped.
+fn release_file(file: OpenFile) {
+    match file.body {
+        FileBody::Pipe { id, end } => pipe::close_end(id, end),
+        FileBody::Channel { id, end } => {
+            let held = channel::close_end(id, end);
+            for cap in held.into_iter().flatten() {
+                release_file(cap);
+            }
+        }
+        FileBody::Archive(_) | FileBody::Galfs(_) => {}
+    }
+}
+
+/// Grows the current task's heap by `pages`. See `docs/PROCESS.md`.
+pub(crate) fn task_map(pages: u64) -> Result<u64, SysError> {
+    if pages == 0 || pages > galexy_abi::USER_HEAP_PAGES {
+        return Err(SysError::BadValue);
+    }
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    let already = interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        Ok(thread.heap_pages)
+    })?;
+    if u64::from(already).saturating_add(pages) > galexy_abi::USER_HEAP_PAGES {
+        return Err(SysError::NoResource);
+    }
+    let base = galexy_abi::USER_IMAGE_BASE + loader::USER_IMAGE_WINDOW + u64::from(already) * 4096;
+    let mut mapped = 0u64;
+    for i in 0..pages {
+        let Some(frame) = mm::allocate_frame() else {
+            break;
+        };
+        // SAFETY: the frame is exclusively ours until it is mapped.
+        unsafe {
+            core::ptr::write_bytes(
+                mm::frame_virt(frame.start_address()).as_mut_ptr::<u8>(),
+                0,
+                4096,
+            );
+        }
+        let page = Page::containing_address(VirtAddr::new(base + i * 4096));
+        if mm::map_active_user_page(page, frame).is_err() {
+            mm::deallocate_frame(frame);
+            break;
+        }
+        mapped += 1;
+    }
+    if mapped == 0 {
+        return Err(SysError::NoResource);
+    }
+    interrupts::without_interrupts(|| {
+        if let Some(thread) = THREADS.lock().get_mut(slot - 1) {
+            thread.heap_pages = thread.heap_pages.saturating_add(mapped as u16);
+        }
+    });
+    if mapped < pages {
+        return Err(SysError::NoResource);
+    }
+    Ok(base)
+}
+
+/// Creates a channel and installs both endpoints on the caller.
+pub(crate) fn task_channel() -> Result<(Cap, Cap), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        let mut free = [usize::MAX; 2];
+        let mut nfree = 0usize;
+        for (i, slot) in thread.files.iter().enumerate() {
+            if slot.is_none() {
+                free[nfree] = i;
+                nfree += 1;
+                if nfree == 2 {
+                    break;
+                }
+            }
+        }
+        if nfree < 2 {
+            return Err(SysError::NoResource);
+        }
+        let id = channel::alloc()?;
+        let rights = CapRights::READ.union(CapRights::WRITE);
+        for (end, index) in [free[0], free[1]].into_iter().enumerate() {
+            thread.files[index] = Some(OpenFile {
+                body: FileBody::Channel { id, end: end as u8 },
+                offset: 0,
+                rights,
+            });
+        }
+        Ok((
+            Cap::new(galexy_abi::FILE_CAP_BASE + free[0] as u64, rights),
+            Cap::new(galexy_abi::FILE_CAP_BASE + free[1] as u64, rights),
+        ))
+    })
+}
+
+fn channel_end(thread: &Thread, cap: Cap) -> Result<(u8, u8), SysError> {
+    let index = file_slot(cap)?;
+    let file = thread.files[index].as_ref().ok_or(SysError::BadCap)?;
+    match file.body {
+        FileBody::Channel { id, end } => Ok((id, end)),
+        _ => Err(SysError::BadCap),
+    }
+}
+
+/// Queues one message. Caps named by `cap0` / `cap1` (`0` = none) move
+/// only when the queue accepts the message.
+pub(crate) fn task_send(cap: Cap, bytes: &[u8], cap0: u64, cap1: u64) -> Result<usize, SysError> {
+    if bytes.len() > galexy_abi::CHAN_MSG_MAX {
+        return Err(SysError::BadValue);
+    }
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    let id = interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        let (id, end) = channel_end(thread, cap)?;
+        let endpoint = file_slot(cap)?;
+        let file = thread.files[endpoint].as_ref().ok_or(SysError::BadCap)?;
+        if !file
+            .rights
+            .intersection(cap.rights())
+            .contains(CapRights::WRITE)
+        {
+            return Err(SysError::AccessDenied);
+        }
+        // Taken slots are restored on every failure, including a second
+        // cap that names the same slot as the first.
+        let mut moved: [Option<(usize, OpenFile)>; 2] = [None, None];
+        let outcome = (|| -> Result<u8, SysError> {
+            for (i, bits) in [cap0, cap1].into_iter().enumerate() {
+                if bits == 0 {
+                    continue;
+                }
+                let extra = Cap::from_bits(bits);
+                let index = file_slot(extra)?;
+                if index == endpoint || moved.iter().flatten().any(|(slot, _)| *slot == index) {
+                    return Err(SysError::BadValue);
+                }
+                let Some(file) = thread.files[index].take() else {
+                    return Err(SysError::BadCap);
+                };
+                if let FileBody::Channel { id: cid, .. } = file.body {
+                    if cid == id {
+                        thread.files[index] = Some(file);
+                        return Err(SysError::BadValue);
+                    }
+                }
+                moved[i] = Some((index, file));
+            }
+            // `OpenFile` is `Copy`. The channel stores these copies; the
+            // table slots stay empty. Dropping `moved` does not close them.
+            let caps = [
+                moved[0].map(|(_, file)| file),
+                moved[1].map(|(_, file)| file),
+            ];
+            channel::enqueue(id, end, bytes, caps)?;
+            Ok(id)
+        })();
+        if outcome.is_err() {
+            for item in moved.into_iter().flatten() {
+                thread.files[item.0] = Some(item.1);
+            }
+        }
+        outcome
+    })?;
+    wake_channel_waiters(id);
+    Ok(bytes.len())
+}
+
+/// Outcome of [`task_recv`].
+///
+/// The payload stays inline. Boxing it would allocate on the syscall path.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum RecvOp {
+    /// Message copied into `bytes` (`n` of them). `caps` are installed bits.
+    Ready {
+        /// Payload length.
+        n: usize,
+        /// Payload.
+        bytes: [u8; galexy_abi::CHAN_MSG_MAX],
+        /// New Cap bits, or 0.
+        caps: [u64; 2],
+    },
+    /// Peer closed, nothing queued.
+    Eof,
+    /// Caller is parked.
+    Park,
+}
+
+/// Receives one message or parks. `caps_out == 0` refuses a message that
+/// carries Caps (`BadBuffer`, message stays).
+pub(crate) fn task_recv(
+    cap: Cap,
+    addr: u64,
+    len: usize,
+    caps_out: u64,
+) -> Result<RecvOp, SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let (id, end) = {
+            let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+            if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+                return Err(SysError::BadCap);
+            }
+            let (id, end) = channel_end(thread, cap)?;
+            let file = thread.files[file_slot(cap)?]
+                .as_ref()
+                .ok_or(SysError::BadCap)?;
+            if !file
+                .rights
+                .intersection(cap.rights())
+                .contains(CapRights::READ)
+            {
+                return Err(SysError::AccessDenied);
+            }
+            (id, end)
+        };
+        channel::with_mut(id, |ch| {
+            match channel::pull(ch, end)? {
+                Ok(delivery) => {
+                    let need = delivery.caps.iter().filter(|c| c.is_some()).count();
+                    if need > 0 && caps_out == 0 {
+                        channel::unpull(ch, delivery);
+                        return Err(SysError::BadBuffer);
+                    }
+                    let free = threads[slot - 1]
+                        .files
+                        .iter()
+                        .filter(|s| s.is_none())
+                        .count();
+                    if need > free {
+                        channel::unpull(ch, delivery);
+                        return Err(SysError::NoResource);
+                    }
+                    let n = delivery.len.min(len);
+                    let mut bytes = [0u8; galexy_abi::CHAN_MSG_MAX];
+                    bytes[..n].copy_from_slice(&delivery.data[..n]);
+                    let mut caps = [0u64; 2];
+                    for (i, file) in delivery.caps.into_iter().enumerate() {
+                        let Some(file) = file else { continue };
+                        // `need <= free` was checked above, still holding
+                        // `THREADS`. `release_file` would re-lock `CHANS`.
+                        let Some(index) = threads[slot - 1].files.iter().position(|s| s.is_none())
+                        else {
+                            continue;
+                        };
+                        let rights = file.rights;
+                        threads[slot - 1].files[index] = Some(file);
+                        caps[i] = Cap::new(galexy_abi::FILE_CAP_BASE + index as u64, rights).bits();
+                    }
+                    Ok(RecvOp::Ready { n, bytes, caps })
+                }
+                Err(channel::Empty::Eof) => Ok(RecvOp::Eof),
+                Err(channel::Empty::Wait) => {
+                    park_io(
+                        &mut threads,
+                        slot,
+                        IO_CHAN_RECV,
+                        id,
+                        addr,
+                        len as u32,
+                        cap.bits(),
+                    );
+                    threads[slot - 1]
+                        .io_extra
+                        .store(caps_out, Ordering::Relaxed);
+                    Ok(RecvOp::Park)
+                }
+            }
+        })?
+    })
+}
+
 /// Drops one file capability belonging to the current task.
 ///
 /// Close is possession of the slot, not a READ: the index names the open
@@ -2598,7 +2937,7 @@ pub(crate) fn task_close(cap: Cap) -> Result<(), SysError> {
         });
     }
     let index = file_slot(cap)?;
-    let wake_id = interrupts::without_interrupts(|| {
+    let (wake_pipe, wake_chan) = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
         let Some(file) = thread.files[index].take() else {
@@ -2607,14 +2946,24 @@ pub(crate) fn task_close(cap: Cap) -> Result<(), SysError> {
         Ok(match file.body {
             FileBody::Pipe { id, end } => {
                 pipe::close_end(id, end);
-                Some(id)
+                (Some(id), None)
             }
-            _ => None,
+            FileBody::Channel { id, end } => {
+                let held = channel::close_end(id, end);
+                for cap in held.into_iter().flatten() {
+                    release_file(cap);
+                }
+                (None, Some(id))
+            }
+            _ => (None, None),
         })
     })?;
-    // Wake outside THREADS — `wake_pipe_waiters` takes the same lock.
-    if let Some(id) = wake_id {
+    // Wake outside THREADS — the wake helpers take the same lock.
+    if let Some(id) = wake_pipe {
         wake_pipe_waiters(id);
+    }
+    if let Some(id) = wake_chan {
+        wake_channel_waiters(id);
     }
     Ok(())
 }
@@ -2672,6 +3021,12 @@ pub(crate) fn task_wait(cap: Cap) -> Result<Option<u64>, SysError> {
         // Consume Cap into the park (abi: Cap stale after successful wait).
         let child_slot = handle.child_slot;
         threads[slot - 1].procs[pi] = None;
+        let tty = threads[slot - 1].tty as usize;
+        if tty < FG_COUNT {
+            // `fg` (and any Cap-wait) publishes this child for Ctrl-C.
+            FG_SLOTS[tty].store(child_slot, Ordering::Release);
+            FG_GENS[tty].store(gen, Ordering::Release);
+        }
         let waiter = &mut threads[slot - 1];
         waiter.wait_child_slot.store(child_slot, Ordering::Release);
         waiter.wait_for_exit.store(true, Ordering::Release);
@@ -3007,8 +3362,8 @@ pub(crate) fn task_give(cap: Cap, target: &str) -> Result<Cap, SysError> {
             // Put it back — target missing.
             if let Some(caller) = threads.get_mut(slot - 1) {
                 caller.files[index] = Some(file);
-            } else if let FileBody::Pipe { id, end } = file.body {
-                pipe::close_end(id, end);
+            } else {
+                release_file(file);
             }
             return Err(SysError::NotFound);
         };
@@ -3103,7 +3458,7 @@ pub(crate) fn task_seek(cap: Cap, offset: i64, whence: u64) -> Result<u64, SysEr
             FileBody::Galfs(obj) => {
                 galfs::with_file(obj, |o| o.len as usize).ok_or(SysError::BadCap)?
             }
-            FileBody::Pipe { .. } => return Err(SysError::Unsupported),
+            FileBody::Pipe { .. } | FileBody::Channel { .. } => return Err(SysError::Unsupported),
         };
         let base = match whence {
             galexy_abi::SEEK_SET => 0i64,
@@ -4279,6 +4634,8 @@ const IO_PIPE_READ: u8 = 2;
 const IO_PIPE_WRITE: u8 = 3;
 /// Virtio-blk request waiting for the used-ring interrupt.
 const IO_BLOCK: u8 = 4;
+/// Channel `recv` parked on an empty endpoint.
+const IO_CHAN_RECV: u8 = 5;
 
 fn clear_wait_fields(thread: &Thread) {
     thread.wait_child_slot.store(0, Ordering::Relaxed);
@@ -4289,6 +4646,7 @@ fn clear_wait_fields(thread: &Thread) {
     thread.io_addr.store(0, Ordering::Relaxed);
     thread.io_len.store(0, Ordering::Relaxed);
     thread.io_cap.store(0, Ordering::Relaxed);
+    thread.io_extra.store(0, Ordering::Relaxed);
 }
 
 fn park_io(
@@ -4309,6 +4667,7 @@ fn park_io(
     thread.io_addr.store(addr, Ordering::Relaxed);
     thread.io_len.store(len, Ordering::Relaxed);
     thread.io_cap.store(cap_bits, Ordering::Relaxed);
+    thread.io_extra.store(0, Ordering::Relaxed);
     thread.state.store(STATE_WAITING, Ordering::Release);
 }
 
@@ -4419,6 +4778,124 @@ fn copy_to_user_via(
         done += room;
     }
     true
+}
+
+/// Wake tasks parked in `recv` on channel `id`.
+pub fn wake_channel_waiters(id: u8) {
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let n = threads.len();
+        for i in 0..n {
+            if threads[i].state.load(Ordering::Acquire) != STATE_WAITING {
+                continue;
+            }
+            if threads[i].io_kind.load(Ordering::Acquire) != IO_CHAN_RECV {
+                continue;
+            }
+            if threads[i].io_pipe.load(Ordering::Acquire) != id {
+                continue;
+            }
+            complete_chan_recv(&mut threads, i);
+        }
+    });
+}
+
+/// One step of [`complete_chan_recv`] after the channel lock drops.
+///
+/// The payload stays inline. Boxing it would allocate on the wake path.
+#[allow(clippy::large_enum_variant)]
+enum ChanStep {
+    /// Queue still empty and the peer is open.
+    Stay,
+    /// Stamp this result and mark the waiter runnable.
+    Done(SyscallResult),
+    /// Copy `n` payload bytes and the two Cap words, then stamp `n`.
+    Payload {
+        n: usize,
+        bytes: [u8; galexy_abi::CHAN_MSG_MAX],
+        caps: [u64; 2],
+    },
+}
+
+fn finish_chan_waiter(thread: &Thread, result: SyscallResult) {
+    clear_wait_fields(thread);
+    stamp_waiter_frame(thread, result);
+    set_running(thread);
+}
+
+fn complete_chan_recv(threads: &mut [Thread], index: usize) {
+    let addr = threads[index].io_addr.load(Ordering::Acquire);
+    let len = threads[index].io_len.load(Ordering::Acquire) as usize;
+    let id = threads[index].io_pipe.load(Ordering::Acquire);
+    let cap = Cap::from_bits(threads[index].io_cap.load(Ordering::Acquire));
+    let caps_out = threads[index].io_extra.load(Ordering::Acquire);
+    let cr3 = threads[index].cr3.load(Ordering::Acquire);
+    let end = match channel_end(&threads[index], cap) {
+        Ok((cid, end)) if cid == id => end,
+        _ => {
+            finish_chan_waiter(&threads[index], SyscallResult::err(SysError::BadCap));
+            return;
+        }
+    };
+    let step = match channel::with_mut(id, |ch| -> Result<ChanStep, SysError> {
+        match channel::pull(ch, end)? {
+            Ok(delivery) => {
+                let need = delivery.caps.iter().filter(|c| c.is_some()).count();
+                if need > 0 && caps_out == 0 {
+                    let _ = channel::unpull(ch, delivery);
+                    return Ok(ChanStep::Done(SyscallResult::err(SysError::BadBuffer)));
+                }
+                let free = threads[index].files.iter().filter(|s| s.is_none()).count();
+                if need > free {
+                    let _ = channel::unpull(ch, delivery);
+                    return Ok(ChanStep::Done(SyscallResult::err(SysError::NoResource)));
+                }
+                let n = delivery.len.min(len);
+                let mut bytes = [0u8; galexy_abi::CHAN_MSG_MAX];
+                bytes[..n].copy_from_slice(&delivery.data[..n]);
+                let mut caps = [0u64; 2];
+                for (i, file) in delivery.caps.into_iter().enumerate() {
+                    let Some(file) = file else { continue };
+                    let Some(slot) = threads[index].files.iter().position(|s| s.is_none()) else {
+                        continue;
+                    };
+                    let rights = file.rights;
+                    threads[index].files[slot] = Some(file);
+                    caps[i] = Cap::new(galexy_abi::FILE_CAP_BASE + slot as u64, rights).bits();
+                }
+                Ok(ChanStep::Payload { n, bytes, caps })
+            }
+            Err(channel::Empty::Eof) => Ok(ChanStep::Done(SyscallResult::ok(0))),
+            Err(channel::Empty::Wait) => Ok(ChanStep::Stay),
+        }
+    }) {
+        Ok(Ok(step)) => step,
+        Ok(Err(err)) | Err(err) => ChanStep::Done(SyscallResult::err(err)),
+    };
+    match step {
+        ChanStep::Stay => {}
+        ChanStep::Done(result) => finish_chan_waiter(&threads[index], result),
+        ChanStep::Payload { n, bytes, caps } => {
+            let mut raw = [0u8; 16];
+            raw[..8].copy_from_slice(&caps[0].to_le_bytes());
+            raw[8..].copy_from_slice(&caps[1].to_le_bytes());
+            let root = PhysFrame::from_start_address(PhysAddr::new(cr3)).expect("waiter cr3");
+            // SAFETY: parked waiter's tree, not CR3-active. Phys-map copy.
+            let ok = unsafe {
+                crate::arch::mm::with_table(root, |mapper| {
+                    let data_ok = n == 0 || copy_to_user_via(mapper, addr, &bytes[..n]);
+                    let caps_ok = caps_out == 0 || copy_to_user_via(mapper, caps_out, &raw);
+                    data_ok && caps_ok
+                })
+            };
+            let result = if ok {
+                SyscallResult::ok(n as u64)
+            } else {
+                SyscallResult::err(SysError::BadBuffer)
+            };
+            finish_chan_waiter(&threads[index], result);
+        }
+    }
 }
 
 /// Wake pipe readers (data or EOF) / writers (space or closed).

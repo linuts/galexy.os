@@ -4,8 +4,9 @@
 //! Utilities spawn with `SPAWN_INHERIT`, then [`galexy_rt::wait`] on the
 //! child Cap so the prompt returns after they exit; a bare program name
 //! returns once the load finishes (Cap dropped) and keeps running.
-//! Bare launches share this console — there is no background job.
-//! `echo text | cat` is a pipe moved into the children at spawn. A `*` word expands to
+//! A bare launch shares this console. `cmd &` is a background job (`jobs`
+//! / `fg`); Ctrl-Z is not implemented. Pipelines are up to four stages
+//! joined by ` | `. A `*` word expands to
 //! names in the current directory from the files snapshot.
 //! `echo`, `cat`, `nano`, `touch`, `mkdir`, `rm`, and `ls` are those utilities.
 //! `nano` also receives the keyboard grant and Cap-waits, so it can edit.
@@ -22,7 +23,10 @@
 #![no_std]
 #![no_main]
 
-use core::sync::atomic::{AtomicU64, Ordering};
+extern crate alloc;
+
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
@@ -34,6 +38,54 @@ use galexy_rt::{
 
 /// Exit status of the last Cap-waited utility (or spawn failure).
 static LAST_STATUS: AtomicU64 = AtomicU64::new(0);
+/// Set for the command currently being dispatched when it ended with ` &`.
+static BACKGROUND: AtomicBool = AtomicBool::new(false);
+
+const JOB_MAX: usize = 4;
+const STAGE_MAX: usize = 4;
+
+#[derive(Clone, Copy)]
+struct Job {
+    caps: [u64; STAGE_MAX],
+    n: u8,
+    label: [u8; 48],
+    label_len: u8,
+}
+
+impl Job {
+    const fn empty() -> Self {
+        Self {
+            caps: [0; STAGE_MAX],
+            n: 0,
+            label: [0; 48],
+            label_len: 0,
+        }
+    }
+}
+
+struct JobTable {
+    jobs: [Job; JOB_MAX],
+    count: usize,
+    label: [u8; 64],
+    label_len: usize,
+}
+
+struct JobsCell(UnsafeCell<JobTable>);
+
+// The shell task is the only caller. Background children do not touch this.
+unsafe impl Sync for JobsCell {}
+
+static JOBS: JobsCell = JobsCell(UnsafeCell::new(JobTable {
+    jobs: [Job::empty(); JOB_MAX],
+    count: 0,
+    label: [0; 64],
+    label_len: 0,
+}));
+
+fn jobs_mut() -> &'static mut JobTable {
+    // SAFETY: one shell task; dispatch is not re-entered.
+    unsafe { &mut *JOBS.0.get() }
+}
 
 entry!(main);
 
@@ -419,12 +471,21 @@ fn show_help() {
     help_row(b"rm <path>", b"remove file or empty dir");
     help_row(b"cp <src> <dst>", b"copy");
     help_row(b"mv <src> <dst>", b"rename / move");
+    help_row(b"ls -l", b"size and kind");
+    help_row(b"head <name>", b"first 10 lines");
+    help_row(b"tail <name>", b"last 10 lines");
+    help_row(b"wc <name>", b"lines words bytes");
+    help_row(b"grep <text>", b"fixed string");
     help_row(b"stat <path>", b"metadata");
     help_row(b"truncate <path> <n>", b"set file length");
     help_row(b"sync", b"flush galfs to disk");
     write_console(b"\n");
 
     help_section(b"session");
+    help_row(b"jobs", b"background jobs");
+    help_row(b"fg", b"wait for the latest job");
+    help_row(b"history", b"numbered session lines");
+    help_row(b"uptime", b"milliseconds since boot");
     help_row(b"whoami", b"current user");
     help_row(b"users", b"list accounts");
     help_row(b"tokens", b"list access cards");
@@ -459,6 +520,7 @@ fn show_help() {
 
     help_section(b"keys");
     help_row(b"up / down", b"history (saved on logout)");
+    help_row(b"tab", b"complete a file name");
     help_row(b"left / right", b"move inside the line");
     help_row(b"Ctrl-A / Ctrl-E", b"start / end of the line");
     help_row(b"Ctrl-U", b"clear the line");
@@ -469,6 +531,8 @@ fn show_help() {
 
     write_console(b"notes\n");
     write_console(b"  echo text | cat    pipe the text through cat\n");
+    write_console(b"  cmd | cmd          up to four stages\n");
+    write_console(b"  cmd &              background (jobs / fg)\n");
     write_console(b"  *                  names in the current directory\n");
     write_console(b"  a bare program shares this console (no background)\n");
     write_console(b"  default admin/admin must passwd before other commands\n");
@@ -603,6 +667,15 @@ fn repl(kbd: Cap, cwd: &mut Cwd, must_change: &mut bool, history: &mut History) 
                         pos = len;
                     }
                     0x15 => editor_clear(
+                        &mut line,
+                        &mut len,
+                        &mut pos,
+                        &mut draft,
+                        &mut draft_len,
+                        &mut hist_idx,
+                    ),
+                    0x09 => tab_complete(
+                        cwd,
                         &mut line,
                         &mut len,
                         &mut pos,
@@ -849,6 +922,9 @@ fn dispatch(
     must_change: &mut bool,
     history: &mut History,
 ) -> Option<ReplEnd> {
+    let (line, bg) = strip_background(line);
+    BACKGROUND.store(bg, Ordering::Relaxed);
+    set_cmd_label(line);
     if line.is_empty() {
         prompt(cwd);
         return None;
@@ -871,6 +947,7 @@ fn dispatch(
         prompt(cwd);
         return None;
     }
+    set_cmd_label(line);
     // Compiled out of release images. The supervisor e2e boots a ramdisk
     // whose shell was built with `--features crash-seam`.
     #[cfg(feature = "crash-seam")]
@@ -881,6 +958,24 @@ fn dispatch(
         return None;
     }
     if try_pipeline(cwd, line) {
+        return None;
+    }
+    if line == b"jobs" {
+        show_jobs();
+        prompt(cwd);
+        return None;
+    }
+    if line == b"fg" {
+        fg_job(cwd);
+        return None;
+    }
+    if line == b"history" {
+        show_history(history);
+        prompt(cwd);
+        return None;
+    }
+    if line == b"uptime" {
+        launch_util(cwd, b"uptime", b"", false);
         return None;
     }
     if line == b"help" {
@@ -902,8 +997,15 @@ fn dispatch(
         prompt(cwd);
         return None;
     }
-    if line == b"ls" {
-        ls(cwd);
+    if let Some(rest) = arg_of(line, b"ls") {
+        if rest.is_empty() {
+            ls(cwd, false);
+        } else if rest == b"-l" {
+            ls(cwd, true);
+        } else {
+            write_console(b"ls: usage: ls [-l]\n");
+            prompt(cwd);
+        }
         return None;
     }
     if line == b"stats" {
@@ -941,6 +1043,22 @@ fn dispatch(
     }
     if let Some(name) = arg_of(line, b"cat") {
         cat(cwd, name);
+        return None;
+    }
+    if let Some(name) = arg_of(line, b"head") {
+        path_util(cwd, b"head", name);
+        return None;
+    }
+    if let Some(name) = arg_of(line, b"tail") {
+        path_util(cwd, b"tail", name);
+        return None;
+    }
+    if let Some(name) = arg_of(line, b"wc") {
+        path_util(cwd, b"wc", name);
+        return None;
+    }
+    if let Some(rest) = arg_of(line, b"grep") {
+        grep_cmd(cwd, rest);
         return None;
     }
     if let Some(name) = arg_of(line, b"nano") {
@@ -1077,30 +1195,37 @@ fn dispatch(
     None
 }
 
-/// `echo text | cat` — one pipe, two utilities. Each end moves into the
-/// child at spawn (`SPAWN_WITH_CAPS`), so neither utility polls for `give`.
+/// Up to four stages joined by ` | `. `echo text | cat` stays mode 3 so
+/// the text still lands in the pipe. Other stages get a NUL argv.
 fn try_pipeline(cwd: &Cwd, line: &[u8]) -> bool {
-    let Some(at) = find_slice(line, b" | ") else {
+    if find_slice(line, b" | ").is_none() {
         return false;
-    };
-    if find_slice(&line[at + 3..], b" | ").is_some() {
-        write_console(b"pipeline: one pipe only\n");
+    }
+    let mut stages: [&[u8]; STAGE_MAX] = [&[], &[], &[], &[]];
+    let mut n = 0usize;
+    let mut rest = line;
+    loop {
+        if n == STAGE_MAX {
+            write_console(b"pipeline: too many stages\n");
+            prompt(cwd);
+            return true;
+        }
+        if let Some(at) = find_slice(rest, b" | ") {
+            stages[n] = trim(&rest[..at]);
+            rest = trim(&rest[at + 3..]);
+            n += 1;
+        } else {
+            stages[n] = rest;
+            n += 1;
+            break;
+        }
+    }
+    if stages[..n].iter().any(|s| s.is_empty()) {
+        write_console(b"pipeline: empty stage\n");
         prompt(cwd);
         return true;
     }
-    let left = trim(&line[..at]);
-    let right = trim(&line[at + 3..]);
-    let Some(text) = arg_of(left, b"echo") else {
-        write_console(b"pipeline: usage: echo text | cat\n");
-        prompt(cwd);
-        return true;
-    };
-    if right != b"cat" {
-        write_console(b"pipeline: usage: echo text | cat\n");
-        prompt(cwd);
-        return true;
-    }
-    run_echo_cat(cwd, text);
+    run_pipeline(cwd, &stages[..n]);
     true
 }
 
@@ -1109,58 +1234,576 @@ fn file_slot(cap: Cap) -> u64 {
     cap.index().saturating_sub(galexy_abi::FILE_CAP_BASE)
 }
 
-fn run_echo_cat(cwd: &Cwd, text: &[u8]) {
-    let mut arg = [0u8; 2 + LINE_MAX];
-    arg[0] = 3;
-    arg[1] = 0;
-    let ncopy = text.len().min(LINE_MAX);
-    arg[2..2 + ncopy].copy_from_slice(&text[..ncopy]);
-    let mut ends = [0u64; 2];
-    let piped = pipe(&mut ends);
-    if !piped.ok {
-        write_console(b"pipeline: failed\n");
-        LAST_STATUS.store(1, Ordering::Relaxed);
-        prompt(cwd);
+fn strip_background(line: &[u8]) -> (&[u8], bool) {
+    if let Some(rest) = line.strip_suffix(b" &") {
+        (trim(rest), true)
+    } else {
+        (line, false)
+    }
+}
+
+fn set_cmd_label(line: &[u8]) {
+    let jobs = jobs_mut();
+    let n = line.len().min(jobs.label.len());
+    jobs.label[..n].copy_from_slice(&line[..n]);
+    jobs.label_len = n;
+}
+
+fn push_job(caps: &[u64]) -> bool {
+    if caps.is_empty() || caps.len() > STAGE_MAX {
+        return false;
+    }
+    let jobs = jobs_mut();
+    if jobs.count >= JOB_MAX {
+        return false;
+    }
+    let mut job = Job::empty();
+    job.n = caps.len() as u8;
+    job.caps[..caps.len()].copy_from_slice(caps);
+    let n = jobs.label_len.min(job.label.len());
+    job.label[..n].copy_from_slice(&jobs.label[..n]);
+    job.label_len = n as u8;
+    jobs.jobs[jobs.count] = job;
+    jobs.count += 1;
+    true
+}
+
+fn show_jobs() {
+    let jobs = jobs_mut();
+    if jobs.count == 0 {
+        write_console(b"jobs: none\n");
         return;
     }
-    let read_cap = Cap::from_bits(ends[0]);
-    let write_cap = Cap::from_bits(ends[1]);
-    let echo_grants = galexy_abi::SPAWN_INHERIT
-        | galexy_abi::SPAWN_WITH_CAPS
-        | (file_slot(write_cap) << galexy_abi::SPAWN_CAP_SHIFT)
-        | (galexy_abi::SPAWN_CAP_NONE << (galexy_abi::SPAWN_CAP_SHIFT + 4));
-    let echo_res = spawn_with(b"echo", &arg[..2 + ncopy], echo_grants);
-    if !echo_res.ok {
-        let _ = close(read_cap);
-        let _ = close(write_cap);
-        write_console(b"pipeline: failed\n");
-        LAST_STATUS.store(1, Ordering::Relaxed);
+    for (i, job) in jobs.jobs.iter().enumerate().take(jobs.count) {
+        write_console(b"[");
+        write_u64_dec((i + 1) as u64);
+        write_console(b"] ");
+        write_console(&job.label[..job.label_len as usize]);
+        write_console(b"\n");
+    }
+}
+
+fn fg_job(cwd: &Cwd) {
+    let taken = {
+        let jobs = jobs_mut();
+        if jobs.count == 0 {
+            None
+        } else {
+            jobs.count -= 1;
+            Some(jobs.jobs[jobs.count])
+        }
+    };
+    let Some(job) = taken else {
+        write_console(b"fg: no current job\n");
         prompt(cwd);
         return;
-    }
-    let echo_cap = Cap::from_bits(echo_res.value);
-    let cat_grants = galexy_abi::SPAWN_INHERIT
-        | galexy_abi::SPAWN_WITH_CAPS
-        | (file_slot(read_cap) << galexy_abi::SPAWN_CAP_SHIFT)
-        | (galexy_abi::SPAWN_CAP_NONE << (galexy_abi::SPAWN_CAP_SHIFT + 4));
-    let cat_res = spawn_with(b"cat", b"-", cat_grants);
-    if !cat_res.ok {
-        let _ = close(read_cap);
-        let _ = kill(echo_cap);
-        let _ = wait(echo_cap);
-        write_console(b"pipeline: failed\n");
-        LAST_STATUS.store(1, Ordering::Relaxed);
-        prompt(cwd);
-        return;
-    }
-    let cat_cap = Cap::from_bits(cat_res.value);
-    let _ = wait(echo_cap);
-    let cat_done = wait(cat_cap);
-    LAST_STATUS.store(
-        if cat_done.ok { cat_done.value } else { 1 },
-        Ordering::Relaxed,
-    );
+    };
+    wait_caps(&job.caps[..job.n as usize]);
     prompt(cwd);
+}
+
+fn show_history(history: &History) {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+    if history.count == 0 {
+        write_console(b"history: none\n");
+        return;
+    }
+    let mut lines: Vec<String> = Vec::new();
+    for i in 0..history.count {
+        let mut s = String::new();
+        s.push_str("  ");
+        push_dec(&mut s, (i + 1) as u64);
+        s.push_str("  ");
+        for &byte in &history.lines[i][..history.lens[i]] {
+            s.push(byte as char);
+        }
+        lines.push(s);
+    }
+    for line in &lines {
+        write_console(line.as_bytes());
+        write_console(b"\n");
+    }
+}
+
+fn push_dec(out: &mut alloc::string::String, mut n: u64) {
+    if n == 0 {
+        out.push('0');
+        return;
+    }
+    let mut tmp = [0u8; 20];
+    let mut i = tmp.len();
+    while n > 0 {
+        i -= 1;
+        tmp[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    for byte in &tmp[i..] {
+        out.push(*byte as char);
+    }
+}
+
+fn split_word(line: &[u8]) -> Option<(&[u8], &[u8])> {
+    let line = trim(line);
+    if line.is_empty() {
+        return None;
+    }
+    let at = line.iter().position(|b| *b == b' ').unwrap_or(line.len());
+    Some((&line[..at], trim(&line[at..])))
+}
+
+fn ls_arg(cwd: &Cwd, rest: &[u8], out: &mut [u8]) -> Option<usize> {
+    let rest = trim(rest);
+    if rest.is_empty() {
+        if cwd.len > out.len() {
+            return None;
+        }
+        out[..cwd.len].copy_from_slice(&cwd.buf[..cwd.len]);
+        return Some(cwd.len);
+    }
+    if rest != b"-l" {
+        return None;
+    }
+    if out.len() < 2 {
+        return None;
+    }
+    out[0] = b'-';
+    out[1] = b'l';
+    if cwd.len == 0 {
+        return Some(2);
+    }
+    if 3 + cwd.len > out.len() {
+        return None;
+    }
+    out[2] = 0;
+    out[3..3 + cwd.len].copy_from_slice(&cwd.buf[..cwd.len]);
+    Some(3 + cwd.len)
+}
+
+fn grep_arg(cwd: &Cwd, rest: &[u8], has_in: bool, out: &mut [u8]) -> Option<usize> {
+    let (pat, files) = split_word(rest)?;
+    if pat.is_empty() || pat.len() > out.len() {
+        return None;
+    }
+    out[..pat.len()].copy_from_slice(pat);
+    let mut n = pat.len();
+    let files = trim(files);
+    if files.is_empty() {
+        if has_in {
+            if n + 2 > out.len() {
+                return None;
+            }
+            out[n] = 0;
+            out[n + 1] = b'-';
+            n += 2;
+        }
+        return Some(n);
+    }
+    let mut paths = [0u8; 256];
+    let pn = join_paths(cwd, files, &mut paths)?;
+    if n + 1 + pn > out.len() {
+        return None;
+    }
+    out[n] = 0;
+    n += 1;
+    out[n..n + pn].copy_from_slice(&paths[..pn]);
+    n += pn;
+    if has_in && !words_have_dash(files) {
+        if n + 2 > out.len() {
+            return None;
+        }
+        out[n] = 0;
+        out[n + 1] = b'-';
+        n += 2;
+    }
+    Some(n)
+}
+
+fn join_stage(
+    cwd: &Cwd,
+    rest: &[u8],
+    has_in: bool,
+    compose_paths: bool,
+    out: &mut [u8; 256],
+) -> Option<usize> {
+    let rest = trim(rest);
+    if compose_paths {
+        if !has_in {
+            return join_paths(cwd, rest, out);
+        }
+        if words_have_dash(rest) || rest == b"-" {
+            return join_paths(cwd, rest, out);
+        }
+        let mut body = [0u8; 256];
+        let bn = if rest.is_empty() {
+            0
+        } else {
+            join_paths(cwd, rest, &mut body)?
+        };
+        if bn == 0 {
+            out[0] = b'-';
+            return Some(1);
+        }
+        if 2 + bn > out.len() {
+            return None;
+        }
+        out[0] = b'-';
+        out[1] = 0;
+        out[2..2 + bn].copy_from_slice(&body[..bn]);
+        return Some(2 + bn);
+    }
+    if has_in && !rest.starts_with(b"-") {
+        if rest.is_empty() {
+            out[0] = b'-';
+            return Some(1);
+        }
+        if 2 + rest.len() > out.len() {
+            return None;
+        }
+        out[0] = b'-';
+        out[1] = 0;
+        out[2..2 + rest.len()].copy_from_slice(rest);
+        return Some(2 + rest.len());
+    }
+    if rest.len() > out.len() {
+        return None;
+    }
+    out[..rest.len()].copy_from_slice(rest);
+    Some(rest.len())
+}
+
+fn words_have_dash(rest: &[u8]) -> bool {
+    Words::new(rest).any(|word| word == b"-")
+}
+
+fn join_paths(cwd: &Cwd, rest: &[u8], out: &mut [u8]) -> Option<usize> {
+    let mut n = 0usize;
+    let mut any = false;
+    for word in Words::new(rest) {
+        if word != b"-" && !path_arg_ok(word) {
+            return None;
+        }
+        let mut path = [0u8; PATH_MAX];
+        let pn = if word == b"-" {
+            path[0] = b'-';
+            1
+        } else {
+            compose(cwd, word, false, &mut path)?
+        };
+        let extra = usize::from(any);
+        if n + extra + pn > out.len() {
+            return None;
+        }
+        if any {
+            out[n] = 0;
+            n += 1;
+        }
+        out[n..n + pn].copy_from_slice(&path[..pn]);
+        n += pn;
+        any = true;
+    }
+    if any {
+        Some(n)
+    } else {
+        None
+    }
+}
+
+struct Words<'a> {
+    rest: &'a [u8],
+}
+
+impl<'a> Words<'a> {
+    fn new(rest: &'a [u8]) -> Self {
+        Self { rest: trim(rest) }
+    }
+}
+
+impl<'a> Iterator for Words<'a> {
+    type Item = &'a [u8];
+
+    fn next(&mut self) -> Option<&'a [u8]> {
+        self.rest = trim(self.rest);
+        if self.rest.is_empty() {
+            return None;
+        }
+        let at = self
+            .rest
+            .iter()
+            .position(|b| *b == b' ')
+            .unwrap_or(self.rest.len());
+        let word = &self.rest[..at];
+        self.rest = &self.rest[at..];
+        Some(word)
+    }
+}
+
+fn tab_complete(
+    cwd: &Cwd,
+    line: &mut [u8; LINE_MAX],
+    len: &mut usize,
+    pos: &mut usize,
+    draft: &mut [u8; LINE_MAX],
+    draft_len: &mut usize,
+    hist_idx: &mut Option<usize>,
+) {
+    if *pos > *len {
+        return;
+    }
+    let mut start = *pos;
+    while start > 0 && line[start - 1] != b' ' {
+        start -= 1;
+    }
+    let prefix_len = *pos - start;
+    let mut names = [[0u8; 64]; 16];
+    let mut nlens = [0usize; 16];
+    let mut nmatch = 0usize;
+    let mut snap = [0u8; 1024];
+    let got = read(files_cap(), &mut snap);
+    if !got.ok {
+        return;
+    }
+    let snap_n = (got.value as usize).min(snap.len());
+    let mut i = 0usize;
+    while i < snap_n && nmatch < names.len() {
+        let rest = &snap[i..snap_n];
+        let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());
+        if let Some(shown) = cwd_entry(cwd, &rest[..end]) {
+            let bare = shown.strip_suffix(b"/").unwrap_or(shown);
+            if bare.starts_with(&line[start..start + prefix_len]) && bare.len() <= 64 {
+                names[nmatch][..bare.len()].copy_from_slice(bare);
+                nlens[nmatch] = bare.len();
+                nmatch += 1;
+            }
+        }
+        i += end + 1;
+    }
+    if nmatch == 0 {
+        return;
+    }
+    let mut common = nlens[0];
+    for i in 1..nmatch {
+        let mut k = 0usize;
+        let limit = common.min(nlens[i]);
+        while k < limit && names[0][k] == names[i][k] {
+            k += 1;
+        }
+        common = k;
+    }
+    if common > prefix_len {
+        for &byte in &names[0][prefix_len..common] {
+            editor_insert(byte, line, len, pos, draft, draft_len, hist_idx);
+        }
+    }
+    if nmatch == 1 && *len < LINE_MAX && line.get((*pos).saturating_sub(1)) != Some(&b' ') {
+        editor_insert(b' ', line, len, pos, draft, draft_len, hist_idx);
+        return;
+    }
+    if nmatch > 1 && common == prefix_len {
+        write_console(b"\n");
+        for i in 0..nmatch {
+            write_console(&names[i][..nlens[i]]);
+            write_console(b"\n");
+        }
+        prompt(cwd);
+        if *len > 0 {
+            write_console(&line[..*len]);
+        }
+        move_left(*len - *pos);
+    }
+}
+
+fn cwd_entry<'a>(cwd: &Cwd, line: &'a [u8]) -> Option<&'a [u8]> {
+    if line.is_empty() {
+        return None;
+    }
+    let dir = &cwd.buf[..cwd.len];
+    if dir.is_empty() {
+        let slashes = line.iter().filter(|b| **b == b'/').count();
+        if slashes == 0 || (slashes == 1 && line.ends_with(b"/")) {
+            return Some(line);
+        }
+        return None;
+    }
+    if line.len() <= dir.len() + 1 || &line[..dir.len()] != dir || line[dir.len()] != b'/' {
+        return None;
+    }
+    let rest = &line[dir.len() + 1..];
+    let slashes = rest.iter().filter(|b| **b == b'/').count();
+    if slashes == 0 || (slashes == 1 && rest.ends_with(b"/")) {
+        Some(rest)
+    } else {
+        None
+    }
+}
+
+fn run_pipeline(cwd: &Cwd, stages: &[&[u8]]) {
+    let n = stages.len();
+    if !(2..=STAGE_MAX).contains(&n) {
+        write_console(b"pipeline: failed\n");
+        LAST_STATUS.store(1, Ordering::Relaxed);
+        prompt(cwd);
+        return;
+    }
+    let pipes = n - 1;
+    let mut ends = [[0u64; 2]; STAGE_MAX - 1];
+    for i in 0..pipes {
+        let piped = pipe(&mut ends[i]);
+        if !piped.ok {
+            for prev in &ends[..i] {
+                let _ = close(Cap::from_bits(prev[0]));
+                let _ = close(Cap::from_bits(prev[1]));
+            }
+            write_console(b"pipeline: failed\n");
+            LAST_STATUS.store(1, Ordering::Relaxed);
+            prompt(cwd);
+            return;
+        }
+    }
+    let mut args = [[0u8; 256]; STAGE_MAX];
+    let mut arg_len = [0usize; STAGE_MAX];
+    let mut progs: [&[u8]; STAGE_MAX] = [&[], &[], &[], &[]];
+    for (i, stage) in stages.iter().enumerate() {
+        let Some((prog, rest)) = split_word(stage) else {
+            close_pipe_ends(&ends[..pipes]);
+            write_console(b"pipeline: empty stage\n");
+            LAST_STATUS.store(1, Ordering::Relaxed);
+            prompt(cwd);
+            return;
+        };
+        progs[i] = prog;
+        let has_in = i > 0;
+        let has_out = i + 1 < n;
+        match stage_arg(cwd, prog, rest, has_in, has_out, &mut args[i]) {
+            Some(len) => arg_len[i] = len,
+            None => {
+                close_pipe_ends(&ends[..pipes]);
+                write_console(b"pipeline: failed\n");
+                LAST_STATUS.store(1, Ordering::Relaxed);
+                prompt(cwd);
+                return;
+            }
+        }
+    }
+    let bg = BACKGROUND.load(Ordering::Relaxed);
+    let mut spawned = [0u64; STAGE_MAX];
+    let mut spawned_n = 0usize;
+    for i in 0..n {
+        let stdin = if i > 0 { Some(ends[i - 1][0]) } else { None };
+        let stdout = if i + 1 < n { Some(ends[i][1]) } else { None };
+        let mut grants = pipe_grants(stdin, stdout);
+        if bg {
+            grants |= galexy_abi::SPAWN_NO_FG;
+        }
+        let res = spawn_with(progs[i], &args[i][..arg_len[i]], grants);
+        if !res.ok {
+            close_unmoved(i, n, &ends[..pipes]);
+            for cap in &spawned[..spawned_n] {
+                let cap = Cap::from_bits(*cap);
+                let _ = kill(cap);
+                let _ = wait(cap);
+            }
+            write_console(b"pipeline: failed\n");
+            LAST_STATUS.store(1, Ordering::Relaxed);
+            prompt(cwd);
+            return;
+        }
+        spawned[spawned_n] = res.value;
+        spawned_n += 1;
+    }
+    if bg {
+        if !push_job(&spawned[..spawned_n]) {
+            write_console(b"jobs: table full; waiting\n");
+            wait_caps(&spawned[..spawned_n]);
+        }
+        prompt(cwd);
+        return;
+    }
+    wait_caps(&spawned[..spawned_n]);
+    prompt(cwd);
+}
+
+fn wait_caps(caps: &[u64]) {
+    for (i, bits) in caps.iter().enumerate() {
+        let waited = wait(Cap::from_bits(*bits));
+        if i + 1 == caps.len() {
+            LAST_STATUS.store(if waited.ok { waited.value } else { 1 }, Ordering::Relaxed);
+        }
+    }
+}
+
+fn close_pipe_ends(ends: &[[u64; 2]]) {
+    for pair in ends {
+        let _ = close(Cap::from_bits(pair[0]));
+        let _ = close(Cap::from_bits(pair[1]));
+    }
+}
+
+/// Closes pipe ends that stage `failed` and later stages have not moved yet.
+fn close_unmoved(failed: usize, n: usize, ends: &[[u64; 2]]) {
+    let pipes = n.saturating_sub(1);
+    for (i, pair) in ends.iter().enumerate().take(pipes) {
+        if i >= failed {
+            let _ = close(Cap::from_bits(pair[1]));
+        }
+        if i + 1 >= failed {
+            let _ = close(Cap::from_bits(pair[0]));
+        }
+    }
+}
+
+fn pipe_grants(stdin: Option<u64>, stdout: Option<u64>) -> u64 {
+    let base =
+        galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_QUERY | galexy_abi::SPAWN_WITH_CAPS;
+    let (n0, n1) = match (stdin, stdout) {
+        (Some(read_end), Some(write_end)) => (
+            file_slot(Cap::from_bits(read_end)),
+            file_slot(Cap::from_bits(write_end)),
+        ),
+        (Some(read_end), None) => (
+            file_slot(Cap::from_bits(read_end)),
+            galexy_abi::SPAWN_CAP_NONE,
+        ),
+        (None, Some(write_end)) => (
+            file_slot(Cap::from_bits(write_end)),
+            galexy_abi::SPAWN_CAP_NONE,
+        ),
+        (None, None) => return galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_QUERY,
+    };
+    base | (n0 << galexy_abi::SPAWN_CAP_SHIFT) | (n1 << (galexy_abi::SPAWN_CAP_SHIFT + 4))
+}
+
+fn stage_arg(
+    cwd: &Cwd,
+    prog: &[u8],
+    rest: &[u8],
+    has_in: bool,
+    has_out: bool,
+    out: &mut [u8; 256],
+) -> Option<usize> {
+    if prog == b"echo" {
+        if has_in {
+            return None;
+        }
+        if !has_out {
+            return None;
+        }
+        if rest.len() + 2 > out.len() {
+            return None;
+        }
+        out[0] = 3;
+        out[1] = 0;
+        out[2..2 + rest.len()].copy_from_slice(rest);
+        return Some(2 + rest.len());
+    }
+    if prog == b"ls" {
+        return ls_arg(cwd, rest, out);
+    }
+    if prog == b"grep" {
+        return grep_arg(cwd, rest, has_in, out);
+    }
+    let paths = matches!(prog, b"cat" | b"head" | b"tail" | b"wc");
+    join_stage(cwd, rest, has_in, paths, out)
 }
 
 /// Copies `line` into `out`, expanding `*` words against the files snapshot.
@@ -1357,19 +2000,48 @@ fn nano(cwd: &Cwd, name: &[u8]) {
 }
 
 fn cat(cwd: &Cwd, name: &[u8]) {
+    path_util(cwd, b"cat", name);
+}
+
+fn path_util(cwd: &Cwd, program: &[u8], name: &[u8]) {
     let name = trim(name);
-    if !path_arg_ok(name) {
-        write_console(b"cat: usage: cat <name>\n");
+    if name.is_empty() {
+        write_console(program);
+        write_console(b": usage: ");
+        write_console(program);
+        write_console(b" <name>\n");
         prompt(cwd);
         return;
     }
-    let mut path = [0u8; PATH_MAX];
-    let Some(n) = compose(cwd, name, false, &mut path) else {
-        write_console(b"cat: path too long\n");
+    let mut arg = [0u8; 256];
+    let Some(n) = join_paths(cwd, name, &mut arg) else {
+        write_console(program);
+        write_console(b": path too long\n");
         prompt(cwd);
         return;
     };
-    launch_util(cwd, b"cat", &path[..n], false);
+    launch_util(cwd, program, &arg[..n], false);
+}
+
+fn grep_cmd(cwd: &Cwd, rest: &[u8]) {
+    let rest = trim(rest);
+    let Some((pat, _)) = split_word(rest) else {
+        write_console(b"grep: usage: grep <text> [name]\n");
+        prompt(cwd);
+        return;
+    };
+    if pat.is_empty() {
+        write_console(b"grep: usage: grep <text> [name]\n");
+        prompt(cwd);
+        return;
+    }
+    let mut arg = [0u8; 256];
+    let Some(n) = grep_arg(cwd, rest, false, &mut arg) else {
+        write_console(b"grep: path too long\n");
+        prompt(cwd);
+        return;
+    };
+    launch_util(cwd, b"grep", &arg[..n], false);
 }
 
 fn touch(cwd: &Cwd, name: &[u8]) {
@@ -2095,8 +2767,18 @@ fn cd(cwd: &mut Cwd, name: &[u8]) {
     prompt(cwd);
 }
 
-fn ls(cwd: &Cwd) {
-    launch_util(cwd, b"ls", &cwd.buf[..cwd.len], true);
+fn ls(cwd: &Cwd, long: bool) {
+    if !long {
+        launch_util(cwd, b"ls", &cwd.buf[..cwd.len], true);
+        return;
+    }
+    let mut arg = [0u8; 80];
+    let Some(n) = ls_arg(cwd, b"-l", &mut arg) else {
+        write_console(b"ls: path too long\n");
+        prompt(cwd);
+        return;
+    };
+    launch_util(cwd, b"ls", &arg[..n], true);
 }
 
 /// Starts the ramdisk program `name`. A missing name, or a file that is
@@ -2123,6 +2805,12 @@ fn launch_util(cwd: &Cwd, program: &[u8], arg: &[u8], query: bool) {
 }
 
 fn spawn_and_prompt(cwd: &Cwd, program: &[u8], arg: &[u8], grants: u64, wait_exit: bool) {
+    let bg = BACKGROUND.load(Ordering::Relaxed);
+    let grants = if bg {
+        grants | galexy_abi::SPAWN_NO_FG
+    } else {
+        grants
+    };
     let result = spawn_with(program, arg, grants);
     if !result.ok {
         write_console(program);
@@ -2143,6 +2831,12 @@ fn spawn_and_prompt(cwd: &Cwd, program: &[u8], arg: &[u8], grants: u64, wait_exi
             1
         };
         LAST_STATUS.store(code, Ordering::Relaxed);
+    } else if bg {
+        if !push_job(&[result.value]) {
+            write_console(b"jobs: table full; waiting\n");
+            let waited = wait(Cap::from_bits(result.value));
+            LAST_STATUS.store(if waited.ok { waited.value } else { 1 }, Ordering::Relaxed);
+        }
     } else if wait_exit {
         let waited = wait(Cap::from_bits(result.value));
         LAST_STATUS.store(if waited.ok { waited.value } else { 1 }, Ordering::Relaxed);

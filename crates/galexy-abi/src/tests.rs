@@ -111,6 +111,15 @@ fn reserved_caps_have_permanent_indexes() {
     assert!(matches!(SYSCALLS[22], Syscall::Unshare));
     assert!(matches!(SYSCALLS[23], Syscall::Wait));
     assert!(matches!(SYSCALLS[24], Syscall::Kill));
+    assert!(matches!(SYSCALLS[25], Syscall::Sleep));
+    assert!(matches!(SYSCALLS[26], Syscall::Map));
+    assert!(matches!(SYSCALLS[27], Syscall::Clock));
+    assert!(matches!(SYSCALLS[28], Syscall::Channel));
+    assert!(matches!(SYSCALLS[29], Syscall::Send));
+    assert!(matches!(SYSCALLS[30], Syscall::Recv));
+    assert_eq!(SPAWN_NO_FG, 32);
+    assert_eq!(USER_HEAP_PAGES, 32);
+    assert_eq!(CHAN_MSG_MAX, 256);
     assert_eq!(PROC_CAP_BASE, 0x40);
     assert_eq!(MAX_PROC_CAPS, 16);
     const _: () = assert!(PROC_CAP_BASE > FILE_CAP_BASE + 7);

@@ -78,6 +78,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         sched::drain_spawn();
         sched::poll_idle_logouts();
         screen::apply_tty_switch();
+        screen::apply_scrollback();
         if user_shell && !have_init {
             sched::ensure_shell();
         }

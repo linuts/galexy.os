@@ -1254,6 +1254,34 @@ fn fsck_test_passes() {
 }
 
 #[test]
+fn userheap_test_passes() {
+    let (code, serial) = boot(&image("test-userheap"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-userheap should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-userheap] passed"),
+        "test-userheap success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn channel_test_passes() {
+    let (code, serial) = boot(&image("test-channel"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-channel should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-channel] passed"),
+        "test-channel success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
 fn pipe_test_passes() {
     let (code, serial) = boot(&image("test-pipe"));
     assert_eq!(
@@ -2475,6 +2503,113 @@ const PIPE_GLOB_KEYS: &[(&str, &str)] = &[
     ("t", "t"),
     ("ret", "quiz\n"),
 ];
+
+/// Pipelines, `uptime`, `ls -l`, `history`, and a background job.
+const USERLAND_KEYS: &[(&str, &str)] = &[
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("z", "z"),
+    ("e", "e"),
+    ("d", "d"),
+    ("minus", "-"),
+    ("6", "6"),
+    ("6", "6"),
+    ("spc", " "),
+    ("shift+backslash", "|"),
+    ("spc", " "),
+    ("g", "g"),
+    ("r", "r"),
+    ("e", "e"),
+    ("p", "p"),
+    ("spc", " "),
+    ("z", "z"),
+    ("e", "e"),
+    ("d", "d"),
+    ("spc", " "),
+    ("shift+backslash", "|"),
+    ("spc", " "),
+    ("h", "h"),
+    ("e", "e"),
+    ("a", "a"),
+    ("d", "d"),
+    ("ret", "zed-66\n"),
+    ("u", "u"),
+    ("p", "p"),
+    ("t", "t"),
+    ("i", "i"),
+    ("m", "m"),
+    ("e", "e"),
+    ("ret", "uptime:"),
+    ("l", "l"),
+    ("s", "s"),
+    ("spc", " "),
+    ("minus", "-"),
+    ("l", "l"),
+    ("ret", "banner.txt"),
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("n", "n"),
+    ("o", "o"),
+    ("t", "t"),
+    ("e", "e"),
+    ("6", "6"),
+    ("6", "6"),
+    ("ret", "note66\n"),
+    ("h", "h"),
+    ("i", "i"),
+    ("s", "s"),
+    ("t", "t"),
+    ("o", "o"),
+    ("r", "r"),
+    ("y", "y"),
+    ("ret", "note66"),
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("h", "h"),
+    ("i", "i"),
+    ("spc", " "),
+    ("shift+7", "&"),
+    ("ret", "admin@galexy> "),
+    ("j", "j"),
+    ("o", "o"),
+    ("b", "b"),
+    ("s", "s"),
+    ("ret", "[1] echo"),
+];
+
+#[test]
+fn shell_userland_typing_e2e() {
+    let keys = with_login(USERLAND_KEYS);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "[1] echo",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    assert!(
+        serial.contains("zed-66\n"),
+        "pipeline did not print zed-66; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("uptime:"),
+        "uptime did not print; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[1] echo"),
+        "jobs did not list the background echo; serial:\n{serial}"
+    );
+}
 
 #[test]
 fn shell_pipeline_glob_typing_e2e() {

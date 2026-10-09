@@ -267,6 +267,11 @@ pub const SPAWN_GRANT_KEYBOARD: u64 = 8;
 /// those nibbles must be zero. Bit 3 is [`SPAWN_GRANT_KEYBOARD`], so this
 /// flag is bit 4.
 pub const SPAWN_WITH_CAPS: u64 = 16;
+/// `spawn` grant bit (`r10`, bit 5): do not make the child the TTY
+/// foreground job. The shell sets this for `cmd &`. `fg` Cap-wait is
+/// what publishes the job for Ctrl-C. Without the flag, spawn still
+/// installs the foreground slot (Milestone 55).
+pub const SPAWN_NO_FG: u64 = 32;
 /// `spawn` `r10` shift of the first moved file-slot index.
 pub const SPAWN_CAP_SHIFT: u64 = 16;
 /// Nibble in the [`SPAWN_CAP_SHIFT`] fields meaning "no second Cap".
@@ -420,12 +425,13 @@ pub enum Syscall {
     /// Args: `RDI = loader cap bits`, `RSI = user address of the name`,
     /// `RDX = byte count` (1..=64). The name is a **label**: ASCII
     /// alphanumeric plus `.` `_` `-` (no `/`). Optional: `R8` = argument
-    /// blob address, `R9` = blob length (at most 256; **single arg blob**
-    /// — no argv/env vector until a later ABI bump), `R10` = grant bits
+    /// blob address, `R9` = blob length (at most 256; NUL-separated argv,
+    /// one argument when there is no interior NUL; no env), `R10` = grant bits
     /// ([`SPAWN_GRANT_QUERY`], [`SPAWN_WAIT`], [`SPAWN_INHERIT`],
     /// [`SPAWN_GRANT_KEYBOARD`], [`SPAWN_WITH_CAPS`], or a combination,
-    /// plus an optional rights mask in [`SPAWN_RIGHTS_BITS`] and up to
-    /// two file-slot nibbles at [`SPAWN_CAP_SHIFT`]).
+    /// plus an optional rights mask in [`SPAWN_RIGHTS_BITS`], up to
+    /// two file-slot nibbles at [`SPAWN_CAP_SHIFT`], and
+    /// [`SPAWN_NO_FG`]).
     /// Returns: `SyscallResult` — without [`SPAWN_WAIT`], `rax` is a
     /// process Cap ([`PROC_CAP_BASE`] + slot) with [`CapRights::PROC_PARENT`];
     /// with [`SPAWN_WAIT`], `rax` is the child's exit code (the Cap is still
@@ -589,17 +595,74 @@ pub enum Syscall {
     ///
     /// **Stable** (Milestone 58 scheduler policy freeze).
     Sleep,
+    /// `map(pages)` — grow this task's heap by `pages` 4 KiB frames.
+    ///
+    /// Args: `RDI = page count` (`1..=`[`USER_HEAP_PAGES`]). No Cap.
+    /// Returns: `SyscallResult` (rax = base virtual address of the new
+    /// pages). Flags are present, writable, user, and no-execute. The
+    /// region starts at [`USER_IMAGE_BASE`] + 512 MiB and stops after
+    /// [`USER_HEAP_PAGES`]. Past that budget is `NoResource`. Reap
+    /// returns every frame. There is no unmap.
+    ///
+    /// **Experimental** until Milestone 67.
+    Map,
+    /// `clock()` — monotonic milliseconds, the same counter as `sleep`.
+    ///
+    /// Args: none. No Cap. Returns: `SyscallResult` (rax = `timer_ticks`).
+    /// Not a wall clock.
+    ///
+    /// **Experimental** until Milestone 67. `sleep` stays stable beside it.
+    Clock,
+    /// `channel(addr)` — create a capability channel; write two endpoint
+    /// Caps into a 16-byte user buffer.
+    ///
+    /// Args: `RDI = user address of 16 bytes`. Returns: `SyscallResult`
+    /// (rax = 0). Both Caps are READ|WRITE. One queued message per
+    /// channel. A full table or file table is `NoResource`. See
+    /// `docs/PROCESS.md`.
+    ///
+    /// **Experimental** until Milestone 67.
+    Channel,
+    /// `send(cap, addr, len, cap0, cap1)` — queue one message on a channel.
+    ///
+    /// Args: `RDI = endpoint cap`, `RSI = user bytes`, `RDX = length`
+    /// (`0..=`[`CHAN_MSG_MAX`]), `R8` / `R9` = file Cap bits to move
+    /// (`0` means none). Returns: `SyscallResult` (rax = bytes queued).
+    /// A message already queued is `NoResource` and the Caps stay put.
+    /// A closed peer is `Unsupported`. Does not park.
+    ///
+    /// **Experimental** until Milestone 67.
+    Send,
+    /// `recv(cap, addr, len, caps_out)` — take one message, or park.
+    ///
+    /// Args: `RDI = endpoint cap`, `RSI = user buffer`, `RDX = buffer
+    /// length`, `R8 = 16-byte cap-out buffer` (or `0` when the caller
+    /// will not accept Caps). Returns: `SyscallResult` (rax = bytes
+    /// copied). Empty + peer still open parks. Empty + peer closed is
+    /// `0`. If the message carries Caps and the receiver's file table
+    /// cannot hold them, the message stays queued and the result is
+    /// `NoResource`.
+    ///
+    /// **Experimental** until Milestone 67.
+    Recv,
 }
 
 /// Maximum bytes in a spawn program **name** (label). Matches the kernel
 /// name buffer; longer names are `BadValue`.
 pub const SPAWN_NAME_MAX: usize = 64;
-/// Maximum bytes in the single spawn **argument blob** (`r8`/`r9`).
+/// Maximum bytes in the spawn argument blob (`r8`/`r9`).
+///
+/// Milestone 66: the bytes are a NUL-separated argv. No interior NUL
+/// means one argument. No environment vector.
 pub const SPAWN_ARG_MAX: usize = 256;
+/// Pages one task may `map` for its heap (128 KiB).
+pub const USER_HEAP_PAGES: u64 = 32;
+/// Bytes one channel message may carry, not counting Caps.
+pub const CHAN_MSG_MAX: usize = 256;
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (lifting the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 26] = [
+pub const SYSCALLS: [Syscall; 31] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -626,6 +689,11 @@ pub const SYSCALLS: [Syscall; 26] = [
     Syscall::Wait,
     Syscall::Kill,
     Syscall::Sleep,
+    Syscall::Map,
+    Syscall::Clock,
+    Syscall::Channel,
+    Syscall::Send,
+    Syscall::Recv,
 ];
 
 /// Maximum `sleep(ms)` argument (one minute). Longer waits loop in userspace.
