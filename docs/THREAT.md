@@ -9,9 +9,10 @@ than waived, and the non-goals with a one-line reason each.
 spawn policy), `GALFS.md` (filesystem, sealed slots), and `PROCESS.md`
 (process Caps).
 
-Status: **review-rc1 bar** (Milestones 43–52). The `v1.0` bar adds
-Milestone 63 (CPU features, hostile-input sweep) on top; those items
-are listed below as *absent, tracked*, not as covered.
+Status: **review-rc1 bar** (Milestones 43–52) plus Milestone 63
+(CPU features, per-actor KDF cost, user-VA copies under SMAP). The
+`v1.0` bar still adds Milestones 64–67. Waivers for KPTI, IBRS, MDS,
+and CET are in [CPU features](#cpu-features) below.
 
 ## Assets
 
@@ -30,8 +31,8 @@ are listed below as *absent, tracked*, not as covered.
 
 | Adversary | Has | Wants | Verdict |
 | --- | --- | --- | --- |
-| **A1 Stolen disk** | a raw copy of `galfs.img` / the IDE slave, unlimited offline time | file bytes, password hashes, the volume key | **defended** — sealed GALF (`GALFS.md` → Sealed slots): random volume key, ChaCha20 + HMAC-SHA256 per slot, KEK from PBKDF2 of the volume passphrase. Raw dumps contain no plaintext; `galfs_disk_*` and `unlock_test_passes` assert refusal on a wrong passphrase. Bring-up passphrase `galfs` and 10 000 PBKDF2 iterations are a known weak default → Milestone 63 raises cost; the operator sets a real passphrase at first boot |
-| **A2 Malicious user program** | ring 3, any ramdisk binary spawned *bare* (no inherit), any syscall with any argument | crash the kernel, read another task, escalate to galfs | **defended** — per-task address spaces, W^X user maps, NX, guard pages, user-buffer page walk before every copy, Caps = kernel grant ∩ handle snapshot, empty token table on a bare spawn. Proven by `userfault`, `wx`, `capforge`, `badelf`, `negative`, `procbudget`, `treechurn`. The syscall promise is `SysError`, never a panic |
+| **A1 Stolen disk** | a raw copy of `galfs.img` / the IDE slave, unlimited offline time | file bytes, password hashes, the volume key | **defended** — sealed GALF (`GALFS.md` → Sealed slots): random volume key, ChaCha20 + HMAC-SHA256 per slot, KEK from PBKDF2 of the volume passphrase. Raw dumps contain no plaintext; `galfs_disk_*` and `unlock_test_passes` assert refusal on a wrong passphrase. Actor passwords store their PBKDF2 count (GALF v12): test and TCG boots write 10 000, a `--release` kernel under KVM writes 100 000, and `passwd` re-derives at the current default. The volume KEK stays at 10 000. The bring-up passphrase is still `galfs`; the operator sets a real passphrase at first boot |
+| **A2 Malicious user program** | ring 3, any ramdisk binary spawned *bare* (no inherit), any syscall with any argument | crash the kernel, read another task, escalate to galfs | **defended** — per-task address spaces, W^X user maps, NX, guard pages, SMEP / SMAP / UMIP when the CPU reports them, user-buffer page walk before every copy, `stac`/`clac` around user-VA copies, Caps = kernel grant ∩ handle snapshot, empty token table on a bare spawn. Proven by `userfault`, `wx`, `smep`, `smap`, `umip`, `capforge`, `badelf`, `negative`, `procbudget`, `treechurn`. The syscall promise is `SysError`, never a panic |
 | **A3 Malicious second seat** | a login on F2 while the victim is on F1; or a stolen-but-live seat before idle logout | the victim's files, the victim's session | **defended** — a password buys `RIGHT_ALL` on your own root only; everything else is a token the owner granted (`grant`/`share`/`su` card). Caps and tokens are per task, not per TTY. Confused-deputy rules in `cards_test_passes` (kernel) and `galexy_galf::cards` host property tests. Idle logout and lockout bound the live-seat window (`idle_test_passes`, `lockout_test_passes`) |
 | **A4 Hostile utility with inherit** | a ramdisk binary the shell spawns with `SPAWN_INHERIT` | the caller's whole tree, and for `nano` the seat's keystrokes (`SPAWN_GRANT_KEYBOARD`) | **accepted risk** — the ramdisk is trusted input (below). The rights mask in `r10` lets a caller attenuate what a utility inherits (`attenuate_tokens` is covered by the `galexy_galf::cards` host tests; no in-tree spawner sets the mask yet — the shell passes the full set). The shell sets the keyboard bit only for `nano` and Cap-waits, so the parent is not reading keys at the same time |
 | **A5 Keyboard flooder / console hog** | a seat, a tight loop | starve other seats, hide audit lines | **bounded, not security** — 512 B/tick console budget per task (`pathological_test_passes`: a 3 000-call flood is admitted at ≤ 512 × (ticks + 2) bytes and never errors), a 65-byte paste at the password prompt is refused and masked (`shell_password_paste_typing_e2e`), keyboard overflow drops newest and counts (`audit_console_test_passes`); quotas cap galfs objects and bytes per actor. Fairness mechanisms, not isolation guarantees |
@@ -45,7 +46,7 @@ Things the system believes without checking, each with the reason.
 | **Physical F1 / the hypervisor** | whoever can plug in a keyboard or edit the QEMU command line can also replace the disk image; no OS-level control changes that | — |
 | **Bootloader and firmware** (`bootloader` 0.11, BIOS or OVMF) | they map the kernel and hand over `BootInfo`; there is no secure boot or measured boot chain | — |
 | **Ramdisk publisher** | the tar is built by `runner/build.rs` from this repository's userspace crates; nothing on the running system can modify it | SHA-256 of the packed tar is printed at build (`cargo:warning=ramdisk.tar sha256=…`), exported as `GALEXY_RAMDISK_SHA256`, and re-measured by the kernel at boot (`test-ramdisk` prints it; `ramdisk_test_passes` asserts equality). There is **no allowlist and no signature**: a hash only proves the image the runner built is the image that booted |
-| **The kernel itself** | ring 0 has no further backstop (no SMEP/SMAP/UMIP, no KPTI) | Milestone 63 adds the hardware bits; today isolation is paging plus validated copies |
+| **The kernel itself** | SMEP, SMAP, and UMIP are on when CPUID reports them. KPTI is waived: the kernel half stays mapped in every tree (`CPU features` below) | `smep_test_passes`, `smap_test_passes`, `umip_test_passes` |
 | **`galexy-crypto`** | SHA-256, HMAC, PBKDF2, ChaCha20 are in-tree, unaudited implementations chosen for `no_std` and size | host tests against published vectors; constant-time `hash_eq` |
 | **RDRAND** | salts, volume keys, and nonces come from `arch::rand` (RDRAND with a tick-mixed fallback) | the fallback is weak by construction and only exists so a CPU without RDRAND still boots a test image |
 
@@ -57,10 +58,10 @@ What exists, which doc owns it, and the test that fails if it regresses.
 | --- | --- | --- |
 | Capabilities on day one; no fd table, no PIDs; rights = grant ∩ snapshot | `DESIGN.md` → sched/syscalls, `PROCESS.md` | `capforge_test_passes`, `selfcap`, `procgive`, `procbudget` |
 | Per-task address space, W^X, NX, guard page, kstack canary, stack and secret wipe on reap | `DESIGN.md` → Memory policy | `freshl4`, `wx`, `userfault`, `treechurn`, `reuse` |
-| User-buffer page walk before every copy; length caps on names, paths, passwords, writes | `DESIGN.md` → User pointers | `syscall_test_passes`, `badelf` (truncated inputs), `paths` |
+| User-buffer page walk before every copy; length caps on names, paths, passwords, writes; user-VA copies go through `arch::user_copy` (`stac`/`clac` when SMAP is on) | `DESIGN.md` → User pointers | `syscall_test_passes`, `smap_test_passes`, `badelf` (truncated inputs), `paths` |
 | ELF validation before any page is mapped: class, machine, type, phdr table bounds, `filesz ≤ memsz`, 512 MiB user window, W\|X refused, overlapping `PT_LOAD` refused, entry inside an executable segment | `DESIGN.md` → Hostile ELF images | `badelf_test_passes` |
 | Pre-login seat cannot spawn (kernel rule: no `fs_root` ⇒ `AccessDenied`, independent of the loader grant); bare spawn gets empty tokens | `AUTH.md` → Spawn policy | `negative_test_passes`, `shell_nested_spawn_refused_e2e` |
-| PBKDF2-HMAC-SHA256 passwords, CSPRNG salt, constant-time compare, no echo, staging wipe on every path | `AUTH.md` | `users`, `mustchange`, `assert_passwords_masked`, `audit_strings` |
+| PBKDF2-HMAC-SHA256 passwords, CSPRNG salt, constant-time compare, no echo, staging wipe on every path; iteration count stored per actor | `AUTH.md` | `users`, `mustchange`, `assert_passwords_masked`, `audit_strings`, `galexy_crypto` stored-count test |
 | Lockout (five misses lock actor and TTY), idle logout, forced first `passwd`, session generation | `AUTH.md` | `lockout`, `idle`, `mustchange`, `shell_must_change_typing_e2e` |
 | Sealed dual-slot GALF, newest valid generation wins, refuse silent format, torn-write recovery | `GALFS.md` → On-disk | `galfs_disk_recovers_*`, `galfs_disk_refuses_format_when_both_slots_corrupt`, `crash_injection_picks_consistent_slot`, `galexy_galf::slots_test` |
 | Volume key wiped on last logout and power; wrong passphrase stays RAM-only | `AUTH.md` → Sealed GALF | `unlock_test_passes`, `shutdown_test_powers_off` |
@@ -72,6 +73,27 @@ What exists, which doc owns it, and the test that fails if it regresses.
 | Lock-order table (`THREADS` then galfs `TABLE`); IF=0 syscall path never allocates | `DESIGN.md` → Lock order | the SMP suite (`smp`, `ipi`, `smpstress`, `smpuser`) |
 | Ramdisk measured at build and boot | this page → Trust | `ramdisk_test_passes` |
 
+## CPU features
+
+What the kernel turns on, what it waives, and what is still absent.
+`arch/cpu.rs` reads CPUID leaf 7 and sets the bit only when the leaf
+reports it. `-cpu max` (TCG) and `-cpu host` (KVM) both report SMEP,
+SMAP, and UMIP. A CPU without the bit boots with that bit clear.
+
+| Feature | State | Why |
+| --- | --- | --- |
+| FSGSBASE | **on** (required) | per-CPU GS. Boot panics if CPUID 7.0 EBX bit 0 is clear |
+| SMEP | **on** when CPUID 7.0 EBX bit 7 | ring 0 cannot execute a user page. `smep_test_passes` |
+| SMAP | **on** when CPUID 7.0 EBX bit 20 | ring 0 cannot read a user VA unless `EFLAGS.AC` is set. Only `arch::user_copy` executes `stac` / `clac`. `smap_test_passes` |
+| UMIP | **on** when CPUID 7.0 ECX bit 2 | `sgdt` / `sidt` / `sldt` / `smsw` / `str` at CPL 3 raise `#GP`. The `#GP` vector shares the ring-3 kill path with `#PF`. `umip_test_passes` |
+| Kernel KASLR | **on** | `BootloaderConfig.mappings.aslr` randomizes the kernel, stack, framebuffer, ramdisk, and boot info inside P4 indexes 1..=24. Fixed slots stay put (physical memory 128, heap 170, LAPIC 200, I/O APIC 201, recursive 511, user image 25). `kaslr_kernel_base_differs_across_boots` |
+| Spectre v1 | **masked** | after the bounds check, the syscall number and Cap-slot indexes pass through `cpu::spectre_mask` (`lfence`, then an arithmetic mask). This is not a claim about other gadgets |
+| KPTI / Meltdown | **waived** for v1.0 | single-tenant guest. The kernel half stays mapped in every task tree. A second tenant, or a host without the Meltdown microcode/hardware fix, changes this |
+| IBRS / retpoline | **waived** for v1.0 | same assumption: one guest, a host that has already mitigated cross-VM branch history. No retpoline in this kernel |
+| MDS | **waived** for v1.0 | same single-tenant guest. No `verw` / buffer-overwrite sequence |
+| CET shadow stacks | **waived** | QEMU TCG coverage of CET is thin, and the kernel has no shadow-stack ABI |
+| User ASLR | **waived** | every ELF links at `USER_IMAGE_BASE` (see Non-goals) |
+
 ## Absent, tracked (not waived)
 
 These are gaps a reviewer will find. Each has an owner milestone; none
@@ -79,11 +101,6 @@ is claimed as covered.
 
 | Gap | Today | Milestone |
 | --- | --- | --- |
-| SMEP / SMAP / UMIP | `CR4` sets only `FSGSBASE`; user-VA copies are validated by page walk but not hardware-fenced | **63** |
-| KASLR | kernel half is where the bootloader puts it (`mappings.aslr` off) | **63** |
-| Spectre v1 mask, KPTI / IBRS / CET stance | no stance written; no mitigation | **63** (written as waivers or mitigations in this page) |
-| PBKDF2 cost | 10 000 iterations is a debug-QEMU budget | **63** (cost stored per actor; production formats at ≥ 100 000) |
-| Hostile-input sweep beyond the loader | `badelf` covers ELF; `paths` and `badelf` cover truncated inputs; a syscall-by-syscall fuzz pass has not been run | **63** |
 | Release profile, KVM, timing | everything is measured under TCG at `opt-level = 0`; side-channel timing has not been looked at | **64** |
 | fsck repair into a new slot | host `fsck` detects; recovery is "pick the other slot" | GALFS follow-on |
 

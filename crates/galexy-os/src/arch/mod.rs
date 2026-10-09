@@ -19,8 +19,11 @@ pub mod rand;
 pub mod speaker;
 pub mod syscall;
 pub mod timer;
+pub mod user_copy;
 
 use bootloader_api::info::BootInfo;
+
+use crate::serial_println;
 
 pub use acpi::madt;
 pub use gdt::{set_tss_rsp0, syscall_selectors, tss_rsp0, user_cs_ss};
@@ -44,6 +47,10 @@ pub fn init(boot_info: &BootInfo) {
         .physical_memory_offset
         .into_option()
         .expect("physical memory must be mapped (see BOOTLOADER_CONFIG)");
+    serial_println!(
+        "[kaslr] kernel_image_offset={:#x}",
+        boot_info.kernel_image_offset
+    );
     acpi::init(boot_info.rsdp_addr.into_option(), phys_offset);
 
     gdt::init();

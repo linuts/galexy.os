@@ -61,6 +61,8 @@ pub fn init(phys_offset: u64) {
     if mapper.is_some() {
         return;
     }
+    // SAFETY: phys_offset is the bootloader's physical-memory map; CR3's
+    // L4 is reachable through it for the life of the boot.
     let level_4_table = unsafe { active_level_4_table(VirtAddr::new(phys_offset)) };
     // SAFETY: the L4 table is the CPU's active one (read via CR3) and is
     // only ever accessed through the MAPPER lock below.

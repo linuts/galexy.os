@@ -43,7 +43,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     };
 
     let before = arch::timer_ticks();
-    let _region = sched::loader::spawn_program("nap", elf);
+    let _region = sched::loader::spawn_program("nap", elf).expect("nap elf");
 
     // `threads_count` is RUNNING-only; sleep parks as WAITING — wait until
     // the name is no longer live (exited / reaped).

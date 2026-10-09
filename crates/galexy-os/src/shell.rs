@@ -119,6 +119,9 @@ fn launch(name: &str) -> bool {
     if !sched::loader::looks_like_elf(bytes) {
         return false;
     }
+    if sched::loader::validate_elf(bytes).is_err() {
+        return false;
+    }
     // Close the typed line FIRST — no kernel work between Enter and this
     // newline, so the program's output always starts on a fresh line.
     screen::set_color(TEXT_COLOR);
@@ -129,7 +132,8 @@ fn launch(name: &str) -> bool {
     // threads) after the gate, so nothing prints before this. The prompt
     // is NOT reclaimed here: it returns when the program exits (poll).
     x86_64::instructions::interrupts::without_interrupts(|| {
-        sched::loader::spawn_program(&owned, bytes);
+        // Image passed `validate_elf`. A later `Err` is a kernel bug.
+        sched::loader::spawn_program(&owned, bytes).expect("validated ramdisk elf");
         *PENDING.lock() = Some(owned);
     });
     true

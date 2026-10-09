@@ -22,16 +22,33 @@ pub const SALT_LEN: usize = 8;
 /// Derived-key length stored on each actor.
 pub const HASH_LEN: usize = 16;
 
-/// PBKDF2 iteration count (HMAC-SHA256).
+/// PBKDF2 iteration count (HMAC-SHA256) for test kernels and TCG.
 ///
 /// Kept modest so debug QEMU boots (format + login + useradd) stay inside
-/// the 60 s runner timeout; raise once a release-profile / dedicated KDF
-/// path exists.
+/// the 60 s runner timeout.
 pub const PBKDF2_ITERS: u32 = 10_000;
+
+/// Iteration count stored on actors formatted by a `--release` kernel
+/// running under KVM.
+pub const PBKDF2_ITERS_RELEASE: u32 = 100_000;
 
 /// Fills `out` with PBKDF2-HMAC-SHA256(password, salt, [`PBKDF2_ITERS`]).
 pub fn hash_password(password: &[u8], salt: &[u8; SALT_LEN], out: &mut [u8; HASH_LEN]) {
-    pbkdf2_hmac_sha256(password, salt, PBKDF2_ITERS, out);
+    hash_password_iters(password, salt, PBKDF2_ITERS, out);
+}
+
+/// Like [`hash_password`], with the iteration count stored on the actor.
+///
+/// `iters == 0` still runs the first HMAC block (the PBKDF2 U_1) and no
+/// xor rounds, matching a stored cost of zero. Callers that refuse a
+/// hostile cost do so before calling.
+pub fn hash_password_iters(
+    password: &[u8],
+    salt: &[u8; SALT_LEN],
+    iters: u32,
+    out: &mut [u8; HASH_LEN],
+) {
+    pbkdf2_hmac_sha256(password, salt, iters, out);
 }
 
 /// Derives a 32-byte key (volume KEK) via PBKDF2-HMAC-SHA256.
@@ -176,6 +193,22 @@ mod tests {
         hash_password(b"admin", &s1, &mut a);
         hash_password(b"admin", &s2, &mut b);
         assert!(!hash_eq(&a, &b));
+    }
+
+    /// A hash stored at an older iteration count still verifies at that
+    /// count, and does not match the current default cost.
+    #[test]
+    fn stored_iteration_count_still_verifies() {
+        let mut salt = [0u8; SALT_LEN];
+        salt_from_seed(b"old-cost", &mut salt);
+        let mut stored = [0u8; HASH_LEN];
+        let mut again = [0u8; HASH_LEN];
+        let mut now = [0u8; HASH_LEN];
+        hash_password_iters(b"admin", &salt, 1_000, &mut stored);
+        hash_password_iters(b"admin", &salt, 1_000, &mut again);
+        hash_password(b"admin", &salt, &mut now);
+        assert!(hash_eq(&stored, &again));
+        assert!(!hash_eq(&stored, &now));
     }
 
     #[test]

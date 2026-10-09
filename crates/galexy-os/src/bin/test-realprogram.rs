@@ -48,7 +48,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let baseline = galexy_os::arch::mm::free_frames();
 
     // The real program: ELF in, task running.
-    let _region = sched::loader::spawn_program("hello", hello_elf);
+    let _region = sched::loader::spawn_program("hello", hello_elf).expect("hello elf");
 
     // Main loop: hlt + rotations while the program runs; the entry shim
     // exits the task when main returns 0 — the kernel sees tombstone +

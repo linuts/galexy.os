@@ -53,8 +53,10 @@ fixed in a milestone PR with a changelog line.
   compromised bootloader or firmware, or a hostile hypervisor.
 - A hostile ramdisk: the tar is trusted input, measured (SHA-256 at
   build and boot) but not signed.
-- Speculative-execution side channels, SMEP/SMAP/UMIP/KASLR absence,
-  and the PBKDF2 cost — tracked as **Milestone 63**, not waived.
+- KPTI, IBRS, MDS, and CET (waived for this single-tenant guest;
+  `THREAT.md` → CPU features). SMEP, SMAP, UMIP, and kernel KASLR are
+  on. Actor password cost is stored per actor; the volume KEK stays
+  at 10 000 iterations.
 - Anything behind a network: there is no network stack.
 - Denial of service by the operator at the keyboard (the console budget
   and quotas are fairness, not security, mechanisms).

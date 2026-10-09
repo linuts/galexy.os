@@ -45,6 +45,8 @@ static IDT: LazyLock<Mutex<InterruptDescriptorTable>> = LazyLock::new(|| {
     // IF=0 lock holder must still be able to ack a broadcast).
     idt[crate::arch::mm::shootdown::SD_VECTOR]
         .set_handler_fn(crate::arch::mm::shootdown::shootdown_handler);
+    // Wake IPI: leave hlt so an idle CPU re-checks its runnable set.
+    idt[apic::WAKE_VECTOR].set_handler_fn(wake_handler);
     Mutex::new(idt)
 });
 
@@ -58,6 +60,10 @@ pub fn init() {
         idt[TIMER_INTERRUPT_ID].set_handler_addr(VirtAddr::from_ptr(timer_fn as *const ()));
         let pf_fn: unsafe extern "C" fn() = crate::sched::context::page_fault_handler_naked;
         idt.page_fault
+            .set_handler_addr(VirtAddr::from_ptr(pf_fn as *const ()));
+        // #GP (UMIP: sgdt/sidt from ring 3) has the same error-code frame
+        // as #PF. The naked handler kills a ring-3 task and parks ring 0.
+        idt.general_protection_fault
             .set_handler_addr(VirtAddr::from_ptr(pf_fn as *const ()));
     }
     drop(idt);
@@ -105,6 +111,11 @@ extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame) {
 /// silence. A spurious needs no EOI (the ISR bit for it is never set), so
 /// this body is a no-op — the handler exists purely so the gate is mapped.
 extern "x86-interrupt" fn spurious_handler(_stack_frame: InterruptStackFrame) {}
+
+/// Wake IPI (`WAKE_VECTOR`): no work, just EOI so `hlt` returns.
+extern "x86-interrupt" fn wake_handler(_stack_frame: InterruptStackFrame) {
+    apic::eoi();
+}
 
 /// Loads the SHARED IDT into THIS CPU's IDTR (AP bring-up).
 ///

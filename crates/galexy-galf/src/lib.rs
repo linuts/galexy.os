@@ -26,7 +26,7 @@ pub const DISK_SLOT_COUNT: usize = 2;
 /// On-disk magic.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
 /// Current sealed layout (quotas + shares + single-indirect blocks).
-pub const DISK_VERSION: u16 = 11;
+pub const DISK_VERSION: u16 = 12;
 
 pub const OBJECT_SLOTS: usize = 128;
 pub const ACTOR_SLOTS: usize = 32;
@@ -43,8 +43,8 @@ pub const NAME_CAP: usize = 64;
 pub const ACTOR_NAME: usize = 32;
 
 pub const DISK_HEADER: usize = 128;
-/// used + name_len + name + root + salt + hash + max_objects + max_bytes.
-pub const ACTOR_ON_DISK: usize = 66;
+/// used + name_len + name + root + salt + hash + kdf_iters + quota.
+pub const ACTOR_ON_DISK: usize = 70;
 /// kind+actor+name_len+pad + parent+len + name + directs + indirect.
 pub const OBJECT_ON_DISK: usize = 8 + NAME_CAP + DIRECT_BLOCKS * 2 + 2;
 /// used + rights + grantee + pad + object.
@@ -121,6 +121,8 @@ pub struct Actor {
     pub root: u16,
     pub salt: [u8; SALT_LEN],
     pub pass_hash: [u8; HASH_LEN],
+    /// PBKDF2-HMAC-SHA256 iteration count used for `pass_hash`.
+    pub kdf_iters: u32,
     pub max_objects: u16,
     pub max_bytes: u32,
 }
@@ -134,6 +136,7 @@ impl Actor {
             root: 0xffff,
             salt: [0; SALT_LEN],
             pass_hash: [0; HASH_LEN],
+            kdf_iters: 0,
             max_objects: 0,
             max_bytes: 0,
         }
@@ -370,7 +373,9 @@ pub fn encode_slot(
         let salt_off = off + 4 + ACTOR_NAME;
         flat[salt_off..salt_off + SALT_LEN].copy_from_slice(&actor.salt);
         flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN].copy_from_slice(&actor.pass_hash);
-        let qoff = salt_off + SALT_LEN + HASH_LEN;
+        let koff = salt_off + SALT_LEN + HASH_LEN;
+        flat[koff..koff + 4].copy_from_slice(&actor.kdf_iters.to_le_bytes());
+        let qoff = koff + 4;
         flat[qoff..qoff + 2].copy_from_slice(&actor.max_objects.to_le_bytes());
         flat[qoff + 2..qoff + 6].copy_from_slice(&actor.max_bytes.to_le_bytes());
         off += ACTOR_ON_DISK;
@@ -509,7 +514,10 @@ pub fn decode_slot(flat: &mut [u8], passphrase: &[u8], table: &mut Table) -> Opt
         actor
             .pass_hash
             .copy_from_slice(&flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN]);
-        let qoff = salt_off + SALT_LEN + HASH_LEN;
+        let koff = salt_off + SALT_LEN + HASH_LEN;
+        actor.kdf_iters =
+            u32::from_le_bytes([flat[koff], flat[koff + 1], flat[koff + 2], flat[koff + 3]]);
+        let qoff = koff + 4;
         actor.max_objects = u16::from_le_bytes([flat[qoff], flat[qoff + 1]]);
         actor.max_bytes = u32::from_le_bytes([
             flat[qoff + 2],
@@ -766,11 +774,11 @@ mod tests {
     #[test]
     fn layout_constants_fit_slot() {
         // Slot fit is a `const _` assertion at the top of the crate.
-        assert_eq!(ACTOR_ON_DISK, 66);
+        assert_eq!(ACTOR_ON_DISK, 70);
         assert_eq!(OBJECT_ON_DISK, 90);
         assert_eq!(SHARE_ON_DISK, 6);
         assert_eq!(SHARE_SLOTS, 32);
         assert_eq!(FILE_BYTES, 32 * 1024);
-        assert_eq!(DISK_VERSION, 11);
+        assert_eq!(DISK_VERSION, 12);
     }
 }

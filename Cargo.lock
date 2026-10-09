@@ -50,8 +50,6 @@ dependencies = [
 [[package]]
 name = "bootloader"
 version = "0.11.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d861319d747a01da5d4d680500b7f808607f902a286b476bd51f991612e39d8e"
 dependencies = [
  "anyhow",
  "bootloader-boot-config",

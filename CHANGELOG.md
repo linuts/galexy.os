@@ -11,6 +11,14 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 - `nano` — ring-3 screen editor (`nano <path>`): arrows, Ctrl-O save,
   Ctrl-X exit. The shell passes `SPAWN_GRANT_KEYBOARD` (spawn `r10` bit 3)
   and Cap-waits so the editor can read the seat's keys
+- [#81](https://github.com/linuts/galexy.os/pull/81) — M63 — SMEP, SMAP,
+  and UMIP when the CPU reports them; user copies go through
+  `arch::user_copy`; kernel KASLR stays inside P4 indexes 1..=24 (BIOS
+  stage 4 switches to a 64 KiB stack before the ASLR RNG); ELF load
+  failures return `BadValue`; GALF v12 stores each actor's KDF
+  iteration count (100_000 on a release build under KVM, else 10_000;
+  old images are refused); a 2 s rotation watchdog dumps once, and a
+  wake or a new thread pokes an idle CPU with IPI `0xF7`
 - [#79](https://github.com/linuts/galexy.os/pull/79) — `cargo run` is
   headless by default (`-nographic`); COM1 receive (IRQ4) feeds the
   keyboard queue so the terminal is the console. `--display` still opens

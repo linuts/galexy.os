@@ -20,7 +20,7 @@ use spin::Mutex;
 use galexy_abi::SysError;
 use galexy_core::{crc32, HASH_LEN, SALT_LEN};
 use galexy_crypto::{
-    derive_key, hash_eq, hash_password, open, seal, wipe_bytes, KEY_LEN, NONCE_LEN, TAG_LEN,
+    derive_key, hash_eq, hash_password_iters, open, seal, wipe_bytes, KEY_LEN, NONCE_LEN, TAG_LEN,
 };
 
 const _: () = assert!(SALT_LEN == galexy_crypto::SALT_LEN);
@@ -125,6 +125,8 @@ struct Actor {
     root: u16,
     salt: [u8; SALT_LEN],
     pass_hash: [u8; HASH_LEN],
+    /// PBKDF2 iteration count that produced `pass_hash`.
+    kdf_iters: u32,
     /// Max objects (files + dirs, including root) this actor may own.
     max_objects: u16,
     /// Max sum of file lengths (bytes) this actor may own.
@@ -140,6 +142,7 @@ impl Actor {
             root: NO_OBJECT,
             salt: [0; SALT_LEN],
             pass_hash: [0; HASH_LEN],
+            kdf_iters: 0,
             max_objects: 0,
             max_bytes: 0,
         }
@@ -156,7 +159,11 @@ impl Actor {
 
     fn set_password(&mut self, password: &[u8]) {
         crate::arch::rand::fill_bytes(&mut self.salt);
-        hash_password(password, &self.salt, &mut self.pass_hash);
+        // `passwd` and format both re-derive at the boot's default cost,
+        // not at whatever count the previous hash used.
+        let iters = password_kdf_iters();
+        self.kdf_iters = iters;
+        hash_password_iters(password, &self.salt, iters, &mut self.pass_hash);
         // Default admin password keeps the must-change flag across reboot.
         if self.name_is(ADMIN_NAME) && password == ADMIN_DEFAULT_PASSWORD.as_bytes() {
             self.max_objects |= MUST_CHANGE_BIT;
@@ -166,8 +173,15 @@ impl Actor {
     }
 
     fn check_password(&self, password: &[u8]) -> bool {
+        // A hostile image can store a huge count. Refuse it instead of
+        // wedging the CPU. A stored older cost (including the test-kernel
+        // 10 000) still verifies.
+        const KDF_ITERS_MAX: u32 = 1_000_000;
+        if self.kdf_iters == 0 || self.kdf_iters > KDF_ITERS_MAX {
+            return false;
+        }
         let mut got = [0u8; HASH_LEN];
-        hash_password(password, &self.salt, &mut got);
+        hash_password_iters(password, &self.salt, self.kdf_iters, &mut got);
         let ok = hash_eq(&got, &self.pass_hash);
         wipe_bytes(&mut got);
         ok
@@ -278,9 +292,9 @@ static ADMIN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16
 /// gen+1 and a CRC, then flushes — a crash mid-write leaves the previous
 /// slot intact.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-/// Bumped for single-indirect file blocks (Milestone 45). Older images are
-/// refused; format recreates admin under a wrapped volume key.
-pub const DISK_VERSION: u16 = 11;
+/// Bumped for the per-actor PBKDF2 iteration count (Milestone 63). Older
+/// images are refused with a serial line; there is no silent migrate.
+pub const DISK_VERSION: u16 = 12;
 /// Sectors per dual-slot image (must cover header + sealed payload).
 pub const DISK_SECTORS: usize = 288;
 pub const DISK_SLOT_COUNT: usize = 2;
@@ -290,8 +304,8 @@ pub const DISK_PART_LBA: u32 = 2048;
 /// Clear header + wrap fields + data tag (see `encode_table`).
 const DISK_HEADER: usize = 128;
 /// used(1) + name_len(1) + name(32) + root(2) + salt(8) + hash(16)
-/// + max_objects(2) + max_bytes(4) = 66.
-const ACTOR_ON_DISK: usize = 66;
+/// + kdf_iters(4) + max_objects(2) + max_bytes(4) = 70.
+const ACTOR_ON_DISK: usize = 70;
 /// used(1) + rights(1) + grantee(1) + pad(1) + object(2) = 6.
 const SHARE_ON_DISK: usize = 6;
 const _: () = assert!(DISK_MAGIC[0] == galexy_galf::DISK_MAGIC[0]);
@@ -700,9 +714,8 @@ enum DiskLoad {
 fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
     let mut best_gen = 0u64;
     let mut best_slot: Option<u32> = None;
-    // True when a slot had GALF magic at the current DISK_VERSION but
-    // failed decode/validate — refuse silent format. Obsolete versions
-    // (layout bumps) count as empty so format can recreate.
+    // True when a slot had GALF magic but failed decode, or the version
+    // is not the current one. Either case refuses silent format.
     let mut saw_corrupt_current = false;
     let mut bad_with_magic = 0u32;
     let mut buf = DISK_BUF.lock();
@@ -721,11 +734,12 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
         };
         if magic && version != DISK_VERSION {
             crate::serial_println!(
-                "[galfs] slot {} version {} (need {}); will reformat if no valid sibling",
+                "[galfs] slot {} version {} refused (need {}); old images are not migrated",
                 slot,
                 version,
                 DISK_VERSION,
             );
+            saw_corrupt_current = true;
             continue;
         }
         let Some(gen) = decode_table(&mut buf, &mut cand, passphrase) else {
@@ -780,6 +794,19 @@ fn copy_table(src: &Table, dst: &mut Table) {
     }
 }
 
+/// Iteration count written by `format` and `passwd` on this boot.
+///
+/// Test kernels (`debug_assertions`) and TCG stay at 10 000 so the suite
+/// fits the runner timeout. A `--release` kernel under KVM stores
+/// [`galexy_crypto::PBKDF2_ITERS_RELEASE`].
+fn password_kdf_iters() -> u32 {
+    if cfg!(not(debug_assertions)) && crate::arch::cpu::under_kvm() {
+        galexy_crypto::PBKDF2_ITERS_RELEASE
+    } else {
+        galexy_crypto::PBKDF2_ITERS
+    }
+}
+
 fn refresh_roots(table: &Table) {
     let mut admin = NO_OBJECT;
     for actor in &table.actors {
@@ -830,7 +857,9 @@ fn encode_table(
         let salt_off = off + 4 + ACTOR_NAME;
         flat[salt_off..salt_off + SALT_LEN].copy_from_slice(&actor.salt);
         flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN].copy_from_slice(&actor.pass_hash);
-        let qoff = salt_off + SALT_LEN + HASH_LEN;
+        let koff = salt_off + SALT_LEN + HASH_LEN;
+        flat[koff..koff + 4].copy_from_slice(&actor.kdf_iters.to_le_bytes());
+        let qoff = koff + 4;
         flat[qoff..qoff + 2].copy_from_slice(&actor.max_objects.to_le_bytes());
         flat[qoff + 2..qoff + 6].copy_from_slice(&actor.max_bytes.to_le_bytes());
         off += ACTOR_ON_DISK;
@@ -999,7 +1028,10 @@ fn decode_table(
         actor
             .pass_hash
             .copy_from_slice(&flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN]);
-        let qoff = salt_off + SALT_LEN + HASH_LEN;
+        let koff = salt_off + SALT_LEN + HASH_LEN;
+        actor.kdf_iters =
+            u32::from_le_bytes([flat[koff], flat[koff + 1], flat[koff + 2], flat[koff + 3]]);
+        let qoff = koff + 4;
         actor.max_objects = u16::from_le_bytes([flat[qoff], flat[qoff + 1]]);
         actor.max_bytes = u32::from_le_bytes([
             flat[qoff + 2],

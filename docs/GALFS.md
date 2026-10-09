@@ -129,9 +129,11 @@ confused-deputy share rules.
 
 ## Table limits (today)
 
-Milestone **45** / GALF **v11**: actor/object tables plus a shared block
-pool, per-actor quotas, durable home shares, and single-indirect files.
-Empty files cost an inode only; bytes live in direct/indirect blocks.
+Milestone **45** shaped the tables; the on-disk version is GALF **v12**
+(Milestone 63 added `kdf_iters` on each actor). Actor/object tables
+plus a shared block pool, per-actor quotas, durable home shares, and
+single-indirect files. Empty files cost an inode only; bytes live in
+direct/indirect blocks.
 
 | Resource | Cap |
 | --- | --- |
@@ -219,7 +221,9 @@ volume key in RAM; cold-boot remanence is accepted. The MAC stays
 HMAC-SHA256 (Poly1305 needs a versioned cutover). Per-file keys,
 secure erase, and TPM seal are non-goals. Details: `AUTH.md` → Sealed GALF.
 
-v11 refuses older images; delete `galfs.img` or let format recreate.
+v12 refuses older images (including v11); delete `galfs.img` or let
+format recreate. The actor record carries `kdf_iters` (4 bytes) after
+the password hash.
 
 ## Boot and format
 
@@ -269,7 +273,8 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 
 ### Today (through review readiness)
 
-- GALF **v11**: 32 actors / 128 objects / 32 durable shares; 256×512 block
+- GALF **v12**: 32 actors / 128 objects / 32 durable shares; per-actor
+  `kdf_iters`; 256×512 block
   pool; 8 directs + single indirect/file (32 KiB max); per-actor object +
   byte quotas (defaults for new users; admin at table max)
 - Sealed dual-slot image (288 sectors/slot) on the IDE slave
@@ -410,7 +415,7 @@ MMIO BARs, MSI-X) on `-M q35` and keeps the paths below as fallbacks.
 | **44** ✅ | Sealed GALF (volume key + AEAD); threat model; no plaintext in image |
 | **45** ✅ | Capacity, blocks, ops, sync, quotas, host fsck, shares, single-indirect, crash injection, ATA I/O errors |
 | **46** ✅ | `BlockDevice`, capacity gate, flush matrix, legacy virtio-blk, partition offset |
-| **63** | Per-actor KDF cost in the actor record (GALF v12) |
+| **63** ✅ | Per-actor KDF cost in the actor record (GALF v12) |
 | **64 / 65** | IRQ completion; virtio 1.x + MSI-X on `q35`; IDE and legacy virtio as fallbacks |
 
 Demo limits above are the shipped contract (double-indirect and fsck

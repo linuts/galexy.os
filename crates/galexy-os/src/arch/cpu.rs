@@ -62,6 +62,10 @@ pub struct PerCpu {
     /// Naked tails (timer, syscall, page fault) read gs:[40] AFTER `mov rsp`
     /// and publish that slot's saved context as stable. Same-CPU only.
     departed_slot: AtomicU64,
+    /// `timer_ticks` when this CPU last entered the scheduler (timer IRQ
+    /// or syscall handoff). `0` until the first one. The other CPU's
+    /// watchdog reads it.
+    last_switch: AtomicU64,
 }
 
 // Layout contract for the naked asm (verified at compile time):
@@ -102,6 +106,7 @@ impl PerCpu {
             cpu_index: AtomicU32::new(0),
             apic_id: AtomicU32::new(0),
             departed_slot: AtomicU64::new(0),
+            last_switch: AtomicU64::new(0),
         }
     }
 }
@@ -167,30 +172,109 @@ pub fn online() -> usize {
     ONLINE.load(Ordering::Relaxed)
 }
 
-/// Detects FSGSBASE via CPUID leaf 7, subleaf 0, EBX bit 0.
-fn fsgsbase_supported() -> bool {
-    let b: u64;
-    // NOTE: for architectural leaf 7, cpuid's EAX return is the *subleaf
-    // max* (often 0) — NOT a max-level indicator. Leaf 7 exists on every
-    // long-mode-model CPU; only the EBX feature bits carry information.
-    let mut _max_subleaf = 0u32;
-    // SAFETY: cpuid probes features and clobbers eax/ecx/edx AND ebx.
-    // ebx is callee-saved and CANNOT be an inline-asm constraint on
-    // x86_64, so its value is parked in r8 via xchg (explicit register —
-    // no allocator aliasing hazards) and the captured feature bits stay
-    // in r8 while rbx is put back.
+/// CPUID `(eax, ebx, ecx, edx)` for `leaf` / `subleaf`.
+///
+/// EBX is parked in `r8` because it is callee-saved and cannot be an
+/// inline-asm constraint on x86_64.
+fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
+    let ebx: u32;
+    let ecx: u32;
+    let edx: u32;
+    let eax: u32;
+    // SAFETY: cpuid reads feature leaves and clobbers rax/rbx/rcx/rdx.
+    // rbx is restored via the paired xchg before the asm block ends.
     unsafe {
         asm!(
             "xchg rbx, r8",
             "cpuid",
+            "mov r9d, ecx",
+            "mov r10d, edx",
+            "mov r11d, eax",
             "xchg rbx, r8",
-            out("r8") b,
-            inout("rax") 7u32 => _max_subleaf,
-            inout("rcx") 0u32 => _,
-            out("rdx") _,
+            in("eax") leaf,
+            in("ecx") subleaf,
+            lateout("eax") _,
+            out("r8") ebx,
+            out("r9") ecx,
+            out("r10") edx,
+            out("r11") eax,
+            out("edx") _,
         );
     }
-    b & (1 << 0) != 0
+    (eax, ebx, ecx, edx)
+}
+
+/// Leaf 7.0 feature bits the kernel turns on: `(ebx, ecx)`.
+fn cpuid_leaf7() -> (u32, u32) {
+    let (_eax, ebx, ecx, _edx) = cpuid(7, 0);
+    (ebx, ecx)
+}
+
+/// True when the hypervisor leaf identifies KVM.
+///
+/// Used to pick the production PBKDF2 cost (`--release` + KVM). TCG stays
+/// on the debug iteration count so the suite fits the runner timeout.
+pub fn under_kvm() -> bool {
+    let (_a, _b, ecx, _d) = cpuid(1, 0);
+    // CPUID.1:ECX[31] — hypervisor present.
+    if ecx & (1 << 31) == 0 {
+        return false;
+    }
+    let (_a, ebx, ecx, edx) = cpuid(0x4000_0000, 0);
+    let mut sig = [0u8; 12];
+    sig[0..4].copy_from_slice(&ebx.to_le_bytes());
+    sig[4..8].copy_from_slice(&ecx.to_le_bytes());
+    sig[8..12].copy_from_slice(&edx.to_le_bytes());
+    // KVM pads the 9-character id to the 12-byte hypervisor vendor slot.
+    sig == *b"KVMKVMKVM\0\0\0"
+}
+
+/// Masks `index` to `0` when it is not strictly below `len`.
+///
+/// An `lfence` after the caller's bounds check stops the processor from
+/// using a speculated index, and the arithmetic mask keeps a speculated
+/// out-of-range value from reaching a table load. Used on the syscall
+/// number and on Cap indexes that index a table.
+#[inline(always)]
+pub fn spectre_mask(index: u64, len: u64) -> u64 {
+    // SAFETY: lfence has no operands and does not touch memory.
+    unsafe { asm!("lfence", options(nostack, preserves_flags)) };
+    let ok = u64::from(index < len);
+    index & ok.wrapping_neg()
+}
+
+/// Records that this CPU just ran the scheduler.
+pub fn note_switch() {
+    if !GS_READY.load(Ordering::Acquire) {
+        return;
+    }
+    let now = crate::arch::timer_ticks();
+    current().last_switch.store(now, Ordering::Relaxed);
+}
+
+/// Last scheduler entry tick for logical `cpu`, or 0.
+pub fn last_switch_tick(cpu: usize) -> u64 {
+    if cpu >= MAX_CPUS {
+        return 0;
+    }
+    SLOTS[cpu].last_switch.load(Ordering::Relaxed)
+}
+
+/// Fixed IPI that only exists to leave `hlt`. The idle loop re-arms a
+/// quantum when it finds runnable work. Vector `0xF7` (just below the
+/// shootdown vector). No-op for the calling CPU and for slots that are
+/// not online.
+pub fn kick(cpu_index: usize) {
+    if !GS_READY.load(Ordering::Acquire) {
+        return;
+    }
+    if cpu_index == current_index() {
+        return;
+    }
+    let Some(apic_id) = apic_id_of(cpu_index) else {
+        return;
+    };
+    crate::arch::apic::send_fixed_ipi(apic_id as u8, crate::arch::apic::WAKE_VECTOR);
 }
 
 /// Brings up per-CPU access for the BSP (logical CPU 0): feature assert,
@@ -203,20 +287,34 @@ fn fsgsbase_supported() -> bool {
 /// that CPU (the GS selector load resets the base — WRGSBASE must be the
 /// last GS-base writer).
 pub fn init_percpu(cpu_index: usize, apic_id: u32) {
-    // CR4.FSGSBASE must be SET before any RDGSBASE/WRGSBASE is legal: the
-    // CPUID bit only says the CPU CAN do it (firmware leaves the CR4 bit
-    // clear). Every crossing of gs:[*] (syscall entry, later all switch
-    // paths) needs this live.
-    let mut cr4 = x86_64::registers::control::Cr4::read();
-    cr4.insert(x86_64::registers::control::Cr4Flags::FSGSBASE);
-    // SAFETY: setting CR4.FSGSBASE on a CPU that reports the CPUID feature;
-    // no live per-CPU consumers exist on this CPU yet (its own bring-up).
-    unsafe { x86_64::registers::control::Cr4::write(cr4) };
-
+    let (ebx, ecx) = cpuid_leaf7();
     assert!(
-        fsgsbase_supported(),
+        ebx & (1 << 0) != 0,
         "cpu: FSGSBASE unsupported — per-CPU mechanism requires it (CPUID 7.0.EBX bit 0)"
     );
+    // CR4 bits the CPU reports. FSGSBASE is required (RDGSBASE/WRGSBASE
+    // are #UD without it). SMEP, SMAP, and UMIP are on when the leaf says
+    // so and stay off otherwise — a CPU without the bit must not set it.
+    let mut cr4 = x86_64::registers::control::Cr4::read();
+    cr4.insert(x86_64::registers::control::Cr4Flags::FSGSBASE);
+    let smep = ebx & (1 << 7) != 0;
+    let smap = ebx & (1 << 20) != 0;
+    let umip = ecx & (1 << 2) != 0;
+    if smep {
+        cr4.insert(x86_64::registers::control::Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION);
+    }
+    if smap {
+        cr4.insert(x86_64::registers::control::Cr4Flags::SUPERVISOR_MODE_ACCESS_PREVENTION);
+    }
+    if umip {
+        cr4.insert(x86_64::registers::control::Cr4Flags::USER_MODE_INSTRUCTION_PREVENTION);
+    }
+    // SAFETY: each inserted bit is gated by the CPUID feature above.
+    // No user task is running on this CPU yet (its own bring-up).
+    unsafe { x86_64::registers::control::Cr4::write(cr4) };
+    if smap {
+        crate::arch::user_copy::note_smap_enabled();
+    }
 
     let slot = &SLOTS[cpu_index];
     let slot_addr = slot as *const PerCpu as u64;
@@ -242,9 +340,12 @@ pub fn init_percpu(cpu_index: usize, apic_id: u32) {
     GS_READY.store(true, Ordering::Release);
     let _ = ONLINE.fetch_add(1, Ordering::Relaxed);
     serial_println!(
-        "[cpu] per-cpu GS live (slot {} @ {:#x})",
+        "[cpu] per-cpu GS live (slot {} @ {:#x}) smep={} smap={} umip={}",
         cpu_index,
-        readback
+        readback,
+        u8::from(smep),
+        u8::from(smap),
+        u8::from(umip),
     );
 }
 

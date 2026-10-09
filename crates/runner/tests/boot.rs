@@ -458,6 +458,102 @@ fn wx_test_passes() {
     );
 }
 
+#[test]
+fn smep_test_passes() {
+    let (code, serial) = boot(&image("test-smep"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-smep should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("smep=1"),
+        "SMEP was not enabled; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-smep] fault"),
+        "SMEP fault marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-smep] passed"),
+        "test-smep success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn smap_test_passes() {
+    let (code, serial) = boot(&image("test-smap"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-smap should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("smap=1"),
+        "SMAP was not enabled; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-smap] fault"),
+        "SMAP fault marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-smap] passed"),
+        "test-smap success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn umip_test_passes() {
+    let (code, serial) = boot(&image("test-umip"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-umip should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("umip=1"),
+        "UMIP was not enabled; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("ring-3 task fault"),
+        "ring-3 fault marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-umip] passed"),
+        "test-umip success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn kaslr_kernel_base_differs_across_boots() {
+    let (code_a, serial_a) = boot(&image("test-kaslr"));
+    let (code_b, serial_b) = boot(&image("test-kaslr"));
+    assert_eq!(
+        code_a,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-kaslr boot A should succeed; serial:\n{serial_a}"
+    );
+    assert_eq!(
+        code_b,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-kaslr boot B should succeed; serial:\n{serial_b}"
+    );
+    let base = |serial: &str| -> u64 {
+        let line = serial
+            .lines()
+            .find(|line| line.contains("[kaslr] kernel_image_offset="))
+            .unwrap_or_else(|| panic!("kaslr line missing; serial:\n{serial}"));
+        let hex = line.split('=').nth(1).unwrap().trim();
+        u64::from_str_radix(hex.trim_start_matches("0x"), 16).expect("kaslr offset")
+    };
+    let a = base(&serial_a);
+    let b = base(&serial_b);
+    assert_ne!(
+        a, b,
+        "KASLR kernel base matched across boots ({a:#x}); A:\n{serial_a}\nB:\n{serial_b}"
+    );
+}
+
 /// Hostile ELF suite: forged headers and segments are refused with a
 /// `SysError` by the spawn gate, never a kernel panic; real programs pass.
 #[test]
