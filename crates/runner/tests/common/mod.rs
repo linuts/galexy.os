@@ -1188,10 +1188,10 @@ fn boot_and_type_cmd(
             let _ = child.wait();
             panic!(
                 "ready marker '{ready_marker}' never appeared; serial:\n{}",
-                std::fs::read_to_string(&serial_path).unwrap_or_default()
+                std::fs::read_to_string(serial_path).unwrap_or_default()
             );
         }
-        if std::fs::read_to_string(&serial_path)
+        if std::fs::read_to_string(serial_path)
             .map(|s| s.contains(ready_marker))
             .unwrap_or(false)
         {
@@ -1216,7 +1216,7 @@ fn boot_and_type_cmd(
         loop {
             if Instant::now() > deadline {
                 let serial =
-                    typing_visible(&std::fs::read_to_string(&serial_path).unwrap_or_default());
+                    typing_visible(&std::fs::read_to_string(serial_path).unwrap_or_default());
                 let lo = seen.saturating_sub(400).min(serial.len());
                 let hi = (seen + 200).min(serial.len());
                 panic!(
@@ -1228,7 +1228,7 @@ fn boot_and_type_cmd(
             // Read the log before treating exit as failure. Shutdown
             // powers the machine off on the last key, and the echo is
             // already in the file when QEMU's process is gone.
-            let raw = std::fs::read_to_string(&serial_path).unwrap_or_default();
+            let raw = std::fs::read_to_string(serial_path).unwrap_or_default();
             let exited = child.try_wait().expect("try_wait failed").is_some();
             let data = typing_visible(&raw);
             // A multi-byte marker may start before `seen` (the per-key
@@ -1258,10 +1258,10 @@ fn boot_and_type_cmd(
             if Instant::now() > deadline {
                 panic!(
                     "final marker '{final_marker}' never appeared; serial tail:\n{}",
-                    std::fs::read_to_string(&serial_path).unwrap_or_default()
+                    std::fs::read_to_string(serial_path).unwrap_or_default()
                 );
             }
-            let serial = std::fs::read_to_string(&serial_path).unwrap_or_default();
+            let serial = std::fs::read_to_string(serial_path).unwrap_or_default();
             if serial.contains(final_marker) {
                 break;
             }
@@ -1275,5 +1275,5 @@ fn boot_and_type_cmd(
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_file(&sock);
-    std::fs::read_to_string(&serial_path).unwrap_or_default()
+    std::fs::read_to_string(serial_path).unwrap_or_default()
 }
