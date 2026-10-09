@@ -931,12 +931,13 @@ one scratch page. There is no user heap. A user `#PF` kills that task
 (`test-userfault`). The kernel heap grows by an explicit map, not by
 faulting.
 
-**Kernel heap.** Start is 100 pages (400 KiB) at P4 index 43. Growth is
-16 pages (64 KiB) per step, cap `HEAP_MAX_PAGES` (64 × 1024 pages,
-256 MiB). A failed `alloc` returns null. Syscall paths that cannot
-proceed return `NoResource` (object table, frame reserve
-`SPAWN_FRAME_RESERVE` = 64). An `expect` on a frame the kernel must
-have is a panic: that is a kernel bug, not a user error.
+**Kernel heap.** Start is 100 pages (400 KiB) at `0x0000_5555_5555_0000`
+(P4 index 170). Growth is 16 pages (64 KiB) per step, cap
+`HEAP_MAX_PAGES` (64 × 1024 pages, 256 MiB). A failed `alloc` returns
+null. Syscall paths that cannot proceed return `NoResource` (object
+table, frame reserve `SPAWN_FRAME_RESERVE` = 64). An `expect` on a
+frame the kernel must have is a panic: that is a kernel bug, not a
+user error.
 
 **FSGSBASE.** Per-CPU GS requires CPUID 7.0 EBX bit 0. The runner and
 `cargo run` pass `-cpu max`. Boot panics with
@@ -946,19 +947,21 @@ A software GS fallback is out of scope.
 **ASLR.** User-side ASLR is waived. Every user ELF links at
 `USER_IMAGE_BASE`; randomizing the P4 slot would not hide that address
 from the program, and it would break the single load address the loader
-and the ABI share. Kernel-side KASLR (the bootloader's `mappings.aslr`)
-is Milestone 63. `docs/THREAT.md` → Non-goals cites this paragraph.
+and the ABI share. Kernel KASLR is the bootloader's `mappings.aslr`,
+limited to P4 indexes 1..=24 so it cannot land on the user image
+(25), the physical-memory map (128), the heap (170), the LAPIC (200),
+or the I/O APIC (201). The BIOS stage-4 stack is 64 KiB
+(`third_party/bootloader-x86_64-bios-stage-4`); the stock `0x7c00`
+stack overflows while seeding the bootloader RNG. `docs/THREAT.md` →
+CPU features is the table.
 
-**CPU security features (status: absent).** `CR4` today sets only
-`FSGSBASE` (`arch/cpu.rs`). SMEP, SMAP, and UMIP are not enabled, and
-the syscall staging copies read user virtual addresses directly after
-the `user_buffer` walk. Milestone 63 turns the three bits on where
-CPUID reports them, routes every user-VA copy through one
-`arch::user_copy` module that owns `stac`/`clac`, and writes the
-Spectre v1 mask plus the KPTI / IBRS / CET waivers into `THREAT.md`.
-Until then this paragraph is the honest statement: the isolation story
-is paging plus validated copies, with no hardware backstop against a
-kernel bug that dereferences a user pointer.
+**CPU security features.** `arch/cpu.rs` sets `CR4.FSGSBASE` always
+(panic if the bit is missing) and `CR4.SMEP` / `CR4.SMAP` / `CR4.UMIP`
+when CPUID leaf 7 reports them. User-VA syscall copies go through
+`arch::user_copy`, the only `stac` / `clac` site; copies that walk the
+physical map do not. `#GP` (UMIP) shares the naked fault handler with
+`#PF`, so a ring-3 fault kills that task. Spectre v1 masking and the
+KPTI / IBRS / MDS / CET waivers are in `THREAT.md` → CPU features.
 
 **Hostile ELF images.** `loader::validate_elf` runs before any page
 is mapped (the spawn syscall calls it on the ramdisk bytes): ELF
@@ -966,21 +969,37 @@ magic, `ELFCLASS64`, `ET_EXEC`, `EM_X86_64`, the phdr table inside the
 file (`xmas_elf` slices it unchecked), `phentsize == 56`, 1–64 phdrs,
 `filesz <= memsz`, segment bytes inside the file, every `PT_LOAD`
 inside `[USER_IMAGE_BASE, +USER_IMAGE_WINDOW)` (512 MiB), no `W|X`
-segment, no overlapping `PT_LOAD` pages, and the entry inside an
-executable segment. Each failure is `Unsupported` (not our ELF shape)
-or `BadValue` (ours but malformed) — never a panic. `bin/test-badelf`
-forges nineteen mutations of the real `hello` image plus truncated
-header and table cases and asserts each one;
-`loader::load` keeps its own asserts as a second line. Milestone 63
-extends the sweep past the loader (every syscall argument, SMAP on).
-The ramdisk is still trusted input — measured, not signed (`THREAT.md`
-→ Trust assumptions).
+segment, no overlapping `PT_LOAD` pages, the entry inside an
+executable segment, and the page count of one segment and of the
+image both inside `USER_IMAGE_MAX_PAGES`. Each failure is
+`Unsupported` (not our ELF shape) or `BadValue` (ours but malformed)
+— never a panic. `spawn_program` returns that `Result`. Trusted
+ramdisk callers (the shell, init) still `expect` a binary this repo
+just linked. `bin/test-badelf` forges nineteen mutations of the real
+`hello` image plus truncated header and table cases and asserts each
+one. The ramdisk is still trusted input — measured, not signed
+(`THREAT.md` → Trust assumptions).
 
 **User pointers.** Syscalls copy path, name, password, and write bytes
 into stack buffers only after a length check (`MAX_NAME`, `MAX_READ` /
 `MAX_WRITE`, `SPAWN_ARG_MAX` 256, password ≤ 64) and a `user_buffer`
-walk. Parse and KDF run on that copy, so a later store in the user
-page cannot change the bytes mid-check.
+walk. `user_buffer(0)` is an empty range, not `BadBuffer`. The copy
+itself is `arch::user_copy` (`stac` / `clac` when SMAP is on). Parse
+and KDF run on that copy, so a later store in the user page cannot
+change the bytes mid-check. A waiter whose CR3 is zero is a kernel
+bug: keyboard and pipe completion `expect` a kept kernel address and
+`debug_assert` that the slot is `WAITING`.
+
+**Rotation watchdog.** Each CPU records the tick of its last scheduler
+entry. Another CPU that still has `STATE_RUNNING` threads and has not
+entered the scheduler for 2 s is dumped once: rotation indexes,
+`armed_ms`, and any in-flight shootdown mailbox (`[watchdog]`). A
+wake that arrives while an idle CPU is programming its tickless
+deadline re-arms a quantum, and `cpu::kick` sends IPI `0xF7` so the
+owner leaves `hlt`. Spawn pokes the same way: a new `RUNNING` thread
+on an idle CPU must not wait for the next whole-second deadline.
+The dump does not panic and does not contain secrets. A long `IF=0`
+PBKDF2 can trip it once.
 
 **Secrets.** Login, useradd, passwd, and volume-unlock staging buffers
 are `wipe_bytes`'d before the syscall returns, including the error
@@ -1094,7 +1113,7 @@ instead of `rust-lld` — a build axis, not a behaviour switch.
 
 ### Coverage: which milestone each test kernel guards
 
-One row per `crates/galexy-os/src/bin/test-*.rs` (73). The boot test is
+One row per `crates/galexy-os/src/bin/test-*.rs` (77). The boot test is
 the `runner/tests/boot.rs` function that boots it; the milestone is the
 one whose promise breaks first if the kernel goes red. Typing e2e boots
 (`shell_*_typing_e2e`, `gxld_image_*`, `util_typing_e2e_on`) run the
@@ -1129,7 +1148,8 @@ main image and are listed at the end.
 | `test-init`, `test-jobcap` | `init_test_passes`, `jobcap_test_passes` | M53 init orphan root, M55 job Cap / Ctrl-C |
 | `test-sleep`, `test-idle` | `sleep_test_passes`, `idle_test_passes` | M56 time and deadlines, M58 policy freeze |
 | `test-hellogxc` | `hellogxc_test_passes` | M61 hello via `gxc`, M69 `gxld` link |
-| `test-badelf`, `test-negative` | `badelf_test_passes`, `negative_test_passes` | M51 hostile ELF oracle and negative suite (loader hardening itself: M63) |
+| `test-badelf`, `test-negative` | `badelf_test_passes`, `negative_test_passes` | M51 hostile ELF oracle and negative suite; M63 loader returns `SysError` and caps image pages |
+| `test-smep`, `test-smap`, `test-umip`, `test-kaslr` | `smep_test_passes`, `smap_test_passes`, `umip_test_passes`, `kaslr_kernel_base_differs_across_boots` | M63 SMEP, SMAP, UMIP, kernel KASLR (`kaslr` boots the image twice) |
 | `test-soak`, `test-fairness`, `test-pathological` | `soak_test_passes`, `fairness_test_passes`, `pathological_test_passes` | M51 soak (exact table closure per round), steal fairness under load, console-budget flood |
 | main image | `main_kernel_boots_and_timer_ticks`, `uefi_image_boots_and_timer_ticks`, `shell_*_typing_e2e`, `shell_run_hello_typing_e2e_uefi`, `shell_tty_switch_e2e`, `util_typing_e2e_on`, `assert_passwords_masked`, `uart_console_login_e2e` | M21 / M29 / M33 / M40 / M43 / M50 / M54 seats, shell, utilities, masked prompts; `shell_password_paste_typing_e2e` (M51 pathological input), `default_image_has_no_crash_seam_e2e` (M52 default-build audit), `uart_console_login_e2e` (COM1 is the console: DEL, CR, masked password) |
 | `gxld` image | `gxld_image_run_hello_typing_e2e`, `gxld_image_util_typing_e2e` | M69 linker differential |

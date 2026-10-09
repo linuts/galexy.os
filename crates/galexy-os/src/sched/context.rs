@@ -210,6 +210,8 @@ unsafe extern "C" fn page_fault_sched(frame: *mut Context) -> u64 {
             err,
             cr2
         );
+        // SAFETY: `frame` is the faulting task's context block on its
+        // kernel stack, built by the naked handler. The task is ring 3.
         unsafe { super::syscall_handoff(frame, true, "page fault") }
     } else {
         // Ring-0 fault: kernel bug or a test-installed seam. Report

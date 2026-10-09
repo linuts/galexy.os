@@ -46,6 +46,9 @@ pub fn looks_like_elf(bytes: &[u8]) -> bool {
 /// Size of the window a program image may occupy, starting at
 /// `USER_IMAGE_BASE`. The stack sits at `+1 GiB`, well above it.
 pub const USER_IMAGE_WINDOW: u64 = 512 * 1024 * 1024;
+/// Pages that fit in [`USER_IMAGE_WINDOW`]. A `PT_LOAD`'s `memsz`, and the
+/// sum of load pages, may not exceed this.
+pub const USER_IMAGE_MAX_PAGES: u64 = USER_IMAGE_WINDOW / 4096;
 
 /// Most `PT_LOAD`-or-other program headers a program may carry. Bounds the
 /// pairwise overlap check; real programs have fewer than ten.
@@ -103,6 +106,7 @@ pub fn validate_elf(bytes: &[u8]) -> Result<(), galexy_abi::SysError> {
     // Page-granular [first, last] of every accepted PT_LOAD so far.
     let mut loads: [(u64, u64); MAX_PHDRS as usize] = [(0, 0); MAX_PHDRS as usize];
     let mut n_loads = 0usize;
+    let mut total_pages = 0u64;
     let entry = elf.header.pt2.entry_point();
     let mut entry_in_text = false;
 
@@ -116,6 +120,10 @@ pub fn validate_elf(bytes: &[u8]) -> Result<(), galexy_abi::SysError> {
         let memsz = ph.mem_size();
         let filesz = ph.file_size();
         if filesz > memsz {
+            return Err(SysError::BadValue);
+        }
+        let pages = memsz.div_ceil(4096);
+        if pages > USER_IMAGE_MAX_PAGES {
             return Err(SysError::BadValue);
         }
         let data_end = ph.offset().checked_add(filesz).ok_or(SysError::BadValue)?;
@@ -140,6 +148,10 @@ pub fn validate_elf(bytes: &[u8]) -> Result<(), galexy_abi::SysError> {
         {
             return Err(SysError::BadValue);
         }
+        total_pages = total_pages.saturating_add(last - first + 1);
+        if total_pages > USER_IMAGE_MAX_PAGES {
+            return Err(SysError::BadValue);
+        }
         loads[n_loads] = (first, last);
         n_loads += 1;
         if ph.flags().is_execute() && entry >= vaddr && entry < end {
@@ -157,8 +169,8 @@ pub fn validate_elf(bytes: &[u8]) -> Result<(), galexy_abi::SysError> {
 /// The task is granted the console only. Same rotation/lifecycle as every
 /// task: kernel stack via TSS.RSP0, CR3 own tree, tombstone + tree-walk
 /// reaping. Owner CPU round-robins.
-pub fn spawn_program(name: &str, bytes: &[u8]) -> ProgramRegion {
-    spawn_program_placed(
+pub fn spawn_program(name: &str, bytes: &[u8]) -> Result<ProgramRegion, galexy_abi::SysError> {
+    Ok(spawn_program_placed(
         name,
         bytes,
         None,
@@ -169,8 +181,8 @@ pub fn spawn_program(name: &str, bytes: &[u8]) -> ProgramRegion {
         crate::sched::galfs::admin_cred(),
         0,
         false,
-    )
-    .0
+    )?
+    .0)
 }
 
 /// Like [`spawn_program`], with an explicit grant set, a startup argument,
@@ -186,7 +198,7 @@ pub(crate) fn spawn_launched(
     tty: u8,
     fs: crate::sched::galfs::FsCred,
     parent_slot: u8,
-) -> u8 {
+) -> Result<u8, galexy_abi::SysError> {
     spawn_launched_placed(name, bytes, grants, arg, tty, fs, parent_slot, false)
 }
 
@@ -199,7 +211,7 @@ pub(crate) fn spawn_launched_seat(
     tty: u8,
     fs: crate::sched::galfs::FsCred,
     parent_slot: u8,
-) -> u8 {
+) -> Result<u8, galexy_abi::SysError> {
     spawn_launched_placed(name, bytes, grants, arg, tty, fs, parent_slot, true)
 }
 
@@ -213,8 +225,8 @@ fn spawn_launched_placed(
     fs: crate::sched::galfs::FsCred,
     parent_slot: u8,
     seat: bool,
-) -> u8 {
-    spawn_program_placed(
+) -> Result<u8, galexy_abi::SysError> {
+    Ok(spawn_program_placed(
         name,
         bytes,
         if seat { Some(0) } else { None },
@@ -225,8 +237,8 @@ fn spawn_launched_placed(
         fs,
         parent_slot,
         false,
-    )
-    .1
+    )?
+    .1)
 }
 
 /// Like [`spawn_program`], pinned to the BSP, and idle CPUs do not steal it.
@@ -235,7 +247,7 @@ fn spawn_launched_placed(
 /// framebuffer has one painter, and that painter is the BSP. The shell
 /// receives the launcher grant (console, keyboard, loader, queries, power),
 /// admin's root token, and writes the console `tty` names.
-pub fn spawn_program_bsp(name: &str, bytes: &[u8]) -> ProgramRegion {
+pub fn spawn_program_bsp(name: &str, bytes: &[u8]) -> Result<ProgramRegion, galexy_abi::SysError> {
     spawn_shell_on(name, bytes, 0)
 }
 
@@ -244,13 +256,17 @@ pub fn spawn_program_bsp(name: &str, bytes: &[u8]) -> ProgramRegion {
 /// Every seat starts **logged out** (console + keyboard only). The startup
 /// argument is a single byte: 1-based TTY index for the login banner.
 /// `login` installs the session; `logout` returns to the login screen.
-pub fn spawn_shell_on(name: &str, bytes: &[u8], tty: u8) -> ProgramRegion {
-    spawn_shell_on_slot(name, bytes, tty).0
+pub fn spawn_shell_on(
+    name: &str,
+    bytes: &[u8],
+    tty: u8,
+) -> Result<ProgramRegion, galexy_abi::SysError> {
+    Ok(spawn_shell_on_slot(name, bytes, tty)?.0)
 }
 
 /// Loads userspace `init` (Milestone 53): BSP-pinned, no-steal, init grants.
-pub fn spawn_init(bytes: &[u8]) -> ProgramRegion {
-    spawn_program_placed(
+pub fn spawn_init(bytes: &[u8]) -> Result<ProgramRegion, galexy_abi::SysError> {
+    Ok(spawn_program_placed(
         "init",
         bytes,
         Some(0),
@@ -261,11 +277,15 @@ pub fn spawn_init(bytes: &[u8]) -> ProgramRegion {
         crate::sched::galfs::admin_cred(),
         0,
         true,
-    )
-    .0
+    )?
+    .0)
 }
 
-fn spawn_shell_on_slot(name: &str, bytes: &[u8], tty: u8) -> (ProgramRegion, u8) {
+fn spawn_shell_on_slot(
+    name: &str,
+    bytes: &[u8],
+    tty: u8,
+) -> Result<(ProgramRegion, u8), galexy_abi::SysError> {
     let tty_arg = [tty.wrapping_add(1)];
     spawn_program_placed(
         name,
@@ -293,17 +313,19 @@ fn spawn_program_placed(
     fs: crate::sched::galfs::FsCred,
     parent_slot: u8,
     is_init: bool,
-) -> (ProgramRegion, u8) {
-    let elf = ElfFile::new(bytes).expect("spawn_program: invalid ELF");
-    // Only static executables: relocatable/DYN would need relocation work.
+) -> Result<(ProgramRegion, u8), galexy_abi::SysError> {
+    use galexy_abi::SysError;
+    // Image contents are `BadValue` / `Unsupported` from here on. Frame
+    // exhaustion stays an `expect`: that is a kernel bug, not a bad file.
+    validate_elf(bytes)?;
+    let elf = ElfFile::new(bytes).map_err(|_| SysError::BadValue)?;
     match elf.header.pt2.type_().as_type() {
         xmas_elf::header::Type::Executable => {}
-        other => panic!("spawn_program: unsupported ELF type {other:?} (static EXEC only)"),
+        _ => return Err(SysError::BadValue),
     }
-    assert!(
-        elf_load_wx_ok(&elf),
-        "spawn_program: ELF has a writable+executable PT_LOAD (W^X)"
-    );
+    if !elf_load_wx_ok(&elf) {
+        return Err(SysError::BadValue);
+    }
     let entry_vaddr = elf.header.pt2.entry_point();
 
     interrupts::without_interrupts(|| {
@@ -313,30 +335,41 @@ fn spawn_program_placed(
             mm::on_kernel_tree(),
             "spawn_program: must run on the kernel tree (main-loop context)"
         );
+        // Resource exhaustion, not a hostile image.
         let fresh = mm::FreshL4::new().expect("no frame for a fresh task table");
         let root = fresh.frame;
         let image = VirtAddr::new(galexy_abi::USER_IMAGE_BASE);
         let entry = VirtAddr::new(entry_vaddr);
-        assert!(
-            entry >= image && entry.as_u64() < image.as_u64() + USER_IMAGE_WINDOW,
-            "spawn_program: entry {:#x} outside the image region",
-            entry.as_u64()
-        );
+        if entry < image || entry.as_u64() >= image.as_u64() + USER_IMAGE_WINDOW {
+            mm::free_user_tree(root, p4_index_of(image));
+            return Err(SysError::BadValue);
+        }
 
         // Map every PT_LOAD segment into the task's tree.
+        let mut load_err = Ok(());
         // SAFETY: a FreshL4 root: coherent, freshly cloned, not active.
         unsafe {
             mm::with_table(root, |mapper| {
                 for ph in elf.program_iter() {
                     match ph.get_type() {
-                        Ok(Type::Load) => map_segment(mapper, &elf, &ph),
-                        // The rest of the phdr types are irrelevant for
-                        // static freestanding binaries.
+                        Ok(Type::Load) => {
+                            if let Err(e) = map_segment(mapper, &elf, &ph) {
+                                load_err = Err(e);
+                                return;
+                            }
+                        }
                         Ok(_) => {}
-                        Err(e) => panic!("spawn_program: bad phdr: {e:?}"),
+                        Err(_) => {
+                            load_err = Err(SysError::BadValue);
+                            return;
+                        }
                     }
                 }
             });
+        }
+        if let Err(e) = load_err {
+            mm::free_user_tree(root, p4_index_of(image));
+            return Err(e);
         }
 
         // Task-private stack + scratch (stack at +1 GiB with its guard
@@ -399,6 +432,8 @@ fn spawn_program_placed(
         let fab_vaddr = mm::frame_virt(stack_frames[USER_STACK_PAGES - 1].start_address()) + 4096;
         let (arg_user, arg_len) = place_arg(fab_vaddr.as_u64(), stack_top, arg);
         let (cs, ss) = context::user_cs_ss();
+        // SAFETY: `fab_vaddr` is the phys-map image of the fresh top stack
+        // page; `entry` is inside a validated executable segment.
         let ctx = unsafe {
             context::init_user_frame(
                 fab_vaddr.as_u64(),
@@ -438,7 +473,7 @@ fn spawn_program_placed(
             entry.as_u64()
         );
 
-        (
+        Ok((
             ProgramRegion {
                 image,
                 entry,
@@ -446,7 +481,7 @@ fn spawn_program_placed(
                 scratch_phys: scratch_frame.start_address(),
             },
             child_slot,
-        )
+        ))
     })
 }
 
@@ -503,40 +538,37 @@ fn elf_load_wx_ok(elf: &ElfFile) -> bool {
 /// # Safety
 ///
 /// `mapper` must be over a coherent, non-active task tree.
-unsafe fn map_segment(mapper: &mut OffsetPageTable<'static>, elf: &ElfFile, ph: &ProgramHeader) {
+unsafe fn map_segment(
+    mapper: &mut OffsetPageTable<'static>,
+    elf: &ElfFile,
+    ph: &ProgramHeader,
+) -> Result<(), galexy_abi::SysError> {
+    use galexy_abi::SysError;
     let vaddr = VirtAddr::new(ph.virtual_addr());
     let memsz = ph.mem_size();
     let filesz = ph.file_size();
     if memsz == 0 {
-        return;
+        return Ok(());
+    }
+    if filesz > memsz || memsz.div_ceil(4096) > USER_IMAGE_MAX_PAGES {
+        return Err(SysError::BadValue);
     }
 
     // STRICT: every segment's pages must live under the task's own P4
     // entry (USER_IMAGE_BASE's entry). Anything else would map through
-    // kernel-shared page-table subtrees — rejected loudly, never silently
-    // polluting the shared tables.
+    // kernel-shared page-table subtrees — refused, never mapped.
     let own_p4 = (galexy_abi::USER_IMAGE_BASE >> 39) as usize;
     let seg_first_p4 = (vaddr.as_u64() >> 39) as usize;
     let seg_last_p4 = ((vaddr + memsz - 1).as_u64() >> 39) as usize;
-    assert!(
-        seg_first_p4 == own_p4 && seg_last_p4 == own_p4,
-        "loader: segment {:#x}..{:#x} must sit under P4 entry {}",
-        vaddr.as_u64(),
-        vaddr.as_u64() + memsz,
-        own_p4
-    );
-    assert!(
-        vaddr.as_u64() < 0x0000_8000_0000_0000,
-        "loader: segment vaddr {:#x} is kernel space",
-        vaddr.as_u64()
-    );
-
-    // W^X: never map a PT_LOAD that is both writable and executable.
-    assert!(
-        !(ph.flags().is_write() && ph.flags().is_execute()),
-        "loader: refusing W|X PT_LOAD at {:#x} (W^X)",
-        vaddr.as_u64()
-    );
+    if seg_first_p4 != own_p4 || seg_last_p4 != own_p4 {
+        return Err(SysError::BadValue);
+    }
+    if vaddr.as_u64() >= 0x0000_8000_0000_0000 {
+        return Err(SysError::BadValue);
+    }
+    if ph.flags().is_write() && ph.flags().is_execute() {
+        return Err(SysError::BadValue);
+    }
 
     // Flags: R (PRESENT) + W (WRITABLE) + X (no NO_EXECUTE); always USER.
     // Executable pages stay non-writable; writable pages get NO_EXECUTE.
@@ -555,10 +587,11 @@ unsafe fn map_segment(mapper: &mut OffsetPageTable<'static>, elf: &ElfFile, ph: 
 
     let data = match ph.get_data(elf) {
         Ok(SegmentData::Undefined(bytes)) => bytes,
-        Ok(_) => panic!("loader: unexpected segment data kind"),
-        Err(e) => panic!("loader: phdr data: {e:?}"),
+        Ok(_) | Err(_) => return Err(SysError::BadValue),
     };
-    assert_eq!(data.len() as u64, filesz, "loader: file/data size mismatch");
+    if data.len() as u64 != filesz {
+        return Err(SysError::BadValue);
+    }
 
     let first_page = Page::containing_address(vaddr);
     let last_byte = vaddr + memsz - 1;
@@ -596,6 +629,7 @@ unsafe fn map_segment(mapper: &mut OffsetPageTable<'static>, elf: &ElfFile, ph: 
         }
         pages += 1;
     }
+    Ok(())
 }
 
 /// P4 entry index of the user image base.

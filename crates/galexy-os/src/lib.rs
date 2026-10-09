@@ -42,6 +42,15 @@ pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     // top-of-address-space recursive page-table mapping.
     config.mappings.page_table_recursive =
         Some(Mapping::FixedAddress((0xFFFF << 48) | (511 << 39)));
+    // Randomize dynamic mappings (kernel image, stack, framebuffer,
+    // ramdisk, boot info) inside P4 indexes 1..=24. That band sits
+    // below the user image (index 25) and clear of the kernel's fixed
+    // slots: physical memory 128, heap 170, LAPIC 200, I/O APIC 201.
+    // The recursive map is index 511. The kernel is a PIE. The BIOS
+    // stage-4 stack patch in `third_party/` is what makes `aslr` boot.
+    config.mappings.aslr = true;
+    config.mappings.dynamic_range_start = Some(1 << 39);
+    config.mappings.dynamic_range_end = Some((25 << 39) - 1);
     config
 };
 

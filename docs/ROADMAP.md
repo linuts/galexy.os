@@ -10,11 +10,11 @@ what is true today and which milestone closes the gap.
 
 | Bar | Today | Gap → milestone |
 | --- | --- | --- |
-| **Secure** | Capabilities everywhere (26 syscalls, no ambient PID / fd); PBKDF2 passwords, lockout, idle logout, must-change; sealed dual-slot GALF (ChaCha20 + HMAC); W^X user maps, NX, guard pages, kstack canary, stack/secret wipe; TOCTOU-safe copies; lock-order table; audit lines without secrets; zero `static mut` | SMEP / SMAP / UMIP / KASLR absent, not waived; no Spectre / KPTI stance; ELF loader panics on a hostile image; KDF cost fixed at a debug budget → **63**. Threat model, negative suite, hostile-ELF oracle, CI → **51** |
+| **Secure** | Capabilities everywhere (26 syscalls, no ambient PID / fd); PBKDF2 passwords, lockout, idle logout, must-change; sealed dual-slot GALF (ChaCha20 + HMAC); W^X user maps, NX, guard pages, kstack canary, stack/secret wipe; TOCTOU-safe copies; lock-order table; audit lines without secrets; zero `static mut`; SMEP / SMAP / UMIP when CPUID reports them; kernel KASLR in P4 indexes 1..=24; Spectre v1 mask on dispatch; per-actor KDF cost (GALF v12) | KPTI / IBRS / MDS / CET waived for v1.0 (single-tenant guest, kernel half stays mapped; `THREAT.md`). Nothing is measured yet → **64** |
 | **Fast** | Deadline one-shot LAPIC, tickless idle, idle steal, park/wake for sleep / keyboard / pipe; IF=0 syscall path never allocates; console budget | Nothing is measured; suite is TCG at `opt-level = 0`; no release profile or LTO; virtio-blk spins 10 M polls; ATA is PIO; pipeline children `yield_now`-poll until `give` → **64** |
 | **Modern only** | x2APIC-aware LAPIC, I/O APIC, ACPI MADT / FADT / XSDT, UEFI first-class, GOP framebuffer, virtio-blk, FSGSBASE per-CPU, SMP | Legacy is the only path for timer calibration (PIT), 8259 remap, PS/2 keyboard, PIO IDE, legacy virtio IO BAR, port PCI config, `-M pc`; no TSC-deadline, no ECAM, no MSI-X → **65** |
 | **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, one pipeline, glob; 12 utilities; galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; gxc hello | No user heap, argv, clock read, or IPC beyond pipes; one pipeline shape; no background jobs → **66**. Shutdown bypasses init; no service table → **67**. Network and USB → **Phase 10** |
-| **Ready** | 73 QEMU test kernels, 96 runner boots, host suites green; CI workflow (`host` + `qemu` jobs); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 closed (soak, steal fairness, pathological input, default-build audit landed; `review-rc1` tag is the owner's call). Next: the **v1.0 gate** via **63 → 67** |
+| **Ready** | 77 QEMU test kernels, 101 runner boots, host suites green; CI workflow (`host` + `qemu` jobs); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 and 63 closed (`review-rc1` tag is the owner's call). Next: the **v1.0 gate** via **64 → 67** |
 
 Order of work: **51 → 52** (`review-rc1`), then **63 → 64 → 65 → 66 →
 67** (`v1.0`). Security first because every later change should land
@@ -372,11 +372,12 @@ harden the kernel first, measure second, then rewrite device paths on a
 baseline, then grow userland on the hardened kernel, then let init own
 the machine.
 
-1. **63 Kernel hardening** — SMEP / SMAP (`arch::user_copy` owns
-   `stac`/`clac`) / UMIP on; KASLR via the bootloader; Spectre v1 mask
-   on dispatch; KPTI / IBRS / CET written waivers; ELF loader returns
-   `SysError` on every hostile image; KDF cost stored per actor so
-   production formats at ≥ 100 000 iterations
+1. **63 Kernel hardening** ✅ — SMEP / SMAP (`arch::user_copy` owns
+   `stac`/`clac`) / UMIP on when CPUID reports them; KASLR via the
+   bootloader inside P4 indexes 1..=24; Spectre v1 mask on dispatch;
+   KPTI / IBRS / MDS / CET written waivers; ELF loader returns
+   `SysError` on a hostile image; KDF cost stored per actor so a
+   `--release` kernel under KVM formats at 100 000 iterations
 2. **64 Fast path** — `bin/test-bench` + `docs/PERF.md` first; KVM in
    the runner and `cargo run`; release profile with LTO; virtio-blk IRQ
    completion; Caps handed over at spawn (no `yield` polls); framebuffer

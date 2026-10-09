@@ -171,6 +171,8 @@ pub unsafe extern "C" fn syscall_entry_naked() {
 /// Called only from the naked entry above; `frame` is the just-built frame
 /// on the current task's kernel stack.
 unsafe extern "C" fn syscall_rust(frame: *mut crate::sched::context::Context, sysno: u64) -> u64 {
+    // SAFETY: the naked entry just built this frame on the current task's
+    // kernel stack and passed its address. Exclusive for this call.
     let frame = unsafe { &mut *frame };
 
     // A syscall is only legal from a ring-3 task context. Kernel-origin

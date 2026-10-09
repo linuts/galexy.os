@@ -92,6 +92,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         // preempt quantum.
         let into = (galexy_os::arch::timer_ticks() % 500) as u32;
         sched::arm_timer_capped((500 - into).max(1));
-        x86_64::instructions::hlt();
+        // `sti; hlt` so a wake IPI that arrived with IF clear is taken
+        // before the halt, not lost behind it.
+        x86_64::instructions::interrupts::enable_and_hlt();
     }
 }

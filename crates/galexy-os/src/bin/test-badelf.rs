@@ -291,7 +291,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     // The pristine program still loads and runs to completion: the gate
     // refused the forgeries, not the real thing.
     let baseline = galexy_os::arch::mm::free_frames();
-    let _ = sched::loader::spawn_program("hello", hello);
+    let _ = sched::loader::spawn_program("hello", hello).expect("hello elf");
     let mut polls = 0u64;
     loop {
         x86_64::instructions::hlt();

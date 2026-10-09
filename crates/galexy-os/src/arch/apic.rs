@@ -299,6 +299,10 @@ static ARMED_MS: [AtomicU32; crate::arch::cpu::MAX_CPUS] =
 /// Longest idle sleep (status-bar / uptime second boundary).
 pub const IDLE_MAX_MS: u32 = 1000;
 
+/// IPI that only wakes a CPU out of `hlt`. The handler EOIs and returns;
+/// the idle loop notices runnable work and arms a quantum.
+pub const WAKE_VECTOR: u8 = 0xF7;
+
 /// The calibrated LAPIC-timer rate (ticks per millisecond at divide-by-1).
 /// Panics before calibration (a bug, not a condition to handle).
 pub fn ticks_per_ms() -> u32 {
@@ -387,6 +391,15 @@ pub fn arm_oneshot_ms(ms: u32) {
 pub fn idle_deadline_ms() -> u32 {
     let into = (crate::arch::timer_ticks() % 1000) as u32;
     (IDLE_MAX_MS - into).max(1)
+}
+
+/// The one-shot currently programmed on `cpu`, in milliseconds (0 if the
+/// IRQ already consumed it). The rotation watchdog prints this.
+pub fn armed_ms(cpu: usize) -> u32 {
+    if cpu >= ARMED_MS.len() {
+        return 0;
+    }
+    ARMED_MS[cpu].load(Ordering::Relaxed)
 }
 
 /// Consumes the armed duration for this CPU (called from the timer IRQ).

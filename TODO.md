@@ -1637,7 +1637,7 @@ Evidence, not assertions.
       from the real `hello`; `loader::validate_elf` runs before the
       loader in the `spawn` syscall and returns `BadValue` /
       `Unsupported`, never a panic. Every ramdisk program still
-      validates (full page-table-level hardening stays Milestone 63)
+      validates (page-count cap and `SysError` on image contents: Milestone 63)
 - [x] **Ramdisk measurement**: `build.rs` prints the SHA-256 of each
       packed tar (`ramdisk`, `-crash`, `-gxld`) and writes `*.sha256`;
       `test-ramdisk` measures the archive at boot and the runner asserts
@@ -1775,8 +1775,8 @@ of Milestone 67.
 - [x] Full suite green BIOS+UEFI; disk persist + corrupt recover + auth
       e2e + galfs capacity smoke — 96 boots (`cargo test -p runner
       --test boot -- --test-threads=1`) on the M51 close; one
-      intermittent SMP hang is tracked under Known limitations →
-      **Milestone 63**
+      intermittent SMP hang is closed by the Milestone 63 watchdog
+      and wake IPI (Known limitations)
 - [x] Default build: no `crash` (`default_image_has_no_crash_seam_e2e`
       types it on the main image → `command not found`), KDF live
       (`PBKDF2_ITERS = 10_000`, every login pays it — `users`,
@@ -2061,50 +2061,50 @@ and the review scorecard: `docs/ROADMAP.md` → Where we stand. Each
 milestone keeps the suite green on BIOS + UEFI; waivers are written
 down, not implied. Numbering continues after Milestone 62.
 
-## Milestone 63 — Kernel hardening (CPU features + hostile input)
+## Milestone 63 — Kernel hardening (CPU features + hostile input) ✅
 
 What the audit found absent, not waived: SMEP, SMAP, UMIP, KASLR, a
 Spectre stance, and an ELF loader that panics on a bad image.
 
 ### CPU security features
 
-- [ ] **SMEP**: set `CR4.SMEP` when CPUID 7.0 EBX bit 7; the kernel
+- [x] **SMEP**: set `CR4.SMEP` when CPUID 7.0 EBX bit 7; the kernel
       never executes user pages. `bin/test-smep` calls into a
       user-mapped page from ring 0 and expects the fault
-- [ ] **SMAP**: set `CR4.SMAP` when CPUID 7.0 EBX bit 20. One
+- [x] **SMAP**: set `CR4.SMAP` when CPUID 7.0 EBX bit 20. One
       `arch::user_copy` module owns `stac`/`clac`; every syscall copy
       that reads or writes a user VA (`syscalls.rs` staging after
       `user_buffer`) goes through it. Copies through the physical map
       (`copy_to_user_via` / `copy_from_user_via`) stay as they are.
       `bin/test-smap` touches a user VA without `stac` and expects the
       fault
-- [ ] **UMIP**: set `CR4.UMIP` when CPUID 7.0 ECX bit 2; `sgdt` /
+- [x] **UMIP**: set `CR4.UMIP` when CPUID 7.0 ECX bit 2; `sgdt` /
       `sidt` from ring 3 fault and kill the task (`bin/test-umip`)
-- [ ] **KASLR**: `BootloaderConfig.mappings.aslr = true`; the runner
+- [x] **KASLR**: `BootloaderConfig.mappings.aslr = true`; the runner
       boots twice and asserts the printed kernel base differs.
       `USER_IMAGE_BASE` stays fixed (M48 user-ASLR waiver stands)
-- [ ] **Spectre v1 on dispatch**: mask the syscall number and Cap index
+- [x] **Spectre v1 on dispatch**: mask the syscall number and Cap index
       after the bounds check (`lfence` or arithmetic mask); documented
       in `THREAT.md`
-- [ ] **KPTI / Meltdown, IBRS / retpoline, MDS**: written **waiver**
+- [x] **KPTI / Meltdown, IBRS / retpoline, MDS**: written **waiver**
       for v1.0 — single-tenant guest on a hardware-fixed host; the
       kernel half stays mapped in every tree. `THREAT.md` states the
       assumption and what changes it
-- [ ] **CET shadow stacks**: waived (QEMU TCG coverage is thin); noted
+- [x] **CET shadow stacks**: waived (QEMU TCG coverage is thin); noted
 
 ### Hostile input
 
-- [ ] **ELF loader returns errors**: every `expect` / `panic!` on image
+- [x] **ELF loader returns errors**: every `expect` / `panic!` on image
       contents in `sched/loader.rs` becomes `SysError::BadValue`;
       `filesz <= memsz`; `memsz` capped by `USER_IMAGE_MAX_PAGES`;
       overlapping `PT_LOAD`s rejected; truncated headers rejected.
       `bin/test-badelf` (Milestone 51) is the oracle
-- [ ] **`user_buffer(len == 0)`**: guard inside the function, not only
+- [x] **`user_buffer(len == 0)`**: guard inside the function, not only
       at call sites
-- [ ] **Waiter CR3 `expect`s** (`sched/mod.rs` keyboard / pipe
+- [x] **Waiter CR3 `expect`s** (`sched/mod.rs` keyboard / pipe
       completion): keep the panic (kernel invariant) and say so in
       DESIGN; add a `debug_assert` that the slot is `WAITING`
-- [ ] **Rotation watchdog**: the intermittent SMP hang recorded under
+- [x] **Rotation watchdog**: the intermittent SMP hang recorded under
       Known limitations (M51 close: `test-soak` round 2 after a child
       exit at a whole-second boundary; once the pipeline e2e before a
       heap-grow shootdown). Add a per-CPU "last switch tick" and have
@@ -2119,14 +2119,14 @@ Spectre stance, and an ELF loader that panics on a bad image.
       stall and which CPU owes it; the heap-grow OOM path no longer
       allocates a `Vec` while holding `GROWING` (it would have waited on
       itself)
-- [ ] **KDF cost on disk**: PBKDF2 iteration count stored per actor
+- [x] **KDF cost on disk**: PBKDF2 iteration count stored per actor
       (GALF v12); test kernels format at 10 000, production format
       under `--release` + KVM at ≥ 100 000; `passwd` re-derives at the
       current default. Host test: old cost still verifies
-- [ ] **Audit**: `SAFETY:` comment on every production `unsafe` block
+- [x] **Audit**: `SAFETY:` comment on every production `unsafe` block
       (13 missing today, 6 in `sched/mod.rs`); test kernels follow in
       Milestone 51's coverage pass
-- [ ] Docs: `THREAT.md` gains a "CPU features" table (on / waived /
+- [x] Docs: `THREAT.md` gains a "CPU features" table (on / waived /
       absent); DESIGN memory policy cites it
 
 ## Milestone 64 — Fast path (measured, not assumed)
@@ -2469,14 +2469,22 @@ items stay here with rationale.
 - [x] ~~SYSCALL leaves DS/ES/FS/GS as kernel bootstrap selectors when
       the task resumes in ring 3~~ — CLOSED by Milestone 47
       (`USER_DS_RPL3` reload on every ring-3 return tail)
-- [ ] CPU security features (SMEP, SMAP, UMIP, KASLR) are **absent**,
-      not waived; Spectre / KPTI stance unwritten — **Milestone 63**
+- [x] ~~CPU security features (SMEP, SMAP, UMIP, KASLR) are **absent**,
+      not waived; Spectre / KPTI stance unwritten~~ — CLOSED by
+      Milestone 63. SMEP / SMAP / UMIP follow CPUID; KASLR randomizes
+      dynamic mappings inside P4 indexes 1..=24; Spectre v1 is masked
+      on the syscall number and Cap indexes. KPTI, IBRS, MDS, and CET
+      are waived for v1.0 (`docs/THREAT.md` → CPU features)
 - [x] ~~ELF loader panics on a hostile image instead of returning
       `SysError`~~ — CLOSED by Milestone 51 (`loader::validate_elf`
-      before any map; `bin/test-badelf` is the oracle). The wider
-      hostile-input sweep (every syscall, SMAP on) stays **Milestone 63**
-- [ ] PBKDF2 at 10 000 iterations is a debug-QEMU budget, not a
-      production cost — **Milestone 63** (cost stored per actor)
+      before any map; `bin/test-badelf` is the oracle). Milestone 63
+      routes every user-VA syscall copy through `arch::user_copy`
+      (`stac` / `clac` when SMAP is on) and caps image page counts
+- [x] ~~PBKDF2 at 10 000 iterations is a debug-QEMU budget, not a
+      production cost~~ — CLOSED by Milestone 63 for actor passwords
+      (GALF v12 stores `kdf_iters`; `passwd` / format write 100 000
+      under `--release` + KVM, 10 000 otherwise; verify uses the stored
+      count). The volume KEK stays at 10 000 (not a per-actor field)
 - [ ] Nothing is profiled; the suite runs TCG at `opt-level = 0`; no
       release profile, no LTO, no KVM path — **Milestone 64**
 - [ ] virtio-blk completion is a 10 M-spin poll; ATA is PIO; `echo` /
@@ -2490,21 +2498,17 @@ items stay here with rationale.
       not bound to the seat Cap — **Milestone 67**
 - [x] ~~No `LICENSE` / `SECURITY.md` / `CHANGELOG.md`~~ — CLOSED by
       Milestone 51 (MIT; reporting + scope; one line per milestone PR)
-- [ ] Intermittent SMP hang under host load: twice during the M51 close
-      `test-soak` stopped right after `[sched] task 'hello' exited`
-      (round 2, at a whole-second tick boundary) with no reap and no
-      waiter wake, and once `shell_pipeline_glob_typing_e2e` stopped
-      after `[loader] program 'echo' ready` before the heap-grow
-      shootdown; every re-run (10× soak, 3× pipeline) passed. Suspect
-      the idle-AP tickless wake / exit-handoff window. Needs a watchdog
-      that dumps per-CPU state to serial when the rotation stalls —
-      **Milestone 63**. (The pipeline case may instead have been the
-      stale-serial-log harness bug fixed on the M51 close: the polling
-      harnesses could read the previous run's log in the window before
-      QEMU truncated it — `crash_injection_picks_consistent_slot`
-      alternated pass/fail for that reason. `serial_log_path` now removes
-      the file before QEMU starts. The soak hangs are not explained by
-      it; `boot()` reads the log only after the guest exits.)
+- [x] ~~Intermittent SMP hang under host load~~ — CLOSED by Milestone
+      63. A wake that lands while an idle CPU is arming its tickless
+      deadline re-arms a quantum, and the owner is kicked with IPI
+      `0xF7` so it leaves `hlt` (including when spawn publishes a new
+      `RUNNING` thread onto an idle CPU). If a CPU with runnable threads still
+      goes 2 s without entering the scheduler, the observer dumps that
+      CPU's rotation, `armed_ms`, and the shootdown mailbox once
+      (`[watchdog]`). The M51 symptom (soak round 2 after a child exit
+      at a whole-second boundary) is the window this closes. The
+      stale-serial-log harness bug from that close stays fixed
+      (`serial_log_path` removes the file before QEMU starts)
 - [ ] No network stack, no USB — **Phase 10** (after `v1.0`)
 - [x] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
@@ -2554,7 +2558,7 @@ items stay here with rationale.
       frozen at gxr v0
 - [ ] No linker on Galexy; `gxc` emits a finished ELF, host `rust-lld`
       links everything else — **Milestone 69** (`gxld`)
-- [ ] Kernel hardening (SMEP/SMAP/UMIP/KASLR, hostile ELF, KDF cost) —
+- [x] Kernel hardening (SMEP/SMAP/UMIP/KASLR, hostile ELF, KDF cost) —
       **Milestone 63** (Phase 9)
 - [ ] Fast path (bench, KVM, release profile, IRQ completion) —
       **Milestone 64**

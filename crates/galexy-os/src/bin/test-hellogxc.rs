@@ -45,7 +45,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     };
 
     let baseline = galexy_os::arch::mm::free_frames();
-    let _region = sched::loader::spawn_program("hello-gxc", elf);
+    let _region = sched::loader::spawn_program("hello-gxc", elf).expect("hello-gxc elf");
 
     let mut polls = 0u64;
     loop {

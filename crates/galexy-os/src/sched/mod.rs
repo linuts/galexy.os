@@ -687,6 +687,8 @@ pub fn reap() {
             } else {
                 threads[i].stack.as_ptr()
             };
+            // SAFETY: `canary_stack` is the bottom of the thread's heap
+            // stack, still owned by this slot, 8 bytes long.
             let canary = unsafe { (canary_stack as *const u64).read_unaligned() };
             if canary != STACK_CANARY {
                 panic!(
@@ -786,7 +788,7 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
         let fx = Box::into_raw(Box::new(FxArea::new()));
         let owner = init.owner.unwrap_or_else(next_cpu);
         let (name_bytes, name_len) = pack_name(init.name);
-        push_thread(Thread {
+        let slot = push_thread(Thread {
             name_bytes,
             name_len,
             state: AtomicU8::new(STATE_RUNNING),
@@ -828,7 +830,11 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
             last_input_tick: 0,
             console_budget_tick: 0,
             console_budget_used: 0,
-        })
+        });
+        // The record is RUNNING before the poke. An idle owner otherwise
+        // stays in `hlt` until its tickless deadline (up to a second).
+        poke_owner(owner);
+        slot
     })
 }
 
@@ -846,6 +852,7 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
         // Round the stack top down to 16 bytes (SSE alignment).
         let top = (stack.as_ptr() as u64 + stack.len() as u64) & !0xF;
         let (cs, ss) = context::kernel_cs_ss();
+        // SAFETY: `top` is the 16-byte-aligned top of the fresh heap stack.
         let ctx = unsafe { context::init_stack(top, entry, cs, ss) };
         let fx = Box::into_raw(Box::new(FxArea::new()));
         let owner = next_cpu();
@@ -895,6 +902,7 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
         });
         serial_println!("[sched] thread '{}' ready (owner cpu {})", name, owner);
         let _ = _slot;
+        poke_owner(owner);
         owner
     })
 }
@@ -1111,6 +1119,8 @@ pub(crate) fn spawn_user_with_grants(
         debug_assert!(stack_top.is_multiple_of(4096));
         let fab_vaddr = mm::frame_virt(stack_frames[USER_STACK_PAGES - 1].start_address()) + 4096;
         let (cs, ss) = context::user_cs_ss();
+        // SAFETY: `fab_vaddr` is the phys-map image of the fresh top stack
+        // page; the entry RIP is the task's own code page.
         let ctx = unsafe {
             context::init_user_frame(
                 fab_vaddr.as_u64(),
@@ -1186,6 +1196,7 @@ pub(crate) fn spawn_user_with_grants(
             kstack_top
         );
         let _ = _slot;
+        poke_owner(owner);
         (granted, owner)
     })
 }
@@ -1684,11 +1695,18 @@ pub fn drain_spawn() {
     // Seats share the `shell` ELF under twelve reserved names.
     let elf_name = if seat { "shell" } else { name };
     let child_slot = if let Some(bytes) = ramdisk::find(elf_name) {
-        Some(if seat {
+        let spawned = if seat {
             loader::spawn_launched_seat(name, bytes, grants, &arg[..arg_len], tty, fs, waiter_slot)
         } else {
             loader::spawn_launched(name, bytes, grants, &arg[..arg_len], tty, fs, waiter_slot)
-        })
+        };
+        match spawned {
+            Ok(slot) => Some(Ok(slot)),
+            Err(err) => {
+                serial_println!("[sched] spawn '{}' refused ({:?})", name, err);
+                Some(Err(err))
+            }
+        }
     } else {
         serial_println!(
             "[sched] spawn '{}' elf='{}' seat={} missing at drain",
@@ -1707,6 +1725,13 @@ pub fn drain_spawn() {
                 SyscallResult::err(SysError::NotFound),
             );
             return;
+        };
+        let child_slot = match child_slot {
+            Ok(slot) => slot,
+            Err(err) => {
+                wake_spawn_waiter(&mut threads, waiter_slot, SyscallResult::err(err));
+                return;
+            }
         };
         if must_change {
             if let Some(child) = threads.get_mut(child_slot as usize - 1) {
@@ -1867,7 +1892,8 @@ fn ensure_one_shell(name: &str, tty: u8) {
     } else {
         serial_println!("[sched] {} is gone; loading it again", name);
     }
-    loader::spawn_shell_on(name, bytes, tty);
+    // Ramdisk `shell` is a build input. Refusal is a kernel bug.
+    loader::spawn_shell_on(name, bytes, tty).expect("ramdisk shell");
 }
 
 /// Loads every F-key shell that has exited.
@@ -1886,7 +1912,7 @@ pub fn spawn_all_shells() {
         return;
     };
     for (tty, name) in SHELL_NAMES.iter().enumerate() {
-        loader::spawn_shell_on(name, bytes, tty as u8);
+        loader::spawn_shell_on(name, bytes, tty as u8).expect("ramdisk shell");
     }
 }
 
@@ -1920,7 +1946,7 @@ pub fn spawn_init() -> bool {
     if init_slot().is_some() {
         return true;
     }
-    loader::spawn_init(bytes);
+    loader::spawn_init(bytes).expect("ramdisk init");
     serial_println!("[sched] init loaded (orphan root)");
     true
 }
@@ -2006,7 +2032,7 @@ fn wake_spawn_waiter(threads: &mut [Thread], waiter_slot: u8, result: SyscallRes
     }
     clear_wait_fields(thread);
     stamp_waiter_frame(thread, result);
-    thread.state.store(STATE_RUNNING, Ordering::Release);
+    set_running(thread);
 }
 
 /// Writes syscall result registers into a parked task's saved context.
@@ -2038,7 +2064,7 @@ fn wake_exit_waiters(threads: &mut [Thread], child_slot: u8, exit_code: u64) {
         }
         clear_wait_fields(thread);
         stamp_waiter_frame(thread, SyscallResult::ok(exit_code));
-        thread.state.store(STATE_RUNNING, Ordering::Release);
+        set_running(thread);
         any = true;
     }
     // Only mark waited when a Cap-waiter (or SPAWN_WAIT) collected the
@@ -3592,10 +3618,11 @@ fn file_slot(cap: Cap) -> Result<usize, SysError> {
     if index < galexy_abi::FILE_CAP_BASE {
         return Err(SysError::BadCap);
     }
-    let slot = (index - galexy_abi::FILE_CAP_BASE) as usize;
-    if slot >= MAX_OPEN_FILES {
+    let raw = index - galexy_abi::FILE_CAP_BASE;
+    if raw >= MAX_OPEN_FILES as u64 {
         return Err(SysError::BadCap);
     }
+    let slot = crate::arch::cpu::spectre_mask(raw, MAX_OPEN_FILES as u64) as usize;
     Ok(slot)
 }
 
@@ -3605,10 +3632,11 @@ fn proc_slot(cap: Cap) -> Result<usize, SysError> {
     if index < PROC_CAP_BASE {
         return Err(SysError::BadCap);
     }
-    let slot = (index - PROC_CAP_BASE) as usize;
-    if slot >= MAX_PROC_CAPS {
+    let raw = index - PROC_CAP_BASE;
+    if raw >= MAX_PROC_CAPS as u64 {
         return Err(SysError::BadCap);
     }
+    let slot = crate::arch::cpu::spectre_mask(raw, MAX_PROC_CAPS as u64) as usize;
     Ok(slot)
 }
 
@@ -3709,6 +3737,7 @@ pub unsafe fn syscall_handoff(
     exit: bool,
     reason: &'static str,
 ) -> u64 {
+    crate::arch::cpu::note_switch();
     // No-switch paths (there are none once we return) must not leave a
     // stale departed slot for the naked tail to publish.
     crate::arch::cpu::set_departed_slot(0);
@@ -3825,6 +3854,8 @@ pub unsafe fn syscall_handoff(
 /// `frame` must be the outgoing task's context block (the naked wrapper's
 /// RSP).
 pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
+    crate::arch::cpu::note_switch();
+    watchdog_observe();
     crate::arch::cpu::set_departed_slot(0);
     // Tickless: advance by the one-shot duration that just fired.
     let elapsed = crate::arch::apic::take_armed_ms();
@@ -4065,8 +4096,23 @@ fn wake_due_sleepers(threads: &mut [Thread], now: u64) {
         }
         clear_wait_fields(thread);
         stamp_waiter_frame(thread, SyscallResult::ok(0));
-        thread.state.store(STATE_RUNNING, Ordering::Release);
+        set_running(thread);
     }
+}
+
+/// Marks `thread` runnable and kicks its owner out of `hlt` when that
+/// owner is another CPU. The kick handler only EOIs; the idle loop then
+/// sees the runnable thread and arms a quantum.
+fn set_running(thread: &Thread) {
+    thread.state.store(STATE_RUNNING, Ordering::Release);
+    poke_owner(thread.owner);
+}
+
+/// Wake `owner` if it is another CPU. `kick` is a no-op for the caller
+/// and for a CPU that is not online yet, so spawn during BSP bring-up
+/// is safe. The thread must already be visible as `RUNNING`.
+fn poke_owner(owner: u8) {
+    crate::arch::cpu::kick(owner as usize);
 }
 
 const IO_NONE: u8 = 0;
@@ -4126,7 +4172,7 @@ pub fn wake_keyboard_waiters(tty: u8) {
             if len == 0 || addr == 0 {
                 clear_wait_fields(&threads[i]);
                 stamp_waiter_frame(&threads[i], SyscallResult::ok(0));
-                threads[i].state.store(STATE_RUNNING, Ordering::Release);
+                set_running(&threads[i]);
                 continue;
             }
             // Fill from the keyboard queue while the waiter is still parked
@@ -4143,7 +4189,7 @@ pub fn wake_keyboard_waiters(tty: u8) {
             threads[i].last_input_tick = crate::arch::timer_ticks();
             clear_wait_fields(&threads[i]);
             stamp_waiter_frame(&threads[i], SyscallResult::ok(n as u64));
-            threads[i].state.store(STATE_RUNNING, Ordering::Release);
+            set_running(&threads[i]);
         }
     });
 }
@@ -4172,8 +4218,12 @@ fn fill_keyboard_into_user(tty: u8, cr3: u64, addr: u64, len: usize) -> usize {
     if cr3 == 0 {
         return 0;
     }
+    // Kernel invariant: the slot was `STATE_WAITING` with the CR3 recorded
+    // at park. A corrupt root panics — it is not a user error.
+    debug_assert_ne!(cr3, 0, "waiter cr3: STATE_WAITING slot has no root");
     let root = PhysFrame::from_start_address(PhysAddr::new(cr3)).expect("waiter cr3");
-    // SAFETY: waiter FreshL4 root; not necessarily active.
+    // SAFETY: waiter FreshL4 root; the task is parked so the tree is not
+    // CR3-active on this CPU. The copy goes through the phys map.
     let ok = unsafe {
         crate::arch::mm::with_table(root, |mapper| {
             copy_to_user_via(mapper, addr, &staged[..filled])
@@ -4274,7 +4324,15 @@ fn complete_pipe_read(threads: &mut [Thread], index: usize) {
     let result = match pipe::try_read(id, &mut staged[..max]) {
         Ok(pipe::ReadResult::Ready(0)) => SyscallResult::ok(0),
         Ok(pipe::ReadResult::Ready(n)) => {
+            debug_assert_eq!(
+                threads[index].state.load(Ordering::Acquire),
+                STATE_WAITING,
+                "pipe read completion is a kernel invariant: slot is WAITING"
+            );
+            // Kernel invariant (DESIGN): a parked waiter's CR3 is the root
+            // recorded at park. Corrupt means the scheduler broke, so panic.
             let root = PhysFrame::from_start_address(PhysAddr::new(cr3)).expect("cr3");
+            // SAFETY: parked waiter's tree, not CR3-active. Phys-map copy.
             let ok = unsafe {
                 crate::arch::mm::with_table(root, |mapper| {
                     copy_to_user_via(mapper, addr, &staged[..n])
@@ -4293,7 +4351,7 @@ fn complete_pipe_read(threads: &mut [Thread], index: usize) {
     let _ = cap_bits;
     clear_wait_fields(&threads[index]);
     stamp_waiter_frame(&threads[index], result);
-    threads[index].state.store(STATE_RUNNING, Ordering::Release);
+    set_running(&threads[index]);
 }
 
 fn complete_pipe_write(threads: &mut [Thread], index: usize) {
@@ -4304,7 +4362,14 @@ fn complete_pipe_write(threads: &mut [Thread], index: usize) {
     let mut staged = [0u8; 256];
     let max = len.min(staged.len());
     // Copy FROM user into staging.
+    debug_assert_eq!(
+        threads[index].state.load(Ordering::Acquire),
+        STATE_WAITING,
+        "pipe write completion is a kernel invariant: slot is WAITING"
+    );
+    // Kernel invariant (DESIGN): same as the pipe-read path.
     let root = PhysFrame::from_start_address(PhysAddr::new(cr3)).expect("cr3");
+    // SAFETY: parked waiter's tree, not CR3-active. Phys-map copy.
     let ok = unsafe {
         crate::arch::mm::with_table(root, |mapper| {
             copy_from_user_via(mapper, addr, &mut staged[..max])
@@ -4313,7 +4378,7 @@ fn complete_pipe_write(threads: &mut [Thread], index: usize) {
     if !ok {
         clear_wait_fields(&threads[index]);
         stamp_waiter_frame(&threads[index], SyscallResult::err(SysError::BadBuffer));
-        threads[index].state.store(STATE_RUNNING, Ordering::Release);
+        set_running(&threads[index]);
         return;
     }
     let result = match pipe::try_write(id, &staged[..max]) {
@@ -4324,7 +4389,7 @@ fn complete_pipe_write(threads: &mut [Thread], index: usize) {
     };
     clear_wait_fields(&threads[index]);
     stamp_waiter_frame(&threads[index], result);
-    threads[index].state.store(STATE_RUNNING, Ordering::Release);
+    set_running(&threads[index]);
 }
 
 fn copy_from_user_via(
@@ -4343,6 +4408,8 @@ fn copy_from_user_via(
         let off = (va.as_u64() as usize) & 0xFFF;
         let room = (0x1000 - off).min(dst.len() - done);
         let src = crate::arch::mm::frame_virt(frame.start_address()).as_ptr::<u8>();
+        // SAFETY: `src` is the phys-map image of a present user page; the
+        // waiter is parked so the frame is not written by its task.
         unsafe {
             core::ptr::copy_nonoverlapping(src.add(off), dst[done..].as_mut_ptr(), room);
         }
@@ -4404,7 +4471,7 @@ fn interrupt_io_waiter(threads: &mut [Thread], index: usize) {
     }
     clear_wait_fields(&threads[index]);
     stamp_waiter_frame(&threads[index], SyscallResult::err(SysError::Interrupted));
-    threads[index].state.store(STATE_RUNNING, Ordering::Release);
+    set_running(&threads[index]);
 }
 
 /// Milliseconds until the nearest sleep deadline, if any sleeper exists.
@@ -4431,6 +4498,78 @@ fn ms_until_next_sleep() -> Option<u32> {
     })
 }
 
+/// Another CPU with runnable threads that has not entered the scheduler
+/// for this long is dumped once. Idle `hlt` (no runnable thread) is not
+/// a stall — the tickless deadline is at most one second.
+const WATCHDOG_MS: u64 = 2_000;
+static WATCHDOG_DUMPED: [AtomicBool; crate::arch::cpu::MAX_CPUS] =
+    [const { AtomicBool::new(false) }; crate::arch::cpu::MAX_CPUS];
+
+fn watchdog_observe() {
+    let now = crate::arch::timer_ticks();
+    let me = crate::arch::cpu::current_index();
+    let online = crate::arch::cpu::online();
+    let Some(threads) = THREADS.try_lock() else {
+        return;
+    };
+    let mut stalled: Option<usize> = None;
+    for (cpu, dumped) in WATCHDOG_DUMPED.iter().enumerate().take(online) {
+        if cpu == me {
+            continue;
+        }
+        let last = crate::arch::cpu::last_switch_tick(cpu);
+        if last == 0 || now.saturating_sub(last) <= WATCHDOG_MS {
+            continue;
+        }
+        let runnable = threads
+            .iter()
+            .any(|t| t.owner == cpu as u8 && t.state.load(Ordering::Acquire) == STATE_RUNNING);
+        if !runnable {
+            continue;
+        }
+        if dumped
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            .is_err()
+        {
+            continue;
+        }
+        stalled = Some(cpu);
+        break;
+    }
+    let mut snap = [(0usize, 0usize, 0u64, 0u32); crate::arch::cpu::MAX_CPUS];
+    let n = online.min(snap.len());
+    for (cpu, slot) in snap.iter_mut().enumerate().take(n) {
+        let sched = &CPU_SCHED[cpu];
+        *slot = (
+            sched.current.load(Ordering::Relaxed),
+            sched.last_served.load(Ordering::Relaxed),
+            crate::arch::cpu::last_switch_tick(cpu),
+            crate::arch::apic::armed_ms(cpu),
+        );
+    }
+    drop(threads);
+    let Some(cpu) = stalled else {
+        return;
+    };
+    serial_println!(
+        "[watchdog] cpu {} stalled {} ms with runnable work (observer cpu {})",
+        cpu,
+        now.saturating_sub(snap[cpu].2),
+        me
+    );
+    for (i, row) in snap.iter().enumerate().take(n) {
+        serial_println!(
+            "[watchdog] cpu {} current {} last_served {} armed_ms {} last_switch {}",
+            i,
+            row.0,
+            row.1,
+            row.3,
+            row.2
+        );
+    }
+    crate::arch::mm::shootdown::log_mailbox();
+}
+
 /// Reprogram the local LAPIC for the current load (call before `hlt`).
 ///
 /// Busy → preempt quantum; idle → min(next whole second, next sleeper).
@@ -4455,5 +4594,12 @@ pub fn arm_timer_capped(cap_ms: u32) {
             None => idle,
         };
         crate::arch::apic::arm_oneshot_ms(ms);
+    }
+    // A wake can land while the idle deadline is being programmed (the
+    // other CPU's exit handoff, or a kick that has not been taken yet).
+    // Re-arm a quantum if work appeared, so `hlt` is not a full second
+    // with a runnable thread already owned here.
+    if cpu_has_runnable() {
+        crate::arch::apic::arm_oneshot_ms(crate::arch::apic::quantum_ms());
     }
 }

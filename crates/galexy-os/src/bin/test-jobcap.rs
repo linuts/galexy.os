@@ -41,7 +41,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let Some(bytes) = sched::ramdisk::find("linger") else {
         panic!("linger missing");
     };
-    let _ = sched::loader::spawn_program("linger", bytes);
+    let _ = sched::loader::spawn_program("linger", bytes).expect("linger elf");
 
     let mut elapsed = 0u64;
     let slot = loop {
