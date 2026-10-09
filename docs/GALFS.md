@@ -382,9 +382,10 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 ### Storage stack (Milestone 46 ✅)
 
 Legacy today, by the ROADMAP review: virtio-blk speaks the **legacy**
-PCI IO-BAR transport and polls the used ring; ATA is PIO. Milestone 64
-adds IRQ completion; Milestone 65 adds virtio 1.x (PCI capabilities,
-MMIO BARs, MSI-X) on `-M q35` and keeps the paths below as fallbacks.
+PCI IO-BAR transport and completes on INTx (a missed line is noticed
+on the next timer tick). ATA is PIO and stays the legacy fallback.
+Milestone 65 adds virtio 1.x (PCI capabilities, MMIO BARs, MSI-X) on
+`-M q35` and keeps the paths below as fallbacks.
 
 - **Landed:** `BlockDevice` + `ata::PrimarySlave` + IDENTIFY capacity;
   galfs via `disk()`; dual-slot size gate

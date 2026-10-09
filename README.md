@@ -14,15 +14,16 @@ programs.
 Not a Linux clone. No POSIX claim. Authority is **capabilities** (and
 galfs access cards), not global file descriptors or PIDs.
 
-**Status (October 2026):** Milestones 1–61, 63, and 69 are merged (62 was
-superseded); the QEMU suite is 101 boots plus host tests, all green. The
+**Status (October 2026):** Milestones 1–61, 63, 64, and 69 are merged (62 was
+superseded); the QEMU suite is 102 boots plus host tests, all green. The
 Milestone 52 review checklist is complete except the `review-rc1` tag,
-which is the owner's call; Phase 9 continues with performance,
-modern-platform, and userland work (64–67) toward `v1.0`. The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md)
-→ Where we stand. Known gaps today: nothing profiled, legacy device
-paths (PIT, 8259, PS/2, PIO IDE, legacy virtio) are the only paths, no
-user heap or argv, no network. KPTI, IBRS, MDS, and CET are waived for
-this single-tenant guest (`docs/THREAT.md`).
+which is the owner's call; Phase 9 continues with the modern platform
+and userland work (65–67) toward `v1.0`. The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md)
+→ Where we stand. Known gaps today: legacy device paths (PIT, 8259, PS/2,
+PIO IDE, legacy virtio) are still the defaults, no user heap or argv, no
+network. KPTI, IBRS, MDS, and CET are waived for this single-tenant guest
+(`docs/THREAT.md`). PCID and a new heap allocator stay waived
+(`docs/PERF.md`).
 
 | You want… | Read |
 | --- | --- |
@@ -47,12 +48,12 @@ UEFI an OVMF image.
 # Arch example
 sudo pacman -S --needed qemu-desktop ovmf
 
-cargo run                 # BIOS, headless; type on this terminal
-cargo run -- --display    # also open the framebuffer window (F1–F12)
-cargo run -- --uefi       # UEFI — set OVMF_FD if the default path is missing
+cargo run --release                 # BIOS, headless; type on this terminal
+cargo run --release -- --display    # also open the framebuffer window (F1–F12)
+cargo run --release -- --uefi       # UEFI — set OVMF_FD if the default path is missing
 ```
 
-`cargo run` attaches a persistent `galfs.img` as **virtio-blk-pci**
+`cargo run --release` attaches a persistent `galfs.img` as **virtio-blk-pci**
 (legacy IO BAR; boot image stays IDE master `index=0` with `snapshot=on`).
 Guest galfs prefers virtio-blk when present, else the ATA primary slave.
 Override the image path with `GALEXY_GALFS_IMG=/path/to/img`. Set
@@ -65,7 +66,7 @@ UEFI firmware path defaults to `/usr/share/ovmf/x64/OVMF.4m.fd`. On many
 distros:
 
 ```sh
-OVMF_FD=/usr/share/ovmf/OVMF.fd cargo run -- --uefi
+OVMF_FD=/usr/share/ovmf/OVMF.fd cargo run --release -- --uefi
 ```
 
 ### First boot
@@ -128,7 +129,7 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 ```sh
 cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxc -p gxld   # host suites
 cargo test -p runner --test audit_strings   # no "password" in any serial line
-cargo test -p runner --test boot -- --test-threads=1   # QEMU suite (101 boots, -smp 2)
+cargo test -p runner --test boot --release -- --test-threads=1   # QEMU suite (102 boots, -smp 2, release profile)
 ```
 
 UEFI cases need `OVMF_FD` if the default firmware path is absent. Disk
@@ -185,13 +186,13 @@ OVMF image for UEFI. Nothing else.
 
 ```sh
 cargo build -p runner                       # every image under target/
-cargo run                                   # BIOS, headless, -smp 2 -cpu max; type on COM1
-cargo run -- --display                      # same, plus the framebuffer window
-OVMF_FD=/usr/share/ovmf/OVMF.fd cargo run -- --uefi   # UEFI; path varies per distro
+cargo run --release                         # BIOS, headless, -smp 2; KVM if /dev/kvm is writable, else TCG
+cargo run --release -- --display            # same, plus the framebuffer window
+OVMF_FD=/usr/share/ovmf/OVMF.fd cargo run --release -- --uefi   # UEFI; path varies per distro
 scripts/review-smoke.sh                     # focused subset: host suites + 11 boots (~10 min TCG)
 ```
 
-**Disk.** `cargo run` creates and attaches `galfs.img` in the repo root
+**Disk.** `cargo run --release` creates and attaches `galfs.img` in the repo root
 (gitignored, virtio-blk). Fresh image ⇒ fresh format ⇒ the shell asks
 for a volume passphrase only once there is a sealed slot; the
 bring-up passphrase is `galfs`. `GALEXY_GALFS_IMG=/path` relocates it;

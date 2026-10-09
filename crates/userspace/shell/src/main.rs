@@ -5,7 +5,7 @@
 //! child Cap so the prompt returns after they exit; a bare program name
 //! returns once the load finishes (Cap dropped) and keeps running.
 //! Bare launches share this console — there is no background job.
-//! `echo text | cat` is a pipe (`pipe` + `give`). A `*` word expands to
+//! `echo text | cat` is a pipe moved into the children at spawn. A `*` word expands to
 //! names in the current directory from the files snapshot.
 //! `echo`, `cat`, `touch`, `mkdir`, `rm`, and `ls` are those utilities.
 //! The kernel keeps the status bar and the screen, and loads this shell
@@ -25,11 +25,10 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
-    arg, close, create, create_replace, dmesg_cap, entry, files_cap, give, grant, keyboard_cap,
-    kill, open, pipe, read, reboot, revoke, share, shutdown, spawn_with, stats_cap, sync,
-    tasks_cap, threads_cap, unshare, user, user_login, user_logout, user_name, user_name_pass,
-    user_passwd, user_quota, user_setquota, user_unlock, volume_locked, wait, write, write_console,
-    yield_now,
+    arg, close, create, create_replace, dmesg_cap, entry, files_cap, grant, keyboard_cap, kill,
+    open, pipe, read, reboot, revoke, share, shutdown, spawn_with, stats_cap, sync, tasks_cap,
+    threads_cap, unshare, user, user_login, user_logout, user_name, user_name_pass, user_passwd,
+    user_quota, user_setquota, user_unlock, volume_locked, wait, write, write_console, yield_now,
 };
 
 /// Exit status of the last Cap-waited utility (or spawn failure).
@@ -506,10 +505,6 @@ fn read_line(kbd: Cap, buf: &mut [u8], secret: bool) -> LineRead {
             wipe(buf);
             return LineRead::Denied;
         }
-        if got.value == 0 {
-            yield_now();
-            continue;
-        }
         let n = got.value as usize;
         for &byte in &chunk[..n.min(chunk.len())] {
             match byte {
@@ -571,10 +566,6 @@ fn repl(kbd: Cap, cwd: &mut Cwd, must_change: &mut bool, history: &mut History) 
         if !got.ok {
             write_console(b"\nread: keyboard denied\n");
             return ReplEnd::Die(1);
-        }
-        if got.value == 0 {
-            yield_now();
-            continue;
         }
         let n = got.value as usize;
         for &byte in &buf[..n.min(buf.len())] {
@@ -1080,7 +1071,8 @@ fn dispatch(
     None
 }
 
-/// `echo text | cat` — one pipe, two utilities, `give` of each end.
+/// `echo text | cat` — one pipe, two utilities. Each end moves into the
+/// child at spawn (`SPAWN_WITH_CAPS`), so neither utility polls for `give`.
 fn try_pipeline(cwd: &Cwd, line: &[u8]) -> bool {
     let Some(at) = find_slice(line, b" | ") else {
         return false;
@@ -1106,22 +1098,48 @@ fn try_pipeline(cwd: &Cwd, line: &[u8]) -> bool {
     true
 }
 
+/// File-table index of `cap` (offset from [`galexy_abi::FILE_CAP_BASE`]).
+fn file_slot(cap: Cap) -> u64 {
+    cap.index().saturating_sub(galexy_abi::FILE_CAP_BASE)
+}
+
 fn run_echo_cat(cwd: &Cwd, text: &[u8]) {
     let mut arg = [0u8; 2 + LINE_MAX];
     arg[0] = 3;
     arg[1] = 0;
     let ncopy = text.len().min(LINE_MAX);
     arg[2..2 + ncopy].copy_from_slice(&text[..ncopy]);
-    let echo_res = spawn_with(b"echo", &arg[..2 + ncopy], galexy_abi::SPAWN_INHERIT);
+    let mut ends = [0u64; 2];
+    let piped = pipe(&mut ends);
+    if !piped.ok {
+        write_console(b"pipeline: failed\n");
+        LAST_STATUS.store(1, Ordering::Relaxed);
+        prompt(cwd);
+        return;
+    }
+    let read_cap = Cap::from_bits(ends[0]);
+    let write_cap = Cap::from_bits(ends[1]);
+    let echo_grants = galexy_abi::SPAWN_INHERIT
+        | galexy_abi::SPAWN_WITH_CAPS
+        | (file_slot(write_cap) << galexy_abi::SPAWN_CAP_SHIFT)
+        | (galexy_abi::SPAWN_CAP_NONE << (galexy_abi::SPAWN_CAP_SHIFT + 4));
+    let echo_res = spawn_with(b"echo", &arg[..2 + ncopy], echo_grants);
     if !echo_res.ok {
+        let _ = close(read_cap);
+        let _ = close(write_cap);
         write_console(b"pipeline: failed\n");
         LAST_STATUS.store(1, Ordering::Relaxed);
         prompt(cwd);
         return;
     }
     let echo_cap = Cap::from_bits(echo_res.value);
-    let cat_res = spawn_with(b"cat", b"-", galexy_abi::SPAWN_INHERIT);
+    let cat_grants = galexy_abi::SPAWN_INHERIT
+        | galexy_abi::SPAWN_WITH_CAPS
+        | (file_slot(read_cap) << galexy_abi::SPAWN_CAP_SHIFT)
+        | (galexy_abi::SPAWN_CAP_NONE << (galexy_abi::SPAWN_CAP_SHIFT + 4));
+    let cat_res = spawn_with(b"cat", b"-", cat_grants);
     if !cat_res.ok {
+        let _ = close(read_cap);
         let _ = kill(echo_cap);
         let _ = wait(echo_cap);
         write_console(b"pipeline: failed\n");
@@ -1130,32 +1148,6 @@ fn run_echo_cat(cwd: &Cwd, text: &[u8]) {
         return;
     }
     let cat_cap = Cap::from_bits(cat_res.value);
-    let mut ends = [0u64; 2];
-    let piped = pipe(&mut ends);
-    if !piped.ok {
-        let _ = kill(echo_cap);
-        let _ = kill(cat_cap);
-        let _ = wait(echo_cap);
-        let _ = wait(cat_cap);
-        write_console(b"pipeline: failed\n");
-        LAST_STATUS.store(1, Ordering::Relaxed);
-        prompt(cwd);
-        return;
-    }
-    let read_cap = Cap::from_bits(ends[0]);
-    let write_cap = Cap::from_bits(ends[1]);
-    let gave_w = give(write_cap, b"echo");
-    let gave_r = give(read_cap, b"cat");
-    if !gave_w.ok {
-        let _ = close(write_cap);
-    }
-    if !gave_r.ok {
-        let _ = close(read_cap);
-    }
-    if !gave_w.ok || !gave_r.ok {
-        let _ = kill(echo_cap);
-        let _ = kill(cat_cap);
-    }
     let _ = wait(echo_cap);
     let cat_done = wait(cat_cap);
     LAST_STATUS.store(

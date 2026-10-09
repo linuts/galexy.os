@@ -122,5 +122,5 @@ Written down so the review is about what is here. Each has a reason;
 | **No systemd / dbus** | init is a small supervised seat table (`PROCESS.md`); a service table and `svc` are Milestone 67 and stay small |
 | **No user-side ASLR** | every ELF links at `USER_IMAGE_BASE`; randomizing the slot would not hide the address from the program itself and would break the single load address the loader and ABI share (`DESIGN.md` → ASLR) |
 | **No Argon2id / Poly1305** | PBKDF2-HMAC-SHA256 and HMAC-SHA256 tags reuse one primitive the crate already carries; a memory-hard KDF needs a dedicated stack (waived in Milestones 43–44) |
-| **No desktop-class throughput** | the suite runs TCG at `opt-level = 0`; Milestone 64 measures before anything is optimised (`PERF.md`) |
+| **No desktop-class throughput** | `docs/PERF.md` holds `test-bench` numbers; the target is still *does not fall over*, not *fast* |
 | **No `review-rc1` tag yet** | the owner tags when the review happens; the checklist in `TODO.md` Milestone 52 is the gate |

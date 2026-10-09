@@ -61,7 +61,9 @@ jobs:
           cargo clippy -p galexy-rt -p hello -p init -p shell -p util
           --target x86_64-unknown-none --no-deps -- -D warnings
 
-  # Boots every test kernel under QEMU (BIOS and UEFI, -smp 2, TCG).
+  # Boots every test kernel under QEMU (BIOS and UEFI, -smp 2).
+  # Release profile (debug assertions still on). Accel is kvm when
+  # /dev/kvm is writable, otherwise tcg; the log line is `[runner] accel=`.
   # `--test-threads=1`: galfs disk and QMP typing cases share host
   # files and keyboard timing, so they do not run in parallel.
   qemu:
@@ -91,17 +93,17 @@ jobs:
         with:
           key: qemu
 
-      - name: Build images (debug profile, same as the tests)
-        run: cargo build -p runner
+      - name: Build images (release profile, same as the tests)
+        run: cargo build -p runner --release
 
       - name: Clippy (runner incl. boot tests)
         run: cargo clippy -p runner --all-targets -- -D warnings
 
       - name: Audit strings (no secrets in serial output)
-        run: cargo test -p runner --test audit_strings
+        run: cargo test -p runner --test audit_strings --release
 
       - name: Boot suite
-        run: cargo test -p runner --test boot -- --test-threads=1
+        run: cargo test -p runner --test boot --release -- --test-threads=1
 
       - name: Upload serial logs on failure
         if: failure()

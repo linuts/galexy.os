@@ -23,6 +23,12 @@ panic = "abort"
 
 [profile.release]
 panic = "abort"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = "line-tables-only"
+# Image builds keep asserts (`cargo test --release` and `cargo run --release`).
+debug-assertions = true
 
 # bootloader 0.11.17, pointed at a stage-4 with a 64 KiB stack so
 # `mappings.aslr` can seed its RNG. The stock BIOS stack (SP = 0x7c00)

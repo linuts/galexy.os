@@ -251,6 +251,19 @@ pub const SPAWN_WAIT: u64 = 2;
 /// [`SPAWN_WAIT`] — Cap-wait utilities set inherit and call
 /// [`Syscall::Wait`] on the returned Cap.
 pub const SPAWN_INHERIT: u64 = 4;
+/// `spawn` grant bit (`r10`): move up to two of the caller's file or pipe
+/// Caps into the child before it runs.
+///
+/// Bits 16..19 are the caller's file-slot index (`0..8`, the offset from
+/// [`FILE_CAP_BASE`]) of the first Cap. Bits 20..23 are the second, or
+/// [`SPAWN_CAP_NONE`] when only one moves. The child sees them at
+/// [`FILE_CAP_BASE`] and the next slot, in that order. Without this flag
+/// those nibbles must be zero.
+pub const SPAWN_WITH_CAPS: u64 = 8;
+/// `spawn` `r10` shift of the first moved file-slot index.
+pub const SPAWN_CAP_SHIFT: u64 = 16;
+/// Nibble in the [`SPAWN_CAP_SHIFT`] fields meaning "no second Cap".
+pub const SPAWN_CAP_NONE: u64 = 0xF;
 /// `spawn` `r10` bits 8..15: when non-zero, each inherited token's rights
 /// are ANDed with this mask (0 in the mask keeps the parent's full set).
 /// Bare spawn (no [`SPAWN_INHERIT`] and no [`SPAWN_WAIT`]) stays empty

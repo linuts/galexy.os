@@ -778,6 +778,9 @@ pub(crate) struct TaskInit<'a> {
     pub(crate) parent_slot: u8,
     /// Milestone 53 orphan root.
     pub(crate) is_init: bool,
+    /// Stay `WAITING` until [`release_deferred`]. Spawn uses this so file
+    /// Caps move in before the child's first instruction.
+    pub(crate) defer_run: bool,
 }
 
 pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
@@ -791,7 +794,11 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
         let slot = push_thread(Thread {
             name_bytes,
             name_len,
-            state: AtomicU8::new(STATE_RUNNING),
+            state: AtomicU8::new(if init.defer_run {
+                STATE_WAITING
+            } else {
+                STATE_RUNNING
+            }),
             ctx: AtomicU64::new(init.ctx),
             ticks: AtomicU64::new(0),
             fx,
@@ -833,7 +840,11 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
         });
         // The record is RUNNING before the poke. An idle owner otherwise
         // stays in `hlt` until its tickless deadline (up to a second).
-        poke_owner(owner);
+        // A deferred child stays WAITING until `release_deferred` moves
+        // Caps in; poking now would run it with an empty file table.
+        if !init.defer_run {
+            poke_owner(owner);
+        }
         slot
     })
 }
@@ -1488,6 +1499,10 @@ struct PendingSpawn {
     must_change: bool,
     /// 1-based slot of the parked parent.
     waiter_slot: u8,
+    /// Parent file-table indexes to move into the child, or `0xFF`.
+    cap0: u8,
+    /// Second moved file, or `0xFF`.
+    cap1: u8,
     armed: bool,
 }
 
@@ -1504,6 +1519,8 @@ static PENDING_SPAWN: Mutex<PendingSpawn> = Mutex::new(PendingSpawn {
     rights_mask: 0,
     must_change: false,
     waiter_slot: 0,
+    cap0: 0xFF,
+    cap1: 0xFF,
     armed: false,
 });
 
@@ -1522,6 +1539,7 @@ pub(crate) fn task_spawn(
     wait_exit: bool,
     inherit: bool,
     rights_mask: u8,
+    caps: [u8; 2],
 ) -> Result<(), SysError> {
     if name.len() > 64 || arg.len() > ARG_MAX {
         return Err(SysError::BadValue);
@@ -1545,6 +1563,18 @@ pub(crate) fn task_spawn(
             let seat = is_console_shell_name(name);
             if seat && !thread.is_init {
                 return Err(SysError::Unsupported);
+            }
+            let (cap0, cap1) = (caps[0], caps[1]);
+            if cap0 != 0xFF {
+                let n = thread.files.len();
+                if cap0 as usize >= n || thread.files[cap0 as usize].is_none() {
+                    return Err(SysError::BadCap);
+                }
+                if cap1 != 0xFF
+                    && (cap1 as usize >= n || cap1 == cap0 || thread.files[cap1 as usize].is_none())
+                {
+                    return Err(SysError::BadCap);
+                }
             }
         }
         let seat = is_console_shell_name(name);
@@ -1588,6 +1618,8 @@ pub(crate) fn task_spawn(
         pending.rights_mask = rights_mask;
         pending.must_change = parent_must && (inherit || wait_exit) && !seat;
         pending.waiter_slot = slot as u8;
+        pending.cap0 = caps[0];
+        pending.cap1 = caps[1];
         // Seats start logged out (no cards). Utilities inherit the session.
         // Bare programs keep the root for path context but hold no cards.
         pending.fs = if seat {
@@ -1636,6 +1668,8 @@ pub fn drain_spawn() {
         let fs = pending.fs;
         let must_change = pending.must_change;
         let waiter_slot = pending.waiter_slot;
+        let cap0 = pending.cap0;
+        let cap1 = pending.cap1;
         pending.armed = false;
         Some((
             len,
@@ -1649,6 +1683,8 @@ pub fn drain_spawn() {
             fs,
             must_change,
             waiter_slot,
+            cap0,
+            cap1,
         ))
     });
     let Some((
@@ -1663,6 +1699,8 @@ pub fn drain_spawn() {
         fs,
         must_change,
         waiter_slot,
+        cap0,
+        cap1,
     )) = queued
     else {
         return;
@@ -1694,11 +1732,30 @@ pub fn drain_spawn() {
     };
     // Seats share the `shell` ELF under twelve reserved names.
     let elf_name = if seat { "shell" } else { name };
+    let hold = cap0 != 0xFF;
     let child_slot = if let Some(bytes) = ramdisk::find(elf_name) {
         let spawned = if seat {
-            loader::spawn_launched_seat(name, bytes, grants, &arg[..arg_len], tty, fs, waiter_slot)
+            loader::spawn_launched_seat(
+                name,
+                bytes,
+                grants,
+                &arg[..arg_len],
+                tty,
+                fs,
+                waiter_slot,
+                hold,
+            )
         } else {
-            loader::spawn_launched(name, bytes, grants, &arg[..arg_len], tty, fs, waiter_slot)
+            loader::spawn_launched(
+                name,
+                bytes,
+                grants,
+                &arg[..arg_len],
+                tty,
+                fs,
+                waiter_slot,
+                hold,
+            )
         };
         match spawned {
             Ok(slot) => Some(Ok(slot)),
@@ -1738,7 +1795,19 @@ pub fn drain_spawn() {
                 child.must_change = true;
             }
         }
+        if cap0 != 0xFF
+            && move_spawn_caps(&mut threads, waiter_slot, child_slot, cap0, cap1).is_err()
+        {
+            release_deferred(&mut threads, child_slot);
+            wake_spawn_waiter(
+                &mut threads,
+                waiter_slot,
+                SyscallResult::err(SysError::BadCap),
+            );
+            return;
+        }
         let Some(cap_bits) = install_proc_cap(&mut threads, waiter_slot, child_slot) else {
+            release_deferred(&mut threads, child_slot);
             wake_spawn_waiter(
                 &mut threads,
                 waiter_slot,
@@ -1766,6 +1835,9 @@ pub fn drain_spawn() {
         } else {
             wake_spawn_waiter(&mut threads, waiter_slot, SyscallResult::ok(cap_bits));
         }
+        // Caps are in the child. Publish it only after that move so the
+        // first instruction sees FILE_CAP_BASE.
+        release_deferred(&mut threads, child_slot);
     });
 }
 
@@ -2844,6 +2916,45 @@ pub(crate) fn task_pipe() -> Result<(Cap, Cap), SysError> {
     })
 }
 
+/// Moves up to two of the parent's file slots into the child's first
+/// slots. `cap1 == 0xFF` moves only `cap0`. The child sees them at
+/// `FILE_CAP_BASE` upward, before its first instruction.
+fn move_spawn_caps(
+    threads: &mut [Thread],
+    waiter_slot: u8,
+    child_slot: u8,
+    cap0: u8,
+    cap1: u8,
+) -> Result<(), SysError> {
+    let parent = waiter_slot as usize - 1;
+    let child = child_slot as usize - 1;
+    if parent >= threads.len() || child >= threads.len() || parent == child {
+        return Err(SysError::BadCap);
+    }
+    let mut srcs = [cap0, cap1];
+    if cap1 == 0xFF {
+        srcs[1] = 0xFF;
+    }
+    for (dest, src) in srcs.into_iter().enumerate() {
+        if src == 0xFF {
+            continue;
+        }
+        let src = src as usize;
+        if src >= threads[parent].files.len() || dest >= threads[child].files.len() {
+            return Err(SysError::BadCap);
+        }
+        let Some(file) = threads[parent].files[src].take() else {
+            return Err(SysError::BadCap);
+        };
+        if threads[child].files[dest].is_some() {
+            threads[parent].files[src] = Some(file);
+            return Err(SysError::NoResource);
+        }
+        threads[child].files[dest] = Some(file);
+    }
+    Ok(())
+}
+
 /// Moves an open file/pipe **or process Cap** from the caller to `target`.
 /// Returns the new Cap (rights attenuated for process Caps).
 pub(crate) fn task_give(cap: Cap, target: &str) -> Result<Cap, SysError> {
@@ -3855,6 +3966,9 @@ pub unsafe fn syscall_handoff(
 /// RSP).
 pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
     crate::arch::cpu::note_switch();
+    if crate::drivers::virtio_blk::completion_ready() {
+        wake_io_block();
+    }
     watchdog_observe();
     crate::arch::cpu::set_departed_slot(0);
     // Tickless: advance by the one-shot duration that just fired.
@@ -3986,6 +4100,13 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
             }
         }
 
+        // A virtio-blk waiter is halted on this CPU while holding the
+        // device lock (and, for galfs, the sector buffer). Leave it
+        // there; another thread on this CPU would spin on those locks.
+        if crate::drivers::virtio_blk::xfer_wait_cpu() == Some(usize::from(my_cpu)) {
+            next_slot = me.current.load(Ordering::Relaxed);
+        }
+
         // Switching to ourselves (all other slots dead or foreign, and no
         // steal landed) = no switch.
         let current = me.current.load(Ordering::Relaxed);
@@ -4108,6 +4229,17 @@ fn set_running(thread: &Thread) {
     poke_owner(thread.owner);
 }
 
+/// Runs a child that was registered with `defer_run`. No-op once it is
+/// already runnable. Caller holds [`THREADS`].
+fn release_deferred(threads: &mut [Thread], slot: u8) {
+    let Some(thread) = threads.get(slot as usize - 1) else {
+        return;
+    };
+    if thread.state.load(Ordering::Acquire) == STATE_WAITING {
+        set_running(thread);
+    }
+}
+
 /// Wake `owner` if it is another CPU. `kick` is a no-op for the caller
 /// and for a CPU that is not online yet, so spawn during BSP bring-up
 /// is safe. The thread must already be visible as `RUNNING`.
@@ -4119,6 +4251,8 @@ const IO_NONE: u8 = 0;
 const IO_KEYBOARD: u8 = 1;
 const IO_PIPE_READ: u8 = 2;
 const IO_PIPE_WRITE: u8 = 3;
+/// Virtio-blk request waiting for the used-ring interrupt.
+const IO_BLOCK: u8 = 4;
 
 fn clear_wait_fields(thread: &Thread) {
     thread.wait_child_slot.store(0, Ordering::Relaxed);
@@ -4433,6 +4567,73 @@ pub(crate) fn task_park_keyboard(cap_bits: u64, addr: u64, len: u32) -> Result<(
         park_io(&mut threads, slot, IO_KEYBOARD, 0, addr, len, cap_bits);
         Ok(())
     })
+}
+
+/// Park the current user task until virtio-blk's used ring advances.
+pub fn park_io_block() -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        park_io(&mut threads, slot, IO_BLOCK, 0, 0, 0, 0);
+        Ok(())
+    })
+}
+
+/// True while this task is still parked on a block request.
+pub fn io_block_waiting() -> bool {
+    let slot = current_slot();
+    if slot == 0 {
+        return false;
+    }
+    interrupts::without_interrupts(|| {
+        THREADS.lock().get(slot - 1).is_some_and(|thread| {
+            thread.state.load(Ordering::Acquire) == STATE_WAITING
+                && thread.io_kind.load(Ordering::Acquire) == IO_BLOCK
+        })
+    })
+}
+
+/// Clears an `IO_BLOCK` park. The IRQ may already have set `RUNNING`.
+pub fn clear_io_block() {
+    let slot = current_slot();
+    if slot == 0 {
+        return;
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let Some(thread) = threads.get_mut(slot - 1) else {
+            return;
+        };
+        if thread.io_kind.load(Ordering::Acquire) != IO_BLOCK {
+            return;
+        }
+        thread.io_kind.store(IO_NONE, Ordering::Release);
+        if thread.state.load(Ordering::Acquire) == STATE_WAITING {
+            set_running(thread);
+        }
+    });
+}
+
+/// Wakes every task parked on virtio-blk. Called from the INTx handler
+/// and from the timer if the used ring moved without a delivery.
+pub fn wake_io_block() {
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        for thread in threads.iter_mut() {
+            if thread.io_kind.load(Ordering::Acquire) == IO_BLOCK
+                && thread.state.load(Ordering::Acquire) == STATE_WAITING
+            {
+                set_running(thread);
+            }
+        }
+    });
 }
 
 /// Park on a pipe end. `read` selects reader vs writer wait.

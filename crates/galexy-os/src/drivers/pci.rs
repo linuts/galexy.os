@@ -80,6 +80,11 @@ pub fn enable_bus_master(dev: Device) {
     write_u16(dev.bus, dev.slot, dev.func, 0x04, cmd);
 }
 
+/// Interrupt line the firmware wrote at config offset `0x3C` (`0` if none).
+pub fn interrupt_line(dev: Device) -> u8 {
+    read_u32(dev.bus, dev.slot, dev.func, 0x3C) as u8
+}
+
 /// BAR0 as an I/O port base, if the BAR is IO-mapped.
 pub fn io_bar0(dev: Device) -> Option<u16> {
     let bar = read_u32(dev.bus, dev.slot, dev.func, 0x10);

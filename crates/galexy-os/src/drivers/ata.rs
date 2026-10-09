@@ -1,5 +1,8 @@
 //! ATA PIO: LBA28 read/write on the primary IDE slave (second disk).
 //!
+//! Legacy fallback. Completion is a status poll, not an interrupt.
+//! virtio-blk is the path that parks on a used-ring interrupt.
+//!
 //! Drive 0 (master) is the boot image — never touch it. Drive 1 (slave)
 //! holds the galfs image when the runner attaches one. If the slave is
 //! absent, every call returns `Unsupported` and galfs stays RAM-only.
