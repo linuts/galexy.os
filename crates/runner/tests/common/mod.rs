@@ -922,8 +922,16 @@ fn typing_visible(raw: &str) -> String {
     out
 }
 
-/// True when `bytes[i..]` starts with `Ns: ` (kernel serial uptime prefix).
+/// True when `bytes[i..]` starts a line with `Ns: ` (kernel serial uptime
+/// prefix). A digit run in the middle of a line is user text: `zed-669s:`
+/// is `zed-66` glued to the next log, not an uptime of 69 seconds.
 fn is_uptime_log_prefix(bytes: &[u8], i: usize) -> bool {
+    if i > 0 {
+        let prev = bytes[i - 1];
+        if prev != b'\n' && prev != b'\r' && prev != 0x0c {
+            return false;
+        }
+    }
     let mut j = i;
     if j >= bytes.len() || !bytes[j].is_ascii_digit() {
         return false;

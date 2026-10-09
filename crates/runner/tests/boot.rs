@@ -3102,7 +3102,7 @@ fn shell_command_center_typing_e2e() {
         "login dashboard missing galfs; serial:\n{serial}"
     );
     assert!(
-        !serial.contains("[init]"),
+        !console_shows_init(&serial),
         "init must stay off the console beside login; serial:\n{serial}"
     );
     // History file persisted across logout (plus passwd from with_login).
@@ -3110,6 +3110,33 @@ fn shell_command_center_typing_e2e() {
         serial.contains("echo aa\n") && serial.contains("echo bb\n"),
         "shell.history / recall missed echo lines; serial:\n{serial}"
     );
+}
+
+/// Init's own log lines are kernel serial (`Ns: [init] …`), not the seat
+/// console. A login screen that contains `[init]` without that prefix
+/// means init wrote on the TTY it shares with F1.
+fn console_shows_init(serial: &str) -> bool {
+    serial
+        .lines()
+        .any(|line| line.contains("[init]") && !kernel_init_line(line))
+}
+
+fn kernel_init_line(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && (bytes[i] == b'*' || bytes[i] == b' ' || bytes[i] == 0x0c) {
+        i += 1;
+    }
+    let rest = &line[i..];
+    let rb = rest.as_bytes();
+    let mut j = 0;
+    if j >= rb.len() || !rb[j].is_ascii_digit() {
+        return false;
+    }
+    while j < rb.len() && rb[j].is_ascii_digit() {
+        j += 1;
+    }
+    rest[j..].starts_with("s: [init]")
 }
 
 /// True end-to-end: TYPES `hello` into the running kernel through
