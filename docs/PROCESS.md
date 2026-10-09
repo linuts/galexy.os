@@ -45,8 +45,8 @@ We do **not** claim POSIX. Process Caps are the Galexy ABI.
 
 ## Cap rights (landed in `galexy-abi`, Milestone 47)
 
-Bits 6–9 of the rights word; pinned by the abi tests. Experimental
-until Milestone 67 freezes them:
+Bits 6–9 of the rights word; pinned by the abi tests. Stable as of
+Milestone 67 (`spawn` itself stays experimental):
 
 | Right | Allows |
 | --- | --- |
@@ -120,20 +120,33 @@ by a magic “PID 1” in the public ABI. Cap-kill of init is always
 2. Shutdown/reboot ordered through init.
 3. Session/job Caps (Milestone 55).
 
-## Init (Milestone 53 ✅; services and shutdown → Milestone 67)
+## Init (Milestone 53 ✅; services and shutdown ✅ Milestone 67)
 
-`crates/userspace/init` today:
+`crates/userspace/init`:
 
-- Cap-wait loop on children / orphans; round-robin seat restart
-- Fixed seat table (`shell`…`shell12`); no keyboard grant; off the console
-- Attenuated caps/tokens per child (`Grants::init` → seats get
-  `pre_login`)
-
-Milestone 67 adds: per-entry restart policy (`restart` | `once` |
-`ignore` + backoff), non-seat services with `svc` over a capability
-channel (Milestone 66), and an ordered shutdown path where the Power
-grant lives only on init. Config stays a fixed table; `/etc/init` on
-galfs is optional. No systemd/dbus graph.
+- Fixed table, not `/etc/init`. Twelve seats (`restart`), `stamp`
+  (`once`, started at boot), `probe` (`restart`, started only by
+  `svc start`; a fast exit backs off 0, then 250, 500, 1000, and
+  2000 ms), `spare` (`ignore`)
+- First `channel` call is the control channel. Init holds both ends.
+  Seats `send` on the reserved init Cap (`0x8008`); the kernel stamps
+  admin, tty, debug id, and session generation. One RPC is in flight
+- `svc status|start|stop|restart` and `shutdown` / `reboot` are that
+  RPC. Operators never receive a service Cap. A non-admin shutdown is
+  refused in the reply. An admin shutdown Cap-kills every seat except
+  the sender's, syncs, then calls Power. The sender stays parked until
+  the machine is off, or hears `the machine stayed up` if Power returns
+- Logged-in admin seats do not hold the Power grant while init is
+  alive. A no-init shell still does, and `shutdown` falls back to
+  Power when the init Cap is `Unsupported`
+- Cap-wait is polled (`WAIT_POLL`) so a zombie is reaped before init
+  parks on a live seat. A control message cancels init's sleep or
+  blocking wait with `Interrupted` and leaves the process Cap in place.
+  `wait` and `sleep` also refuse to park when a message is already
+  queued, so a send that lands while init is still running is not
+  stuck behind a live seat
+- No keyboard grant. Log lines are serial-only (init shares TTY 0
+  with F1)
 
 ## Seats and services (Milestone 54)
 
@@ -144,10 +157,9 @@ galfs is optional. No systemd/dbus graph.
 | Shell utility | seat/shell | shell (short wait) | n/a ( Cap-wait ) |
 | Bare app | seat/shell | shell (optional) | shell decides |
 
-Operator surface: `svc status|start|stop|restart <name>` talks to init
-over a **capability-gated** IPC (pipe, control file, or syscall — pick
-one in DESIGN when implementing). Operators do not receive raw Caps to
-every service by default.
+Operator surface: `svc status|start|stop|restart <name>` sends on the
+init Cap. The reply is text (`shell running`, `probe stopped`,
+`unknown`). Operators do not receive raw Caps to every service.
 
 F1–F12 **console switching** stays in the kernel; only task lifecycle
 moves to init.
@@ -231,7 +243,11 @@ dropped on that path. When both endpoints have closed, a still-queued
 message's Caps are released (pipe ends closed, channel ends closed).
 
 `Send` / `Recv` are their own syscall numbers, appended after `Channel`.
-All three stay experimental until Milestone 67, beside `Map` and `Clock`.
+`Map`, `Clock`, `Channel`, `Send`, `Recv`, `wait`, and `kill` are
+stable as of Milestone 67. `spawn` stays experimental. `Recv` `R9` bit
+0 (`RECV_POLL`) returns `NoResource` instead of parking when the queue
+is empty. `Send` to the init Cap is the control RPC, not a normal
+channel send: it parks until init replies.
 
 `Clock` reads the same monotonic millisecond counter as `Sleep`
 (`timer_ticks`). It takes no Cap and does not change `Sleep`.

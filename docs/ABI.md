@@ -61,14 +61,14 @@ gaps or duplicates). Appending is allowed; inserting is not.
 | 20 | `sync` | stable | |
 | 21 | `share` | stable | |
 | 22 | `unshare` | stable | |
-| 23 | `wait` | experimental | semantics fixed in Milestone 47; status flips to stable when **Milestone 67** closes init-owned shutdown |
-| 24 | `kill` | experimental | same as `wait` |
+| 23 | `wait` | stable | `RSI` bit 0 = `WAIT_POLL`: a live child is `NoResource` and does not park. Init's own blocking wait may return `Interrupted` when a control message arrives; the Cap stays installed |
+| 24 | `kill` | stable | killing init is `AccessDenied` |
 | 25 | `sleep` | stable | Milestone 58 policy freeze |
-| 26 | `map` | experimental | per-task heap, 32 pages; stable when **Milestone 67** closes |
-| 27 | `clock` | experimental | monotonic ms (`timer_ticks`); `sleep` stays stable beside it |
-| 28 | `channel` | experimental | two endpoint Caps; stable when **Milestone 67** closes |
-| 29 | `send` | experimental | one queued message, up to 256 bytes and two file Caps |
-| 30 | `recv` | experimental | parks when empty and the peer is open |
+| 26 | `map` | stable | per-task heap, 32 pages |
+| 27 | `clock` | stable | monotonic ms (`timer_ticks`); `sleep` stays stable beside it |
+| 28 | `channel` | stable | two endpoint Caps. Init's first channel is the control channel |
+| 29 | `send` | stable | one queued message, up to 256 bytes and two file Caps. `send` on init index `0x8008` parks for a reply (`R8`/`R9` = reply buffer/len); the kernel stamps a 20-byte header |
+| 30 | `recv` | stable | parks when empty and the peer is open. `R9` bit 0 = `RECV_POLL` returns `NoResource` instead of parking |
 
 `MAX_SYSCALL = 30`. The table is capped at 64 entries until there is
 an ABI version story.
@@ -91,9 +91,9 @@ Unknown codes decode to `Unsupported`. New codes append.
 | --- | --- | --- |
 | `Cap` | `u64`: bits 0..48 index, bits 48..64 rights snapshot | stable |
 | `CapRights` | `u16` mask: READ 1, WRITE 2, SIGNAL 4, WAIT 8, EXEC 16, POWER 32, PROC_WAIT 64, PROC_KILL 128, PROC_TRANSFER 256, PROC_INSPECT 512 | stable (SIGNAL / WAIT are reserved groundwork, unused) |
-| Reserved indexes | console 1, self 2, keyboard 0x8000, loader 0x8001, stats 0x8002, tasks 0x8003, threads 0x8004, power 0x8005, files 0x8006, dmesg 0x8007 | stable |
+| Reserved indexes | console 1, self 2, keyboard 0x8000, loader 0x8001, stats 0x8002, tasks 0x8003, threads 0x8004, power 0x8005, files 0x8006, dmesg 0x8007, init 0x8008 | stable |
 | File cap band | `FILE_CAP_BASE = 3`, eight per task | stable |
-| Process cap band | `PROC_CAP_BASE = 0x40`, `MAX_PROC_CAPS = 16` per task | experimental (ceiling may rise with **Milestone 67**) |
+| Process cap band | `PROC_CAP_BASE = 0x40`, `MAX_PROC_CAPS = 16` per task | stable (ceiling stays 16) |
 | Query snapshots (`stats`, `tasks`, `threads`, `files`, `dmesg`, self) | text, one record per line; field names are informational | **unstable** — parse defensively; field set grows |
 | `spawn` grant word (`r10`) | QUERY 1, WAIT 2, INHERIT 4, KEYBOARD 8, WITH_CAPS 16, NO_FG 32, rights mask bits 8..15, file-slot nibbles bits 16..23 | experimental with `spawn` |
 | `spawn` limits | `SPAWN_NAME_MAX = 64`, `SPAWN_ARG_MAX = 256` | experimental with `spawn` |
@@ -104,8 +104,9 @@ Unknown codes decode to `Unsupported`. New codes append.
 | `quota` buffer | 16 bytes: four LE `u32` — objects used, objects max, bytes used, bytes max | stable |
 | `power` ops | SHUTDOWN 0, REBOOT 1 | stable |
 | `sleep` clamp | `1..=SLEEP_MS_MAX (60 000)` ms | stable |
-| `map` | `1..=USER_HEAP_PAGES (32)` pages, 512 MiB above the task image base | experimental until Milestone 67 |
-| `channel` message | `CHAN_MSG_MAX = 256` bytes, up to two file Caps; 8 channels | experimental until Milestone 67 |
+| `map` | `1..=USER_HEAP_PAGES (32)` pages, 512 MiB above the task image base | stable |
+| `channel` message | `CHAN_MSG_MAX = 256` bytes, up to two file Caps; 8 channels | stable |
+| init RPC header | 20 bytes: admin u8, tty u8, pad 2, debug id u64, session gen u64, then the user payload (`op`, `name_len`, name). User payload max 236. Ops: status 1, start 2, stop 3, restart 4, shutdown 5, reboot 6 | stable |
 | `USER_IMAGE_BASE` | `0x0000_0C80_0000_0000`; every ELF links here; the loader accepts PT_LOADs inside `[base, base + 512 MiB)` | stable (no user ASLR — `THREAT.md`) |
 | Exit status of a killed task | `137` to Cap-waiters; the cancelled waiter's own syscall returns `Interrupted` | stable (M58) |
 | `OS_VERSION` | `"0.1.0"` banner string | informational |

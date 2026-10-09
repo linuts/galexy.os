@@ -1189,9 +1189,35 @@ slot, so the frames return with the tree. `galexy-rt` bumps an
 allocator over the region; `dealloc` does not unmap. `Clock` reads
 `timer_ticks` and does not change `Sleep`. `Channel` / `Send` / `Recv`
 are in `docs/PROCESS.md`: one queued message, up to 256 bytes and two
-file Caps, `Recv` parks. All five stay experimental until Milestone 67.
+file Caps, `Recv` parks. Milestone 67 marks `Map`, `Clock`,
+`Channel`, `Send`, and `Recv` stable. `spawn` stays experimental.
 `SPAWN_NO_FG` (r10 bit 5) keeps a background spawn off the TTY's Ctrl-C
 slot until `fg` Cap-waits it.
+
+## Init control (Milestone 67)
+
+Init creates one channel and keeps both ends. The kernel records that
+id. A logged-in seat `send`s on reserved index `0x8008`. The kernel
+prepends a 20-byte header (admin, tty, debug id, session generation),
+queues it from the end init does not recv on, and parks the sender
+until init `send`s the reply on its recv end. One RPC is in flight.
+Pre-login is `AccessDenied`. No control channel is `Unsupported`, and
+the shell then calls Power only if that grant is still installed.
+
+A control message cancels init's sleep, or its Cap-wait when the child
+is still alive. The process Cap stays in the table and the wait returns
+`Interrupted`. If the child has already exited, the exit wake owns the
+wait. Other tasks' Cap-waits are not cancelled this way. `wait` and
+`sleep` also refuse to park when a control message is already queued,
+so a send that lands while init is still running cannot hide behind a
+live seat. `WAIT_POLL` lets init reap a zombie without parking on a
+live seat.
+
+Admin login drops the Power grant while init is alive.
+`Grants::launcher` (power on) stays the grant for kernel test tasks and
+for an admin login when init is not running. Shutdown Cap-kills seats,
+syncs, then calls Power. The sender's seat is left parked so the reply
+can still be delivered if Power returns.
 
 ## Process Caps (Milestone 47)
 
@@ -1236,8 +1262,8 @@ zombies can reap. `SPAWN_WAIT` remains a park-until-exit convenience
 shell `echo $?` prints the last Cap-wait exit status. Args remain a
 single blob until argv/env layout freezes in abi.
 
-**ABI stability.** Process Cap wait/kill stay **experimental** until
-Phase 6 freezes init and seat supervision. Numbers for `PROC_*` bits are
+**ABI stability.** Process Cap `wait` / `kill` are **stable** as of
+Milestone 67. `spawn` stays experimental. Numbers for `PROC_*` bits are
 pinned in `galexy-abi` tests.
 
 ## Known sharp edges

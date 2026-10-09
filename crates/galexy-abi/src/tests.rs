@@ -77,6 +77,15 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(reserved::POWER_INDEX, 0x8005);
     assert_eq!(reserved::FILES_INDEX, 0x8006);
     assert_eq!(reserved::DMESG_INDEX, 0x8007);
+    assert_eq!(reserved::INIT_INDEX, 0x8008);
+    assert_eq!(INIT_RPC_HDR, 20);
+    assert_eq!(INIT_RPC_MAX, 236);
+    assert_eq!(INIT_OP_STATUS, 1);
+    assert_eq!(INIT_OP_SHUTDOWN, 5);
+    assert_eq!(INIT_OP_REBOOT, 6);
+    assert_eq!(RECV_POLL, 1);
+    assert_eq!(WAIT_POLL, 1);
+    assert_eq!(MAX_SYSCALL, 30);
     assert_eq!(POWER_SHUTDOWN, 0);
     assert_eq!(POWER_REBOOT, 1);
     assert_eq!(CapRights::POWER.bits(), 1 << 5);

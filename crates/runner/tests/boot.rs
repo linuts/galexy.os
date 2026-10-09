@@ -1349,6 +1349,84 @@ fn init_test_passes() {
         serial.contains("[test-init] passed"),
         "test-init success marker missing; serial:\n{serial}"
     );
+    assert!(
+        serial.contains("[init] backoff name=probe ms=250"),
+        "init did not back off the probe storm; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-init] logged-out init rpc denied"),
+        "logged-out init rpc was not denied; serial:\n{serial}"
+    );
+}
+
+const SVC_STATUS_KEYS: &[(&str, &str)] = &[
+    ("s", "s"),
+    ("v", "v"),
+    ("c", "c"),
+    ("spc", " "),
+    ("s", "s"),
+    ("t", "t"),
+    ("a", "a"),
+    ("t", "t"),
+    ("u", "u"),
+    ("s", "s"),
+    ("spc", " "),
+    ("s", "s"),
+    ("h", "h"),
+    ("e", "e"),
+    ("l", "l"),
+    ("l", "l"),
+    ("ret", "shell running"),
+];
+
+#[test]
+fn shell_svc_status_typing_e2e() {
+    let keys = with_login(SVC_STATUS_KEYS);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "shell running",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    assert!(
+        serial.contains("shell running"),
+        "svc status shell did not report the seat; serial:\n{serial}"
+    );
+}
+
+const SHUTDOWN_KEYS: &[(&str, &str)] = &[
+    ("s", "s"),
+    ("h", "h"),
+    ("u", "u"),
+    ("t", "t"),
+    ("d", "d"),
+    ("o", "o"),
+    ("w", "w"),
+    ("n", "n"),
+    ("ret", "asking init"),
+];
+
+#[test]
+fn shell_shutdown_reaches_init() {
+    let keys = with_login(SHUTDOWN_KEYS);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "[init] power",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    assert!(
+        serial.contains("[init] shutdown"),
+        "shutdown never reached init; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[init] power"),
+        "init did not reach Power after killing seats; serial:\n{serial}"
+    );
 }
 
 #[test]

@@ -72,6 +72,18 @@ path = "src/bin/grep.rs"
 name = "uptime"
 path = "src/bin/uptime.rs"
 
+[[bin]]
+name = "stamp"
+path = "src/bin/stamp.rs"
+
+[[bin]]
+name = "probe"
+path = "src/bin/probe.rs"
+
+[[bin]]
+name = "spare"
+path = "src/bin/spare.rs"
+
 [dependencies]
 galexy-rt = { path = "../galexy-rt" }
 galexy-abi = { path = "../../galexy-abi" }

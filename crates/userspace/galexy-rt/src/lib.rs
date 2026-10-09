@@ -446,6 +446,12 @@ pub fn wait(cap: Cap) -> SyscallResult {
     syscall(Syscall::Wait as u64, cap.bits(), 0, 0)
 }
 
+/// Like [`wait`], but a child that is still alive is
+/// [`galexy_abi::SysError::NoResource`] and the caller does not park.
+pub fn wait_poll(cap: Cap) -> SyscallResult {
+    syscall(Syscall::Wait as u64, cap.bits(), galexy_abi::WAIT_POLL, 0)
+}
+
 /// Stops the task named by a process Cap.
 ///
 /// Requires [`CapRights::PROC_KILL`].
@@ -491,9 +497,15 @@ pub fn dmesg_cap() -> Cap {
 }
 
 /// The power capability. [`shutdown`] and [`reboot`] do not return when the
-/// machine honors them.
+/// machine honors them. A logged-in seat does not hold this grant while
+/// init is the supervisor; [`init_rpc`] is the operator path.
 pub fn power_cap() -> Cap {
     galexy_abi::reserved::power(CapRights::POWER)
+}
+
+/// The init control capability (WRITE). [`init_rpc`] parks until init replies.
+pub fn init_cap() -> Cap {
+    galexy_abi::reserved::init(CapRights::WRITE)
 }
 
 /// Turns the machine off. Returns if it stayed up.
@@ -652,14 +664,14 @@ pub fn sleep_ms(ms: u64) -> SyscallResult {
 /// Grows this task's heap by `pages` 4 KiB frames.
 ///
 /// On success, `value` is the base virtual address of the new pages.
-/// Experimental until Milestone 67.
+/// Stable since Milestone 67.
 pub fn map_pages(pages: u64) -> SyscallResult {
     syscall(Syscall::Map as u64, pages, 0, 0)
 }
 
 /// Monotonic milliseconds since boot (the same counter as [`sleep_ms`]).
 ///
-/// Experimental until Milestone 67. `sleep` stays the stable wait.
+/// Stable since Milestone 67. `sleep` stays the stable wait.
 pub fn clock_ms() -> u64 {
     let got = syscall(Syscall::Clock as u64, 0, 0, 0);
     if got.ok {
@@ -671,13 +683,13 @@ pub fn clock_ms() -> u64 {
 
 /// Creates a capability channel. On success, `out` is `[end0, end1]`.
 ///
-/// Experimental until Milestone 67.
+/// Stable since Milestone 67. Init's first channel is the control channel.
 pub fn channel(out: &mut [u64; 2]) -> SyscallResult {
     syscall(Syscall::Channel as u64, out.as_mut_ptr() as u64, 0, 0)
 }
 
 /// Queues one channel message. `cap0` / `cap1` are file Cap bits to move,
-/// or `0` for none. Does not park. Experimental until Milestone 67.
+/// or `0` for none. Does not park. Stable since Milestone 67.
 pub fn chan_send(cap: Cap, bytes: &[u8], cap0: u64, cap1: u64) -> SyscallResult {
     syscall_r8r9(
         Syscall::Send as u64,
@@ -692,7 +704,7 @@ pub fn chan_send(cap: Cap, bytes: &[u8], cap0: u64, cap1: u64) -> SyscallResult 
 /// Takes one channel message into `buf`, or parks until one arrives.
 ///
 /// `caps_out` receives two Cap words when the message carries them. Pass
-/// `None` to refuse a message that has Caps. Experimental until Milestone 67.
+/// `None` to refuse a message that has Caps. Stable since Milestone 67.
 pub fn chan_recv(cap: Cap, buf: &mut [u8], caps_out: Option<&mut [u64; 2]>) -> SyscallResult {
     let caps_addr = match caps_out {
         Some(slot) => slot.as_mut_ptr() as u64,
@@ -705,6 +717,41 @@ pub fn chan_recv(cap: Cap, buf: &mut [u8], caps_out: Option<&mut [u64; 2]>) -> S
         buf.len() as u64,
         caps_addr,
         0,
+    )
+}
+
+/// Like [`chan_recv`], but an empty queue is [`galexy_abi::SysError::NoResource`]
+/// and the caller does not park. EOF is still success with `value == 0`.
+pub fn chan_recv_poll(cap: Cap, buf: &mut [u8]) -> SyscallResult {
+    syscall_r8r9(
+        Syscall::Recv as u64,
+        cap.bits(),
+        buf.as_mut_ptr() as u64,
+        buf.len() as u64,
+        0,
+        galexy_abi::RECV_POLL,
+    )
+}
+
+/// Asks init to run `op` ([`galexy_abi::INIT_OP_STATUS`] and the rest).
+///
+/// Parks until init replies. `value` is the number of reply bytes written.
+/// `Unsupported` means init has no control channel.
+pub fn init_rpc(op: u8, name: &[u8], reply: &mut [u8]) -> SyscallResult {
+    if name.len() > 62 {
+        return SyscallResult::err(galexy_abi::SysError::BadValue);
+    }
+    let mut payload = [0u8; 64];
+    payload[0] = op;
+    payload[1] = name.len() as u8;
+    payload[2..2 + name.len()].copy_from_slice(name);
+    syscall_r8r9(
+        Syscall::Send as u64,
+        init_cap().bits(),
+        payload.as_ptr() as u64,
+        (2 + name.len()) as u64,
+        reply.as_mut_ptr() as u64,
+        reply.len() as u64,
     )
 }
 

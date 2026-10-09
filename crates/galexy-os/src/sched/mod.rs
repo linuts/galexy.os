@@ -179,6 +179,11 @@ static IDLE_LIMIT_OVERRIDE: AtomicU64 = AtomicU64::new(0);
 /// Same clock as lockout (`timer_ticks`, ~1 ms).
 pub const IDLE_LOGOUT_MS: u64 = 60_000;
 
+/// Init's control channel. `0xFF` until init's first `channel` call.
+static INIT_CTRL: AtomicU8 = AtomicU8::new(0xFF);
+/// `wait_proc_index` when the park is not a consuming Cap-wait.
+const WAIT_PROC_NONE: u8 = 0xFF;
+
 /// Magic word painted at the very bottom of each thread's stack (lowest
 /// address). A stack that overflows far enough to corrupt the heap walks
 /// downward through this word first — reaping detects the clobber.
@@ -386,6 +391,12 @@ struct Thread {
     /// pending spawn load only, or a sleep / I/O wait). Cap-wait uses this
     /// instead of a name.
     wait_child_slot: AtomicU8,
+    /// Process-cap table index held across a [`task_wait`] park.
+    /// `0xFF` means this wait did not take a cap (`SPAWN_WAIT` keeps it).
+    /// Exit delivery clears that slot; an init control wake leaves it.
+    wait_proc_index: AtomicU8,
+    /// Child `cap_gen` captured when [`task_wait`] parked.
+    wait_child_gen: AtomicU32,
     /// When waiting on a child: true = wake on exit; false = wake on load.
     wait_for_exit: AtomicBool,
     /// Absolute `timer_ticks` deadline for [`Syscall::Sleep`]. `0` means
@@ -893,6 +904,8 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
             procs: [None; MAX_PROC_CAPS],
             no_steal: init.no_steal,
             wait_child_slot: AtomicU8::new(0),
+            wait_proc_index: AtomicU8::new(WAIT_PROC_NONE),
+            wait_child_gen: AtomicU32::new(0),
             wait_for_exit: AtomicBool::new(false),
             sleep_deadline: AtomicU64::new(0),
             io_kind: AtomicU8::new(0),
@@ -968,6 +981,8 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             procs: [None; MAX_PROC_CAPS],
             no_steal: false,
             wait_child_slot: AtomicU8::new(0),
+            wait_proc_index: AtomicU8::new(WAIT_PROC_NONE),
+            wait_child_gen: AtomicU32::new(0),
             wait_for_exit: AtomicBool::new(false),
             sleep_deadline: AtomicU64::new(0),
             io_kind: AtomicU8::new(0),
@@ -1257,6 +1272,8 @@ pub(crate) fn spawn_user_with_grants(
             // on their spawn CPU so idle steal cannot starve a waiter.
             no_steal: true,
             wait_child_slot: AtomicU8::new(0),
+            wait_proc_index: AtomicU8::new(WAIT_PROC_NONE),
+            wait_child_gen: AtomicU32::new(0),
             wait_for_exit: AtomicBool::new(false),
             sleep_deadline: AtomicU64::new(0),
             io_kind: AtomicU8::new(0),
@@ -1734,6 +1751,10 @@ pub(crate) fn task_spawn(
         // sets wait_child_slot to the new child for exit wait.
         let thread = &mut threads[slot - 1];
         thread.wait_child_slot.store(0, Ordering::Relaxed);
+        thread
+            .wait_proc_index
+            .store(WAIT_PROC_NONE, Ordering::Relaxed);
+        thread.wait_child_gen.store(0, Ordering::Relaxed);
         thread.wait_for_exit.store(wait_exit, Ordering::Relaxed);
         thread.state.store(STATE_WAITING, Ordering::Release);
         Ok(())
@@ -1942,6 +1963,7 @@ pub fn drain_spawn() {
         if wait_exit {
             if let Some(w) = threads.get_mut(waiter_slot as usize - 1) {
                 w.wait_child_slot.store(child_slot, Ordering::Release);
+                w.wait_proc_index.store(WAIT_PROC_NONE, Ordering::Relaxed);
                 w.wait_for_exit.store(true, Ordering::Release);
             }
         } else {
@@ -2245,6 +2267,17 @@ fn wake_exit_waiters(threads: &mut [Thread], child_slot: u8, exit_code: u64) {
         }
         if thread.state.load(Ordering::Acquire) != STATE_WAITING {
             continue;
+        }
+        let pi = thread.wait_proc_index.load(Ordering::Acquire);
+        if pi != WAIT_PROC_NONE {
+            let pi = pi as usize;
+            if pi < MAX_PROC_CAPS {
+                if let Some(handle) = thread.procs[pi] {
+                    if handle.child_slot == child_slot {
+                        thread.procs[pi] = None;
+                    }
+                }
+            }
         }
         clear_wait_fields(thread);
         stamp_waiter_frame(thread, SyscallResult::ok(exit_code));
@@ -2765,6 +2798,9 @@ pub(crate) fn task_channel() -> Result<(Cap, Cap), SysError> {
             return Err(SysError::NoResource);
         }
         let id = channel::alloc()?;
+        if thread.is_init {
+            let _ = INIT_CTRL.compare_exchange(0xFF, id, Ordering::AcqRel, Ordering::Acquire);
+        }
         let rights = CapRights::READ.union(CapRights::WRITE);
         for (end, index) in [free[0], free[1]].into_iter().enumerate() {
             thread.files[index] = Some(OpenFile {
@@ -2799,13 +2835,21 @@ pub(crate) fn task_send(cap: Cap, bytes: &[u8], cap0: u64, cap1: u64) -> Result<
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    let id = interrupts::without_interrupts(|| {
+    let id = interrupts::without_interrupts(|| -> Result<u8, SysError> {
         let mut threads = THREADS.lock();
         let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
         if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
         }
         let (id, end) = channel_end(thread, cap)?;
+        let ctrl = INIT_CTRL.load(Ordering::Acquire);
+        if ctrl != 0xFF && id == ctrl && end == 0 {
+            if cap0 != 0 || cap1 != 0 {
+                return Err(SysError::BadValue);
+            }
+            deliver_init_reply(&mut threads, bytes)?;
+            return Ok(id);
+        }
         let endpoint = file_slot(cap)?;
         let file = thread.files[endpoint].as_ref().ok_or(SysError::BadCap)?;
         if !file
@@ -2859,6 +2903,132 @@ pub(crate) fn task_send(cap: Cap, bytes: &[u8], cap0: u64, cap1: u64) -> Result<
     Ok(bytes.len())
 }
 
+/// One init control RPC is in flight. `Ok(())` means the caller is parked.
+pub(crate) fn task_init_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(), SysError> {
+    if bytes.len() > galexy_abi::INIT_RPC_MAX || reply_len as usize > galexy_abi::CHAN_MSG_MAX {
+        return Err(SysError::BadValue);
+    }
+    let ctrl = INIT_CTRL.load(Ordering::Acquire);
+    if ctrl == 0xFF {
+        return Err(SysError::Unsupported);
+    }
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let (admin, tty, debug_id, session_gen) = {
+            let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+            if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+                return Err(SysError::BadCap);
+            }
+            if thread.fs_root == galfs::NO_OBJECT {
+                return Err(SysError::AccessDenied);
+            }
+            let admin = u8::from(galfs::is_admin_root(thread.fs_root));
+            (admin, thread.tty, thread.debug_id, thread.session_gen)
+        };
+        if threads.iter().any(|t| {
+            t.state.load(Ordering::Acquire) == STATE_WAITING
+                && t.io_kind.load(Ordering::Acquire) == IO_INIT_RPC
+        }) {
+            return Err(SysError::NoResource);
+        }
+        let mut msg = [0u8; galexy_abi::CHAN_MSG_MAX];
+        let n = galexy_abi::INIT_RPC_HDR + bytes.len();
+        msg[0] = admin;
+        msg[1] = tty;
+        msg[4..12].copy_from_slice(&debug_id.to_le_bytes());
+        msg[12..20].copy_from_slice(&session_gen.to_le_bytes());
+        msg[galexy_abi::INIT_RPC_HDR..n].copy_from_slice(bytes);
+        channel::enqueue(ctrl, 1, &msg[..n], [None, None])?;
+        park_io(&mut threads, slot, IO_INIT_RPC, ctrl, reply, reply_len, 0);
+        wake_init_for_control(&mut threads);
+        Ok(())
+    })
+}
+
+/// Copies `bytes` into the parked init-RPC waiter and marks it runnable.
+fn deliver_init_reply(threads: &mut [Thread], bytes: &[u8]) -> Result<(), SysError> {
+    let Some(index) = threads.iter().position(|t| {
+        t.state.load(Ordering::Acquire) == STATE_WAITING
+            && t.io_kind.load(Ordering::Acquire) == IO_INIT_RPC
+    }) else {
+        return Err(SysError::NoResource);
+    };
+    let addr = threads[index].io_addr.load(Ordering::Acquire);
+    let len = threads[index].io_len.load(Ordering::Acquire) as usize;
+    let cr3 = threads[index].cr3.load(Ordering::Acquire);
+    let n = bytes.len().min(len);
+    let copied = if n == 0 {
+        true
+    } else {
+        let root = PhysFrame::from_start_address(PhysAddr::new(cr3)).expect("waiter cr3");
+        // SAFETY: parked waiter's tree, not CR3-active. Phys-map copy.
+        unsafe {
+            crate::arch::mm::with_table(root, |mapper| copy_to_user_via(mapper, addr, &bytes[..n]))
+        }
+    };
+    let result = if copied {
+        SyscallResult::ok(n as u64)
+    } else {
+        SyscallResult::err(SysError::BadBuffer)
+    };
+    finish_chan_waiter(&threads[index], result);
+    Ok(())
+}
+
+/// Lets init observe a queued control message without waiting out a backoff
+/// sleep or a live child's Cap-wait. A child that has already exited keeps
+/// the exit wake. Other tasks are left parked.
+fn wake_init_for_control(threads: &mut [Thread]) {
+    let Some(index) = threads.iter().position(|t| t.is_init) else {
+        return;
+    };
+    if threads[index].state.load(Ordering::Acquire) != STATE_WAITING {
+        return;
+    }
+    if threads[index].sleep_deadline.load(Ordering::Acquire) != 0 {
+        clear_wait_fields(&threads[index]);
+        stamp_waiter_frame(&threads[index], SyscallResult::err(SysError::Interrupted));
+        set_running(&threads[index]);
+        return;
+    }
+    if !threads[index].wait_for_exit.load(Ordering::Acquire) {
+        return;
+    }
+    let child = threads[index].wait_child_slot.load(Ordering::Acquire);
+    if child == 0 {
+        return;
+    }
+    let ci = child as usize;
+    if ci == 0 || ci > threads.len() {
+        return;
+    }
+    let state = threads[ci - 1].state.load(Ordering::Acquire);
+    if state == STATE_EXITED || state == STATE_FREED {
+        return;
+    }
+    let pi = threads[index].wait_proc_index.load(Ordering::Acquire);
+    if pi == WAIT_PROC_NONE {
+        return;
+    }
+    let pi = pi as usize;
+    if pi >= MAX_PROC_CAPS {
+        return;
+    }
+    let Some(handle) = threads[index].procs[pi] else {
+        return;
+    };
+    if handle.child_slot != child {
+        return;
+    }
+    clear_wait_fields(&threads[index]);
+    stamp_waiter_frame(&threads[index], SyscallResult::err(SysError::Interrupted));
+    set_running(&threads[index]);
+}
+
 /// Outcome of [`task_recv`].
 ///
 /// The payload stays inline. Boxing it would allocate on the syscall path.
@@ -2886,6 +3056,7 @@ pub(crate) fn task_recv(
     addr: u64,
     len: usize,
     caps_out: u64,
+    poll: bool,
 ) -> Result<RecvOp, SysError> {
     let slot = current_slot();
     if slot == 0 {
@@ -2948,6 +3119,9 @@ pub(crate) fn task_recv(
                 }
                 Err(channel::Empty::Eof) => Ok(RecvOp::Eof),
                 Err(channel::Empty::Wait) => {
+                    if poll {
+                        return Err(SysError::NoResource);
+                    }
                     park_io(
                         &mut threads,
                         slot,
@@ -3024,9 +3198,11 @@ const EXIT_KILLED: u64 = 137;
 /// Parks until the process Cap's child exits; returns the exit code.
 ///
 /// On success the Cap slot is cleared (stale). If the child has already
-/// exited, returns immediately (`Some(code)`). Otherwise consumes the Cap
-/// into a park and returns `None` (caller must hand off the CPU).
-pub(crate) fn task_wait(cap: Cap) -> Result<Option<u64>, SysError> {
+/// exited, returns immediately (`Some(code)`). Otherwise parks and returns
+/// `None` (caller must hand off the CPU). The Cap stays in the table until
+/// the exit wake, so an init control wake can return
+/// [`SysError::Interrupted`] and the caller can wait on the same bits.
+pub(crate) fn task_wait(cap: Cap, poll: bool) -> Result<Option<u64>, SysError> {
     if !cap.rights().contains(CapRights::PROC_WAIT) {
         return Err(SysError::AccessDenied);
     }
@@ -3068,9 +3244,22 @@ pub(crate) fn task_wait(cap: Cap) -> Result<Option<u64>, SysError> {
             threads[slot - 1].procs[pi] = None;
             return Err(SysError::BadCap);
         }
-        // Consume Cap into the park (abi: Cap stale after successful wait).
+        // Still alive. A poll returns without parking so a supervisor can
+        // reap a different child that has already exited.
+        if poll {
+            return Err(SysError::NoResource);
+        }
+        // A control message that arrived while init was still running
+        // must not sit behind this park. The send path only wakes a
+        // task that is already WAITING, so the park itself checks the
+        // queue under `THREADS` (enqueue takes that lock first).
+        if threads[slot - 1].is_init && init_ctrl_queued() {
+            return Err(SysError::Interrupted);
+        }
+        // The Cap stays installed until an exit wake clears it. A control
+        // wake (init only) returns Interrupted and the caller waits again
+        // on the same bits. Orphan adoption must not reuse this slot.
         let child_slot = handle.child_slot;
-        threads[slot - 1].procs[pi] = None;
         let tty = threads[slot - 1].tty as usize;
         if tty < FG_COUNT {
             // `fg` (and any Cap-wait) publishes this child for Ctrl-C.
@@ -3079,6 +3268,8 @@ pub(crate) fn task_wait(cap: Cap) -> Result<Option<u64>, SysError> {
         }
         let waiter = &mut threads[slot - 1];
         waiter.wait_child_slot.store(child_slot, Ordering::Release);
+        waiter.wait_proc_index.store(pi as u8, Ordering::Release);
+        waiter.wait_child_gen.store(gen, Ordering::Release);
         waiter.wait_for_exit.store(true, Ordering::Release);
         waiter.state.store(STATE_WAITING, Ordering::Release);
         Ok(None)
@@ -3713,16 +3904,22 @@ pub(crate) fn task_login(name: &str, password: &[u8]) -> Result<(), SysError> {
     let target = galfs::root_named(name)?;
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-        if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
+        {
+            let caller = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+            if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
+                return Err(SysError::BadCap);
+            }
         }
-        let gen = install_session(caller, target, true)?;
+        let init_live = init_supervisor_live(&threads);
+        let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        let gen = install_session(caller, target, true, init_live)?;
+        let debug_id = caller.debug_id;
         serial_println!(
-            "[auth] session login user={} gen={} tty={}",
+            "[auth] session login user={} gen={} tty={} id={}",
             name,
             gen,
-            tty.saturating_add(1)
+            tty.saturating_add(1),
+            debug_id
         );
         Ok(())
     })?;
@@ -3747,11 +3944,13 @@ pub(crate) fn task_logout() -> Result<(), SysError> {
         }
         let tty = caller.tty;
         let was_in = caller.fs_root != galfs::NO_OBJECT;
+        let debug_id = caller.debug_id;
         let gen = clear_session(caller);
         serial_println!(
-            "[auth] session logout gen={} tty={}",
+            "[auth] session logout gen={} tty={} id={}",
             gen,
-            tty.saturating_add(1)
+            tty.saturating_add(1),
+            debug_id
         );
         Ok(was_in && !sessions_open(&threads))
     })?;
@@ -3766,7 +3965,12 @@ pub(crate) fn task_logout() -> Result<(), SysError> {
 /// `from_login` sets [`Thread::born_admin`] from the target (password
 /// identity). `su` passes `false` so switching to a non-admin actor does
 /// **not** clear born-admin — the seat can `su admin` to return (AUTH.md).
-fn install_session(caller: &mut Thread, target: u16, from_login: bool) -> Result<u64, SysError> {
+fn install_session(
+    caller: &mut Thread,
+    target: u16,
+    from_login: bool,
+    init_live: bool,
+) -> Result<u64, SysError> {
     caller.fs_root = target;
     caller.fs_tokens = [galfs::Token::empty(); galfs::TOKEN_SLOTS];
     galfs::push_token(&mut caller.fs_tokens, target, galfs::RIGHT_ALL)?;
@@ -3779,12 +3983,25 @@ fn install_session(caller: &mut Thread, target: u16, from_login: bool) -> Result
     caller.last_input_tick = crate::arch::timer_ticks();
     let gen = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
     caller.session_gen = gen;
-    caller.grants = if admin {
+    // Power stays on the admin seat only when init is not the supervisor.
+    // Kernel test launchers still use [`Grants::launcher`] directly.
+    caller.grants = if admin && !init_live {
         Grants::launcher()
     } else {
         Grants::session()
     };
     Ok(gen)
+}
+
+/// True when the orphan-root init task is still running or parked.
+fn init_supervisor_live(threads: &[Thread]) -> bool {
+    threads.iter().any(|t| {
+        if !t.is_init {
+            return false;
+        }
+        let state = t.state.load(Ordering::Acquire);
+        state == STATE_RUNNING || state == STATE_WAITING
+    })
 }
 
 /// Durable home share for actor `grantee` (survives logout; reapplied at login).
@@ -3994,14 +4211,17 @@ pub(crate) fn task_su(name: &str) -> Result<(), SysError> {
                 serial_println!("[auth] card once user={} revoked", name);
             }
         }
+        let init_live = init_supervisor_live(&threads);
         let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
         let tty = caller.tty;
-        let gen = install_session(caller, target, false)?;
+        let gen = install_session(caller, target, false, init_live)?;
+        let debug_id = caller.debug_id;
         serial_println!(
-            "[auth] session su user={} gen={} tty={}",
+            "[auth] session su user={} gen={} tty={} id={}",
             name,
             gen,
-            tty.saturating_add(1)
+            tty.saturating_add(1),
+            debug_id
         );
         Ok(())
     })
@@ -4209,6 +4429,23 @@ pub fn fault_task_name(out: &mut [u8]) -> &str {
     out[..n].copy_from_slice(&thread.name_bytes[..n]);
     drop(threads);
     core::str::from_utf8(&out[..n]).unwrap_or("?")
+}
+
+/// True when the running task is userspace init.
+///
+/// Init shares TTY 0 with the F1 seat. Its console writes go to the
+/// serial log only, so a supervisor line cannot land in the login prompt.
+pub fn current_is_init() -> bool {
+    let slot = current_slot();
+    if slot == 0 {
+        return false;
+    }
+    interrupts::without_interrupts(|| {
+        THREADS
+            .lock()
+            .get(slot - 1)
+            .is_some_and(|thread| thread.is_init)
+    })
 }
 
 /// Console the running task writes. The main loop is TTY 0.
@@ -4627,12 +4864,33 @@ pub(crate) fn task_sleep(ms: u64) -> Result<(), SysError> {
         if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
         }
+        // Same race as Cap-wait: a queued control message must win over
+        // a backoff sleep. Checked before WAITING so the send path's
+        // wake and this park cannot miss each other.
+        if thread.is_init && init_ctrl_queued() {
+            return Err(SysError::Interrupted);
+        }
         thread.wait_child_slot.store(0, Ordering::Relaxed);
+        thread
+            .wait_proc_index
+            .store(WAIT_PROC_NONE, Ordering::Relaxed);
+        thread.wait_child_gen.store(0, Ordering::Relaxed);
         thread.wait_for_exit.store(false, Ordering::Relaxed);
         thread.sleep_deadline.store(deadline, Ordering::Release);
         thread.state.store(STATE_WAITING, Ordering::Release);
         Ok(())
     })
+}
+
+/// True when init's control channel already holds a message for end 0.
+///
+/// Caller holds [`THREADS`]. Channel lock is taken second.
+fn init_ctrl_queued() -> bool {
+    let id = INIT_CTRL.load(Ordering::Acquire);
+    if id == 0xFF {
+        return false;
+    }
+    channel::queued_for(id, 0)
 }
 
 /// Wake sleepers whose deadline is due. Call under the timer path after
@@ -4686,9 +4944,15 @@ const IO_PIPE_WRITE: u8 = 3;
 const IO_BLOCK: u8 = 4;
 /// Channel `recv` parked on an empty endpoint.
 const IO_CHAN_RECV: u8 = 5;
+/// Init control `send` parked until init replies.
+const IO_INIT_RPC: u8 = 6;
 
 fn clear_wait_fields(thread: &Thread) {
     thread.wait_child_slot.store(0, Ordering::Relaxed);
+    thread
+        .wait_proc_index
+        .store(WAIT_PROC_NONE, Ordering::Relaxed);
+    thread.wait_child_gen.store(0, Ordering::Relaxed);
     thread.wait_for_exit.store(false, Ordering::Relaxed);
     thread.sleep_deadline.store(0, Ordering::Relaxed);
     thread.io_kind.store(IO_NONE, Ordering::Relaxed);
@@ -4710,6 +4974,10 @@ fn park_io(
 ) {
     let thread = &mut threads[slot - 1];
     thread.wait_child_slot.store(0, Ordering::Relaxed);
+    thread
+        .wait_proc_index
+        .store(WAIT_PROC_NONE, Ordering::Relaxed);
+    thread.wait_child_gen.store(0, Ordering::Relaxed);
     thread.wait_for_exit.store(false, Ordering::Relaxed);
     thread.sleep_deadline.store(0, Ordering::Relaxed);
     thread.io_kind.store(kind, Ordering::Release);

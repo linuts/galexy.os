@@ -1173,14 +1173,12 @@ fn boot_and_type_on(
                     std::fs::read_to_string(&serial_path).unwrap_or_default()
                 );
             }
-            if child.try_wait().expect("try_wait failed").is_some() {
-                panic!("guest exited before the final marker '{final_marker}'");
-            }
-            if std::fs::read_to_string(&serial_path)
-                .map(|s| s.contains(final_marker))
-                .unwrap_or(false)
-            {
+            let serial = std::fs::read_to_string(&serial_path).unwrap_or_default();
+            if serial.contains(final_marker) {
                 break;
+            }
+            if child.try_wait().expect("try_wait failed").is_some() {
+                panic!("guest exited before the final marker '{final_marker}'; serial:\n{serial}");
             }
             std::thread::sleep(Duration::from_millis(50));
         }

@@ -117,6 +117,20 @@ pub(crate) fn enqueue(
     Ok(())
 }
 
+/// True when a message is queued for `end` (the sender was the other end).
+///
+/// Callers that also hold `THREADS` must take that lock first.
+pub(crate) fn queued_for(id: u8, end: u8) -> bool {
+    if end > 1 {
+        return false;
+    }
+    let chans = CHANS.lock();
+    let Some(ch) = chans.get(id as usize) else {
+        return false;
+    };
+    ch.used && ch.open[end as usize] && ch.pending && ch.from != end
+}
+
 /// Runs `f` while the channel row is locked. Callers that also hold
 /// `THREADS` must take that lock first.
 pub(crate) fn with_mut<R>(id: u8, f: impl FnOnce(&mut Chan) -> R) -> Result<R, SysError> {
