@@ -18,7 +18,7 @@ column from this machine. Re-run
 `GALEXY_ACCEL=kvm cargo test -p runner --test boot --release -- --exact bench_test_passes`
 on a host where `/dev/kvm` executes a guest, and replace the KVM cells.
 
-| Bench | What it times | TCG release (µs) | KVM ceiling the runner asserts (µs) |
+| Bench | What it times | TCG release (µs) at `7f7b416` | KVM ceiling the runner asserts (µs) |
 | --- | --- | --- | --- |
 | `yield` | ring-3 `yield` × 10 000 (r13 counter; rcx does not survive `SYSCALL`) | 21 804 022 | 2 000 000 |
 | `spawn` | one user spawn + exit, from `rdtsc` around `spawn_user_task` until the name is gone | 11 369 | 2 000 000 |
