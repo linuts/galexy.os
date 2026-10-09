@@ -17,7 +17,7 @@ galfs access cards), not global file descriptors or PIDs.
 **Status (October 2026):** Milestones 1–61 and 63–67 are in this tree,
 plus 69 (62 was superseded); `nano` is in the ramdisk. Milestone 67
 gives init shutdown, `svc`, and the ABI freeze (`spawn` stays
-experimental). The QEMU suite is 111 boots plus host tests. The
+experimental). The QEMU suite is 113 boots plus host tests. The
 Milestone 52 review checklist is complete except the `review-rc1` tag,
 which is the owner's call. The `v1.0` tag is a separate gate
 (BIOS+UEFI, TCG+KVM, q35+pc, `PERF.md`).
@@ -136,7 +136,7 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 ```sh
 cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxc -p gxld   # host suites
 cargo test -p runner --test audit_strings   # no "password" in any serial line
-cargo test -p runner --test boot --release -- --test-threads=1   # QEMU suite (109 boots, -smp 2, release profile)
+cargo test -p runner --test boot --release -- --test-threads=1   # QEMU suite (113 boots, -smp 2, release profile)
 ```
 
 UEFI cases need `OVMF_FD` if the default firmware path is absent. Disk

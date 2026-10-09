@@ -8,6 +8,23 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#88](https://github.com/linuts/galexy.os/pull/88) — stability and
+  security review — fixes
+  [#86](https://github.com/linuts/galexy.os/issues/86) (`passwd` hung a
+  sealed-disk boot): every kernel spin lock is `sync::Mutex`, whose
+  relax step services TLB-shootdown acks so an IF=0 lock waiter cannot
+  stall a heap growth on the other CPU; the shootdown initiator
+  services other CPUs while it waits; the heap's second grower polls
+  instead of re-enabling IF; galfs `sync_to_disk`, `wipe_volume_key`,
+  and `seal_and_lock` run IF=0 from the BSP main loop; PBKDF2 runs
+  before the `TABLE` lock; `thread_stats`, pipe wake, and orphan
+  transfer no longer allocate under `THREADS`. `svc
+  start|stop|restart` are admin-only through init (`svc status` stays
+  open). The panic handler force-unlocks serial and `dmesg` before it
+  prints. New `test-lockgrow` kernel and `passwd_on_sealed_disk_typing_e2e`
+  (production image, sealed disk, passphrase → login → `passwd` →
+  `sync` → reboot → login). `THREAT.md` gains a review log. Suite:
+  113 boots. The `v1.0` tag is still a separate gate
 - [#87](https://github.com/linuts/galexy.os/pull/87) — M67 — init owns
   shutdown and the service table. `shutdown` / `reboot` ask init over
   one channel; init Cap-kills the other seats, calls `sync`, then

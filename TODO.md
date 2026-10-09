@@ -2207,7 +2207,7 @@ legacy paths kept only where the platform has nothing else.
 - [x] **Stated non-goals**: 5-level paging, huge user pages, USB, GPU
       beyond the GOP framebuffer, network (Phase 10)
 
-## Milestone 66 — Userland completeness
+## Milestone 66 — Userland completeness ✅
 
 Programs today get one 256-byte argument, no heap, pipes only, and
 `sleep` as the only clock. Fill the holes a real utility hits.
@@ -2240,7 +2240,7 @@ Programs today get one 256-byte argument, no heap, pipes only, and
 - [x] Docs: ABI table rows for `Map`, `Clock`, `Channel` marked
       experimental until Milestone 67 closes
 
-## Milestone 67 — Init owns shutdown and services
+## Milestone 67 — Init owns shutdown and services ✅ (`v1.0` tag is the owner's gate)
 
 The Milestone 53–54 follow-ons, finished.
 
@@ -2260,10 +2260,15 @@ The Milestone 53–54 follow-ons, finished.
 
 ### v1.0 gate
 
-- [ ] Milestones 51–52 and 63–67 ✅ or waived in `THREAT.md` / `PERF.md`
+- [x] Milestones 51–52 and 63–67 ✅ or waived in `THREAT.md` / `PERF.md`
+      (readiness audit after #87: every box under those headers is
+      checked or carries a written waiver; the `review-rc1` tag is the
+      one owner-deferred item)
 - [ ] Suite green on BIOS + UEFI, TCG + KVM, `q35` + the `pc` legacy
-      case
-- [ ] `PERF.md` numbers within budget under KVM
+      case (BIOS + UEFI, TCG, `q35` + `pc` are green at 113 boots; the
+      KVM pass needs a host whose `/dev/kvm` can create a vCPU)
+- [ ] `PERF.md` numbers within budget under KVM (TCG release cells
+      recorded; KVM cells empty for the same host reason)
 - [ ] Tag `v1.0` with the changelog
 
 ---
@@ -2295,7 +2300,7 @@ run under KVM (Milestone 64).
       the console Cap; typed E2E
 - [ ] Docs: `RUSTC.md` Stage 1 ✅; README build line for the target
 
-## Milestone 69 — `gxld`, a static linker (host library first)
+## Milestone 69 — `gxld`, a static linker (host library first) ✅ (ring-3 program → Milestone 71)
 
 Plan: `docs/LINKER.md`. Static ELF64 linker for the loader's contract,
 `no_std + alloc`, host-tested against `rust-lld`. Only Phase 11 item
@@ -2347,7 +2352,7 @@ with zero kernel dependencies; de-risks Milestone 73.
 - [x] Non-goals written in `LINKER.md`: dynamic linking, `PT_INTERP`,
       `PT_DYNAMIC`, PLT, linker scripts, LTO, relaxation, string
       merging, non-x86_64
-- [ ] Ring-3 `gxld` program is **not** this milestone (needs user heap +
+- Ring-3 `gxld` program is **not** this milestone (needs user heap +
       large files → Milestone 71); the crate is `no_std + alloc` so it
       is a thin `main` later
 
@@ -2531,6 +2536,16 @@ items stay here with rationale.
       stale-serial-log harness bug from that close stays fixed
       (`serial_log_path` removes the file before QEMU starts)
 - [ ] No network stack, no USB — **Phase 10** (after `v1.0`)
+- [x] ~~`passwd` on a sealed-disk boot hung the machine
+      (galexy.os#86)~~ — CLOSED by PR #88. Two IF=0 deadlocks: a lock
+      holder's heap growth waited on a shootdown ack from a CPU spinning
+      IF=0 on that lock, and the BSP main loop committed galfs with IF=1
+      while holding `TABLE`. Every kernel spin lock now services
+      shootdowns in its relax step (`sync::Mutex`), the main-loop galfs
+      entries gate IF themselves, and PBKDF2 runs before `TABLE`.
+      `bin/test-lockgrow` and `passwd_on_sealed_disk_typing_e2e` are the
+      regressions. `svc start|stop|restart` became admin-only in the
+      same review (`docs/THREAT.md` → Review log)
 - [x] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
       ESC, BEL). CSI policy and the blinking cursor are Milestone 49
@@ -2563,8 +2578,10 @@ items stay here with rationale.
 - [x] Memory/safety/concurrency — **Milestone 48**
 - [x] Console/audit — **Milestone 49**
 - [x] Shell demos — **Milestone 50**
-- [ ] Docs/tests/CI/soak — **Milestone 51**
-- [ ] Review RC — **Milestone 52**
+- [x] Docs/tests/CI/soak — **Milestone 51** (no ramdisk allowlist —
+      owner's call)
+- [x] Review RC — **Milestone 52** (`review-rc1` tag deferred by the
+      owner; every other checklist line is closed)
 - [x] Init (orphan root) — **Milestone 53** (Phase 6)
 - [x] Seats & service supervision — **Milestone 54**
 - [x] Sessions & job Caps lite — **Milestone 55**
@@ -2577,8 +2594,8 @@ items stay here with rationale.
 - [x] Hello via gxc in QEMU — **Milestone 61**
 - [x] ~~On-OS gxc~~ — **Milestone 62** superseded by Phase 11; `gxc`
       frozen at gxr v0
-- [ ] No linker on Galexy; `gxc` emits a finished ELF, host `rust-lld`
-      links everything else — **Milestone 69** (`gxld`)
+- [ ] No linker *on* Galexy yet; the host `gxld` crate is CLOSED by
+      **Milestone 69**; the ring-3 program is **Milestone 71**
 - [x] Kernel hardening (SMEP/SMAP/UMIP/KASLR, hostile ELF, KDF cost) —
       **Milestone 63** (Phase 9)
 - [x] Fast path (bench, KVM, release profile, IRQ completion) —

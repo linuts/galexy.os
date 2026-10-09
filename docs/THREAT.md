@@ -9,10 +9,12 @@ than waived, and the non-goals with a one-line reason each.
 spawn policy), `GALFS.md` (filesystem, sealed slots), and `PROCESS.md`
 (process Caps).
 
-Status: **review-rc1 bar** (Milestones 43–52) plus Milestone 63
-(CPU features, per-actor KDF cost, user-VA copies under SMAP). The
-`v1.0` bar still adds Milestones 64–67. Waivers for KPTI, IBRS, MDS,
-and CET are in [CPU features](#cpu-features) below.
+Status: **review-rc1 bar** (Milestones 43–52) plus Milestones 63–67
+(CPU features, per-actor KDF cost, user-VA copies under SMAP, release
+images, q35, per-task heap and channels, init-owned shutdown and
+services) and the post-M67 review pass in [Review log](#review-log).
+Waivers for KPTI, IBRS, MDS, and CET are in [CPU features](#cpu-features)
+below. The `v1.0` tag is the owner's gate.
 
 ## Assets
 
@@ -69,8 +71,8 @@ What exists, which doc owns it, and the test that fails if it regresses.
 | Path grammar: ≤ 8 components, ≤ 64 bytes each, charset `[A-Za-z0-9._-]`, `.`/`..` rejected | `GALFS.md` → Paths | `paths_test_passes`, `galexy_core::path_test` exhaustive sweep |
 | Quotas per actor (objects, bytes) | `GALFS.md` → Quotas | `quota_test_passes` |
 | Audit lines never carry secrets; `dmesg` is a read-only ring behind a Cap | `STYLE.md` → Secrets, `DESIGN.md` → console | `audit_strings`, `audit_console_test_passes` |
-| Init is the orphan root and immortal to user kill; seats are pre-login; init has no keyboard | `PROCESS.md` | `init_test_passes`, `orphan`, `jobcap` |
-| Lock-order table (`THREADS` then galfs `TABLE`); IF=0 syscall path never allocates | `DESIGN.md` → Lock order | the SMP suite (`smp`, `ipi`, `smpstress`, `smpuser`) |
+| Init is the orphan root and immortal to user kill; seats are pre-login; init has no keyboard; `svc start|stop|restart`, `shutdown`, and `reboot` need the kernel-stamped admin bit | `PROCESS.md` | `init_test_passes` (non-admin `stop` is refused and the seat stays live), `orphan`, `jobcap` |
+| Lock-order table (`THREADS` then galfs `TABLE`); IF=0 syscall path never allocates and never holds a lock across a heap growth; every kernel spin lock services TLB-shootdown acks while it waits; main-loop galfs commits run IF=0 | `DESIGN.md` → Lock order, TLB shootdown | the SMP suite (`smp`, `ipi`, `smpstress`, `smpuser`), `lockgrow_test_passes`, `passwd_on_sealed_disk_typing_e2e` |
 | Ramdisk measured at build and boot | this page → Trust | `ramdisk_test_passes` |
 
 ## CPU features
@@ -101,8 +103,21 @@ is claimed as covered.
 
 | Gap | Today | Milestone |
 | --- | --- | --- |
-| Release profile, KVM, timing | everything is measured under TCG at `opt-level = 0`; side-channel timing has not been looked at | **64** |
+| KVM numbers, timing | the suite and `test-bench` run on the release image (`opt-level = 3`, fat LTO) under TCG; `docs/PERF.md` holds the TCG cells and loose KVM ceilings. The landing host cannot create a KVM vCPU, so the KVM cells are empty until a host with a working `/dev/kvm` runs `bench_test_passes`; side-channel timing has not been looked at | **64** (release done), v1.0 gate for KVM |
 | fsck repair into a new slot | host `fsck` detects; recovery is "pick the other slot" | GALFS follow-on |
+
+## Review log
+
+Findings from review passes after the Milestone 52 bar, with the fix
+and the test that keeps it fixed. A finding stays here after it is
+closed so the next reviewer sees what was already looked at.
+
+| Finding | Class | Fix | Guard |
+| --- | --- | --- | --- |
+| **galexy.os#86** — `passwd` hung the machine on a sealed-disk boot. Two independent IF=0 deadlocks: (1) a thread holding a kernel spin lock allocated, the heap grew, and the TLB-shootdown initiator spun for an ack from a CPU that was itself spinning IF=0 on that same lock, so the IPI never landed; (2) the BSP main loop committed a dirty galfs table to disk with IF=1 and the timer switched away while `DISK_BUF` + `TABLE` were held, so the shell's next galfs syscall (IF=0) spun on `TABLE` forever on the same CPU | availability (any logged-in seat could wedge every seat) | `sync::Mutex` wraps every kernel spin lock with a relax step that services pending shootdown requests (`shootdown::service_pending`); the initiator services other CPUs' requests while it waits; the heap's second grower polls instead of re-enabling IF. `sync_to_disk`, `wipe_volume_key`, and `seal_and_lock` gate IF themselves. PBKDF2 for `passwd` / `useradd` / format runs before the `TABLE` lock (`PasswordCred`); `thread_stats`, pipe wake, and orphan transfer no longer allocate under `THREADS` | `lockgrow_test_passes` (hung before the fix, passes after), `passwd_on_sealed_disk_typing_e2e` (production image, sealed disk, passphrase → login → `passwd` → `sync` → reboot → login with the new password) |
+| `svc start|stop|restart` accepted any logged-in seat | authorization (a non-admin seat could stop or restart another seat or service through init) | init checks the kernel-stamped admin byte before any service mutation and replies `access denied`; `svc status` stays open | `init_test_passes` (`eve` seat: `status shell2` answered, `stop shell2` refused, `shell2` still live) |
+| Panic path could deadlock on the serial or `dmesg` lock when the panicking CPU held it | diagnosability | the panic handler disables interrupts and force-unlocks `SERIAL1` and `DMESG` before printing `[PANIC]` | every boot test asserts on `[PANIC]`; a silent hang would now print instead |
+| Audit of user-pointer copies, `interrupts::enable` sites, and allocation on the syscall path | no finding | every user copy goes through `user_buffer` / `arch::user_copy` after a page walk; the only unconditional `enable()` outside boot and the idle loops was the heap's second-grower wait, now removed (virtio-blk `xfer` restores the entry IF state and pins the waiter to its CPU); the remaining syscall-path allocations happen outside `THREADS` | `syscall_test_passes`, `smap_test_passes`, `badelf_test_passes`, `lockgrow_test_passes` |
 
 ## Non-goals (scope freeze)
 

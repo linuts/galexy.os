@@ -1068,12 +1068,12 @@ IRQ that already has IF=0) around the acquire.
 
 | Lock | May hold while taking | IRQ-gate |
 | --- | --- | --- |
-| `THREADS` | galfs `TABLE`, then `VOLUME_KEY`, then `VOLUME_PASS`, then `CHANS` | yes |
-| galfs `TABLE` | `DISK_BUF` only while encoding; not `THREADS` | yes, on the syscall path |
+| `THREADS` | galfs `TABLE`, then `VOLUME_KEY`, then `VOLUME_PASS`, then `CHANS`. No heap allocation while held (snapshot into fixed arrays, allocate after the drop) | yes |
+| galfs `TABLE` | `DISK_BUF` only while encoding; not `THREADS`. The PBKDF2 for `login` / `passwd` / `useradd` runs before the lock is taken (`PasswordCred`) | yes. Syscalls arrive IF=0; the main-loop entries (`sync_to_disk`, `wipe_volume_key`, `seal_and_lock`) gate themselves — a preempted main-loop holder on the BSP deadlocked the shell's next galfs syscall on the same CPU (galexy.os#86) |
 | `VOLUME_KEY` | `VOLUME_PASS` | with the caller |
 | `LOCKOUT` | nothing above | yes; never under `THREADS` or `TABLE` |
 | Frame `USED` then `USABLE` | nothing else | yes |
-| Heap `INNER` | nothing else; growth drops it before shootdown | yes |
+| Heap `INNER` | nothing else; growth drops it before shootdown. A second grower that lost the race polls `shootdown::service_pending()` while it waits and never re-enables IF (galexy.os#86) | yes |
 | `ATA` / virtio `DEV` then `DMA` | nothing else. The timer may take `DMA` alone to read `used.idx`; it never takes `DEV`. The waiter holds `DEV` across the halt and stays on that CPU (`xfer_wait_cpu`) so a same-CPU switch cannot spin on it | with the caller (syscall or BSP); `used.idx` disables interrupts around `DMA` |
 | Screen `SCREEN` / `GRIDS` | nothing else | BSP; IRQ handlers do not take it |
 | Keyboard queue | nothing else (drop warning takes `DMESG` after the queue lock drops) | IRQ may push; readers gate |
@@ -1081,7 +1081,7 @@ IRQ that already has IF=0) around the acquire.
 | COM1 `SERIAL1` | nothing (received bytes are delivered after it drops) | TX path gates; the receive IRQ takes it |
 | `CHANS` | nothing else | yes; only after `THREADS` |
 | `SCHED`, `RAMDISK`, `PIPES`, `PENDING_SPAWN` | not `THREADS` | yes when called from preemptable code |
-| Shootdown handler | **no lock** | runs at IPI; initiator holds none across the broadcast |
+| Shootdown handler | **no lock** | runs at IPI, and from the relax step of every `sync::Mutex` spin via `service_pending()` so an IF=0 lock waiter still acks; the initiator services other CPUs' requests while it waits and holds no lock across the broadcast |
 
 Init order (`galexy-os` `main`): serial → framebuffer → ramdisk publish
 → `mm` (frames, paging, heap) → `arch` (GDT, IDT, ACPI, FSGSBASE,
