@@ -4,11 +4,12 @@
 mod common;
 
 use common::{
-    boot, boot_and_type, boot_and_type_ps2, boot_and_type_uefi, boot_galfs_once, boot_liveness,
-    boot_uefi, boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache,
-    boot_with_galfs_crash, boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn,
-    boot_with_galfs_virtio, boot_with_galfs_virtio_legacy, image, uart_login_serial, use_kvm,
-    GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
+    boot, boot_and_type, boot_and_type_ps2, boot_and_type_uefi, boot_galfs_once,
+    boot_galfs_once_virtio, boot_liveness, boot_uefi, boot_with_galfs,
+    boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
+    boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio,
+    boot_with_galfs_virtio_legacy, image, uart_login_serial, use_kvm, GalfsDiskCache,
+    GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
 };
 use std::time::Duration;
 
@@ -902,6 +903,38 @@ fn galfs_disk_persists_virtio_legacy() {
         "disable-modern must not take the 1.x path; serial:\n{serial1}"
     );
     assert_galfs_disk_persists((code1, serial1, img, code2, serial2), "virtio-legacy");
+}
+
+/// virtio-blk DMA follows the buffer's physical pages, not `translate(buf)`
+/// plus a length: a sector straddling two non-adjacent frames lands in
+/// both and never in the frame that happens to be physically next. Both
+/// transports share the descriptor builder; both are booted.
+#[test]
+fn dmasplit_test_passes() {
+    for legacy in [false, true] {
+        let (code, serial) = boot_galfs_once_virtio(&image("test-dmasplit"), legacy);
+        let label = if legacy { "legacy" } else { "virtio 1.x" };
+        assert!(
+            !serial.contains("[PANIC]") && !serial.contains("PAGE FAULT in ring 0"),
+            "test-dmasplit ({label}) panicked or faulted; serial:\n{serial}"
+        );
+        assert!(
+            serial.contains("[test-dmasplit] straddling read stayed in the buffer")
+                && serial.contains("[test-dmasplit] multi-page read stayed in the buffer")
+                && serial.contains("[test-dmasplit] straddling write came from the buffer")
+                && serial.contains("[test-dmasplit] 48-sector round trip"),
+            "test-dmasplit ({label}) did not reach every stage; serial:\n{serial}"
+        );
+        assert!(
+            serial.contains("[test-dmasplit] passed"),
+            "test-dmasplit ({label}) must pass; serial:\n{serial}"
+        );
+        assert_eq!(
+            code,
+            Some(QEMU_EXIT_SUCCESS),
+            "test-dmasplit ({label}) exit code; serial:\n{serial}"
+        );
+    }
 }
 
 /// GALF dual slots start at LBA 2048 — absolute LBA 0 stays empty.

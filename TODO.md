@@ -2265,7 +2265,7 @@ The Milestone 53–54 follow-ons, finished.
       checked or carries a written waiver; the `review-rc1` tag is the
       one owner-deferred item)
 - [ ] Suite green on BIOS + UEFI, TCG + KVM, `q35` + the `pc` legacy
-      case (BIOS + UEFI, TCG, `q35` + `pc` are green at 113 boots; the
+      case (BIOS + UEFI, TCG, `q35` + `pc` are green at 114 boots; the
       KVM pass needs a host whose `/dev/kvm` can create a vCPU)
 - [ ] `PERF.md` numbers within budget under KVM (TCG release cells
       recorded; KVM cells empty for the same host reason)
@@ -2546,6 +2546,15 @@ items stay here with rationale.
       `bin/test-lockgrow` and `passwd_on_sealed_disk_typing_e2e` are the
       regressions. `svc start|stop|restart` became admin-only in the
       same review (`docs/THREAT.md` → Review log)
+- [x] ~~virtio-blk handed the device `translate(buf) + len`, so a sector
+      straddling two non-adjacent frames DMA'd into whatever was
+      physically next (the page table the bootloader placed between two
+      `.bss` frames at a 2 MiB boundary: a ring-0 page fault inside
+      galfs `DISK_BUF` on the boots where KASLR crossed it)~~ — CLOSED
+      by PR #88. One descriptor per physically contiguous run
+      (`push_data_descs`), page-aligned `DISK_BUF`, 32-sector batches;
+      `bin/test-dmasplit` plants a sentinel in the physically adjacent
+      frame and checks straddling reads and writes on both transports
 - [x] `write` still rejects controls outside the console subset
       (printable ASCII, space, newline, backspace, tab, form feed, CR,
       ESC, BEL). CSI policy and the blinking cursor are Milestone 49

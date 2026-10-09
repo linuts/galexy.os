@@ -218,7 +218,7 @@ pub fn capacity_sectors() -> u64 {
 
 /// Reads `dst.len()` sectors starting at `lba`.
 ///
-/// Batches physically contiguous runs like [`write_sectors`].
+/// Batches up to [`MAX_BATCH_SECTORS`] per request like [`write_sectors`].
 pub fn read_sectors(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError> {
     if dst.is_empty() {
         return Err(SysError::BadValue);
@@ -229,7 +229,7 @@ pub fn read_sectors(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError> 
     check_range(lba, dst.len())?;
     let mut i = 0usize;
     while i < dst.len() {
-        let n = contiguous_sectors(&dst[i..]);
+        let n = batch_sectors(&dst[i..]);
         xfer(
             VIRTIO_BLK_T_IN,
             lba + i as u32,
@@ -243,8 +243,9 @@ pub fn read_sectors(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError> 
 
 /// Writes `src.len()` sectors starting at `lba`.
 ///
-/// Batches physically contiguous runs (same mapped page) into one virtio
-/// request so a 288-sector GALF slot is dozens of kicks, not 288.
+/// Batches up to [`MAX_BATCH_SECTORS`] into one virtio request (one
+/// descriptor per physically contiguous run) so a 288-sector GALF slot is
+/// nine kicks, not 288.
 pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
     if src.is_empty() {
         return Err(SysError::BadValue);
@@ -255,7 +256,7 @@ pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
     check_range(lba, src.len())?;
     let mut i = 0usize;
     while i < src.len() {
-        let n = contiguous_sectors(&src[i..]);
+        let n = batch_sectors(&src[i..]);
         // SAFETY: xfer only reads `n * SECTOR` bytes for OUT; slice lives for the call.
         xfer(
             VIRTIO_BLK_T_OUT,
@@ -268,29 +269,18 @@ pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
     Ok(())
 }
 
-/// How many leading sectors of `src` share one physically contiguous run.
-fn contiguous_sectors(src: &[[u8; SECTOR]]) -> usize {
-    if src.is_empty() {
-        return 0;
-    }
-    let base_virt = VirtAddr::new(core::ptr::from_ref(&src[0]) as u64);
-    let Some(base_phys) = mm::translate(base_virt) else {
-        return 1;
-    };
-    let page_left = (0x1000 - (base_phys.as_u64() as usize & 0xFFF)) / SECTOR;
-    let max = src.len().min(page_left.max(1));
-    let mut n = 1usize;
-    while n < max {
-        let v = VirtAddr::new(core::ptr::from_ref(&src[n]) as u64);
-        let Some(p) = mm::translate(v) else {
-            break;
-        };
-        if p.as_u64() != base_phys.as_u64() + (n * SECTOR) as u64 {
-            break;
-        }
-        n += 1;
-    }
-    n
+/// Sectors per request. 16 KiB spans at most five pages, so a request
+/// never needs more than five data descriptors (`push_data_descs`).
+const MAX_BATCH_SECTORS: usize = 32;
+
+/// How many leading sectors of `src` go into one request.
+///
+/// Physical contiguity is the descriptor chain's job (`push_data_descs`
+/// splits at every page whose frame does not continue the run), so the
+/// batch is bounded by size alone. A slice whose sectors straddle a page
+/// boundary is handled the same way as an aligned one.
+fn batch_sectors(src: &[[u8; SECTOR]]) -> usize {
+    src.len().min(MAX_BATCH_SECTORS)
 }
 
 /// Issues a virtio-blk FLUSH.
@@ -636,30 +626,7 @@ fn submit_xfer(
         );
     }
 
-    let status_idx = if len > 0 {
-        let buf_phys = mm::translate(VirtAddr::new(buf as u64))
-            .ok_or(SysError::Unsupported)?
-            .as_u64();
-        let mut flags = VRING_DESC_F_NEXT;
-        if type_ == VIRTIO_BLK_T_IN {
-            flags |= VRING_DESC_F_WRITE;
-        }
-        // SAFETY: as above.
-        unsafe {
-            core::ptr::write_volatile(
-                &mut dma.desc[1],
-                VirtqDesc {
-                    addr: buf_phys,
-                    len: len as u32,
-                    flags,
-                    next: 2,
-                },
-            );
-        }
-        2u16
-    } else {
-        1u16
-    };
+    let status_idx = push_data_descs(&mut dma, buf, len, type_ == VIRTIO_BLK_T_IN)?;
 
     // SAFETY: as above.
     unsafe {
@@ -695,6 +662,84 @@ fn submit_xfer(
     let want = state.last_used.wrapping_add(1);
     drop(dma);
     Ok(want)
+}
+
+/// Data descriptors one request may use: the chain is `req` + data + `status`.
+const MAX_DATA_DESCS: usize = QUEUE_SIZE - 2;
+
+/// Fills `desc[1..]` with one descriptor per PHYSICALLY contiguous run of
+/// `[buf, buf + len)` and returns the index the status descriptor takes.
+///
+/// A kernel buffer is contiguous in virtual memory and nothing more. The
+/// bootloader hands `.bss` adjacent frames most of the time, which is why a
+/// single `translate(buf)` ever worked; at a 2 MiB boundary it allocates a
+/// page-table frame between two data frames, and a sector that straddles
+/// that boundary would have the device DMA into the page table (a read
+/// clobbers kernel PTEs with disk bytes, a write leaks PTEs to disk). Each
+/// 4 KiB page is translated on its own; runs merge only when the physical
+/// addresses actually continue.
+fn push_data_descs(
+    dma: &mut DmaRegion,
+    buf: *mut u8,
+    len: usize,
+    device_writes: bool,
+) -> Result<u16, SysError> {
+    let mut flags = VRING_DESC_F_NEXT;
+    if device_writes {
+        flags |= VRING_DESC_F_WRITE;
+    }
+    let mut idx = 1usize;
+    let mut run_phys = 0u64;
+    let mut run_len = 0usize;
+    let mut off = 0usize;
+    while off < len {
+        let va = (buf as u64)
+            .checked_add(off as u64)
+            .ok_or(SysError::BadValue)?;
+        let phys = mm::translate(VirtAddr::new(va))
+            .ok_or(SysError::Unsupported)?
+            .as_u64();
+        let page_left = 0x1000 - (va as usize & 0xFFF);
+        let chunk = page_left.min(len - off);
+        if run_len > 0 && phys == run_phys + run_len as u64 {
+            run_len += chunk;
+        } else {
+            if run_len > 0 {
+                if idx > MAX_DATA_DESCS {
+                    return Err(SysError::BadValue);
+                }
+                write_desc(dma, idx, run_phys, run_len, flags);
+                idx += 1;
+            }
+            run_phys = phys;
+            run_len = chunk;
+        }
+        off += chunk;
+    }
+    if run_len > 0 {
+        if idx > MAX_DATA_DESCS {
+            return Err(SysError::BadValue);
+        }
+        write_desc(dma, idx, run_phys, run_len, flags);
+        idx += 1;
+    }
+    Ok(idx as u16)
+}
+
+fn write_desc(dma: &mut DmaRegion, idx: usize, addr: u64, len: usize, flags: u16) {
+    // SAFETY: descriptor table is host-owned until notify; `idx` is below
+    // QUEUE_SIZE by the MAX_DATA_DESCS check.
+    unsafe {
+        core::ptr::write_volatile(
+            &mut dma.desc[idx],
+            VirtqDesc {
+                addr,
+                len: len as u32,
+                flags,
+                next: (idx + 1) as u16,
+            },
+        );
+    }
 }
 
 fn finish_xfer(state: &mut DeviceState, want: u16) -> Result<(), SysError> {

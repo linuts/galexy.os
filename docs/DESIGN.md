@@ -270,6 +270,24 @@ a missed line is noticed on the next timer tick. FLUSH via
 pub struct VirtioBlk; // impl BlockDevice
 ```
 
+**DMA follows physical pages, not `translate(buf) + len`.** A kernel
+buffer is contiguous in virtual memory only. The bootloader's `.bss`
+frames are usually adjacent, which is why a single translation ever
+worked; at a 2 MiB boundary it allocates a page-table frame between two
+data frames, and a sector straddling that boundary used to DMA into the
+page table (`[pf] PAGE FAULT in ring 0` inside galfs `DISK_BUF` on the
+boots where KASLR put it across the boundary; on a write, page-table
+bytes went to disk). `push_data_descs` translates every 4 KiB page of a
+request and emits one descriptor per physically contiguous run, so a
+request is up to `MAX_BATCH_SECTORS` (32 sectors, at most five
+descriptors) regardless of alignment. galfs' `DISK_BUF` is page-aligned
+(`SectorBuf`) so the common request is one descriptor. The legacy ring
+layout (desc + avail on one page, used on the next) still requires those
+two frames to be physically adjacent and refuses the device otherwise.
+`bin/test-dmasplit` maps two non-adjacent frames at adjacent pages,
+plants a sentinel in the frame that is physically next, and checks
+straddling reads and writes on both transports.
+
 The keyboard handler never takes the screen lock. Locks are tiny and
 never nested (decode under one lock, push under another), so IRQ
 context is safe. Queue overflow drops the newest key (documented).
@@ -1173,6 +1191,7 @@ main image and are listed at the end.
 | `test-ramdisk`, `test-realprogram`, `test-open`, `test-runshell` | `ramdisk_test_passes`, `realprogram_test_passes`, `open_test_passes`, `runshell_test_passes` | M15 ELF + ramdisk, M20 files as Caps, M31 launch by name; M51 ramdisk measurement |
 | `test-acpi`, `test-apic` | `acpi_test_passes`, `apic_test_passes` | M17 APIC family; M65 x2APIC / TSC-deadline follow CPUID |
 | `test-smp`, `test-ipi`, `test-smpuser`, `test-smpstress` | `smp_test_passes`, `ipi_test_passes`, `smpuser_test_passes`, `smpstress_test_passes` | M18–M19 SMP, shootdown, steal |
+| `test-lockgrow` | `lockgrow_test_passes` | heap growth under a held lock vs an IF=0 waiter on the other CPU (galexy.os#86); shootdown acks from the lock spin |
 | `test-shutdown`, `test-reboot` | `shutdown_test_powers_off`, `reboot_test_resets` | M23 power |
 | `test-audit` | `audit_console_test_passes` | M49 keyboard overflow, dmesg ring, blink |
 | `test-scratch`, `test-rm`, `test-seek` | `scratch_test_passes`, `rm_test_passes`, `seek_test_passes` | M27 / M30 / M36 scratch files, remove, seek |
@@ -1181,6 +1200,7 @@ main image and are listed at the end.
 | `test-galfs-disk`, `test-galfs-part`, `test-share-disk` | `galfs_disk_persists_*`, `assert_galfs_disk_persists`, `galfs_disk_persists_partition_offset`, `share_disk_persists_across_reboot` | M38 / M46 disk-backed galfs, cache modes, virtio, partition offset |
 | `test-galfs-corrupt`, `test-galfs-idempotent`, `test-crash` | `galfs_disk_recovers_*`, `galfs_disk_refuses_format_when_both_slots_corrupt`, `galfs_idempotent_after_recover`, `crash_injection_picks_consistent_slot` | M39 / M45 crash safety |
 | `test-ata` | `ata_absent_returns_unsupported` | M45 ATA error propagation |
+| `test-dmasplit` | `dmasplit_test_passes` | virtio-blk DMA splits at physical discontinuities (both transports); sentinel frame stays untouched |
 | `test-users`, `test-mustchange`, `test-lockout`, `test-idle`, `test-unlock` | `users_test_passes`, `mustchange_test_passes`, `lockout_test_passes`, `idle_test_passes`, `unlock_test_passes` | M37 / M42 / M43 auth, M44 sealed unlock |
 | `test-pipe` | `pipe_test_passes` | M36 pipes + `give`, M57 block/wake |
 | `test-userheap`, `test-channel` | `userheap_test_passes`, `channel_test_passes` | M66 per-task `Map` budget and reap, `Clock`, channel send/recv and `give` |

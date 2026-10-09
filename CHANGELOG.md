@@ -21,10 +21,16 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
   transfer no longer allocate under `THREADS`. `svc
   start|stop|restart` are admin-only through init (`svc status` stays
   open). The panic handler force-unlocks serial and `dmesg` before it
-  prints. New `test-lockgrow` kernel and `passwd_on_sealed_disk_typing_e2e`
-  (production image, sealed disk, passphrase → login → `passwd` →
-  `sync` → reboot → login). `THREAT.md` gains a review log. Suite:
-  113 boots. The `v1.0` tag is still a separate gate
+  prints. virtio-blk DMA follows the buffer's physical pages (one
+  descriptor per contiguous run) instead of `translate(buf) + len`,
+  which had let a sector straddling a 2 MiB boundary DMA into the
+  page table the bootloader placed between two `.bss` frames; galfs
+  `DISK_BUF` is page-aligned; requests batch 32 sectors. New
+  `test-lockgrow` and `test-dmasplit` kernels and
+  `passwd_on_sealed_disk_typing_e2e` (production image, sealed disk,
+  passphrase → login → `passwd` → `sync` → reboot → login).
+  `THREAT.md` gains a review log. Suite: 114 boots. The `v1.0` tag is
+  still a separate gate
 - [#87](https://github.com/linuts/galexy.os/pull/87) — M67 — init owns
   shutdown and the service table. `shutdown` / `reboot` ask init over
   one channel; init Cap-kills the other seats, calls `sync`, then

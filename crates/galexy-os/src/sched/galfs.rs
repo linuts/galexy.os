@@ -381,8 +381,31 @@ pub const VOLUME_PASSPHRASE: &[u8] = b"galfs";
 /// Max bytes accepted by [`unlock_volume`] (matches the syscall staging cap).
 const PASSPHRASE_MAX: usize = 64;
 
-static DISK_BUF: Mutex<[[u8; block::SECTOR]; DISK_SECTORS]> =
-    Mutex::new([[0u8; block::SECTOR]; DISK_SECTORS]);
+/// The slot staging buffer, page-aligned so no sector straddles a page.
+///
+/// The virtio driver splits a request at every physical discontinuity, so
+/// alignment is not what keeps DMA inside the buffer; it keeps every
+/// request a single descriptor and makes the layout independent of where
+/// KASLR puts `.bss` (galexy.os#86 follow-up: an unaligned buffer crossing
+/// a 2 MiB boundary once DMA'd into the page table between its frames).
+#[repr(C, align(4096))]
+struct SectorBuf([[u8; block::SECTOR]; DISK_SECTORS]);
+
+impl core::ops::Deref for SectorBuf {
+    type Target = [[u8; block::SECTOR]; DISK_SECTORS];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for SectorBuf {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+static DISK_BUF: Mutex<SectorBuf> = Mutex::new(SectorBuf([[0u8; block::SECTOR]; DISK_SECTORS]));
+const _: () = assert!(core::mem::align_of::<SectorBuf>() == 4096);
 /// First LBA of slot 0 (partition offset). Default 0; set before [`init`].
 static LBA_BASE: AtomicU32 = AtomicU32::new(0);
 /// Unwrapped volume key while the disk is mounted. `None` when locked.
@@ -755,7 +778,7 @@ fn sync_to_disk_gated() -> bool {
     let mut buf = DISK_BUF.lock();
     {
         let table = TABLE.lock();
-        if !encode_table(&table, next_gen, &mut buf) {
+        if !encode_table(&table, next_gen, &mut buf.0) {
             // A dirty RAM table on a locked volume stays dirty (nothing
             // can seal it) and the 1 Hz tick retries forever. Say so once
             // per lock state, not once a second for the rest of the boot.
@@ -770,7 +793,7 @@ fn sync_to_disk_gated() -> bool {
     LOCKED_SKIP_LOGGED.store(false, Ordering::Release);
     crate::serial_println!("[galfs] committing slot {}", next_slot);
     let d = disk();
-    if d.write_sectors(lba, &*buf).is_err() {
+    if d.write_sectors(lba, &buf.0).is_err() {
         crate::serial_println!("[galfs] disk sync write failed");
         return false;
     }
@@ -803,7 +826,7 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
     let mut cand = LOAD_CAND.lock();
     for slot in 0..DISK_SLOT_COUNT as u32 {
         let lba = slot_lba(slot);
-        if disk().read_sectors(lba, &mut *buf).is_err() {
+        if disk().read_sectors(lba, &mut buf.0).is_err() {
             continue;
         }
         let magic = buf[0][0..4] == DISK_MAGIC;
@@ -822,7 +845,7 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
             saw_corrupt_current = true;
             continue;
         }
-        let Some(gen) = decode_table(&mut buf, &mut cand, passphrase) else {
+        let Some(gen) = decode_table(&mut buf.0, &mut cand, passphrase) else {
             if magic && version == DISK_VERSION {
                 saw_corrupt_current = true;
                 bad_with_magic += 1;

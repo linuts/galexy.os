@@ -597,6 +597,34 @@ pub fn boot_galfs_once(image: &Image) -> (Option<i32>, String) {
     result
 }
 
+/// One boot of `image` with a fresh 1 MiB virtio-blk disk on the given
+/// transport (`-M q35`, `cache=writethrough`). Returns `(exit, serial)`.
+pub fn boot_galfs_once_virtio(image: &Image, legacy: bool) -> (Option<i32>, String) {
+    let galfs_path = std::env::temp_dir().join(format!(
+        "galexy-galfs-virtio-{}-{}.img",
+        image.name.replace('-', "_"),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::write(&galfs_path, vec![0u8; GALFS_IMG_BYTES]).expect("create galfs.img");
+    let backend = if legacy {
+        GalfsBackend::VirtioLegacy
+    } else {
+        GalfsBackend::VirtioPci
+    };
+    let result = boot_once_with_galfs(
+        &image.bios,
+        &galfs_path,
+        &image.name,
+        GalfsDiskCache::Writethrough,
+        backend,
+    );
+    let _ = std::fs::remove_file(&galfs_path);
+    result
+}
+
 /// Boots `image` headless until it exits or the timeout elapses.
 ///
 /// Returns the QEMU exit code (see [`QEMU_EXIT_SUCCESS`] / [`QEMU_EXIT_FAILED`];
