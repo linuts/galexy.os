@@ -573,23 +573,67 @@ fn slot_reusable(threads: &[Thread], index: usize) -> bool {
 
 /// Registers a thread. A freed slot is overwritten in place; otherwise the
 /// vec grows. Indexes of live threads do not move. Returns the 1-based slot.
+///
+/// The vec growth allocates. That allocation can shoot down TLBs, and the
+/// other CPU's timer takes [`THREADS`] with interrupts off. Holding the
+/// lock across the growth deadlocks that ack (`echo | grep` in the
+/// userland typing test). Capacity is reserved with the lock dropped.
 fn push_thread(thread: Thread) -> u8 {
-    let mut threads = THREADS.lock();
-    if let Some(index) = (0..threads.len()).find(|&i| slot_reusable(&threads, i)) {
-        // False until this thread's owner publishes a switch-out. Stored
-        // before the record becomes RUNNING, so a steal scan cannot take
-        // the slot on its first run.
-        CTX_STABLE[index].store(false, Ordering::Release);
-        threads[index] = thread;
-        return (index + 1) as u8;
+    let mut incoming = Some(thread);
+    loop {
+        if let Some(slot) = try_push_thread(&mut incoming) {
+            return slot;
+        }
+        reserve_thread_slot();
     }
-    assert!(
-        threads.len() < MAX_THREADS,
-        "sched: thread table full ({MAX_THREADS} live slots)"
-    );
-    CTX_STABLE[threads.len()].store(false, Ordering::Release);
-    threads.push(thread);
-    threads.len() as u8
+}
+
+/// Inserts the pending thread when a freed slot or spare capacity exists.
+/// `None` means the vec must grow first; `incoming` is left in place.
+fn try_push_thread(incoming: &mut Option<Thread>) -> Option<u8> {
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let reusable = (0..threads.len()).find(|&i| slot_reusable(&threads, i));
+        let spare = threads.capacity() > threads.len();
+        if reusable.is_none() && !spare {
+            assert!(
+                threads.len() < MAX_THREADS,
+                "sched: thread table full ({MAX_THREADS} live slots)"
+            );
+            return None;
+        }
+        let thread = incoming.take().expect("push_thread: missing thread");
+        if let Some(index) = reusable {
+            // False until this thread's owner publishes a switch-out. Stored
+            // before the record becomes RUNNING, so a steal scan cannot take
+            // the slot on its first run.
+            CTX_STABLE[index].store(false, Ordering::Release);
+            threads[index] = thread;
+            return Some((index + 1) as u8);
+        }
+        CTX_STABLE[threads.len()].store(false, Ordering::Release);
+        threads.push(thread);
+        Some(threads.len() as u8)
+    })
+}
+
+/// Grows the thread vec by a few slots. The heap allocation runs without
+/// [`THREADS`] held, so a shootdown can be acked by the other CPU.
+fn reserve_thread_slot() {
+    let want = interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        threads.len().saturating_add(4).max(4)
+    });
+    let mut buf = Vec::with_capacity(want);
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        if threads.capacity() > threads.len() || buf.capacity() < threads.len() + 1 {
+            return;
+        }
+        let mut old = core::mem::take(&mut *threads);
+        buf.append(&mut old);
+        *threads = buf;
+    });
 }
 
 /// Incoming `slot` (1-based; 0 = main) is about to be entered, so its saved

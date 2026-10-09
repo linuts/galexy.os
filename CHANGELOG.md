@@ -15,7 +15,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
   completion, `history`, and Shift+PgUp scrollback; `head`, `tail`,
   `wc`, `grep`, `uptime`, and `ls -l`. Syscall spawn keeps the child
   parked until the parent is linked, so `SPAWN_WAIT` cannot miss a
-  fast exit on the other CPU. `Map`, `Clock`, `Channel`, `Send`, and
+  fast exit on the other CPU. The thread table grows without holding
+  its lock across a TLB shootdown. `Map`, `Clock`, `Channel`, `Send`, and
   `Recv` stay experimental until Milestone 67. `Sleep` is unchanged
 - [#84](https://github.com/linuts/galexy.os/pull/84) — M65 — `-M q35`
   by default; PCIe ECAM when ACPI publishes `MCFG`; virtio-blk 1.x with
