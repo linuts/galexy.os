@@ -90,7 +90,7 @@ Unknown codes decode to `Unsupported`. New codes append.
 | File cap band | `FILE_CAP_BASE = 3`, eight per task | stable |
 | Process cap band | `PROC_CAP_BASE = 0x40`, `MAX_PROC_CAPS = 16` per task | experimental (ceiling may rise with **Milestone 67**) |
 | Query snapshots (`stats`, `tasks`, `threads`, `files`, `dmesg`, self) | text, one record per line; field names are informational | **unstable** — parse defensively; field set grows |
-| `spawn` grant word (`r10`) | QUERY 1, WAIT 2, INHERIT 4, KEYBOARD 8, rights mask bits 8..15 | experimental with `spawn` |
+| `spawn` grant word (`r10`) | QUERY 1, WAIT 2, INHERIT 4, KEYBOARD 8, WITH_CAPS 16, rights mask bits 8..15, file-slot nibbles bits 16..23 | experimental with `spawn` |
 | `spawn` limits | `SPAWN_NAME_MAX = 64`, `SPAWN_ARG_MAX = 256` | experimental with `spawn` |
 | Token rights | READ 1, WRITE 2, LIST 4, CREATE 8, REMOVE 16, ONCE 128 (`grant`/`su` only) | stable |
 | `seek` whence | SET 0, CUR 1, END 2 | stable |

@@ -151,6 +151,15 @@ struct TtyGrids {
     ansi: [AnsiParser; super::keyboard::TTY_COUNT],
 }
 
+fn row_differs(previous: usize, current: usize, row: usize, cols: usize) -> bool {
+    let grids = GRIDS.lock();
+    let left = &grids.cells[previous][row][..cols];
+    let right = &grids.cells[current][row][..cols];
+    left.iter()
+        .zip(right)
+        .any(|(a, b)| a.ch != b.ch || a.fg.r != b.fg.r || a.fg.g != b.fg.g || a.fg.b != b.fg.b)
+}
+
 static GRIDS: Mutex<TtyGrids> = Mutex::new(TtyGrids {
     cells: [[[Cell::BLANK; TTY_COLS]; TTY_ROWS]; super::keyboard::TTY_COUNT],
     x: [0; super::keyboard::TTY_COUNT],
@@ -570,8 +579,11 @@ impl ScreenWriter {
 
     /// Shifts the text rows up by one line and clears the last text row.
     ///
-    /// The status row is not part of the shift. `stride` is in pixels
-    /// (bootloader doc), so the byte count includes `bytes_per_pixel`.
+    /// The pixel buffer is moved one row at a time (`copy_within`), then
+    /// only the vacated row is cleared. Unchanged rows are not redrawn
+    /// glyph by glyph. The status row is not part of the shift. `stride`
+    /// is in pixels (bootloader doc), so the byte count includes
+    /// `bytes_per_pixel`.
     fn scroll_up(&mut self) {
         let rows = self.text_rows();
         if rows == 0 {
@@ -756,6 +768,50 @@ impl ScreenWriter {
         self.load_focus();
     }
 
+    /// Paints text rows that differ from `previous` (the TTY that was
+    /// on screen). Equal rows stay as they are.
+    fn repaint_changed(&mut self, previous: usize) {
+        let rows = self.text_rows().min(TTY_ROWS);
+        let cols = self.max_char_x().min(TTY_COLS);
+        if previous == self.focus || previous >= super::keyboard::TTY_COUNT {
+            self.repaint_text();
+            return;
+        }
+        let saved_x = self.char_x;
+        let saved_y = self.char_y;
+        let saved_fg = self.fg;
+        let saved_ansi = self.ansi;
+        for row in 0..rows {
+            if !row_differs(previous, self.focus, row, cols) {
+                continue;
+            }
+            self.paint_row(row, cols);
+        }
+        self.char_x = saved_x;
+        self.char_y = saved_y;
+        self.fg = saved_fg;
+        self.ansi = saved_ansi;
+    }
+
+    fn paint_row(&mut self, row: usize, cols: usize) {
+        self.fg = Color::new(0, 0, 0);
+        self.clear_row_pixels(row);
+        let mut row_cells = [Cell::BLANK; TTY_COLS];
+        {
+            let grids = GRIDS.lock();
+            row_cells[..cols].copy_from_slice(&grids.cells[self.focus][row][..cols]);
+        }
+        for (col, cell) in row_cells.iter().enumerate().take(cols) {
+            if cell.ch == '\0' || cell.ch == ' ' {
+                continue;
+            }
+            self.char_x = col;
+            self.char_y = row;
+            self.fg = cell.fg;
+            self.draw_glyph(cell.ch);
+        }
+    }
+
     /// Paints the focused TTY's text rows onto the framebuffer.
     fn repaint_text(&mut self) {
         let saved_x = self.char_x;
@@ -765,22 +821,7 @@ impl ScreenWriter {
         let rows = self.text_rows().min(TTY_ROWS);
         let cols = self.max_char_x().min(TTY_COLS);
         for row in 0..rows {
-            self.fg = Color::new(0, 0, 0);
-            self.clear_row_pixels(row);
-            let mut row_cells = [Cell::BLANK; TTY_COLS];
-            {
-                let grids = GRIDS.lock();
-                row_cells[..cols].copy_from_slice(&grids.cells[self.focus][row][..cols]);
-            }
-            for (col, cell) in row_cells.iter().enumerate().take(cols) {
-                if cell.ch == '\0' || cell.ch == ' ' {
-                    continue;
-                }
-                self.char_x = col;
-                self.char_y = row;
-                self.fg = cell.fg;
-                self.draw_glyph(cell.ch);
-            }
+            self.paint_row(row, cols);
         }
         self.char_x = saved_x;
         self.char_y = saved_y;
@@ -1135,15 +1176,45 @@ pub fn show_tty(index: u8) {
     let index = (index as usize).min(super::keyboard::TTY_COUNT - 1);
     super::keyboard::set_active(index as u8);
     with_lock(|screen| {
+        let previous = screen.shown;
         screen.mark_shown = false;
         screen.focus_on(index);
         screen.shown = index;
-        screen.repaint_text();
+        screen.repaint_changed(previous);
         if screen.blink_on {
             screen.show_mark();
         }
     });
     serial_println!("[tty] {}", index + 1);
+}
+
+/// Fills the shown TTY's text cells. The bench calls [`repaint_shown`]
+/// afterwards so the timed work is the paint, not the fill.
+pub fn fill_shown_for_bench() {
+    with_lock(|screen| {
+        let focus = screen.shown;
+        screen.focus_on(focus);
+        let rows = screen.text_rows().min(TTY_ROWS);
+        let cols = screen.max_char_x().min(TTY_COLS);
+        let mut grids = GRIDS.lock();
+        for row in grids.cells[focus].iter_mut().take(rows) {
+            for cell in row.iter_mut().take(cols) {
+                *cell = Cell {
+                    ch: 'M',
+                    fg: Color::new(200, 200, 200),
+                };
+            }
+        }
+    });
+}
+
+/// Paints every text row of the shown TTY from its cell grid.
+pub fn repaint_shown() {
+    with_lock(|screen| {
+        let focus = screen.shown;
+        screen.focus_on(focus);
+        screen.repaint_text();
+    });
 }
 
 /// Paints a TTY switch the keyboard recorded, if one is waiting.

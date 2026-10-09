@@ -2,13 +2,13 @@
 //!
 //! Argument: mode byte, path length, path, then the text. Mode 0 prints.
 //! Mode 1 replaces a galfs file. Mode 2 appends. Mode 3 writes the text
-//! plus a newline to a pipe the parent `give`s (first file slot).
+//! plus a newline to the pipe spawn installed on the first file slot.
 
 #![no_std]
 #![no_main]
 
 use galexy_abi::{Cap, CapRights, SysError, FILE_CAP_BASE};
-use galexy_rt::{arg, close, create, create_replace, entry, open, write, write_console, yield_now};
+use galexy_rt::{arg, close, create, create_replace, entry, open, write, write_console};
 
 entry!(main);
 
@@ -77,10 +77,7 @@ fn main() -> i32 {
     0
 }
 
-/// Writes `text` and a newline to the pipe end the shell gives us.
-///
-/// The slot is empty until `give` lands, so a missing cap is a yield,
-/// not a failure.
+/// Writes `text` and a newline to the pipe end spawn already installed.
 fn write_pipe(text: &[u8]) -> i32 {
     let cap = Cap::new(FILE_CAP_BASE, CapRights::WRITE);
     let mut payload = [0u8; 81];
@@ -88,17 +85,11 @@ fn write_pipe(text: &[u8]) -> i32 {
     payload[..n].copy_from_slice(&text[..n]);
     payload[n] = b'\n';
     let bytes = &payload[..=n];
-    loop {
-        let wrote = write(cap, bytes);
-        if wrote.ok && wrote.value == bytes.len() as u64 {
-            let _ = close(cap);
-            return 0;
-        }
-        if !wrote.ok && wrote.value == SysError::BadCap as u64 {
-            let _ = yield_now();
-            continue;
-        }
-        write_console(b"echo: failed\n");
-        return 1;
+    let wrote = write(cap, bytes);
+    let _ = close(cap);
+    if wrote.ok && wrote.value == bytes.len() as u64 {
+        return 0;
     }
+    write_console(b"echo: failed\n");
+    1
 }

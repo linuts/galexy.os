@@ -10,16 +10,16 @@ what is true today and which milestone closes the gap.
 
 | Bar | Today | Gap → milestone |
 | --- | --- | --- |
-| **Secure** | Capabilities everywhere (26 syscalls, no ambient PID / fd); PBKDF2 passwords, lockout, idle logout, must-change; sealed dual-slot GALF (ChaCha20 + HMAC); W^X user maps, NX, guard pages, kstack canary, stack/secret wipe; TOCTOU-safe copies; lock-order table; audit lines without secrets; zero `static mut`; SMEP / SMAP / UMIP when CPUID reports them; kernel KASLR in P4 indexes 1..=24; Spectre v1 mask on dispatch; per-actor KDF cost (GALF v12) | KPTI / IBRS / MDS / CET waived for v1.0 (single-tenant guest, kernel half stays mapped; `THREAT.md`). Nothing is measured yet → **64** |
-| **Fast** | Deadline one-shot LAPIC, tickless idle, idle steal, park/wake for sleep / keyboard / pipe; IF=0 syscall path never allocates; console budget | Nothing is measured; suite is TCG at `opt-level = 0`; no release profile or LTO; virtio-blk spins 10 M polls; ATA is PIO; pipeline children `yield_now`-poll until `give` → **64** |
+| **Secure** | Capabilities everywhere (26 syscalls, no ambient PID / fd); PBKDF2 passwords, lockout, idle logout, must-change; sealed dual-slot GALF (ChaCha20 + HMAC); W^X user maps, NX, guard pages, kstack canary, stack/secret wipe; TOCTOU-safe copies; lock-order table; audit lines without secrets; zero `static mut`; SMEP / SMAP / UMIP when CPUID reports them; kernel KASLR in P4 indexes 1..=24; Spectre v1 mask on dispatch; per-actor KDF cost (GALF v12) | KPTI / IBRS / MDS / CET waived for v1.0 (single-tenant guest, kernel half stays mapped; `THREAT.md`) |
+| **Fast** | Deadline one-shot LAPIC, tickless idle, idle steal, park/wake for sleep / keyboard / pipe / virtio-blk; IF=0 syscall path never allocates; console budget; release profile (`opt-level = 3`, fat LTO); KVM when `/dev/kvm` is writable; `test-bench` numbers in `PERF.md`; pipe ends move at spawn | PCID and a new heap allocator waived (`PERF.md`: yield does not switch CR3 and does not allocate). ATA PIO stays the legacy disk fallback. Desktop-class throughput is a non-goal |
 | **Modern only** | x2APIC-aware LAPIC, I/O APIC, ACPI MADT / FADT / XSDT, UEFI first-class, GOP framebuffer, virtio-blk, FSGSBASE per-CPU, SMP | Legacy is the only path for timer calibration (PIT), 8259 remap, PS/2 keyboard, PIO IDE, legacy virtio IO BAR, port PCI config, `-M pc`; no TSC-deadline, no ECAM, no MSI-X → **65** |
 | **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, one pipeline, glob; 13 utilities (including `nano`); galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; gxc hello | No user heap, argv, clock read, or IPC beyond pipes; one pipeline shape; no background jobs → **66**. Shutdown bypasses init; no service table → **67**. Network and USB → **Phase 10** |
-| **Ready** | 77 QEMU test kernels, 103 runner boots, host suites green; CI workflow (`host` + `qemu` jobs); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 and 63 closed (`review-rc1` tag is the owner's call). Next: the **v1.0 gate** via **64 → 67** |
+| **Ready** | 78 QEMU test kernels, 104 runner boots (includes `nano` and `test-bench`), host suites green; CI workflow (`host` + `qemu` jobs, release images); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52, 63, and 64 closed (`review-rc1` tag is the owner's call). Next: the **v1.0 gate** via **65 → 67** |
 
 Order of work: **51 → 52** (`review-rc1`), then **63 → 64 → 65 → 66 →
 67** (`v1.0`). Security first because every later change should land
 on a kernel that already has SMAP on and a loader that returns errors.
-Measure (64) before modernizing (65) so the device rewrite has a
+64 measured before 65 modernizes, so the device rewrite has a
 baseline. Network is a phase of its own after `v1.0`; `v1.0` ships
 without it and says so.
 
@@ -378,10 +378,13 @@ the machine.
    KPTI / IBRS / MDS / CET written waivers; ELF loader returns
    `SysError` on a hostile image; KDF cost stored per actor so a
    `--release` kernel under KVM formats at 100 000 iterations
-2. **64 Fast path** — `bin/test-bench` + `docs/PERF.md` first; KVM in
-   the runner and `cargo run`; release profile with LTO; virtio-blk IRQ
-   completion; Caps handed over at spawn (no `yield` polls); framebuffer
-   batching; PCID / allocator changes only if the numbers ask
+2. **64 Fast path** ✅ — `bin/test-bench` and `docs/PERF.md` record
+   TCG and KVM; the runner and `cargo run` use KVM when `/dev/kvm` is
+   writable; release profile is `opt-level = 3`, fat LTO, debug
+   assertions on; virtio-blk completes on INTx (`IO_BLOCK`); pipe ends
+   move at spawn (`SPAWN_WITH_CAPS`); `show_tty` repaints changed rows.
+   PCID and a new heap allocator stay waived (yield does not switch
+   CR3 and does not allocate)
 3. **65 Modern platform** — `-M q35` default, PCIe ECAM, virtio 1.x
    with MSI-X, virtio-input keyboard, CPUID / HPET timer calibration,
    TSC-deadline, x2APIC preferred, 8259 mask-only. PIT, i8042, PIO IDE,

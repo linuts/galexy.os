@@ -7,7 +7,7 @@ use common::{
     boot, boot_and_type, boot_and_type_uefi, boot_galfs_once, boot_liveness, boot_uefi,
     boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
     boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio,
-    image, uart_login_serial, GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
+    image, uart_login_serial, use_kvm, GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
 };
 use std::time::Duration;
 
@@ -3030,6 +3030,58 @@ fn main_kernel_boots_and_timer_ticks() {
         serial.contains("[loader] program 'shell' ready"),
         "ring-3 shell was not spawned; serial:\n{serial}"
     );
+}
+
+/// KVM-only ceilings (µs). TCG is recorded in `docs/PERF.md` and is not
+/// gated. These are loose until a host whose KVM can create a vCPU
+/// records a release run; this landing host's `kvm_arch_vcpu_create`
+/// BUGs, so the numbers were not tightened here.
+const BENCH_YIELD_US: u64 = 2_000_000;
+const BENCH_SPAWN_US: u64 = 2_000_000;
+const BENCH_PIPE_US: u64 = 2_000_000;
+const BENCH_GALFS_US: u64 = 5_000_000;
+const BENCH_REPAINT_US: u64 = 5_000_000;
+
+fn bench_us(serial: &str, name: &str) -> u64 {
+    let key = format!("[bench] name={name} us=");
+    let line = serial
+        .lines()
+        .find(|line| line.contains(&key))
+        .unwrap_or_else(|| panic!("missing {key}; serial:\n{serial}"));
+    let raw = line
+        .split("us=")
+        .nth(1)
+        .unwrap_or_else(|| panic!("bad bench line {line}"));
+    raw.trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("bad bench us in {line}"))
+}
+
+#[test]
+fn bench_test_passes() {
+    let (code, serial) = boot(&image("test-bench"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-bench should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-bench] passed"),
+        "test-bench success marker missing; serial:\n{serial}"
+    );
+    let yield_us = bench_us(&serial, "yield");
+    let spawn_us = bench_us(&serial, "spawn");
+    let pipe_us = bench_us(&serial, "pipe");
+    let galfs_us = bench_us(&serial, "galfs");
+    let repaint_us = bench_us(&serial, "repaint");
+    assert!(yield_us > 0 && spawn_us > 0 && pipe_us > 0);
+    if use_kvm() {
+        assert!(yield_us < BENCH_YIELD_US, "yield {yield_us} us");
+        assert!(spawn_us < BENCH_SPAWN_US, "spawn {spawn_us} us");
+        assert!(pipe_us < BENCH_PIPE_US, "pipe {pipe_us} us");
+        assert!(galfs_us < BENCH_GALFS_US, "galfs {galfs_us} us");
+        assert!(repaint_us < BENCH_REPAINT_US, "repaint {repaint_us} us");
+    }
 }
 
 /// Highest `Ns:` uptime prefix seen in a serial transcript (tickless may

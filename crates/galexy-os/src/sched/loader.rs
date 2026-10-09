@@ -181,6 +181,7 @@ pub fn spawn_program(name: &str, bytes: &[u8]) -> Result<ProgramRegion, galexy_a
         crate::sched::galfs::admin_cred(),
         0,
         false,
+        false,
     )?
     .0)
 }
@@ -190,6 +191,8 @@ pub fn spawn_program(name: &str, bytes: &[u8]) -> Result<ProgramRegion, galexy_a
 ///
 /// The argument is placed above the child's initial stack pointer. `rdi`
 /// is its user address and `rsi` is the length. An empty slice passes zeros.
+/// `defer_run` leaves the child waiting until the spawner publishes it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_launched(
     name: &str,
     bytes: &[u8],
@@ -198,11 +201,23 @@ pub(crate) fn spawn_launched(
     tty: u8,
     fs: crate::sched::galfs::FsCred,
     parent_slot: u8,
+    defer_run: bool,
 ) -> Result<u8, galexy_abi::SysError> {
-    spawn_launched_placed(name, bytes, grants, arg, tty, fs, parent_slot, false)
+    spawn_launched_placed(
+        name,
+        bytes,
+        grants,
+        arg,
+        tty,
+        fs,
+        parent_slot,
+        false,
+        defer_run,
+    )
 }
 
 /// Like [`spawn_launched`], but BSP-pinned and no-steal (login seats).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_launched_seat(
     name: &str,
     bytes: &[u8],
@@ -211,8 +226,19 @@ pub(crate) fn spawn_launched_seat(
     tty: u8,
     fs: crate::sched::galfs::FsCred,
     parent_slot: u8,
+    defer_run: bool,
 ) -> Result<u8, galexy_abi::SysError> {
-    spawn_launched_placed(name, bytes, grants, arg, tty, fs, parent_slot, true)
+    spawn_launched_placed(
+        name,
+        bytes,
+        grants,
+        arg,
+        tty,
+        fs,
+        parent_slot,
+        true,
+        defer_run,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -225,6 +251,7 @@ fn spawn_launched_placed(
     fs: crate::sched::galfs::FsCred,
     parent_slot: u8,
     seat: bool,
+    defer_run: bool,
 ) -> Result<u8, galexy_abi::SysError> {
     Ok(spawn_program_placed(
         name,
@@ -237,6 +264,7 @@ fn spawn_launched_placed(
         fs,
         parent_slot,
         false,
+        defer_run,
     )?
     .1)
 }
@@ -277,6 +305,7 @@ pub fn spawn_init(bytes: &[u8]) -> Result<ProgramRegion, galexy_abi::SysError> {
         crate::sched::galfs::admin_cred(),
         0,
         true,
+        false,
     )?
     .0)
 }
@@ -298,6 +327,7 @@ fn spawn_shell_on_slot(
         crate::sched::galfs::unauth_cred(),
         0,
         false,
+        false,
     )
 }
 
@@ -313,6 +343,7 @@ fn spawn_program_placed(
     fs: crate::sched::galfs::FsCred,
     parent_slot: u8,
     is_init: bool,
+    defer_run: bool,
 ) -> Result<(ProgramRegion, u8), galexy_abi::SysError> {
     use galexy_abi::SysError;
     // Image contents are `BadValue` / `Unsupported` from here on. Frame
@@ -465,6 +496,7 @@ fn spawn_program_placed(
             fs,
             parent_slot,
             is_init,
+            defer_run,
         });
         serial_println!(
             "[loader] program '{}' ready (own tree cr3={:#x}, entry {:#x})",

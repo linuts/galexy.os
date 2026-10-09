@@ -1,30 +1,59 @@
 # PERF — budgets and capacities
 
-Order-of-magnitude budgets a reviewer can hold the kernel to, and the
-fixed capacities that bound it. Nothing here is a measurement:
-**Milestone 64** adds a release profile, a KVM path, and numbers. Until
-then the suite runs QEMU TCG at `opt-level = 0`, where a 10 000-iteration
-PBKDF2 takes about a second and hashing the 11 MB ramdisk at boot takes
-about thirteen (`ramdisk_test_passes` prints the tick count). Treat TCG
-timings as upper bounds only.
+Measured budgets and the fixed capacities that bound the kernel.
+`bin/test-bench` prints `[bench] name=<id> us=<n>` for five operations.
+The runner asserts the KVM ceilings below only when it actually boots
+with `-accel kvm` (`GALEXY_ACCEL=tcg` skips them; TCG swings with host
+load). Desktop-class throughput is an explicit non-goal (`THREAT.md`):
+the target is *does not fall over when exercised*.
 
-Explicit non-goal (`THREAT.md`): desktop-class throughput. The target
-is *does not fall over when exercised*, not *fast*.
+## Measured (release, TCG)
+
+`cargo test -p runner --test boot --release` image,
+`GALEXY_ACCEL=tcg`, `-cpu max`, `-smp 2`. Guest TSC calibrated over a
+20 ms halt against `timer_ticks`. The landing host cannot create a KVM
+vCPU (`kvm_arch_vcpu_create` hits kernel BUG at `arch/x86/kvm/x86.c:702`,
+and SeaBIOS writes nothing under `-accel kvm`), so there is no KVM
+column from this machine. Re-run
+`GALEXY_ACCEL=kvm cargo test -p runner --test boot --release -- --exact bench_test_passes`
+on a host where `/dev/kvm` executes a guest, and replace the KVM cells.
+
+| Bench | What it times | TCG release (µs) at `7f7b416` | KVM ceiling the runner asserts (µs) |
+| --- | --- | --- | --- |
+| `yield` | ring-3 `yield` × 10 000 (r13 counter; rcx does not survive `SYSCALL`) | 21 804 022 | 2 000 000 |
+| `spawn` | one user spawn + exit, from `rdtsc` around `spawn_user_task` until the name is gone | 11 369 | 2 000 000 |
+| `pipe` | 4 KiB copied in 256-byte chunks through one pipe, in-kernel `pipe::write` / `read` (syscall cost is the yield row) | 3 525 | 2 000 000 |
+| `galfs` | 32 KiB append of a static buffer + `sync_explicit`. On a RAM volume sync returns immediately; the number is the append | 3 849 | 5 000 000 |
+| `repaint` | `repaint_shown` after the shown cells are filled with `M` (the fill is not timed) | 281 066 | 5 000 000 |
+
+Yield on TCG is about 2.2 ms per call. A `dev` profile run on the same
+host landed within a few percent (21 423 122 µs), so the cost is the
+emulator's syscall exit, not missing `-C opt-level`. The KVM ceilings
+are loose upper bounds until a real KVM run replaces them; they exist
+so a working KVM host fails a regression that jumps into seconds.
+
+## Waived after the numbers
+
+- **PCID.** A `yield` does not write CR3. The same task returns through
+  `sysret`. No PCID work.
+- **A new heap allocator.** The yield loop does not allocate. The
+  linked-list heap stays.
 
 ## Budgets (targets)
 
 | Thing | Budget class | Why that class | Checked by |
 | --- | --- | --- | --- |
-| Syscall round trip, no I/O (`yield`, `cap_info`, `write` of a short line) | **microseconds** on KVM / release; ≤ 1 ms under TCG debug | the IF=0 path allocates nothing and takes at most the `THREADS` lock; one `swapgs` pair and a stack switch | `syscall_test_passes` (correctness); M64 adds a counter |
-| galfs mutate (`create`, `write`, `remove`, `rename`) on the RAM table | **tens of microseconds** class | fixed tables, no heap, no disk | `galfs_test_passes` |
-| galfs mutate with a disk | **milliseconds** class: one AEAD over the 288-sector slot plus a flush | every mutate publishes a sealed slot; the cost is the seal, not the data | `galfs_disk_*`, `shell_query_typing_e2e` (`sync`) |
-| galfs mutate rate on QEMU (TCG, disk) | **≥ 10 / s** sustained; the suite's capacity smoke does hundreds per boot | slot seal dominates; PIO IDE and the virtio 10 M-spin poll are M64 items | `blocks_test_passes`, `quota_test_passes`, `indirect_test_passes` |
+| Syscall round trip, no I/O (`yield`) | TCG release ≈ 2.2 ms per call for 10 000; KVM ceiling 2 s for the whole loop | the IF=0 path allocates nothing and takes at most the `THREADS` lock | `bench_test_passes` |
+| galfs mutate (`create`, `write`, `remove`, `rename`) on the RAM table | **tens of microseconds** class on real hardware; TCG append of 32 KiB was 3.8 ms | fixed tables, no heap, no disk | `bench_test_passes` (`galfs`), `galfs_test_passes` |
+| galfs mutate with a disk | **milliseconds** class: one AEAD over the 288-sector slot plus a flush | every mutate publishes a sealed slot; the cost is the seal, not the data. virtio completion is INTx (`IO_BLOCK`), not a 10 M-spin | `galfs_disk_*`, `shell_query_typing_e2e` (`sync`) |
+| galfs mutate rate on QEMU (TCG, disk) | **≥ 10 / s** sustained; the suite's capacity smoke does hundreds per boot | slot seal dominates; ATA PIO remains the legacy fallback | `blocks_test_passes`, `quota_test_passes`, `indirect_test_passes` |
 | Console output | **512 bytes per task per tick**; excess returns success with `0` copied | one flooding task cannot starve a seat or hide audit lines | `pathological_test_passes` (3 000-call flood: admitted ≤ 512 × (ticks + 2), never an error), `shell_util_typing_e2e` (`linger`) |
 | Keyboard | ring of 64 keys per TTY; overflow drops the newest and counts | typing never blocks an IRQ | `audit_console_test_passes` |
-| Spawn (ELF validate + map + first schedule) | **single-digit ms** class under TCG for the ~100 KiB userspace images | page-by-page map of PT_LOADs; no copy of the ramdisk | `treechurn_test_passes` (many spawn/exit cycles), `soak_test_passes` (ten spawn/wait/exit rounds with exact table closure), `smpstress_test_passes` |
+| Spawn (ELF validate + map + first schedule) | TCG release one spawn+exit ≈ 11 ms for a tiny blob; userspace images are larger | page-by-page map of PT_LOADs; no copy of the ramdisk | `bench_test_passes` (`spawn`), `treechurn_test_passes`, `soak_test_passes` |
 | Login (PBKDF2) | **≈ 1 s** TCG debug at 10 000 iterations; a `--release` kernel under KVM stores 100 000 | deliberate; the count is per actor (GALF v12) | `users_test_passes`, `lockout_test_passes` |
 | Boot to login prompt | **≤ 5 s** TCG debug without disk; + unlock prompt with a sealed disk | the runner's boot tests fail on a 60 s timeout, so this has headroom | every boot test |
 | Idle | CPU halts with the LAPIC armed to the next second; no periodic tick | tickless idle keeps `timer_ticks` honest under TCG | `main_kernel_boots_and_timer_ticks`, `idle_test_passes`, `fairness_test_passes` (an idle AP wakes and steals) |
+| Full-screen repaint | TCG release ≈ 281 ms for one paint of the shown grid | `show_tty` paints only rows whose cells changed; scroll copies pixel rows and clears the vacated row | `bench_test_passes` (`repaint`) |
 
 ## Capacities (fixed tables)
 
@@ -54,17 +83,21 @@ ceiling is `NoResource`, never a panic.
 
 - **Wall-clock accuracy.** There is no RTC read; `timer_ticks` is
   monotonic and PIT-calibrated at boot (`SCHEDULING.md`).
-- **Disk bandwidth.** ATA is PIO and virtio-blk polls; both are
-  Milestone 64/65 work. Correctness under `cache=none` / `writeback` /
-  `writethrough` is tested; throughput is not.
+- **Disk bandwidth.** ATA is PIO. virtio-blk completes on INTx (legacy
+  IO BAR; MSI-X is Milestone 65). Correctness under `cache=none` /
+  `writeback` / `writethrough` is tested; throughput is not.
 - **Memory.** Free frames are reported by `stats`; a soft reserve
   refuses user spawns before the kernel heap is starved
   (`DESIGN.md` → Memory policy). There is no OOM killer because there
   is no overcommit.
 
-## How Milestone 64 will measure
+## How to re-measure
 
-A `bin/test-bench` kernel printing `[bench] <name> <ticks>` lines for
-each budget row, run under both TCG and `-enable-kvm` by the runner,
-with the numbers pasted into this page per commit. Until that lands,
-anything in this document that is a number is a design intent.
+```sh
+GALEXY_ACCEL=tcg cargo test -p runner --test boot --release -- --exact bench_test_passes
+GALEXY_ACCEL=kvm cargo test -p runner --test boot --release -- --exact bench_test_passes
+```
+
+Paste the five `[bench]` lines into the table above with the commit.
+The KVM run is the one that must stay under the ceilings in
+`crates/runner/tests/boot.rs` (`BENCH_*_US`).

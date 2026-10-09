@@ -1,12 +1,12 @@
-//! cat — copy a file, or a pipe the parent `give`s, to the console.
+//! cat — copy a file, or a pipe spawn installed, to the console.
 //!
-//! Argument `-` waits for a read end on the first file slot (`echo | cat`).
+//! Argument `-` reads the pipe spawn installed on the first file slot.
 
 #![no_std]
 #![no_main]
 
 use galexy_abi::{Cap, CapRights, SysError, FILE_CAP_BASE};
-use galexy_rt::{arg, close, entry, open, read, write_console, yield_now};
+use galexy_rt::{arg, close, entry, open, read, write_console};
 
 entry!(main);
 
@@ -52,8 +52,7 @@ fn main() -> i32 {
     0
 }
 
-/// Copies the pipe the shell gives us. A missing cap means `give` has
-/// not landed yet.
+/// Copies the pipe spawn installed at [`FILE_CAP_BASE`].
 fn cat_pipe() -> i32 {
     let cap = Cap::new(FILE_CAP_BASE, CapRights::READ);
     let mut buf = [0u8; 256];
@@ -62,10 +61,6 @@ fn cat_pipe() -> i32 {
     loop {
         let got = read(cap, &mut buf);
         if !got.ok {
-            if got.value == SysError::BadCap as u64 {
-                let _ = yield_now();
-                continue;
-            }
             write_console(b"cat: failed\n");
             return 1;
         }

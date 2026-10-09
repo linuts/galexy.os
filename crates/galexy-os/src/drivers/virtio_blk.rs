@@ -2,9 +2,12 @@
 //!
 //! QEMU: `-drive if=none,id=galfs,file=galfs.img,format=raw` plus
 //! `-device virtio-blk-pci,drive=galfs,disable-legacy=off,disable-modern=on`.
-//! Polling only — no MSI-X. One outstanding request at a time.
+//! Completion is the used-ring interrupt (INTx via the I/O APIC). The
+//! requester parks `STATE_WAITING` + `IO_BLOCK` instead of spinning.
+//! MSI-X is Milestone 65. One outstanding request at a time. A missed
+//! INTx is noticed on the next timer tick.
 
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 
 use spin::Mutex;
 use x86_64::instructions::port::Port;
@@ -40,6 +43,9 @@ const VRING_DESC_F_WRITE: u16 = 2;
 const VIRTIO_BLK_T_IN: u32 = 0;
 const VIRTIO_BLK_T_OUT: u32 = 1;
 const VIRTIO_BLK_T_FLUSH: u32 = 4;
+
+/// IDT vector for the virtio-blk INTx line.
+pub const VIRTIO_VECTOR: u8 = 0x41;
 
 /// QEMU virtio-blk default queue length; layout must match the device.
 const QUEUE_SIZE: usize = 128;
@@ -108,6 +114,15 @@ struct DeviceState {
 static PROBED: AtomicBool = AtomicBool::new(false);
 static READY: AtomicBool = AtomicBool::new(false);
 static CAPACITY: AtomicU64 = AtomicU64::new(0);
+static IO_BASE: AtomicU16 = AtomicU16::new(0);
+/// `used.idx` the in-flight request is waiting for. Armed only while
+/// a requester is parked or about to park.
+static WANT_USED: AtomicU16 = AtomicU16::new(0);
+static WANT_ARMED: AtomicBool = AtomicBool::new(false);
+/// CPU index inside `wait_used`, or `usize::MAX` when no transfer is
+/// parked. The scheduler must not switch that CPU away: the caller
+/// still holds [`DEV`] and, for galfs, the sector buffer.
+static XFER_CPU: AtomicUsize = AtomicUsize::new(usize::MAX);
 static DEV: Mutex<Option<DeviceState>> = Mutex::new(None);
 
 // Zero-init via MaybeUninit pattern — large static, filled in probe.
@@ -356,9 +371,47 @@ fn probe() -> bool {
         io_base: io,
         last_used: 0,
     });
+    IO_BASE.store(io, Ordering::Release);
     CAPACITY.store(capacity, Ordering::Release);
+    let line = pci::interrupt_line(dev);
+    if line == 0
+        || !crate::arch::ioapic::wire_pci_level(u32::from(line), VIRTIO_VECTOR, "virtio-blk")
+    {
+        crate::serial_println!("[virtio-blk] legacy poll (no INTx line)");
+    }
     crate::serial_println!("[virtio-blk] ready ({} sectors, io=0x{:x})", capacity, io);
     true
+}
+
+/// Reads the legacy ISR, which acknowledges the INTx line.
+pub fn ack_isr() {
+    let io = IO_BASE.load(Ordering::Acquire);
+    if io == 0 {
+        return;
+    }
+    let _ = inb(io + REG_ISR);
+}
+
+/// CPU currently halted inside a transfer, if any.
+///
+/// The scheduler keeps that CPU on the waiter. A switch would run
+/// another thread on the same stack of locks (`DEV`, the galfs sector
+/// buffer) and the waiter would never resume.
+pub fn xfer_wait_cpu() -> Option<usize> {
+    let cpu = XFER_CPU.load(Ordering::Acquire);
+    if cpu == usize::MAX {
+        None
+    } else {
+        Some(cpu)
+    }
+}
+
+/// True when an in-flight request's used index has landed.
+pub fn completion_ready() -> bool {
+    if !WANT_ARMED.load(Ordering::Acquire) {
+        return false;
+    }
+    used_idx() == WANT_USED.load(Ordering::Acquire)
 }
 
 fn zero_dma(dma: &mut DmaRegion) {
@@ -389,10 +442,53 @@ fn zero_dma(dma: &mut DmaRegion) {
 }
 
 fn xfer(type_: u32, lba: u32, buf: *mut u8, len: usize) -> Result<(), SysError> {
+    let enable_after = x86_64::instructions::interrupts::are_enabled();
+    x86_64::instructions::interrupts::disable();
     let mut dev = DEV.lock();
     let Some(state) = dev.as_mut() else {
+        drop(dev);
+        if enable_after {
+            x86_64::instructions::interrupts::enable();
+        }
         return Err(SysError::Unsupported);
     };
+    let submitted = submit_xfer(state, type_, lba, buf, len);
+    let want = match submitted {
+        Ok(want) => want,
+        Err(err) => {
+            drop(dev);
+            if enable_after {
+                x86_64::instructions::interrupts::enable();
+            }
+            return Err(err);
+        }
+    };
+    // Held across the halt so a second CPU cannot reuse the one queue.
+    // `XFER_CPU` stops THIS CPU's timer from switching off the holder.
+    XFER_CPU.store(crate::arch::cpu::current_index(), Ordering::Release);
+    let ready = wait_used(want);
+    x86_64::instructions::interrupts::disable();
+    XFER_CPU.store(usize::MAX, Ordering::Release);
+    let status = if ready {
+        finish_xfer(state, want)
+    } else {
+        crate::serial_println!("[virtio-blk] request timeout");
+        Err(SysError::Unsupported)
+    };
+    drop(dev);
+    if enable_after {
+        x86_64::instructions::interrupts::enable();
+    }
+    status
+}
+
+fn submit_xfer(
+    state: &mut DeviceState,
+    type_: u32,
+    lba: u32,
+    buf: *mut u8,
+    len: usize,
+) -> Result<u16, SysError> {
     let mut dma = DMA.lock();
     let io = state.io_base;
 
@@ -474,23 +570,13 @@ fn xfer(type_: u32, lba: u32, buf: *mut u8, len: usize) -> Result<(), SysError> 
     outw(io + REG_QUEUE_NOTIFY, 0);
 
     let want = state.last_used.wrapping_add(1);
-    let mut done = false;
-    for _ in 0..10_000_000 {
-        core::sync::atomic::fence(Ordering::SeqCst);
-        // SAFETY: used.idx is device-written.
-        let used_idx = unsafe { core::ptr::read_volatile(&dma.used.idx) };
-        if used_idx == want {
-            state.last_used = want;
-            done = true;
-            break;
-        }
-        // Ack ISR in case the device latches completion there.
-        let _ = inb(io + REG_ISR);
-    }
-    if !done {
-        crate::serial_println!("[virtio-blk] request timeout");
-        return Err(SysError::Unsupported);
-    }
+    drop(dma);
+    Ok(want)
+}
+
+fn finish_xfer(state: &mut DeviceState, want: u16) -> Result<(), SysError> {
+    let dma = DMA.lock();
+    state.last_used = want;
     // SAFETY: status byte written by device.
     let status = unsafe { core::ptr::read_volatile(&dma.status) };
     if status != 0 {
@@ -498,6 +584,45 @@ fn xfer(type_: u32, lba: u32, buf: *mut u8, len: usize) -> Result<(), SysError> 
         return Err(SysError::Unsupported);
     }
     Ok(())
+}
+
+fn used_idx() -> u16 {
+    // The timer reads this from `completion_ready`. A lock held with
+    // interrupts open deadlocks that handler on the same CPU.
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let dma = DMA.lock();
+        // SAFETY: the device owns this halfword; a torn read is retried.
+        unsafe { core::ptr::read_volatile(&dma.used.idx) }
+    })
+}
+
+/// Parks a user requester until `used.idx == want`. The main loop (no
+/// task) halts instead. Either way the 10 M-spin poll is gone.
+fn wait_used(want: u16) -> bool {
+    WANT_USED.store(want, Ordering::Release);
+    WANT_ARMED.store(true, Ordering::Release);
+    if used_idx() == want {
+        WANT_ARMED.store(false, Ordering::Release);
+        return true;
+    }
+    let parked = crate::sched::current_slot() != 0 && crate::sched::park_io_block().is_ok();
+    let start = crate::arch::timer_ticks();
+    let mut ok = false;
+    loop {
+        if used_idx() == want {
+            ok = true;
+            break;
+        }
+        if crate::arch::timer_ticks().saturating_sub(start) > 2000 {
+            break;
+        }
+        x86_64::instructions::interrupts::enable_and_hlt();
+    }
+    if parked {
+        crate::sched::clear_io_block();
+    }
+    WANT_ARMED.store(false, Ordering::Release);
+    ok
 }
 
 fn phys_of<T>(r: &T) -> Result<u64, SysError> {

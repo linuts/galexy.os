@@ -74,6 +74,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let (gen, must) = sched::test_auth_flags("chg1").expect("chg1 live after login");
     assert!(gen > 0, "session generation assigned");
     assert!(must, "default admin password sets must-change");
+    // The blob spins on this word so passwd cannot clear the flag first.
+    unsafe {
+        core::ptr::write_volatile(base.as_mut_ptr::<u64>().add(5), 1);
+    }
 
     elapsed = 0;
     let report = loop {
@@ -136,6 +140,13 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     );
     mov_r64_imm(&mut code, 0, TRIPPED);
     store(&mut code, 0, 0x08);
+    // Release finishes passwd before the BSP samples must_change.
+    // Spin until the kernel stores a 1 at scratch+0x28.
+    code.extend_from_slice(&[
+        0x49, 0x8B, 0x87, 0x28, 0x00, 0x00, 0x00, // mov rax, [r15+0x28]
+        0x48, 0x85, 0xC0, // test rax, rax
+        0x74, 0xF4, // jz back to the mov
+    ]);
 
     call_create(&mut code, path_addr, path.len() as u64);
     store_err(&mut code, 0x10);

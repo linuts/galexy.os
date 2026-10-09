@@ -47,6 +47,8 @@ static IDT: LazyLock<Mutex<InterruptDescriptorTable>> = LazyLock::new(|| {
         .set_handler_fn(crate::arch::mm::shootdown::shootdown_handler);
     // Wake IPI: leave hlt so an idle CPU re-checks its runnable set.
     idt[apic::WAKE_VECTOR].set_handler_fn(wake_handler);
+    // Virtio-blk INTx (Milestone 64). MSI-X is Milestone 65.
+    idt[crate::drivers::virtio_blk::VIRTIO_VECTOR].set_handler_fn(virtio_blk_handler);
     Mutex::new(idt)
 });
 
@@ -115,6 +117,15 @@ extern "x86-interrupt" fn spurious_handler(_stack_frame: InterruptStackFrame) {}
 /// Wake IPI (`WAKE_VECTOR`): no work, just EOI so `hlt` returns.
 extern "x86-interrupt" fn wake_handler(_stack_frame: InterruptStackFrame) {
     apic::eoi();
+}
+
+/// Virtio-blk INTx. Ack the device ISR before the I/O APIC EOI so a
+/// level line does not re-fire, then wake the parked requester.
+extern "x86-interrupt" fn virtio_blk_handler(_stack_frame: InterruptStackFrame) {
+    crate::drivers::virtio_blk::ack_isr();
+    crate::sched::wake_io_block();
+    apic::eoi();
+    super::ioapic::eoi_level(crate::drivers::virtio_blk::VIRTIO_VECTOR);
 }
 
 /// Loads the SHARED IDT into THIS CPU's IDTR (AP bring-up).

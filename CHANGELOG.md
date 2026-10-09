@@ -8,6 +8,13 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#83](https://github.com/linuts/galexy.os/pull/83) — M64 — release
+  images (`opt-level = 3`, fat LTO, debug assertions on); KVM when
+  `/dev/kvm` is writable; `bin/test-bench` and `docs/PERF.md`; virtio-blk
+  completes on INTx (`IO_BLOCK`) instead of a 10 M-spin; `SPAWN_WITH_CAPS`
+  (r10 bit 4; bit 3 is the keyboard grant) moves pipe ends before the
+  child runs; `show_tty` repaints changed rows. PCID and a new heap
+  allocator stay waived
 - `nano` — ring-3 screen editor (`nano <path>`): arrows, Ctrl-O save,
   Ctrl-X exit. The shell passes `SPAWN_GRANT_KEYBOARD` (spawn `r10` bit 3)
   and Cap-waits so the editor can read the seat's keys

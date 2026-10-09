@@ -2129,45 +2129,45 @@ Spectre stance, and an ELF loader that panics on a bad image.
 - [x] Docs: `THREAT.md` gains a "CPU features" table (on / waived /
       absent); DESIGN memory policy cites it
 
-## Milestone 64 — Fast path (measured, not assumed)
+## Milestone 64 — Fast path (measured, not assumed) ✅
 
 The suite runs under TCG with `opt-level = 0`; nothing has been
 profiled. Make speed a number before changing anything.
 
 ### Measure
 
-- [ ] **`bin/test-bench`**: syscall round-trip (`yield` ×10 000),
+- [x] **`bin/test-bench`**: syscall round-trip (`yield` ×10 000),
       spawn + exit, 4 KiB through a pipe, 32 KiB galfs append + `sync`,
       one full-screen repaint; prints `[bench] name=… us=…`
-- [ ] **`docs/PERF.md`**: the Milestone 51 budgets doc holds the
+- [x] **`docs/PERF.md`**: the Milestone 51 budgets doc holds the
       numbers from `test-bench` on TCG and on KVM, with the commit they
       were taken at; a budget is an upper bound the runner asserts
       only under KVM
-- [ ] **KVM in the runner and `cargo run`**: `-accel kvm -cpu host`
+- [x] **KVM in the runner and `cargo run`**: `-accel kvm -cpu host`
       when `/dev/kvm` is writable, else `-accel tcg -cpu max`; both
       paths green; CI records which one ran
 
 ### Change (only what the numbers justify)
 
-- [ ] **Release profile**: `opt-level = 3`, `lto = "fat"`,
+- [x] **Release profile**: `opt-level = 3`, `lto = "fat"`,
       `codegen-units = 1`, `debug = "line-tables-only"` for kernel and
       userspace; the runner builds images with the release profile and
       `debug-assertions = true`; `cargo run --release` is the default
       path in README
-- [ ] **virtio-blk IRQ completion**: used-ring interrupt (INTx via the
+- [x] **virtio-blk IRQ completion**: used-ring interrupt (INTx via the
       I/O APIC; MSI-X in Milestone 65) wakes a parked requester
       (`STATE_WAITING` + `IO_BLOCK`) instead of the 10 M-spin poll in
       `drivers/virtio_blk.rs`. ATA PIO stays polled and is marked
       legacy fallback
-- [ ] **Caps at spawn**: `SPAWN_WITH_CAPS` moves up to two file / pipe
+- [x] **Caps at spawn**: `SPAWN_WITH_CAPS` moves up to two file / pipe
       Caps from the parent into the child before it runs, so `echo` /
       `cat -` start with `FILE_CAP_BASE` populated. Removes the
       `yield_now` poll loops in `util/echo.rs`, `util/cat.rs`
-- [ ] **Shell keyboard loop**: drop the `got.value == 0 → yield_now`
+- [x] **Shell keyboard loop**: drop the `got.value == 0 → yield_now`
       branch (reads park since Milestone 57)
-- [ ] **Framebuffer batching**: `show_tty` and scroll repaint only
+- [x] **Framebuffer batching**: `show_tty` and scroll repaint only
       changed cells / rows; measured by the repaint bench
-- [ ] **PCID / heap allocator**: stay waived unless `test-bench` shows
+- [x] **PCID / heap allocator**: stay waived unless `test-bench` shows
       CR3 or `alloc` on a hot path; the decision is recorded in
       `PERF.md`
 
@@ -2487,10 +2487,17 @@ items stay here with rationale.
       (GALF v12 stores `kdf_iters`; `passwd` / format write 100 000
       under `--release` + KVM, 10 000 otherwise; verify uses the stored
       count). The volume KEK stays at 10 000 (not a per-actor field)
-- [ ] Nothing is profiled; the suite runs TCG at `opt-level = 0`; no
-      release profile, no LTO, no KVM path — **Milestone 64**
-- [ ] virtio-blk completion is a 10 M-spin poll; ATA is PIO; `echo` /
-      `cat -` poll with `yield_now` until `give` lands — **Milestone 64**
+- [x] ~~Nothing is profiled; the suite runs TCG at `opt-level = 0`; no
+      release profile, no LTO, no KVM path~~ — CLOSED by Milestone 64.
+      `bin/test-bench` prints microseconds; `docs/PERF.md` records TCG
+      and KVM; the runner uses KVM when `/dev/kvm` is writable; release
+      images are `opt-level = 3` with fat LTO and debug assertions on
+- [x] ~~virtio-blk completion is a 10 M-spin poll; ATA is PIO; `echo` /
+      `cat -` poll with `yield_now` until `give` lands~~ — CLOSED by
+      Milestone 64. virtio-blk parks `IO_BLOCK` and completes on INTx
+      (timer tick if the line is missed). ATA PIO stays the legacy
+      fallback. `echo` / `cat -` receive the pipe at spawn
+      (`SPAWN_WITH_CAPS`)
 - [ ] Legacy platform paths are the only paths: PIT calibration,
       remapped 8259, PS/2 i8042, PIO IDE, legacy virtio IO BAR,
       port-based PCI config, `-M pc` — **Milestone 65**
@@ -2562,7 +2569,7 @@ items stay here with rationale.
       links everything else — **Milestone 69** (`gxld`)
 - [x] Kernel hardening (SMEP/SMAP/UMIP/KASLR, hostile ELF, KDF cost) —
       **Milestone 63** (Phase 9)
-- [ ] Fast path (bench, KVM, release profile, IRQ completion) —
+- [x] Fast path (bench, KVM, release profile, IRQ completion) —
       **Milestone 64**
 - [ ] Modern platform (q35, ECAM, virtio 1.x, MSI-X, TSC-deadline) —
       **Milestone 65**

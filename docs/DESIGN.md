@@ -255,9 +255,11 @@ pub fn flush() -> Result<(), SysError>
 ### virtio_blk — virtio-blk legacy PCI (`drivers/`)
 
 Transitional virtio-blk with a legacy I/O BAR (`disable-modern=on`,
-`queue-size=128`). PCI scan via `drivers/pci`; one polled request queue;
-FLUSH via `VIRTIO_BLK_T_FLUSH`. galfs selects this over ATA when probe
-succeeds.
+`queue-size=128`). PCI scan via `drivers/pci`. One outstanding request.
+Completion is the used-ring INTx (I/O APIC, level, active-low); the
+requester parks `STATE_WAITING` + `IO_BLOCK`, and a missed line is
+noticed on the next timer tick. MSI-X is Milestone 65. FLUSH via
+`VIRTIO_BLK_T_FLUSH`. galfs selects this over ATA when probe succeeds.
 
 ```rust
 pub struct VirtioBlk; // impl BlockDevice
@@ -1041,7 +1043,7 @@ IRQ that already has IF=0) around the acquire.
 | `LOCKOUT` | nothing above | yes; never under `THREADS` or `TABLE` |
 | Frame `USED` then `USABLE` | nothing else | yes |
 | Heap `INNER` | nothing else; growth drops it before shootdown | yes |
-| `ATA` / virtio `DEV` then `DMA` | nothing else | with the caller (syscall or BSP) |
+| `ATA` / virtio `DEV` then `DMA` | nothing else. The timer may take `DMA` alone to read `used.idx`; it never takes `DEV`. The waiter holds `DEV` across the halt and stays on that CPU (`xfer_wait_cpu`) so a same-CPU switch cannot spin on it | with the caller (syscall or BSP); `used.idx` disables interrupts around `DMA` |
 | Screen `SCREEN` / `GRIDS` | nothing else | BSP; IRQ handlers do not take it |
 | Keyboard queue | nothing else (drop warning takes `DMESG` after the queue lock drops) | IRQ may push; readers gate |
 | `DMESG` | nothing else | with `serial_println!`; never acquired before `THREADS` |
@@ -1107,16 +1109,16 @@ them on; `audit_strings` and the e2e boots run against that image.
 | `verbose-sched` | Cargo feature on `galexy-os` | `sched/mod.rs` | prints an idle-steal trace line per steal | nobody in the suite; a developer flag. The one-line `[sched] reap` count is unconditional because the suite reads it |
 | `expect_panic` | runtime registration | `galexy_os::test` | a panic exits QEMU with `Success` instead of `Failed` | `bin/test-should-panic`, `bin/test-memory` (allocator exhaustion) |
 | Inline `login user pass` | shell command form | `userspace/shell` | password on the command line (no masked prompt) | scripted typing e2e; production UX is the masked prompt (`AUTH.md`) |
-| `GALEXY_GALFS_IMG`, `GALEXY_GALFS_IDE` | runner env | `runner/src/main.rs` | disk path / IDE-slave attach for `cargo run` | the developer |
+| `GALEXY_GALFS_IMG`, `GALEXY_GALFS_IDE`, `GALEXY_ACCEL` | runner env | `runner/src/main.rs`, `runner/tests/common` | disk path / IDE-slave attach / `kvm` or `tcg` accel for `cargo run` and the suite | the developer; CI logs `[runner] accel=` |
 | `OVMF_FD` | runner env | `runner` | UEFI firmware path | CI (`/usr/share/ovmf/OVMF.fd`), developers on non-Arch distros |
-| `pub fn test_*` seams | public kernel functions | `keyboard::test_inject` / `test_drain`; `screen::test_cursor_bar_lit` / `_clear`; `sched::test_push_token` / `test_revoke_token` / `test_auth_flags` / `test_backdate_input` / `test_poll_idle_all` / `test_set_idle_limit`; `ramdisk::measure` | expose or poke internals a test kernel asserts on; never called by the main kernel | `bin/test-audit`, `test-galfs`, `test-cards`, `test-idle`, `test-mustchange`, `test-ramdisk` |
+| `pub fn test_*` seams | public kernel functions | `keyboard::test_inject` / `test_drain`; `screen::test_cursor_bar_lit` / `_clear` / `fill_shown_for_bench` / `repaint_shown`; `sched::test_push_token` / `test_revoke_token` / `test_auth_flags` / `test_backdate_input` / `test_poll_idle_all` / `test_set_idle_limit`; `ramdisk::measure` | expose or poke internals a test kernel asserts on; never called by the main kernel | `bin/test-audit`, `test-galfs`, `test-cards`, `test-idle`, `test-mustchange`, `test-ramdisk`, `test-bench` |
 
 Not seams: `ramdisk-gxld.tar` is the same userspace linked by `gxld`
 instead of `rust-lld` — a build axis, not a behaviour switch.
 
 ### Coverage: which milestone each test kernel guards
 
-One row per `crates/galexy-os/src/bin/test-*.rs` (77). The boot test is
+One row per `crates/galexy-os/src/bin/test-*.rs` (78). The boot test is
 the `runner/tests/boot.rs` function that boots it; the milestone is the
 one whose promise breaks first if the kernel goes red. Typing e2e boots
 (`shell_*_typing_e2e`, `gxld_image_*`, `util_typing_e2e_on`) run the
@@ -1153,7 +1155,7 @@ main image and are listed at the end.
 | `test-hellogxc` | `hellogxc_test_passes` | M61 hello via `gxc`, M69 `gxld` link |
 | `test-badelf`, `test-negative` | `badelf_test_passes`, `negative_test_passes` | M51 hostile ELF oracle and negative suite; M63 loader returns `SysError` and caps image pages |
 | `test-smep`, `test-smap`, `test-umip`, `test-kaslr` | `smep_test_passes`, `smap_test_passes`, `umip_test_passes`, `kaslr_kernel_base_differs_across_boots` | M63 SMEP, SMAP, UMIP, kernel KASLR (`kaslr` boots the image twice) |
-| `test-soak`, `test-fairness`, `test-pathological` | `soak_test_passes`, `fairness_test_passes`, `pathological_test_passes` | M51 soak (exact table closure per round), steal fairness under load, console-budget flood |
+| `test-soak`, `test-fairness`, `test-pathological`, `test-bench` | `soak_test_passes`, `fairness_test_passes`, `pathological_test_passes`, `bench_test_passes` | M51 soak (exact table closure per round), steal fairness under load, console-budget flood; M64 `test-bench` prints `[bench] name=… us=…` and the runner asserts KVM ceilings |
 | main image | `main_kernel_boots_and_timer_ticks`, `uefi_image_boots_and_timer_ticks`, `shell_*_typing_e2e`, `shell_run_hello_typing_e2e_uefi`, `shell_tty_switch_e2e`, `util_typing_e2e_on`, `assert_passwords_masked`, `uart_console_login_e2e` | M21 / M29 / M33 / M40 / M43 / M50 / M54 seats, shell, utilities, masked prompts; `shell_password_paste_typing_e2e` (M51 pathological input), `default_image_has_no_crash_seam_e2e` (M52 default-build audit), `uart_console_login_e2e` (COM1 is the console: DEL, CR, masked password) |
 | `gxld` image | `gxld_image_run_hello_typing_e2e`, `gxld_image_util_typing_e2e` | M69 linker differential |
 
@@ -1225,16 +1227,17 @@ pinned in `galexy-abi` tests.
   to xAPIC — both are exercised by the access-layer abstraction, only xAPIC
   by the QEMU test suite (assert in `bin/test-apic`). Milestone 65 adds
   an x2APIC run.
-- Legacy device paths are the only paths today: 8259 remap + mask, PS/2
-  i8042 keyboard, PIO IDE, virtio-blk over the legacy IO BAR with a
-  polled used ring, PCI config through ports 0xCF8 / 0xCFC, `-M pc`.
-  Milestone 65 moves the default to `q35` + ECAM + virtio 1.x + MSI-X
-  + virtio-input and keeps each legacy path as a named fallback with
-  one regression case (ROADMAP standing principle).
-- Nothing is profiled. The suite runs under TCG with the `dev` profile
-  (`opt-level = 0`, no LTO); `cargo run` is the same. Milestone 64 adds
-  `bin/test-bench`, `docs/PERF.md`, KVM detection, and a release
-  profile before any optimization lands.
+- Legacy device paths that remain the default: 8259 remap + mask, PS/2
+  i8042 keyboard, PIO IDE, virtio-blk over the legacy IO BAR (INTx
+  completion, not a poll), PCI config through ports 0xCF8 / 0xCFC,
+  `-M pc`. Milestone 65 moves the default to `q35` + ECAM + virtio 1.x
+  + MSI-X + virtio-input and keeps each legacy path as a named fallback
+  with one regression case (ROADMAP standing principle).
+- The measured path is `cargo run --release` and
+  `cargo test -p runner --test boot --release`. The runner picks
+  `-accel kvm -cpu host` when `/dev/kvm` is writable, else
+  `-accel tcg -cpu max` (`GALEXY_ACCEL` overrides). Numbers live in
+  `docs/PERF.md`. PCID and a second heap allocator stay waived.
 - `-no-reboot` is always passed to QEMU so triple faults surface as an exit
   instead of an infinite reboot loop. A `reboot` request still pulses the
   reset line; QEMU then exits rather than restarting the guest. `shutdown`

@@ -1158,11 +1158,32 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
             | galexy_abi::SPAWN_WAIT
             | galexy_abi::SPAWN_INHERIT
             | galexy_abi::SPAWN_GRANT_KEYBOARD
-            | galexy_abi::SPAWN_RIGHTS_BITS)
+            | galexy_abi::SPAWN_WITH_CAPS
+            | galexy_abi::SPAWN_RIGHTS_BITS
+            | (0xFF << galexy_abi::SPAWN_CAP_SHIFT))
         != 0
     {
         return SyscallResult::err(SysError::BadValue);
     }
+    let with_caps = frame.r10 & galexy_abi::SPAWN_WITH_CAPS != 0;
+    let cap_bits = (frame.r10 >> galexy_abi::SPAWN_CAP_SHIFT) & 0xFF;
+    let (cap0, cap1) = if with_caps {
+        let cap0 = (cap_bits & 0xF) as u8;
+        let cap1 = ((cap_bits >> 4) & 0xF) as u8;
+        if cap0 as u64 == galexy_abi::SPAWN_CAP_NONE {
+            return SyscallResult::err(SysError::BadValue);
+        }
+        let cap1 = if cap1 as u64 == galexy_abi::SPAWN_CAP_NONE {
+            0xFF
+        } else {
+            cap1
+        };
+        (cap0, cap1)
+    } else if cap_bits != 0 {
+        return SyscallResult::err(SysError::BadValue);
+    } else {
+        (0xFF, 0xFF)
+    };
     let arg_len = frame.r9;
     if arg_len > crate::sched::ARG_MAX as u64 {
         return SyscallResult::err(SysError::BadValue);
@@ -1217,6 +1238,7 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
         wait_exit,
         inherit,
         rights_mask,
+        [cap0, cap1],
     ) {
         Ok(()) => SyscallResult::ok(0),
         Err(err) => SyscallResult::err(err),

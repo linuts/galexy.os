@@ -67,19 +67,51 @@ fn serial_log_path(name: &str) -> PathBuf {
 /// Builds the QEMU command for `img_path`: headless, COM1 to `serial_path`,
 /// writable-overlays (`-snapshot`) so parallel tests never conflict.
 ///
-/// `-smp 2 -cpu max`: the SMP substrate requires FSGSBASE (`-cpu max`;
-/// QEMU's default qemu64 model lacks it), and 2 cores exercise the per-CPU
-/// paths in EVERY test — single-core assumptions regress loudly.
+/// `-smp 2` plus either `-accel kvm -cpu host` or `-accel tcg -cpu max`.
+///
+/// KVM when `/dev/kvm` is writable (or `GALEXY_ACCEL=kvm`). Otherwise TCG.
+/// `GALEXY_ACCEL=tcg` forces the software path. `-cpu max` / `host` exposes
+/// FSGSBASE, which the per-CPU substrate requires. 2 cores exercise those
+/// paths in every test.
+fn apply_accel(cmd: &mut Command) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static PRINTED: AtomicBool = AtomicBool::new(false);
+    let kvm = use_kvm();
+    if PRINTED
+        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+        .is_ok()
+    {
+        eprintln!("[runner] accel={}", if kvm { "kvm" } else { "tcg" });
+    }
+    if kvm {
+        cmd.arg("-accel").arg("kvm").arg("-cpu").arg("host");
+    } else {
+        cmd.arg("-accel").arg("tcg").arg("-cpu").arg("max");
+    }
+}
+
+/// True when this process will boot QEMU with KVM.
+pub fn use_kvm() -> bool {
+    match std::env::var("GALEXY_ACCEL").ok().as_deref() {
+        Some("tcg") => false,
+        Some("kvm") => true,
+        _ => std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/kvm")
+            .is_ok(),
+    }
+}
+
 fn qemu_command(img_path: &str, serial_path: &Path) -> Command {
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.arg("-drive")
         .arg(format!("format=raw,file={img_path}"))
         .arg("-snapshot")
         .arg("-smp")
-        .arg("2")
-        .arg("-cpu")
-        .arg("max")
-        .arg("-display")
+        .arg("2");
+    apply_accel(&mut cmd);
+    cmd.arg("-display")
         .arg("none")
         .arg("-no-reboot")
         // COM1 -> log file, polled by the test (no blocking pipe reads).
@@ -162,11 +194,9 @@ fn qemu_command_with_galfs(
             );
         }
     }
-    cmd.arg("-smp")
-        .arg("2")
-        .arg("-cpu")
-        .arg("max")
-        .arg("-display")
+    cmd.arg("-smp").arg("2");
+    apply_accel(&mut cmd);
+    cmd.arg("-display")
         .arg("none")
         .arg("-no-reboot")
         .arg("-serial")
@@ -578,16 +608,16 @@ pub fn uart_login_serial(image: &Image) -> String {
     let sock_path = std::env::temp_dir().join(format!("galexy-uart-{nanos}.sock"));
     let _ = std::fs::remove_file(&sock_path);
 
-    let mut child = Command::new("qemu-system-x86_64")
-        .arg("-drive")
+    let mut cmd = Command::new("qemu-system-x86_64");
+    cmd.arg("-drive")
         .arg(format!(
             "format=raw,file={},if=ide,index=0,snapshot=on",
             image.bios
         ))
         .arg("-smp")
-        .arg("2")
-        .arg("-cpu")
-        .arg("max")
+        .arg("2");
+    apply_accel(&mut cmd);
+    let mut child = cmd
         .arg("-display")
         .arg("none")
         .arg("-monitor")

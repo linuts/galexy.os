@@ -164,6 +164,53 @@ fn wire_isa(page: VirtAddr, pins: u32, isa_irq: u8, vector: u8, what: &str) {
     );
 }
 
+/// Unmasks PCI INTx `gsi` as level-triggered, active-low, onto `vector`.
+///
+/// Returns false when the GSI is outside the boot I/O APIC. The guest
+/// then completes the device by noticing the used ring on the next tick.
+pub fn wire_pci_level(gsi: u32, vector: u8, what: &str) -> bool {
+    let page_u = IOAPIC_PAGE.load(Ordering::Acquire);
+    if page_u == 0 {
+        return false;
+    }
+    let page = VirtAddr::new(page_u);
+    let madt = acpi::madt();
+    if gsi < madt.ioapic_gsi_base() {
+        return false;
+    }
+    let pin = gsi - madt.ioapic_gsi_base();
+    let pins = (read_reg(page, 0x01) >> 16) + 1;
+    if pin >= pins {
+        return false;
+    }
+    let dest = u64::from(apic::lapic_id()) << DEST_SHIFT;
+    // Bit 13 = active low, bit 15 = level. PCI INTx is both.
+    let entry = u64::from(vector) | (1 << 13) | (1 << 15) | dest;
+    write_redtbl(page, pin as u8, entry);
+    serial_println!(
+        "[ioapic] {}: pci gsi {} -> pin {}, vector {} (level, active-low)",
+        what,
+        gsi,
+        pin,
+        vector
+    );
+    true
+}
+
+/// EOI a level-triggered redirection (I/O APIC version ≥ 0x20, offset 0x40).
+pub fn eoi_level(vector: u8) {
+    let page = IOAPIC_PAGE.load(Ordering::Acquire);
+    if page == 0 {
+        return;
+    }
+    // SAFETY: EOI register is a 32-bit MMIO write of the vector, present
+    // on the QEMU I/O APIC (version 0x20). Edge lines ignore it.
+    unsafe {
+        let eoi = (page + 0x40) as *mut u32;
+        eoi.write_volatile(u32::from(vector));
+    }
+}
+
 /// Raw read of redirection entry `pin` (test/inspection seam).
 pub fn redtbl(pin: u8) -> u64 {
     let page = IOAPIC_PAGE.load(Ordering::Acquire);
