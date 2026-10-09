@@ -2510,7 +2510,7 @@ const USERLAND_KEYS: &[(&str, &str)] = &[
     ("a", "a"),
     ("n", "n"),
     ("tab", "banner.txt "),
-    ("ret", ": command not found"),
+    ("ret", "banner.txt: reserved"),
     ("e", "e"),
     ("c", "c"),
     ("h", "h"),
