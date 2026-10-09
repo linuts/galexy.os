@@ -264,6 +264,20 @@ impl Grants {
         }
     }
 
+    /// Console and keyboard for a program the shell Cap-waits (`nano`).
+    ///
+    /// `query` is included when the spawn asked for the files snapshot.
+    /// The loader and power stay with the parent.
+    pub(crate) const fn console_keyboard(query: bool) -> Self {
+        Self {
+            console: true,
+            keyboard: true,
+            loader: false,
+            query,
+            power: false,
+        }
+    }
+
     /// The interactive shell: console, keyboard, loader, queries, power.
     pub(crate) const fn launcher() -> Self {
         Self {
@@ -1474,6 +1488,8 @@ struct PendingSpawn {
     arg: [u8; ARG_MAX],
     arg_len: u16,
     query: bool,
+    /// Child may read the seat keyboard while the parent Cap-waits.
+    keyboard: bool,
     /// Park until the child exits (not only until load finishes).
     wait_exit: bool,
     /// Console the child inherits from the task that asked.
@@ -1497,6 +1513,7 @@ static PENDING_SPAWN: Mutex<PendingSpawn> = Mutex::new(PendingSpawn {
     arg: [0; ARG_MAX],
     arg_len: 0,
     query: false,
+    keyboard: false,
     wait_exit: false,
     tty: 0,
     seat: false,
@@ -1510,15 +1527,17 @@ static PENDING_SPAWN: Mutex<PendingSpawn> = Mutex::new(PendingSpawn {
 /// Queues `name` and parks the current task.
 ///
 /// `arg` is handed to the child. `query` adds the query grant on top of
-/// the console. `wait_exit` keeps the caller parked until the child
-/// exits. `inherit` copies the parent's galfs tokens (utilities).
-/// `rights_mask` ANDs those rights when non-zero. The caller must
-/// already be a running user task. Lock order: this takes
-/// `PENDING_SPAWN`, then `THREADS`.
+/// the console. `keyboard` adds the keyboard grant (the parent should
+/// Cap-wait so it is not also reading keys). `wait_exit` keeps the
+/// caller parked until the child exits. `inherit` copies the parent's
+/// galfs tokens (utilities). `rights_mask` ANDs those rights when
+/// non-zero. The caller must already be a running user task. Lock
+/// order: this takes `PENDING_SPAWN`, then `THREADS`.
 pub(crate) fn task_spawn(
     name: &str,
     arg: &[u8],
     query: bool,
+    keyboard: bool,
     wait_exit: bool,
     inherit: bool,
     rights_mask: u8,
@@ -1577,6 +1596,7 @@ pub(crate) fn task_spawn(
         pending.arg[..arg.len()].copy_from_slice(arg);
         pending.arg_len = arg.len() as u16;
         pending.query = query;
+        pending.keyboard = keyboard;
         pending.wait_exit = wait_exit;
         // Seat TTY: 1-based index in arg[0] (same as kernel spawn_shell_on).
         pending.tty = if seat {
@@ -1630,6 +1650,7 @@ pub fn drain_spawn() {
         let mut arg = [0u8; ARG_MAX];
         arg[..arg_len].copy_from_slice(&pending.arg[..arg_len]);
         let query = pending.query;
+        let keyboard = pending.keyboard;
         let wait_exit = pending.wait_exit;
         let tty = pending.tty;
         let seat = pending.seat;
@@ -1643,6 +1664,7 @@ pub fn drain_spawn() {
             arg_len,
             arg,
             query,
+            keyboard,
             wait_exit,
             tty,
             seat,
@@ -1657,6 +1679,7 @@ pub fn drain_spawn() {
         arg_len,
         arg,
         query,
+        keyboard,
         wait_exit,
         tty,
         seat,
@@ -1687,6 +1710,8 @@ pub fn drain_spawn() {
     }
     let grants = if seat {
         Grants::pre_login()
+    } else if keyboard {
+        Grants::console_keyboard(query)
     } else if query {
         Grants::console_query()
     } else {

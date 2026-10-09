@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- `nano` — ring-3 screen editor (`nano <path>`): arrows, Ctrl-O save,
+  Ctrl-X exit. The shell passes `SPAWN_GRANT_KEYBOARD` (spawn `r10` bit 3)
+  and Cap-waits so the editor can read the seat's keys
 - [#81](https://github.com/linuts/galexy.os/pull/81) — M63 — SMEP, SMAP,
   and UMIP when the CPU reports them; user copies go through
   `arch::user_copy`; kernel KASLR stays inside P4 indexes 1..=24 (BIOS

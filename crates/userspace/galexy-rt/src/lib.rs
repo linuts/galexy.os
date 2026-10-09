@@ -523,7 +523,7 @@ pub fn spawn(name: &[u8]) -> SyscallResult {
 }
 
 /// Starts `name` with `arg` and `grants` (`SPAWN_GRANT_QUERY`,
-/// `SPAWN_WAIT`, `SPAWN_INHERIT`, or a combination).
+/// `SPAWN_WAIT`, `SPAWN_INHERIT`, `SPAWN_GRANT_KEYBOARD`, or a combination).
 ///
 /// Without `SPAWN_WAIT`, returns a process Cap once the program is loaded.
 /// With `SPAWN_WAIT`, parks until the child exits and returns its exit

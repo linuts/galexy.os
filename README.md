@@ -15,7 +15,7 @@ Not a Linux clone. No POSIX claim. Authority is **capabilities** (and
 galfs access cards), not global file descriptors or PIDs.
 
 **Status (October 2026):** Milestones 1–61, 63, and 69 are merged (62 was
-superseded); the QEMU suite is 101 boots plus host tests, all green. The
+superseded); the QEMU suite is 103 boots plus host tests, all green. The
 Milestone 52 review checklist is complete except the `review-rc1` tag,
 which is the owner's call; Phase 9 continues with performance,
 modern-platform, and userland work (64–67) toward `v1.0`. The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md)
@@ -99,7 +99,7 @@ frames). Up/down arrows recall session history (written to
 | Ctrl-C | Cancel a prompt, or kill the foreground job |
 | `fetch` | Re-show the login dashboard |
 | `help` | Commands |
-| `ls` / `echo hi` / `mkdir box` / `cat` / `cp` / `mv` / `rm` / `stat` / `truncate` | Files under your tree |
+| `ls` / `echo hi` / `mkdir box` / `cat` / `nano` / `cp` / `mv` / `rm` / `stat` / `truncate` | Files under your tree. `nano <path>` edits; Ctrl-O saves, Ctrl-X leaves |
 | `echo hi \| cat` · `echo *` | One pipeline (pipe + `give`); one `*` per word in the current directory |
 | `whoami` / `users` / `useradd` / `passwd` / `quota` / `tokens` | Identity, cards, limits |
 | `grant` / `revoke` / `share` / `unshare` / `su` | Access cards (see AUTH.md) |
@@ -128,7 +128,7 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 ```sh
 cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxc -p gxld   # host suites
 cargo test -p runner --test audit_strings   # no "password" in any serial line
-cargo test -p runner --test boot -- --test-threads=1   # QEMU suite (101 boots, -smp 2)
+cargo test -p runner --test boot -- --test-threads=1   # QEMU suite (103 boots, -smp 2)
 ```
 
 UEFI cases need `OVMF_FD` if the default firmware path is absent. Disk
