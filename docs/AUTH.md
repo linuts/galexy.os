@@ -322,7 +322,7 @@ expect to find, and where the remaining edges are:
 | Sealed GALF: volume key wrapped under a passphrase KEK; wrong passphrase stays RAM-only; raw image carries no plaintext | M44 | `unlock_test_passes`, `galfs_disk_*`, `galexy_galf::slots_test` | bring-up passphrase `galfs`; Poly1305 waived (HMAC tag) |
 | Authorization is tokens, never identity; grant/share need every right on the object or an ancestor; revoke is exact-object | M34–M45 | `galfs`, `cards`, `shares`, `galexy_galf::cards_test` | — |
 | Pre-login seat cannot spawn; bare spawn has empty tokens; utilities inherit, optionally masked | M41–M43, kernel rule in M51 | `negative_test_passes`, `shell_nested_spawn_refused_e2e` | no in-tree spawner sets the rights mask yet |
-| Session generation is an audit counter per login/logout (`[auth] session login … gen=N tty=K`) | M43 | `mustchange_test_passes`, `audit_strings` | binding it to the seat *Cap* → **M67** |
+| Session generation is an audit counter per login/logout/su (`[auth] session login … gen=N tty=K id=D`) | M43 / M67 | `mustchange_test_passes`, `audit_strings`, `init_test_passes` | `id` is the seat Cap's debug id, not a handle |
 | Init has no keyboard; seats are pre-login; init is immortal to user kill | M53–M54 | `init_test_passes`, `jobcap_test_passes` | — |
 
 Non-goals (MFA, networked IdP, PAM, Argon2id) are restated with

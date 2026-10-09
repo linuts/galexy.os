@@ -30,10 +30,11 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
-    arg, close, create, create_replace, dmesg_cap, entry, files_cap, grant, keyboard_cap, kill,
-    open, pipe, read, reboot, revoke, share, shutdown, spawn_with, stats_cap, sync, tasks_cap,
-    threads_cap, unshare, user, user_login, user_logout, user_name, user_name_pass, user_passwd,
-    user_quota, user_setquota, user_unlock, volume_locked, wait, write, write_console, yield_now,
+    arg, close, create, create_replace, dmesg_cap, entry, files_cap, grant, init_rpc, keyboard_cap,
+    kill, open, pipe, read, reboot, revoke, share, shutdown, spawn_with, stats_cap, sync,
+    tasks_cap, threads_cap, unshare, user, user_login, user_logout, user_name, user_name_pass,
+    user_passwd, user_quota, user_setquota, user_unlock, volume_locked, wait, write, write_console,
+    yield_now,
 };
 
 /// Exit status of the last Cap-waited utility (or spawn failure).
@@ -514,8 +515,10 @@ fn show_help() {
     help_row(b"threads", b"preemptive thread ticks");
     help_row(b"about", b"version blurb");
     help_row(b"clear", b"clear screen");
-    help_row(b"shutdown", b"power off (admin)");
-    help_row(b"reboot", b"reset (admin)");
+    help_row(b"svc status <name>", b"service state");
+    help_row(b"svc start|stop|restart <name>", b"ask init");
+    help_row(b"shutdown", b"ask init to power off");
+    help_row(b"reboot", b"ask init to reset");
     write_console(b"\n");
 
     help_section(b"keys");
@@ -1025,11 +1028,15 @@ fn dispatch(
         return None;
     }
     if line == b"shutdown" {
-        report_power(cwd, b"shutdown", shutdown());
+        ask_init_power(cwd, false);
         return None;
     }
     if line == b"reboot" {
-        report_power(cwd, b"reboot", reboot());
+        ask_init_power(cwd, true);
+        return None;
+    }
+    if let Some(rest) = arg_of(line, b"svc") {
+        svc_cmd(cwd, rest);
         return None;
     }
     if line == b"clear" {
@@ -2701,6 +2708,85 @@ fn report_user(cwd: &mut Cwd, label: &[u8], result: SyscallResult, reset_cwd: bo
         };
     } else if reset_cwd {
         cwd.len = 0;
+    }
+    prompt(cwd);
+}
+
+/// Ask init to shut down or reboot. A missing control channel falls back
+/// to the Power Cap, which only a no-init admin seat still holds.
+fn ask_init_power(cwd: &Cwd, reboot_flag: bool) {
+    write_console(b"asking init\n");
+    let op = if reboot_flag {
+        galexy_abi::INIT_OP_REBOOT
+    } else {
+        galexy_abi::INIT_OP_SHUTDOWN
+    };
+    let mut reply = [0u8; 96];
+    let got = init_rpc(op, b"", &mut reply);
+    if !got.ok {
+        let err = SysError::from_code(got.value);
+        if err == SysError::Unsupported || err == SysError::BadCap {
+            let label: &[u8] = if reboot_flag { b"reboot" } else { b"shutdown" };
+            let result = if reboot_flag { reboot() } else { shutdown() };
+            report_power(cwd, label, result);
+            return;
+        }
+        let label: &[u8] = if reboot_flag { b"reboot" } else { b"shutdown" };
+        report_power(cwd, label, got);
+        return;
+    }
+    let n = (got.value as usize).min(reply.len());
+    if n > 0 {
+        write_console(&reply[..n]);
+    }
+    prompt(cwd);
+}
+
+fn svc_cmd(cwd: &Cwd, rest: &[u8]) {
+    let rest = trim(rest);
+    let Some(sp) = rest.iter().position(|b| *b == b' ') else {
+        write_console(b"svc: usage: svc status|start|stop|restart <name>\n");
+        prompt(cwd);
+        return;
+    };
+    let verb = &rest[..sp];
+    let name = trim(&rest[sp + 1..]);
+    if name.is_empty() || name.contains(&b' ') {
+        write_console(b"svc: usage: svc status|start|stop|restart <name>\n");
+        prompt(cwd);
+        return;
+    }
+    let op = match verb {
+        b"status" => galexy_abi::INIT_OP_STATUS,
+        b"start" => galexy_abi::INIT_OP_START,
+        b"stop" => galexy_abi::INIT_OP_STOP,
+        b"restart" => galexy_abi::INIT_OP_RESTART,
+        _ => {
+            write_console(b"svc: usage: svc status|start|stop|restart <name>\n");
+            prompt(cwd);
+            return;
+        }
+    };
+    let mut reply = [0u8; 96];
+    let got = init_rpc(op, name, &mut reply);
+    if !got.ok {
+        write_console(b"svc: ");
+        match SysError::from_code(got.value) {
+            SysError::AccessDenied => write_console(b"access denied\n"),
+            SysError::Unsupported => write_console(b"no init\n"),
+            SysError::NoResource => write_console(b"no resource\n"),
+            _ => write_console(b"failed\n"),
+        };
+    } else {
+        let n = (got.value as usize).min(reply.len());
+        if n == 0 {
+            write_console(b"svc: empty reply\n");
+        } else {
+            write_console(&reply[..n]);
+            if reply[n - 1] != b'\n' {
+                write_console(b"\n");
+            }
+        }
     }
     prompt(cwd);
 }

@@ -228,6 +228,20 @@ pub mod reserved {
     pub const fn dmesg(rights: super::CapRights) -> Cap {
         Cap::new(DMESG_INDEX, rights)
     }
+
+    /// Init's control capability. `send` on this index is not a channel
+    /// endpoint: the kernel stamps a header and parks the caller until
+    /// init replies. Logged-out tasks are `AccessDenied`. When init has
+    /// not created its control channel the call is `Unsupported` (a
+    /// no-init shell may still call `power` if it holds that grant).
+    ///
+    /// **Stable** (Milestone 67). No new syscall number.
+    pub const INIT_INDEX: u64 = 0x8008;
+
+    /// The init control capability. Rights must include [`super::CapRights::WRITE`].
+    pub const fn init(rights: super::CapRights) -> Cap {
+        Cap::new(INIT_INDEX, rights)
+    }
 }
 
 /// `power` operand: turn the machine off (ACPI S5).
@@ -354,8 +368,8 @@ pub const FILE_CAP_BASE: u64 = 3;
 /// below the high reserved band (`0x8000`…). Per-task, not global.
 pub const PROC_CAP_BASE: u64 = 0x40;
 /// Process Caps one task may hold at once (spawn children / transfers).
-/// Process Caps per task. Raised to 16 in Milestone 53 so init can hold
-/// supervise Caps for twelve seats plus spare service children.
+/// Process Caps per task. Sixteen is the stable ceiling (Milestone 67):
+/// twelve seats plus a few service children. Do not raise it for init.
 pub const MAX_PROC_CAPS: u64 = 16;
 
 /* ---------------- address-space contract ---------------- */
@@ -440,7 +454,9 @@ pub enum Syscall {
     /// name (Milestone 47). [`SPAWN_INHERIT`] copies the parent's galfs
     /// tokens onto the child (utilities); bare programs omit it.
     ///
-    /// **Experimental** until Phase 6 freezes init / seat supervision.
+    /// **Experimental.** Milestone 67 froze `wait` / `kill`, `Map`,
+    /// `Clock`, and channels. `spawn` stays experimental: argv layout
+    /// and grant bits can still change.
     Spawn,
     /// `power(cap, op)` — shut down or reset the machine.
     ///
@@ -573,18 +589,23 @@ pub enum Syscall {
     Unshare,
     /// `wait(cap)` — block until a process Cap's task exits; return status.
     ///
-    /// Args: `RDI = process Cap bits`. Requires [`CapRights::PROC_WAIT`].
-    /// Returns: `SyscallResult` (rax = exit code). The Cap becomes stale
-    /// after a successful wait.
+    /// Args: `RDI = process Cap bits`, `RSI` bit 0 = [`WAIT_POLL`].
+    /// Requires [`CapRights::PROC_WAIT`]. Returns: `SyscallResult`
+    /// (rax = exit code). The Cap becomes stale after a successful wait.
+    /// [`WAIT_POLL`] returns [`SysError::NoResource`] when the child is
+    /// still alive and does not park.
     ///
-    /// **Experimental** until Phase 6 freezes init / seat supervision.
+    /// **Stable** (Milestone 67). Init's own Cap-wait may return
+    /// [`SysError::Interrupted`] when a control message arrives; the
+    /// process Cap is still installed. Every other waiter still blocks
+    /// until the child exits.
     Wait,
     /// `kill(cap)` — stop a task addressed by a process Cap.
     ///
     /// Args: `RDI = process Cap bits`. Requires [`CapRights::PROC_KILL`].
-    /// Returns: `SyscallResult` (rax = 0).
+    /// Returns: `SyscallResult` (rax = 0). Killing init is `AccessDenied`.
     ///
-    /// **Experimental** until Phase 6 freezes init / seat supervision.
+    /// **Stable** (Milestone 67).
     Kill,
     /// `sleep(ms)` — park until monotonic `timer_ticks` advances by `ms`.
     ///
@@ -605,24 +626,25 @@ pub enum Syscall {
     /// [`USER_HEAP_PAGES`]. Past that budget is `NoResource`. Reap
     /// returns every frame. There is no unmap.
     ///
-    /// **Experimental** until Milestone 67.
+    /// **Stable** (Milestone 67).
     Map,
     /// `clock()` — monotonic milliseconds, the same counter as `sleep`.
     ///
     /// Args: none. No Cap. Returns: `SyscallResult` (rax = `timer_ticks`).
     /// Not a wall clock.
     ///
-    /// **Experimental** until Milestone 67. `sleep` stays stable beside it.
+    /// **Stable** (Milestone 67). `sleep` stays stable beside it.
     Clock,
     /// `channel(addr)` — create a capability channel; write two endpoint
     /// Caps into a 16-byte user buffer.
     ///
     /// Args: `RDI = user address of 16 bytes`. Returns: `SyscallResult`
     /// (rax = 0). Both Caps are READ|WRITE. One queued message per
-    /// channel. A full table or file table is `NoResource`. See
-    /// `docs/PROCESS.md`.
+    /// channel. A full table or file table is `NoResource`. Init's first
+    /// channel is the control channel (see [`reserved::INIT_INDEX`]).
+    /// See `docs/PROCESS.md`.
     ///
-    /// **Experimental** until Milestone 67.
+    /// **Stable** (Milestone 67).
     Channel,
     /// `send(cap, addr, len, cap0, cap1)` — queue one message on a channel.
     ///
@@ -632,19 +654,31 @@ pub enum Syscall {
     /// A message already queued is `NoResource` and the Caps stay put.
     /// A closed peer is `Unsupported`. Does not park.
     ///
-    /// **Experimental** until Milestone 67.
+    /// When `RDI` is [`reserved::INIT_INDEX`], this is the init RPC
+    /// instead. `RSI`/`RDX` are the user payload
+    /// (`0..=`[`INIT_RPC_MAX`]; layout under [`INIT_OP_STATUS`]). `R8` is
+    /// the reply buffer and `R9` is its length (`0..=`[`CHAN_MSG_MAX`]).
+    /// The kernel prepends [`INIT_RPC_HDR`] bytes the caller cannot
+    /// forge, queues the message from the end init does not recv on, and
+    /// parks until init `send`s the reply on its recv end. One RPC is in
+    /// flight; a second is `NoResource`. The reply's `rax` is the byte
+    /// count copied into `R8`. No file Caps ride this path.
+    ///
+    /// **Stable** (Milestone 67). `spawn` stays experimental.
     Send,
-    /// `recv(cap, addr, len, caps_out)` — take one message, or park.
+    /// `recv(cap, addr, len, caps_out, flags)` — take one message, or park.
     ///
     /// Args: `RDI = endpoint cap`, `RSI = user buffer`, `RDX = buffer
     /// length`, `R8 = 16-byte cap-out buffer` (or `0` when the caller
-    /// will not accept Caps). Returns: `SyscallResult` (rax = bytes
-    /// copied). Empty + peer still open parks. Empty + peer closed is
-    /// `0`. If the message carries Caps and the receiver's file table
-    /// cannot hold them, the message stays queued and the result is
-    /// `NoResource`.
+    /// will not accept Caps), `R9` bit 0 = [`RECV_POLL`]. Returns:
+    /// `SyscallResult` (rax = bytes copied). Empty + peer still open
+    /// parks, unless [`RECV_POLL`] is set, in which case the result is
+    /// [`SysError::NoResource`] and the caller stays running. Empty +
+    /// peer closed is `0`. If the message carries Caps and the
+    /// receiver's file table cannot hold them, the message stays queued
+    /// and the result is `NoResource`.
     ///
-    /// **Experimental** until Milestone 67.
+    /// **Stable** (Milestone 67).
     Recv,
 }
 
@@ -660,6 +694,45 @@ pub const SPAWN_ARG_MAX: usize = 256;
 pub const USER_HEAP_PAGES: u64 = 32;
 /// Bytes one channel message may carry, not counting Caps.
 pub const CHAN_MSG_MAX: usize = 256;
+
+/// Bytes the kernel prepends to an init control message.
+///
+/// Layout, little-endian, stamped by the kernel (the caller cannot set
+/// these):
+/// - `0`: admin (`1` when the sender's root is the admin actor)
+/// - `1`: sender TTY, 0-based
+/// - `2..4`: zero
+/// - `4..12`: seat debug id (`u64`)
+/// - `12..20`: session generation (`u64`)
+///
+/// The caller's payload starts at this offset. See [`INIT_OP_STATUS`].
+pub const INIT_RPC_HDR: usize = 20;
+
+/// Largest user payload on an init control `send`.
+pub const INIT_RPC_MAX: usize = CHAN_MSG_MAX - INIT_RPC_HDR;
+
+/// Init RPC: report whether `name` is running. Payload is
+/// `op`, `name_len`, `name` bytes. Init's reply is text.
+pub const INIT_OP_STATUS: u8 = 1;
+/// Init RPC: start a service that is not running.
+pub const INIT_OP_START: u8 = 2;
+/// Init RPC: Cap-kill a service and do not restart it.
+pub const INIT_OP_STOP: u8 = 3;
+/// Init RPC: clear a stop and run the service again.
+pub const INIT_OP_RESTART: u8 = 4;
+/// Init RPC: ordered shutdown. Non-admin is refused in the reply.
+pub const INIT_OP_SHUTDOWN: u8 = 5;
+/// Init RPC: ordered reboot. Non-admin is refused in the reply.
+pub const INIT_OP_REBOOT: u8 = 6;
+
+/// `recv` `R9` bit 0: an empty queue returns [`SysError::NoResource`]
+/// instead of parking. EOF (peer closed) is still `0`.
+pub const RECV_POLL: u64 = 1;
+
+/// `wait` `RSI` bit 0: a child that is still alive returns
+/// [`SysError::NoResource`] and the caller does not park. An already
+/// exited child still returns its status and consumes the Cap.
+pub const WAIT_POLL: u64 = 1;
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (lifting the cap is version-1 work).
@@ -780,11 +853,13 @@ pub enum SysError {
     /// file table, the object table, the single queued spawn, or a live
     /// task that already uses the requested spawn name).
     NoResource = 7,
-    /// A blocking wait (sleep / keyboard / pipe) was cancelled by kill.
+    /// A blocking wait (sleep / keyboard / pipe) was cancelled by kill,
+    /// or init's sleep / Cap-wait was cancelled because a control message
+    /// arrived. The process Cap from that Cap-wait is still installed.
     ///
-    /// **Stable** (Milestone 58). Cap-waiters of the killed task still see
-    /// exit status `137`; this code is stamped on the cancelled waiter's
-    /// syscall frame before the slot goes `EXITED`.
+    /// **Stable** (Milestone 58; init control wake added in Milestone 67).
+    /// Cap-waiters of a killed task still see exit status `137`; this
+    /// code is stamped on the cancelled waiter's syscall frame.
     Interrupted = 8,
     /// Login is in a cool-down (actor and/or TTY). The password was not checked.
     ///

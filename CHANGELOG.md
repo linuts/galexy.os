@@ -8,6 +8,16 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#87](https://github.com/linuts/galexy.os/pull/87) — M67 — init owns
+  shutdown and the service table. `shutdown` / `reboot` ask init over
+  one channel; init Cap-kills the other seats, calls `sync`, then
+  `Power`. Logged-in seats do not hold Power while init is alive.
+  Services are `restart | once | ignore` with backoff (0, then 250,
+  500, 1000, cap 2000 ms). `svc status|start|stop|restart` never hands
+  out a service Cap. Audit lines carry `id=<debug id>`. `Map`, `Clock`,
+  `Channel`, `Send`, `Recv`, `wait`, and `kill` are stable. `spawn`
+  stays experimental. No new syscall. `MAX_PROC_CAPS` stays 16. The
+  `v1.0` tag is still a separate gate
 - [#85](https://github.com/linuts/galexy.os/pull/85) — M66 — per-task
   `Map` heap (32 pages) with a `galexy-rt` bump allocator; `Clock`;
   capability channels (`Channel` / `Send` / `Recv`); NUL-separated argv

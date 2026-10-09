@@ -1349,6 +1349,84 @@ fn init_test_passes() {
         serial.contains("[test-init] passed"),
         "test-init success marker missing; serial:\n{serial}"
     );
+    assert!(
+        serial.contains("[init] backoff name=probe ms=250"),
+        "init did not back off the probe storm; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-init] logged-out init rpc denied"),
+        "logged-out init rpc was not denied; serial:\n{serial}"
+    );
+}
+
+const SVC_STATUS_KEYS: &[(&str, &str)] = &[
+    ("s", "s"),
+    ("v", "v"),
+    ("c", "c"),
+    ("spc", " "),
+    ("s", "s"),
+    ("t", "t"),
+    ("a", "a"),
+    ("t", "t"),
+    ("u", "u"),
+    ("s", "s"),
+    ("spc", " "),
+    ("s", "s"),
+    ("h", "h"),
+    ("e", "e"),
+    ("l", "l"),
+    ("l", "l"),
+    ("ret", "shell running"),
+];
+
+#[test]
+fn shell_svc_status_typing_e2e() {
+    let keys = with_login(SVC_STATUS_KEYS);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "shell running",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    assert!(
+        serial.contains("shell running"),
+        "svc status shell did not report the seat; serial:\n{serial}"
+    );
+}
+
+const SHUTDOWN_KEYS: &[(&str, &str)] = &[
+    ("s", "s"),
+    ("h", "h"),
+    ("u", "u"),
+    ("t", "t"),
+    ("d", "d"),
+    ("o", "o"),
+    ("w", "w"),
+    ("n", "n"),
+    ("ret", "asking init"),
+];
+
+#[test]
+fn shell_shutdown_reaches_init() {
+    let keys = with_login(SHUTDOWN_KEYS);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "[init] power",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    assert!(
+        serial.contains("[init] shutdown"),
+        "shutdown never reached init; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[init] power"),
+        "init did not reach Power after killing seats; serial:\n{serial}"
+    );
 }
 
 #[test]
@@ -3024,7 +3102,7 @@ fn shell_command_center_typing_e2e() {
         "login dashboard missing galfs; serial:\n{serial}"
     );
     assert!(
-        !serial.contains("[init]"),
+        !console_shows_init(&serial),
         "init must stay off the console beside login; serial:\n{serial}"
     );
     // History file persisted across logout (plus passwd from with_login).
@@ -3032,6 +3110,33 @@ fn shell_command_center_typing_e2e() {
         serial.contains("echo aa\n") && serial.contains("echo bb\n"),
         "shell.history / recall missed echo lines; serial:\n{serial}"
     );
+}
+
+/// Init's own log lines are kernel serial (`Ns: [init] …`), not the seat
+/// console. A login screen that contains `[init]` without that prefix
+/// means init wrote on the TTY it shares with F1.
+fn console_shows_init(serial: &str) -> bool {
+    serial
+        .lines()
+        .any(|line| line.contains("[init]") && !kernel_init_line(line))
+}
+
+fn kernel_init_line(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && (bytes[i] == b'*' || bytes[i] == b' ' || bytes[i] == 0x0c) {
+        i += 1;
+    }
+    let rest = &line[i..];
+    let rb = rest.as_bytes();
+    let mut j = 0;
+    if j >= rb.len() || !rb[j].is_ascii_digit() {
+        return false;
+    }
+    while j < rb.len() && rb[j].is_ascii_digit() {
+        j += 1;
+    }
+    rest[j..].starts_with("s: [init]")
 }
 
 /// True end-to-end: TYPES `hello` into the running kernel through

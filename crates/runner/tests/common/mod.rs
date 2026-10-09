@@ -922,8 +922,16 @@ fn typing_visible(raw: &str) -> String {
     out
 }
 
-/// True when `bytes[i..]` starts with `Ns: ` (kernel serial uptime prefix).
+/// True when `bytes[i..]` starts a line with `Ns: ` (kernel serial uptime
+/// prefix). A digit run in the middle of a line is user text: `zed-669s:`
+/// is `zed-66` glued to the next log, not an uptime of 69 seconds.
 fn is_uptime_log_prefix(bytes: &[u8], i: usize) -> bool {
+    if i > 0 {
+        let prev = bytes[i - 1];
+        if prev != b'\n' && prev != b'\r' && prev != 0x0c {
+            return false;
+        }
+    }
     let mut j = i;
     if j >= bytes.len() || !bytes[j].is_ascii_digit() {
         return false;
@@ -1130,7 +1138,7 @@ fn boot_and_type_on(
     // marker may overlap the cursor when earlier keys already consumed
     // its prefix.
     let mut seen = 0usize;
-    for (qcode, echo) in sync_pairs {
+    'keys: for (qcode, echo) in sync_pairs {
         qmp_send_keys(&mut reader, &[qcode]);
         std::thread::sleep(key_delay);
         loop {
@@ -1145,10 +1153,12 @@ fn boot_and_type_on(
                     &serial[lo..hi]
                 );
             }
-            if child.try_wait().expect("try_wait failed").is_some() {
-                panic!("guest exited mid-typing (key '{qcode}')");
-            }
-            let data = typing_visible(&std::fs::read_to_string(&serial_path).unwrap_or_default());
+            // Read the log before treating exit as failure. Shutdown
+            // powers the machine off on the last key, and the echo is
+            // already in the file when QEMU's process is gone.
+            let raw = std::fs::read_to_string(&serial_path).unwrap_or_default();
+            let exited = child.try_wait().expect("try_wait failed").is_some();
+            let data = typing_visible(&raw);
             // A multi-byte marker may start before `seen` (the per-key
             // cursor already ate its first characters) and finish after.
             // Accept the earliest match that ends past the cursor.
@@ -1156,7 +1166,13 @@ fn boot_and_type_on(
             let start = start.min(data.len());
             if let Some(at) = data[start..].find(echo) {
                 seen = start + at + echo.len();
+                if exited {
+                    break 'keys;
+                }
                 break;
+            }
+            if exited {
+                panic!("guest exited mid-typing (key '{qcode}'); serial:\n{raw}");
             }
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -1173,14 +1189,12 @@ fn boot_and_type_on(
                     std::fs::read_to_string(&serial_path).unwrap_or_default()
                 );
             }
-            if child.try_wait().expect("try_wait failed").is_some() {
-                panic!("guest exited before the final marker '{final_marker}'");
-            }
-            if std::fs::read_to_string(&serial_path)
-                .map(|s| s.contains(final_marker))
-                .unwrap_or(false)
-            {
+            let serial = std::fs::read_to_string(&serial_path).unwrap_or_default();
+            if serial.contains(final_marker) {
                 break;
+            }
+            if child.try_wait().expect("try_wait failed").is_some() {
+                panic!("guest exited before the final marker '{final_marker}'; serial:\n{serial}");
             }
             std::thread::sleep(Duration::from_millis(50));
         }

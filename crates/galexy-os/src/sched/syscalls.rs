@@ -174,7 +174,8 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             Outcome::Resume
         }
         n if n == Syscall::Wait as u64 => {
-            match crate::sched::task_wait(Cap::from_bits(frame.rdi)) {
+            let poll = frame.rsi & galexy_abi::WAIT_POLL != 0;
+            match crate::sched::task_wait(Cap::from_bits(frame.rdi), poll) {
                 Ok(None) => {
                     // Parked; exit code is stamped when the child exits.
                     stamp(frame, SyscallResult::ok(0));
@@ -216,10 +217,16 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, syscall_channel(frame.rdi));
             Outcome::Resume
         }
-        n if n == Syscall::Send as u64 => {
-            stamp(frame, syscall_send(frame));
-            Outcome::Resume
-        }
+        n if n == Syscall::Send as u64 => match syscall_send(frame) {
+            IoResult::Done(r) => {
+                stamp(frame, r);
+                Outcome::Resume
+            }
+            IoResult::Park => {
+                stamp(frame, SyscallResult::ok(0));
+                Outcome::Handoff
+            }
+        },
         n if n == Syscall::Recv as u64 => match syscall_recv(frame) {
             IoResult::Done(r) => {
                 stamp(frame, r);
@@ -310,6 +317,17 @@ fn syscall_write_console(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     });
     if !printable {
         return SyscallResult::err(SysError::BadValue);
+    }
+    // Init shares TTY 0 with F1. Its lines are serial-only, and the
+    // console budget must not drop a backoff or shutdown marker.
+    if crate::sched::current_is_init() {
+        let text = core::str::from_utf8(&staged[..len as usize]).unwrap_or("");
+        for line in text.split('\n') {
+            if !line.is_empty() {
+                crate::serial_println!("{}", line);
+            }
+        }
+        return SyscallResult::ok(len);
     }
     let allowed = crate::sched::console_take_budget(len as usize);
     if allowed == 0 {
@@ -1394,13 +1412,17 @@ fn syscall_channel(addr: u64) -> SyscallResult {
     }
 }
 
-fn syscall_send(frame: &Context) -> SyscallResult {
+fn syscall_send(frame: &Context) -> IoResult {
+    let cap = Cap::from_bits(frame.rdi);
+    if cap.index() == galexy_abi::reserved::INIT_INDEX {
+        return syscall_init_send(frame, cap);
+    }
     let len = frame.rdx;
     if len > galexy_abi::CHAN_MSG_MAX as u64 {
-        return SyscallResult::err(SysError::BadValue);
+        return IoResult::Done(SyscallResult::err(SysError::BadValue));
     }
     if len > 0 && user_buffer(frame.rsi, len, false).is_err() {
-        return SyscallResult::err(SysError::BadBuffer);
+        return IoResult::Done(SyscallResult::err(SysError::BadBuffer));
     }
     let mut bytes = [0u8; galexy_abi::CHAN_MSG_MAX];
     if len > 0 {
@@ -1409,14 +1431,40 @@ fn syscall_send(frame: &Context) -> SyscallResult {
             crate::arch::user_copy::copy_from_user(frame.rsi, bytes.as_mut_ptr(), len as usize);
         }
     }
-    match crate::sched::task_send(
-        Cap::from_bits(frame.rdi),
-        &bytes[..len as usize],
-        frame.r8,
-        frame.r9,
-    ) {
-        Ok(n) => SyscallResult::ok(n as u64),
-        Err(err) => SyscallResult::err(err),
+    match crate::sched::task_send(cap, &bytes[..len as usize], frame.r8, frame.r9) {
+        Ok(n) => IoResult::Done(SyscallResult::ok(n as u64)),
+        Err(err) => IoResult::Done(SyscallResult::err(err)),
+    }
+}
+
+fn syscall_init_send(frame: &Context, cap: Cap) -> IoResult {
+    if !cap.rights().contains(CapRights::WRITE) {
+        return IoResult::Done(SyscallResult::err(SysError::AccessDenied));
+    }
+    let len = frame.rdx;
+    if len > galexy_abi::INIT_RPC_MAX as u64 {
+        return IoResult::Done(SyscallResult::err(SysError::BadValue));
+    }
+    if len > 0 && user_buffer(frame.rsi, len, false).is_err() {
+        return IoResult::Done(SyscallResult::err(SysError::BadBuffer));
+    }
+    let reply_len = frame.r9;
+    if reply_len > galexy_abi::CHAN_MSG_MAX as u64 {
+        return IoResult::Done(SyscallResult::err(SysError::BadValue));
+    }
+    if reply_len > 0 && user_buffer(frame.r8, reply_len, true).is_err() {
+        return IoResult::Done(SyscallResult::err(SysError::BadBuffer));
+    }
+    let mut bytes = [0u8; galexy_abi::INIT_RPC_MAX];
+    if len > 0 {
+        // SAFETY: `user_buffer` accepted every byte of the payload.
+        unsafe {
+            crate::arch::user_copy::copy_from_user(frame.rsi, bytes.as_mut_ptr(), len as usize);
+        }
+    }
+    match crate::sched::task_init_rpc(&bytes[..len as usize], frame.r8, reply_len as u32) {
+        Ok(()) => IoResult::Park,
+        Err(err) => IoResult::Done(SyscallResult::err(err)),
     }
 }
 
@@ -1431,7 +1479,14 @@ fn syscall_recv(frame: &Context) -> IoResult {
     if frame.r8 != 0 && user_buffer(frame.r8, 16, true).is_err() {
         return IoResult::Done(SyscallResult::err(SysError::BadBuffer));
     }
-    match crate::sched::task_recv(Cap::from_bits(frame.rdi), frame.rsi, len as usize, frame.r8) {
+    let poll = frame.r9 & galexy_abi::RECV_POLL != 0;
+    match crate::sched::task_recv(
+        Cap::from_bits(frame.rdi),
+        frame.rsi,
+        len as usize,
+        frame.r8,
+        poll,
+    ) {
         Ok(crate::sched::RecvOp::Park) => IoResult::Park,
         Ok(crate::sched::RecvOp::Eof) => IoResult::Done(SyscallResult::ok(0)),
         Ok(crate::sched::RecvOp::Ready { n, bytes, caps }) => {

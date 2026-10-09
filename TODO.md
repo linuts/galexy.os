@@ -2244,18 +2244,19 @@ Programs today get one 256-byte argument, no heap, pipes only, and
 
 The Milestone 53–54 follow-ons, finished.
 
-- [ ] **Ordered shutdown**: `shutdown` / `reboot` ask init over a
+- [x] **Ordered shutdown**: `shutdown` / `reboot` ask init over a
       channel; init Cap-kills seats, calls `sync`, then `Power`; the
       Power grant lives only on init
-- [ ] **Service table**: `restart | once | ignore` with backoff; a
+- [x] **Service table**: `restart | once | ignore` with backoff; a
       restart storm on a crashing seat backs off (`bin/test-init`
       asserts the delay)
-- [ ] **`svc status|start|stop|restart <name>`** over the channel;
+- [x] **`svc status|start|stop|restart <name>`** over the channel;
       operators never receive raw service Caps
-- [ ] **Session id**: audit lines carry the seat Cap debug id
-- [ ] **Config**: fixed table stays v1; `/etc/init` on galfs optional
-- [ ] **ABI freeze**: process Caps, `Map`, `Clock`, `Channel` move
-      from experimental to stable in the ABI table
+- [x] **Session id**: audit lines carry the seat Cap debug id
+- [x] **Config**: fixed table stays v1; `/etc/init` is not read
+- [x] **ABI freeze**: process Caps, `Map`, `Clock`, `Channel` (and
+      `wait` / `kill` / `send` / `recv`) are stable. `spawn` stays
+      experimental. No new syscall number. `MAX_PROC_CAPS` stays 16
 
 ### v1.0 gate
 
@@ -2507,10 +2508,15 @@ items stay here with rationale.
       Default is `-M q35`, ECAM, virtio 1.x + MSI-X, virtio-input.
       PS/2, PIO IDE on `-M pc`, the legacy virtio I/O BAR, and port
       PCI config stay as named fallbacks with one regression boot each
-- [ ] No user heap, no argv, no clock read, IPC is pipes only, one
-      pipeline shape, no background jobs — **Milestone 66**
-- [ ] Shutdown bypasses init; no service table or `svc`; session id is
-      not bound to the seat Cap — **Milestone 67**
+- [x] ~~No user heap, no argv, no clock read, IPC is pipes only, one
+      pipeline shape, no background jobs~~ — CLOSED by Milestone 66.
+      `Map` plus a `galexy-rt` bump allocator, NUL-separated argv,
+      `Clock`, capability channels, N-stage pipelines, and background
+      jobs (`jobs` / `fg`)
+- [x] ~~Shutdown bypasses init; no service table or `svc`; session id is
+      not bound to the seat Cap~~ — CLOSED by Milestone 67. `shutdown`
+      / `reboot` ask init; the service table is `restart | once |
+      ignore` with backoff; audit lines carry `id=<debug id>`
 - [x] ~~No `LICENSE` / `SECURITY.md` / `CHANGELOG.md`~~ — CLOSED by
       Milestone 51 (MIT; reporting + scope; one line per milestone PR)
 - [x] ~~Intermittent SMP hang under host load~~ — CLOSED by Milestone
@@ -2579,7 +2585,7 @@ items stay here with rationale.
       **Milestone 64**
 - [x] Modern platform (q35, ECAM, virtio 1.x, MSI-X, TSC-deadline) —
       **Milestone 65**
-- [ ] Userland completeness (heap, argv, clock, channels, jobs) —
+- [x] Userland completeness (heap, argv, clock, channels, jobs) —
       **Milestone 66**
-- [ ] Init owns shutdown and services; ABI freeze; `v1.0` gate —
-      **Milestone 67**
+- [x] Init owns shutdown and services; ABI freeze — **Milestone 67**
+      (`v1.0` tag stays a separate gate)
