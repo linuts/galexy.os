@@ -8,6 +8,12 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#83](https://github.com/linuts/galexy.os/pull/83) — M64 — release
+  images (`opt-level = 3`, fat LTO, debug assertions on); KVM when
+  `/dev/kvm` is writable; `bin/test-bench` and `docs/PERF.md`; virtio-blk
+  completes on INTx (`IO_BLOCK`) instead of a 10 M-spin; `SPAWN_WITH_CAPS`
+  moves pipe ends before the child runs; `show_tty` repaints changed rows.
+  PCID and a new heap allocator stay waived
 - [#81](https://github.com/linuts/galexy.os/pull/81) — M63 — SMEP, SMAP,
   and UMIP when the CPU reports them; user copies go through
   `arch::user_copy`; kernel KASLR stays inside P4 indexes 1..=24 (BIOS
