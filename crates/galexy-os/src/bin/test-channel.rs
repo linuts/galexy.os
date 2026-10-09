@@ -84,14 +84,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     sched::ramdisk::init(archive);
 
     let (self_region, _) = sched::spawn_user_task("selfchan", |gr| {
-        unsafe {
-            let p = mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>();
-            core::ptr::write_bytes(p, 0, 4096);
-            *p.add(MSG_AB as usize) = b'a';
-            *p.add(MSG_AB as usize + 1) = b'b';
-            *p.add(MSG_C as usize) = b'c';
-            *p.add(Z_BYTE as usize) = b'Z';
-        }
+        // The loader zeroes scratch after `build` returns. The blob
+        // plants `ab`, `c`, and `Z` itself.
         build_self(gr.scratch.as_u64())
     });
     let self_report: *const SelfReport = mm::frame_virt(self_region.scratch_phys).as_ptr();
@@ -204,6 +198,11 @@ fn build_self(scratch: u64) -> alloc::vec::Vec<u8> {
     code.push(0xEB);
     code.push(0);
     mov_r64_imm(&mut code, 15, scratch);
+    // Scratch is zero when the task starts. Plant the payloads there.
+    store_u8(&mut code, MSG_AB as i32, b'a');
+    store_u8(&mut code, MSG_AB as i32 + 1, b'b');
+    store_u8(&mut code, MSG_C as i32, b'c');
+    store_u8(&mut code, Z_BYTE as i32, b'Z');
 
     // channel
     mov_eax(&mut code, Syscall::Channel as u32);
@@ -393,4 +392,11 @@ fn store(code: &mut alloc::vec::Vec<u8>, reg: u8, disp: i32) {
     let modrm = 0x80 | (reg << 3) | 7;
     code.extend_from_slice(&[0x49, 0x89, modrm]);
     code.extend_from_slice(&disp.to_le_bytes());
+}
+
+/// `mov byte [r15+disp], imm`.
+fn store_u8(code: &mut alloc::vec::Vec<u8>, disp: i32, imm: u8) {
+    code.extend_from_slice(&[0x41, 0xC6, 0x87]);
+    code.extend_from_slice(&disp.to_le_bytes());
+    code.push(imm);
 }

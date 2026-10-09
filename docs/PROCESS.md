@@ -236,10 +236,11 @@ All three stay experimental until Milestone 67, beside `Map` and `Clock`.
 `Clock` reads the same monotonic millisecond counter as `Sleep`
 (`timer_ticks`). It takes no Cap and does not change `Sleep`.
 
-`Map` grows the calling task's heap: NX|RW|user pages at
-`USER_IMAGE_BASE + 512 MiB`, at most 32 pages. The return value is the
-base of the newly mapped pages. Past the budget is `NoResource`. Reap
-walks the task P4, so those frames come back with the rest of the tree.
+`Map` grows the calling task's heap: NX|RW|user pages 512 MiB above
+that task's image base (ramdisk ELFs: `USER_IMAGE_BASE + 512 MiB`), at
+most 32 pages. The return value is the base of the newly mapped pages.
+Past the budget is `NoResource`. Reap walks the task's own P4 slot, so
+those frames come back with the rest of the tree.
 `galexy-rt` bumps an allocator over that region; `dealloc` does not
 unmap. `SPAWN_NO_FG` (r10 bit 5) is how the shell starts a background
 job without making it the TTY's Ctrl-C target.

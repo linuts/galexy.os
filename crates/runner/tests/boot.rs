@@ -2535,7 +2535,9 @@ const USERLAND_KEYS: &[(&str, &str)] = &[
     ("e", "e"),
     ("a", "a"),
     ("d", "d"),
-    ("ret", "zed-66\n"),
+    // `zed-66` only. A kernel `Ns:` line can land between the payload
+    // and its newline, so the sync must not require `\n`.
+    ("ret", "zed-66"),
     ("u", "u"),
     ("p", "p"),
     ("t", "t"),
@@ -2598,7 +2600,7 @@ fn shell_userland_typing_e2e() {
         Duration::from_secs(180),
     );
     assert!(
-        serial.contains("zed-66\n"),
+        serial.matches("zed-66").count() >= 2,
         "pipeline did not print zed-66; serial:\n{serial}"
     );
     assert!(

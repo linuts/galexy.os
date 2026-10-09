@@ -2642,18 +2642,20 @@ pub(crate) fn task_map(pages: u64) -> Result<u64, SysError> {
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    let already = interrupts::without_interrupts(|| {
+    let (already, image) = interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
         let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
         if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
         }
-        Ok(thread.heap_pages)
+        // Ramdisk ELFs live at `USER_IMAGE_BASE`. Hand-built tasks use
+        // whichever P4 slot the loader picked. Reap walks only that slot.
+        Ok((thread.heap_pages, (thread.user_p4 as u64) << 39))
     })?;
     if u64::from(already).saturating_add(pages) > galexy_abi::USER_HEAP_PAGES {
         return Err(SysError::NoResource);
     }
-    let base = galexy_abi::USER_IMAGE_BASE + loader::USER_IMAGE_WINDOW + u64::from(already) * 4096;
+    let base = image + loader::USER_IMAGE_WINDOW + u64::from(already) * 4096;
     let mut mapped = 0u64;
     for i in 0..pages {
         let Some(frame) = mm::allocate_frame() else {

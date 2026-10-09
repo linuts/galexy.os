@@ -600,7 +600,8 @@ pub enum Syscall {
     /// Args: `RDI = page count` (`1..=`[`USER_HEAP_PAGES`]). No Cap.
     /// Returns: `SyscallResult` (rax = base virtual address of the new
     /// pages). Flags are present, writable, user, and no-execute. The
-    /// region starts at [`USER_IMAGE_BASE`] + 512 MiB and stops after
+    /// region starts 512 MiB above the task's image base — for a ramdisk
+    /// ELF that is [`USER_IMAGE_BASE`] — and stops after
     /// [`USER_HEAP_PAGES`]. Past that budget is `NoResource`. Reap
     /// returns every frame. There is no unmap.
     ///
