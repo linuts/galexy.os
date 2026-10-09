@@ -910,7 +910,9 @@ not free ramdisk bytes.
   syscall handoff, steals, and reapers serialize on it briefly — no nested
   locks. The IRQ gate is still part of every acquisition (a local
   `hlt`-sleeping CPU must not re-enter a held lock). Steal correctness
-  rides this lock; there is no separate migration lock.
+  rides this lock; there is no separate migration lock. The thread vec
+  grows with the lock dropped: that allocation can shoot down TLBs, and
+  the other CPU's timer is already inside `THREADS` with interrupts off.
 - **Login cool-down (`LOCKOUT`)** is a separate RAM table. Acquire it only
   when `THREADS` and the galfs table are not held. It is IRQ-gated. The
   deadline is absolute `timer_ticks` (Milestone 43).
