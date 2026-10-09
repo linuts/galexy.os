@@ -16,7 +16,7 @@ pub mod shootdown;
 
 pub use paging::{
     active_leaf_flags, frame_virt, free_user_tree, install_cr3, kernel_cr3,
-    map_kernel_page_broadcast, map_page, map_page_flags, on_kernel_tree, phys_to_virt,
+    map_kernel_page_broadcast, map_mmio, map_page, map_page_flags, on_kernel_tree, phys_to_virt,
     top_user_p4_index, top_user_p4_index_in, translate, translate_active, unmap_page, with_table,
     FreshL4, PageError, TaskFrameAlloc,
 };
@@ -93,6 +93,9 @@ pub fn init(boot_info: &BootInfo) {
     FREE_COUNT.store(free, Ordering::Relaxed);
     READY.store(true, Ordering::Relaxed);
     serial_println!("[mm] frame allocator ready: {} free frames", free);
+
+    // Shared L3 before any task or AP copies the kernel L4.
+    paging::reserve_mmio_window();
 
     // Virtual memory is up: bring the heap online too.
     heap::init();

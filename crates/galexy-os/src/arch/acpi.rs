@@ -124,6 +124,28 @@ pub struct PowerInfo {
 /// Parsed FADT power block. `None` before init, or when the firmware has no FADT.
 static POWER: Once<Option<PowerInfo>> = Once::new();
 
+/// One PCI Express ECAM window (segment 0) from the ACPI `MCFG` table.
+#[derive(Debug, Clone, Copy)]
+pub struct McfgWindow {
+    /// Physical base of the window for [`start_bus`].
+    pub base: u64,
+    /// First bus number this window covers.
+    pub start_bus: u8,
+    /// Last bus number this window covers, inclusive.
+    pub end_bus: u8,
+}
+
+/// `MCFG` window, or `None` when the firmware has no segment-0 ECAM.
+static MCFG: Once<Option<McfgWindow>> = Once::new();
+
+/// HPET register-block physical address, or `None` when the table is absent.
+static HPET_BASE: Once<Option<u64>> = Once::new();
+
+/// FADT `IAPC_BOOT_ARCH`, or `None` when the table is too short to carry it.
+///
+/// Bit 0 set means a legacy 8259 pair is present.
+static BOOT_ARCH: Once<Option<u16>> = Once::new();
+
 /// The parsed interrupt-controller table. Call after [`init`].
 pub fn madt() -> &'static Madt {
     MADT.get()
@@ -133,6 +155,25 @@ pub fn madt() -> &'static Madt {
 /// FADT shutdown/reset registers, if the firmware published a FADT.
 pub fn power_info() -> Option<&'static PowerInfo> {
     POWER.get().and_then(|slot| slot.as_ref())
+}
+
+/// PCIe ECAM window from `MCFG`, if the firmware published one for segment 0.
+pub fn mcfg() -> Option<&'static McfgWindow> {
+    MCFG.get().and_then(|slot| slot.as_ref())
+}
+
+/// HPET MMIO base, if the firmware published an `HPET` table in system memory.
+pub fn hpet_base() -> Option<u64> {
+    HPET_BASE.get().copied().flatten()
+}
+
+/// True when the FADT boot-arch flags report an 8259, or when the flags
+/// are missing (legacy machines are assumed to have one).
+pub fn has_8259() -> bool {
+    match BOOT_ARCH.get().copied().flatten() {
+        Some(flags) => flags & 1 != 0,
+        None => true,
+    }
 }
 
 /// Walks RSDP → XSDT/RSDT → MADT and publishes the result.
@@ -171,8 +212,31 @@ pub fn init(rsdp_phys: Option<u64>, phys_offset: u64) {
     }
     MADT.call_once(|| madt);
 
-    let power = find_table(root_phys, phys_offset, entry_size, root_sig, b"FACP")
-        .and_then(|fadt| parse_power(fadt, phys_offset));
+    let fadt_phys = find_table(root_phys, phys_offset, entry_size, root_sig, b"FACP");
+    let power = fadt_phys.and_then(|fadt| parse_power(fadt, phys_offset));
+    let boot_arch = fadt_phys.and_then(|fadt| parse_boot_arch(fadt, phys_offset));
+    if boot_arch.is_none() {
+        serial_println!("[acpi] boot-arch: 8259=assumed (no IAPC_BOOT_ARCH)");
+    }
+    let mcfg = find_table(root_phys, phys_offset, entry_size, root_sig, b"MCFG")
+        .and_then(|phys| parse_mcfg(phys, phys_offset));
+    if let Some(window) = mcfg {
+        serial_println!(
+            "[acpi] mcfg {:#x} buses {}-{}",
+            window.base,
+            window.start_bus,
+            window.end_bus
+        );
+    } else {
+        serial_println!("[acpi] no MCFG");
+    }
+    let hpet = find_table(root_phys, phys_offset, entry_size, root_sig, b"HPET")
+        .and_then(|phys| parse_hpet(phys, phys_offset));
+    if let Some(base) = hpet {
+        serial_println!("[acpi] hpet {:#x}", base);
+    } else {
+        serial_println!("[acpi] no HPET");
+    }
     if let Some(info) = power {
         serial_println!(
             "[acpi] power: pm1a {:#x}, pm1b {:#x}, s5 {}, reset {:#x}",
@@ -192,6 +256,9 @@ pub fn init(rsdp_phys: Option<u64>, phys_offset: u64) {
         panic!("acpi: power info parsed twice");
     }
     POWER.call_once(|| power);
+    BOOT_ARCH.call_once(|| boot_arch);
+    MCFG.call_once(|| mcfg);
+    HPET_BASE.call_once(|| hpet);
 }
 
 struct Rsdp {
@@ -388,6 +455,62 @@ fn parse_madt(phys: u64, phys_offset: u64) -> Madt {
         enabled_ids,
         overrides,
     }
+}
+
+/// `IAPC_BOOT_ARCH` at FADT offset 109. `None` when the table predates it.
+fn parse_boot_arch(fadt_phys: u64, phys_offset: u64) -> Option<u16> {
+    // SAFETY: the address came from the validated root table.
+    let fadt = unsafe { table_bytes(fadt_phys, phys_offset) };
+    if &fadt[0..4] != b"FACP" || fadt.len() < 111 {
+        return None;
+    }
+    let flags = le(fadt, 109, 2) as u16;
+    serial_println!(
+        "[acpi] boot-arch: 8259={} 8042={}",
+        if flags & 1 != 0 { "yes" } else { "no" },
+        if flags & 2 != 0 { "yes" } else { "no" }
+    );
+    Some(flags)
+}
+
+/// First segment-0 allocation in an `MCFG` table.
+fn parse_mcfg(phys: u64, phys_offset: u64) -> Option<McfgWindow> {
+    // SAFETY: the address came from the validated root table.
+    let bytes = unsafe { table_bytes(phys, phys_offset) };
+    if &bytes[0..4] != b"MCFG" || bytes.len() < 44 + 16 {
+        return None;
+    }
+    let mut off = 44;
+    while off + 16 <= bytes.len() {
+        let base = le(bytes, off, 8);
+        let segment = le(bytes, off + 8, 2);
+        let start_bus = bytes[off + 10];
+        let end_bus = bytes[off + 11];
+        if segment == 0 && base != 0 && start_bus <= end_bus {
+            return Some(McfgWindow {
+                base,
+                start_bus,
+                end_bus,
+            });
+        }
+        off += 16;
+    }
+    None
+}
+
+/// HPET base from the GAS at offset 40, when it is system memory.
+fn parse_hpet(phys: u64, phys_offset: u64) -> Option<u64> {
+    // SAFETY: the address came from the validated root table.
+    let bytes = unsafe { table_bytes(phys, phys_offset) };
+    if &bytes[0..4] != b"HPET" || bytes.len() < 52 {
+        return None;
+    }
+    // Address space 0 = system memory. Anything else is not an MMIO block.
+    if bytes[40] != 0 {
+        return None;
+    }
+    let base = le(bytes, 44, 8);
+    (base != 0).then_some(base)
 }
 
 /// Reads the FADT's power and reset registers, and `_S5_` out of its DSDT.

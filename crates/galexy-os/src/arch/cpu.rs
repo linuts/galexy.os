@@ -176,7 +176,7 @@ pub fn online() -> usize {
 ///
 /// EBX is parked in `r8` because it is callee-saved and cannot be an
 /// inline-asm constraint on x86_64.
-fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
+pub fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
     let ebx: u32;
     let ecx: u32;
     let edx: u32;

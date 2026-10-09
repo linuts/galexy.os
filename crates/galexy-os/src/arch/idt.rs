@@ -47,8 +47,9 @@ static IDT: LazyLock<Mutex<InterruptDescriptorTable>> = LazyLock::new(|| {
         .set_handler_fn(crate::arch::mm::shootdown::shootdown_handler);
     // Wake IPI: leave hlt so an idle CPU re-checks its runnable set.
     idt[apic::WAKE_VECTOR].set_handler_fn(wake_handler);
-    // Virtio-blk INTx (Milestone 64). MSI-X is Milestone 65.
+    // Virtio-blk completion (INTx or MSI-X) and virtio-input keys.
     idt[crate::drivers::virtio_blk::VIRTIO_VECTOR].set_handler_fn(virtio_blk_handler);
+    idt[crate::drivers::virtio_input::VECTOR].set_handler_fn(virtio_input_handler);
     Mutex::new(idt)
 });
 
@@ -119,13 +120,24 @@ extern "x86-interrupt" fn wake_handler(_stack_frame: InterruptStackFrame) {
     apic::eoi();
 }
 
-/// Virtio-blk INTx. Ack the device ISR before the I/O APIC EOI so a
-/// level line does not re-fire, then wake the parked requester.
+/// Virtio-blk completion. Ack the device, wake the parked requester, then
+/// EOI a level INTx. MSI-X is edge-triggered and skips the I/O APIC EOI.
 extern "x86-interrupt" fn virtio_blk_handler(_stack_frame: InterruptStackFrame) {
     crate::drivers::virtio_blk::ack_isr();
     crate::sched::wake_io_block();
     apic::eoi();
-    super::ioapic::eoi_level(crate::drivers::virtio_blk::VIRTIO_VECTOR);
+    if crate::drivers::virtio_blk::intx_routed() {
+        super::ioapic::eoi_level(crate::drivers::virtio_blk::VIRTIO_VECTOR);
+    }
+}
+
+/// Virtio-input key events. Same INTx-versus-MSI-X EOI split as virtio-blk.
+extern "x86-interrupt" fn virtio_input_handler(_stack_frame: InterruptStackFrame) {
+    crate::drivers::virtio_input::on_irq();
+    apic::eoi();
+    if crate::drivers::virtio_input::intx_routed() {
+        super::ioapic::eoi_level(crate::drivers::virtio_input::VECTOR);
+    }
 }
 
 /// Loads the SHARED IDT into THIS CPU's IDTR (AP bring-up).

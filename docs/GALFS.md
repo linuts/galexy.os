@@ -381,11 +381,11 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 
 ### Storage stack (Milestone 46 ✅)
 
-Legacy today, by the ROADMAP review: virtio-blk speaks the **legacy**
-PCI IO-BAR transport and completes on INTx (a missed line is noticed
-on the next timer tick). ATA is PIO and stays the legacy fallback.
-Milestone 65 adds virtio 1.x (PCI capabilities, MMIO BARs, MSI-X) on
-`-M q35` and keeps the paths below as fallbacks.
+Default attach is virtio 1.x on `-M q35` (PCI capabilities, MMIO BARs,
+MSI-X). A missed completion is noticed on the next timer tick. ATA PIO
+and the legacy virtio I/O BAR (`disable-modern=on`, serial line
+`legacy IO BAR`) stay as named fallbacks. The IDE matrix is one
+`-M pc` case (port PCI config, serial line `config via 0xCF8`).
 
 - **Landed:** `BlockDevice` + `ata::PrimarySlave` + IDENTIFY capacity;
   galfs via `disk()`; dual-slot size gate
@@ -417,7 +417,8 @@ Milestone 65 adds virtio 1.x (PCI capabilities, MMIO BARs, MSI-X) on
 | **45** ✅ | Capacity, blocks, ops, sync, quotas, host fsck, shares, single-indirect, crash injection, ATA I/O errors |
 | **46** ✅ | `BlockDevice`, capacity gate, flush matrix, legacy virtio-blk, partition offset |
 | **63** ✅ | Per-actor KDF cost in the actor record (GALF v12) |
-| **64 / 65** | IRQ completion; virtio 1.x + MSI-X on `q35`; IDE and legacy virtio as fallbacks |
+| **64** ✅ | virtio-blk parks on `IO_BLOCK`; completion IRQ (INTx then, MSI-X in 65) |
+| **65** ✅ | virtio 1.x + MSI-X on `q35`; IDE (`-M pc`) and legacy virtio as fallbacks |
 
 Demo limits above are the shipped contract (double-indirect and fsck
 repair-into-new-slot are follow-ons). New code must not invent a second

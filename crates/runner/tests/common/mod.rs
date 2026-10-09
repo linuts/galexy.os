@@ -86,7 +86,9 @@ fn apply_accel(cmd: &mut Command) {
     if kvm {
         cmd.arg("-accel").arg("kvm").arg("-cpu").arg("host");
     } else {
-        cmd.arg("-accel").arg("tcg").arg("-cpu").arg("max");
+        // `+x2apic` is the Milestone 65 MSR-path case. `max` already
+        // includes it; the flag keeps the test explicit.
+        cmd.arg("-accel").arg("tcg").arg("-cpu").arg("max,+x2apic");
     }
 }
 
@@ -104,13 +106,29 @@ pub fn use_kvm() -> bool {
 }
 
 fn qemu_command(img_path: &str, serial_path: &Path) -> Command {
+    qemu_command_opts(img_path, serial_path, "q35", true)
+}
+
+/// `machine` is `q35` (default) or `pc` (legacy IDE). `virtio_kbd` attaches
+/// `virtio-keyboard-pci`; without it the guest falls back to the i8042.
+fn qemu_command_opts(
+    img_path: &str,
+    serial_path: &Path,
+    machine: &str,
+    virtio_kbd: bool,
+) -> Command {
     let mut cmd = Command::new("qemu-system-x86_64");
-    cmd.arg("-drive")
+    cmd.arg("-M")
+        .arg(machine)
+        .arg("-drive")
         .arg(format!("format=raw,file={img_path}"))
         .arg("-snapshot")
         .arg("-smp")
         .arg("2");
     apply_accel(&mut cmd);
+    if virtio_kbd {
+        cmd.arg("-device").arg("virtio-keyboard-pci");
+    }
     cmd.arg("-display")
         .arg("none")
         .arg("-no-reboot")
@@ -155,8 +173,10 @@ impl GalfsDiskCache {
 pub enum GalfsBackend {
     /// Primary IDE slave (`if=ide,index=1`) — ATA PIO `PrimarySlave`.
     IdeSlave,
-    /// Virtio-blk PCI transitional (legacy IO BAR) — `drivers::virtio_blk`.
+    /// Virtio-blk PCI, virtio 1.x (modern + legacy both enabled).
     VirtioPci,
+    /// Virtio-blk PCI forced onto the legacy I/O BAR (`disable-modern=on`).
+    VirtioLegacy,
 }
 
 /// Like [`qemu_command`], but the boot drive uses a per-drive snapshot and
@@ -170,6 +190,12 @@ fn qemu_command_with_galfs(
     backend: GalfsBackend,
 ) -> Command {
     let mut cmd = Command::new("qemu-system-x86_64");
+    // PIO IDE exists on `-M pc` only. q35 is the default everywhere else.
+    let machine = match backend {
+        GalfsBackend::IdeSlave => "pc",
+        GalfsBackend::VirtioPci | GalfsBackend::VirtioLegacy => "q35",
+    };
+    cmd.arg("-M").arg(machine);
     cmd.arg("-drive").arg(format!(
         "format=raw,file={img_path},if=ide,index=0,snapshot=on"
     ));
@@ -181,17 +207,20 @@ fn qemu_command_with_galfs(
                 cache.as_qemu()
             ));
         }
-        GalfsBackend::VirtioPci => {
+        GalfsBackend::VirtioPci | GalfsBackend::VirtioLegacy => {
             cmd.arg("-drive").arg(format!(
                 "format=raw,file={},if=none,id=galfs,cache={}",
                 galfs_path.display(),
                 cache.as_qemu()
             ));
-            // Force legacy IO BAR so the guest virtio-blk driver can use
-            // the transitional register layout (no modern MMIO yet).
-            cmd.arg("-device").arg(
-                "virtio-blk-pci,drive=galfs,disable-legacy=off,disable-modern=on,queue-size=128",
-            );
+            let device = match backend {
+                GalfsBackend::VirtioLegacy => {
+                    "virtio-blk-pci,drive=galfs,disable-legacy=off,disable-modern=on,queue-size=128"
+                }
+                _ => "virtio-blk-pci,drive=galfs,disable-legacy=off,queue-size=128",
+            };
+            cmd.arg("-device").arg(device);
+            cmd.arg("-device").arg("virtio-keyboard-pci");
         }
     }
     cmd.arg("-smp").arg("2");
@@ -233,8 +262,21 @@ pub fn boot_with_galfs_cache(
     )
 }
 
+/// Like [`boot_with_galfs`], but forces the legacy virtio I/O BAR.
+pub fn boot_with_galfs_virtio_legacy(
+    image: &Image,
+) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
+    boot_with_galfs_inner(
+        image,
+        CorruptMode::None,
+        GalfsDiskCache::Writethrough,
+        GalfsBackend::VirtioLegacy,
+        GALFS_IMG_BYTES,
+    )
+}
+
 /// Like [`boot_with_galfs`], but attaches the data disk as virtio-blk-pci
-/// (legacy) instead of the IDE slave.
+/// (virtio 1.x) instead of the IDE slave.
 pub fn boot_with_galfs_virtio(
     image: &Image,
 ) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
@@ -609,7 +651,9 @@ pub fn uart_login_serial(image: &Image) -> String {
     let _ = std::fs::remove_file(&sock_path);
 
     let mut cmd = Command::new("qemu-system-x86_64");
-    cmd.arg("-drive")
+    cmd.arg("-M")
+        .arg("q35")
+        .arg("-drive")
         .arg(format!(
             "format=raw,file={},if=ide,index=0,snapshot=on",
             image.bios
@@ -617,6 +661,7 @@ pub fn uart_login_serial(image: &Image) -> String {
         .arg("-smp")
         .arg("2");
     apply_accel(&mut cmd);
+    cmd.arg("-device").arg("virtio-keyboard-pci");
     let mut child = cmd
         .arg("-display")
         .arg("none")
@@ -912,6 +957,28 @@ pub fn boot_and_type(
     boot_and_type_on(
         image.bios.clone(),
         false,
+        true,
+        sync_pairs,
+        ready_marker,
+        final_marker,
+        key_delay,
+        timeout,
+    )
+}
+
+/// Like [`boot_and_type`], but with no virtio-keyboard so QMP keys hit the i8042.
+pub fn boot_and_type_ps2(
+    image: &Image,
+    sync_pairs: &[(&str, &str)],
+    ready_marker: &str,
+    final_marker: &str,
+    key_delay: Duration,
+    timeout: Duration,
+) -> String {
+    boot_and_type_on(
+        image.bios.clone(),
+        false,
+        false,
         sync_pairs,
         ready_marker,
         final_marker,
@@ -932,6 +999,7 @@ pub fn boot_and_type_uefi(
 ) -> String {
     boot_and_type_on(
         image.uefi.clone(),
+        true,
         true,
         sync_pairs,
         ready_marker,
@@ -967,9 +1035,11 @@ impl std::ops::DerefMut for KillOnDrop {
 
 /// Shared body: boots `img_path` (BIOS unless `uefi`, which adds `-bios
 /// OVMF`), QMP monitor attached, types with per-key echo syncs.
+#[allow(clippy::too_many_arguments)]
 fn boot_and_type_on(
     img_path: String,
     uefi: bool,
+    virtio_kbd: bool,
     sync_pairs: &[(&str, &str)],
     ready_marker: &str,
     final_marker: &str,
@@ -986,7 +1056,7 @@ fn boot_and_type_on(
     ));
     let _ = std::fs::remove_file(&sock);
 
-    let mut cmd = qemu_command(&img_path, &serial_path);
+    let mut cmd = qemu_command_opts(&img_path, &serial_path, "q35", virtio_kbd);
     if uefi {
         const OVMF_FD_DEFAULT: &str = "/usr/share/ovmf/x64/OVMF.4m.fd";
         let ovmf_fd = std::env::var("OVMF_FD").unwrap_or_else(|_| OVMF_FD_DEFAULT.into());

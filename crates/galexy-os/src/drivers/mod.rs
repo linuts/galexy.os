@@ -12,3 +12,5 @@ pub mod pci;
 pub mod screen;
 pub mod serial;
 pub mod virtio_blk;
+pub mod virtio_input;
+pub mod virtio_pci;

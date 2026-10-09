@@ -4,10 +4,11 @@
 mod common;
 
 use common::{
-    boot, boot_and_type, boot_and_type_uefi, boot_galfs_once, boot_liveness, boot_uefi,
-    boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
-    boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio,
-    image, uart_login_serial, use_kvm, GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
+    boot, boot_and_type, boot_and_type_ps2, boot_and_type_uefi, boot_galfs_once, boot_liveness,
+    boot_uefi, boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache,
+    boot_with_galfs_crash, boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn,
+    boot_with_galfs_virtio, boot_with_galfs_virtio_legacy, image, uart_login_serial, use_kvm,
+    GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
 };
 use std::time::Duration;
 
@@ -172,10 +173,57 @@ fn apic_test_passes() {
         serial.contains("[apic] lapic up"),
         "LAPIC enable marker missing; serial:\n{serial}"
     );
+    // `-cpu max,+x2apic` requests the MSR path. TCG keeps the bit only when
+    // the accelerator implements x2APIC (QEMU 9+). Older TCG strips it and
+    // the guest must stay on xAPIC. `bin/test-apic` asserts that match.
+    if serial.contains("[apic] x2apic enabled") {
+        assert!(
+            serial.contains("detected mode: X2Apic"),
+            "x2APIC was enabled but the guest stayed off the MSR path; serial:\n{serial}"
+        );
+    } else {
+        assert!(
+            serial.contains("[apic] x2apic not enumerated"),
+            "missing x2APIC decision; serial:\n{serial}"
+        );
+        assert!(
+            serial.contains("detected mode: XApic"),
+            "no x2APIC bit must stay on MMIO; serial:\n{serial}"
+        );
+    }
+    // TSC-deadline is selected when CPUID.1 ECX bit 24 is set. Current QEMU
+    // TCG does not enumerate that bit, so the suite observes one-shot mode.
+    // `bin/test-apic` checks the LVT against the same bit.
+    if serial.contains("timer tsc-deadline") {
+        assert!(
+            serial.contains("timer ticking"),
+            "TSC-deadline timer did not fire; serial:\n{serial}"
+        );
+    } else {
+        assert!(
+            serial.contains("timer oneshot"),
+            "one-shot timer was not selected; serial:\n{serial}"
+        );
+    }
     assert!(
-        serial.contains("detected mode: XApic"),
-        "LAPIC mode detection marker missing; serial:\n{serial}"
+        serial.contains("[pci] ecam"),
+        "q35 boot must use PCIe ECAM; serial:\n{serial}"
     );
+    assert!(
+        serial.contains("[kbd] virtio-input"),
+        "virtio-keyboard was not claimed; serial:\n{serial}"
+    );
+    if serial.contains("8259=no") {
+        assert!(
+            serial.contains("remap skipped"),
+            "FADT reported no 8259 but the PIC was remapped; serial:\n{serial}"
+        );
+    } else {
+        assert!(
+            serial.contains("remapped + fully masked"),
+            "8259 present or assumed must be remapped and masked; serial:\n{serial}"
+        );
+    }
 }
 
 #[test]
@@ -793,7 +841,13 @@ fn paths_test_passes() {
 
 #[test]
 fn galfs_disk_persists_across_reboot() {
-    assert_galfs_disk_persists(boot_with_galfs(&image("test-galfs-disk")), "writethrough");
+    let result = boot_with_galfs(&image("test-galfs-disk"));
+    assert!(
+        result.1.contains("[pci] config via 0xCF8"),
+        "IDE slave matrix must stay on -M pc (no MCFG); serial:\n{}",
+        result.1
+    );
+    assert_galfs_disk_persists(result, "writethrough");
 }
 
 /// Guest FLUSH CACHE must make the inactive-slot commit durable when the
@@ -815,15 +869,39 @@ fn galfs_disk_persists_none_cache() {
     );
 }
 
-/// Persistence via virtio-blk-pci (legacy) instead of the IDE slave.
+/// Persistence via virtio-blk-pci (virtio 1.x, MSI-X) on `-M q35`.
 #[test]
 fn galfs_disk_persists_virtio_blk() {
     let (code1, serial1, img, code2, serial2) = boot_with_galfs_virtio(&image("test-galfs-disk"));
     assert!(
-        serial1.contains("[virtio-blk] ready"),
-        "guest must bind virtio-blk; serial:\n{serial1}"
+        serial1.contains("[pci] ecam"),
+        "virtio disk boot must use ECAM; serial:\n{serial1}"
+    );
+    assert!(
+        serial1.contains("[virtio-blk] virtio 1.x ready"),
+        "guest must bind virtio 1.x; serial:\n{serial1}"
+    );
+    assert!(
+        serial1.contains("msi-x"),
+        "virtio-blk must take MSI-X; serial:\n{serial1}"
     );
     assert_galfs_disk_persists((code1, serial1, img, code2, serial2), "virtio-pci");
+}
+
+/// Legacy I/O BAR remains a named fallback when modern virtio is disabled.
+#[test]
+fn galfs_disk_persists_virtio_legacy() {
+    let (code1, serial1, img, code2, serial2) =
+        boot_with_galfs_virtio_legacy(&image("test-galfs-disk"));
+    assert!(
+        serial1.contains("legacy IO BAR"),
+        "legacy virtio path must name itself; serial:\n{serial1}"
+    );
+    assert!(
+        !serial1.contains("virtio 1.x ready"),
+        "disable-modern must not take the 1.x path; serial:\n{serial1}"
+    );
+    assert_galfs_disk_persists((code1, serial1, img, code2, serial2), "virtio-legacy");
 }
 
 /// GALF dual slots start at LBA 2048 — absolute LBA 0 stays empty.
@@ -2660,6 +2738,10 @@ fn shell_help_typing_e2e() {
         Duration::from_millis(30),
         Duration::from_secs(90),
     );
+    assert!(
+        serial.contains("[kbd] virtio-input"),
+        "QMP typing must land on virtio-input; serial:\n{serial}"
+    );
     assert_passwords_masked(&serial);
     assert!(
         serial.contains("change the default password"),
@@ -2694,6 +2776,28 @@ fn shell_help_typing_e2e() {
     assert!(
         serial.contains("default admin/admin must passwd"),
         "typed `help` missing notes; serial:\n{serial}"
+    );
+}
+
+/// Username plus Enter on the i8042, so QMP is not only hitting virtio-input.
+/// `Password:` cannot be spelled by the boot log, unlike a single letter.
+#[test]
+fn shell_ps2_typing_e2e() {
+    let serial = boot_and_type_ps2(
+        &image("galexy-os"),
+        &LOGIN_ADMIN_KEYS[..6],
+        "[boot] main loop ready",
+        "Password: ",
+        Duration::from_millis(30),
+        Duration::from_secs(90),
+    );
+    assert!(
+        serial.contains("[kbd] ps/2 i8042"),
+        "PS/2 fallback was not selected; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[kbd] virtio-input"),
+        "PS/2 boot must not claim virtio-input; serial:\n{serial}"
     );
 }
 

@@ -1340,8 +1340,8 @@ Multi-user usage beyond one admin and ad-hoc grants.
 ## Milestone 46 — Storage stack ✅
 
 Reviewers will ask how storage grows past QEMU's secondary IDE. Every
-box below landed; modern virtio (PCI capabilities, MSI-X, IRQ
-completion) is Milestone 65.
+box below landed; modern virtio (PCI capabilities, MSI-X) landed in
+Milestone 65. IRQ completion landed in Milestone 64.
 
 - [x] **Device abstraction**: `BlockDevice` trait (read/write sectors,
       flush, capacity) with ATA PIO `PrimarySlave` as the first impl;
@@ -2171,37 +2171,40 @@ profiled. Make speed a number before changing anything.
       CR3 or `alloc` on a hot path; the decision is recorded in
       `PERF.md`
 
-## Milestone 65 — Modern platform (legacy paths become fallbacks)
+## Milestone 65 — Modern platform (legacy paths become fallbacks) ✅
 
 Today: PIT calibration, remapped 8259, PS/2 i8042, PIO IDE, legacy
 virtio over an IO BAR, port-based PCI config. Target: ACPI + x2APIC +
 TSC-deadline + PCIe ECAM + virtio 1.x with MSI-X on `-M q35`, and the
 legacy paths kept only where the platform has nothing else.
 
-- [ ] **q35 default**: runner and `cargo run` boot `-M q35`; the IDE
+- [x] **q35 default**: runner and `cargo run` boot `-M q35`; the IDE
       slave matrix survives as one `-M pc` legacy regression case
-- [ ] **PCIe ECAM**: parse ACPI `MCFG`; PCI config through MMIO; the
+- [x] **PCIe ECAM**: parse ACPI `MCFG`; PCI config through MMIO; the
       0xCF8/0xCFC path only when `MCFG` is absent
-- [ ] **virtio 1.x (modern)**: PCI capability structures (common /
+- [x] **virtio 1.x (modern)**: PCI capability structures (common /
       notify / ISR / device cfg), MMIO BARs, `VIRTIO_F_VERSION_1`
       negotiation; the runner drops `disable-modern=on`; the legacy
       IO-BAR path remains as a fallback with a serial line naming it
-- [ ] **MSI-X** for virtio-blk; INTx fallback
-- [ ] **virtio-input keyboard**: same `keyboard::enqueue` path; PS/2
+- [x] **MSI-X** for virtio-blk; INTx fallback
+- [x] **virtio-input keyboard**: same `keyboard::enqueue` path; PS/2
       i8042 is the fallback when no virtio-input device is present;
       the QMP typing e2e runs on both
-- [ ] **Timer source**: LAPIC calibration from CPUID 0x15 / 0x16 when
+- [x] **Timer source**: LAPIC calibration from CPUID 0x15 / 0x16 when
       present, else ACPI `HPET`, else PIT; **TSC-deadline** mode when
       CPUID.1 ECX bit 24; `IDLE_MAX_MS` / quantum numbers unchanged
-      (SCHEDULING freeze holds)
-- [ ] **8259**: mask only; skip the remap when the FADT boot-arch flags
+      (SCHEDULING freeze holds). QEMU TCG does not enumerate bit 24, so
+      the suite observes the measured HPET one-shot; `bin/test-apic`
+      checks the LVT against the bit
+- [x] **8259**: mask only; skip the remap when the FADT boot-arch flags
       report no 8259
-- [ ] **x2APIC preferred**: enable when CPUID reports it; `bin/test-apic`
-      asserts the MSR path under `-cpu max,+x2apic`
-- [ ] **PC speaker**: stays the only audio path (no virtio-sound);
+- [x] **x2APIC preferred**: enable when CPUID reports it; `bin/test-apic`
+      asserts the MSR path under `-cpu max,+x2apic`. QEMU TCG through
+      8.2 drops the bit, and the same test then requires the xAPIC path
+- [x] **PC speaker**: stays the only audio path (no virtio-sound);
       feature `pc-speaker` default on; documented as the one remaining
       PIT user
-- [ ] **Stated non-goals**: 5-level paging, huge user pages, USB, GPU
+- [x] **Stated non-goals**: 5-level paging, huge user pages, USB, GPU
       beyond the GOP framebuffer, network (Phase 10)
 
 ## Milestone 66 — Userland completeness
@@ -2498,9 +2501,12 @@ items stay here with rationale.
       (timer tick if the line is missed). ATA PIO stays the legacy
       fallback. `echo` / `cat -` receive the pipe at spawn
       (`SPAWN_WITH_CAPS`)
-- [ ] Legacy platform paths are the only paths: PIT calibration,
+- [x] ~~Legacy platform paths are the only paths: PIT calibration,
       remapped 8259, PS/2 i8042, PIO IDE, legacy virtio IO BAR,
-      port-based PCI config, `-M pc` — **Milestone 65**
+      port-based PCI config, `-M pc`~~ — CLOSED by Milestone 65.
+      Default is `-M q35`, ECAM, virtio 1.x + MSI-X, virtio-input.
+      PS/2, PIO IDE on `-M pc`, the legacy virtio I/O BAR, and port
+      PCI config stay as named fallbacks with one regression boot each
 - [ ] No user heap, no argv, no clock read, IPC is pipes only, one
       pipeline shape, no background jobs — **Milestone 66**
 - [ ] Shutdown bypasses init; no service table or `svc`; session id is
@@ -2571,7 +2577,7 @@ items stay here with rationale.
       **Milestone 63** (Phase 9)
 - [x] Fast path (bench, KVM, release profile, IRQ completion) —
       **Milestone 64**
-- [ ] Modern platform (q35, ECAM, virtio 1.x, MSI-X, TSC-deadline) —
+- [x] Modern platform (q35, ECAM, virtio 1.x, MSI-X, TSC-deadline) —
       **Milestone 65**
 - [ ] Userland completeness (heap, argv, clock, channels, jobs) —
       **Milestone 66**

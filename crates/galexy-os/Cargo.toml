@@ -4,9 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
+default = ["pc-speaker"]
 # Idle-steal tracing. Off in production images; the one-line reap count
 # stays in every build because the suite treats it as lifecycle evidence.
 verbose-sched = []
+# PC speaker (PIT channel 2). The only audio path and the only PIT user
+# after boot. On by default; there is no virtio-sound.
+pc-speaker = []
 
 [dependencies]
 bootloader_api = "0.11"

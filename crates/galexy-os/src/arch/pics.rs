@@ -1,17 +1,15 @@
-//! Legacy 8259 PIC: kept quiet, not removed.
+//! Legacy 8259 PIC: masked, not a delivery path.
 //!
-//! Since the APIC work (M17), ALL interrupt delivery is APIC: the LAPIC
-//! timer carries the timer vector, the I/O APIC routes the keyboard. The
-//! 8259 pair still physically exists on BIOS boots (SeaBIOS leaves it in
-//! whatever state it likes) — an UNMASKED legacy line would assert its IRQ
-//! on the PIC, never get an EOI in PIC terms, and steal/double-deliver.
-//! So: remap (keeps the vectors well-defined) and fully mask BOTH 8259s.
-//! The controller stays here, quiet, for real-hardware boots where the
-//! I/O APIC might be absent (falling back to PIC delivery is future work).
+//! When the FADT `IAPC_BOOT_ARCH` bit 0 says the pair is present, remap
+//! then mask both controllers so a BIOS-left line cannot assert. When the
+//! flag says there is no 8259, skip the remap and only write the mask
+//! ports. Delivery is the APIC either way.
 
 use pic8259::ChainedPics;
 use spin::{LazyLock, Mutex};
+use x86_64::instructions::port::Port;
 
+use crate::arch::acpi;
 use crate::serial_println;
 
 /// Base vector for the primary PIC's IRQs.
@@ -37,15 +35,22 @@ static PICS: LazyLock<Mutex<ChainedPics>> = LazyLock::new(|| {
 /// belongs to the KEYBOARD driver now (see `drivers/keyboard::init`) — it
 /// is about the i8042, not about which controller delivers its line.
 pub fn init() {
-    // SAFETY: done once at boot, before any interrupts are enabled.
-    unsafe {
-        let mut pics = PICS.lock();
-        pics.initialize();
-        // The OCW1 masks are whatever the BIOS left (SeaBIOS runs a POLLED
-        // keyboard); don't rely on the inherited state. ALL lines masked:
-        // the APIC family owns delivery now; masked lines never assert, so
-        // there are no lost-EOI ghosts and no double delivery.
-        pics.write_masks(0b1111_1111, 0b1111_1111);
+    if acpi::has_8259() {
+        // SAFETY: done once at boot, before any interrupts are enabled.
+        unsafe {
+            let mut pics = PICS.lock();
+            pics.initialize();
+            // ALL lines masked: the APIC family owns delivery.
+            pics.write_masks(0b1111_1111, 0b1111_1111);
+        }
+        serial_println!("[pics] legacy 8259s remapped + fully masked (APIC delivers)");
+    } else {
+        // No ICW sequence. Mask ports only, in case the decode still exists.
+        // SAFETY: fixed 8259 data ports; writes are ignored when no PIC is there.
+        unsafe {
+            Port::<u8>::new(0x21).write(0xFF);
+            Port::<u8>::new(0xA1).write(0xFF);
+        }
+        serial_println!("[pics] 8259 absent (FADT boot-arch); mask only, remap skipped");
     }
-    serial_println!("[pics] legacy 8259s remapped + fully masked (APIC delivers)");
 }

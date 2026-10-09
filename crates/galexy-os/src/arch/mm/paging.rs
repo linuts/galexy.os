@@ -156,6 +156,80 @@ pub fn map_page(page: Page<Size4KiB>, frame: PhysFrame<Size4KiB>) -> Result<(), 
     map_page_flags(page, frame, flags)
 }
 
+/// P4 index of the shared kernel MMIO window (ECAM, virtio BARs, HPET).
+///
+/// 200 is the LAPIC, 201 the I/O APIC. KASLR stays in 1..=24. The L3 is
+/// installed before any task tree is cloned so later pages under this
+/// index are visible on every CPU and every FreshL4 (the L3 frame is shared).
+const MMIO_P4: usize = 203;
+
+/// Installs an empty L3 at [`MMIO_P4`] in the kernel page table.
+///
+/// Call once from `mm::init`, before any task or AP table is copied.
+pub fn reserve_mmio_window() {
+    let frame = super::allocate_frame().expect("mmio window frame");
+    let bytes = frame_virt(frame.start_address());
+    // SAFETY: the frame just came from the allocator and is not mapped.
+    unsafe {
+        core::ptr::write_bytes(bytes.as_mut_ptr::<u8>(), 0, 4096);
+    }
+    let root = kernel_cr3().start_address();
+    let l4 = phys_offset() + root.as_u64();
+    // SAFETY: the kernel L4 is the boot table, exclusive at this point
+    // (no other CPU, no task tree). Bit 0 and 1 are PRESENT | WRITABLE.
+    unsafe {
+        let table = l4.as_mut_ptr::<u64>();
+        let entry = root_entry_if_empty(table.add(MMIO_P4));
+        assert_eq!(entry, 0, "mmio window p4 {} is already occupied", MMIO_P4);
+        table
+            .add(MMIO_P4)
+            .write_volatile(frame.start_address().as_u64() | 0x3);
+    }
+    serial_println!("[mm] mmio window at p4 {}", MMIO_P4);
+}
+
+fn root_entry_if_empty(ptr: *const u64) -> u64 {
+    // SAFETY: caller holds the kernel L4 and `ptr` is one of its slots.
+    unsafe { ptr.read_volatile() }
+}
+
+/// Next free page index inside the MMIO window.
+static MMIO_NEXT: AtomicU64 = AtomicU64::new(0);
+
+/// Maps `len` bytes of device memory at `phys` into the kernel MMIO window.
+///
+/// Returns the virtual address of `phys` (page-aligned base plus the
+/// page offset). Pages are uncached. `reserve_mmio_window` must already
+/// have run.
+pub fn map_mmio(phys: u64, len: usize) -> VirtAddr {
+    assert!(len > 0, "mmio map of zero bytes");
+    assert!(len <= 16 * 1024 * 1024, "mmio map larger than 16 MiB");
+    let start = phys & !0xFFF;
+    let end = (phys.saturating_add(len as u64).saturating_add(0xFFF)) & !0xFFF;
+    let pages = (end - start) / 4096;
+    let slot = MMIO_NEXT.fetch_add(pages, Ordering::Relaxed);
+    assert!(
+        slot.saturating_add(pages) < (1 << 18),
+        "mmio window exhausted"
+    );
+    let virt_base = (MMIO_P4 as u64) << 39 | (slot * 4096);
+    let flags = PageTableFlags::PRESENT
+        | PageTableFlags::WRITABLE
+        | PageTableFlags::NO_EXECUTE
+        | PageTableFlags::NO_CACHE;
+    for i in 0..pages {
+        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(virt_base + i * 4096));
+        let frame = PhysFrame::from_start_address(PhysAddr::new(start + i * 4096))
+            .expect("mmio frame alignment");
+        match map_page_flags(page, frame, flags) {
+            Ok(()) => {}
+            Err(PageError::AlreadyMapped) => {}
+            Err(e) => panic!("mmio map failed: {e:?}"),
+        }
+    }
+    VirtAddr::new(virt_base + (phys & 0xFFF))
+}
+
 /// Maps `frame` to `page` with explicit flags (the USER_ACCESSIBLE / NX
 /// permutation space user tasks need).
 pub fn map_page_flags(
