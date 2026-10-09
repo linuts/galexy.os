@@ -8,11 +8,11 @@
 
 use core::sync::atomic::{AtomicI8, AtomicU64, AtomicU8, Ordering};
 
+use crate::sync::Mutex;
 use galexy_core::Ring;
 use pc_keyboard::{
     layouts, DecodedKey, HandleControl, KeyCode, KeyState, PS2Keyboard, ScancodeSet1,
 };
-use spin::Mutex;
 use x86_64::instructions::port::Port;
 
 /// How many text consoles F1–F12 select.

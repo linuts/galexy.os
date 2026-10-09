@@ -23,8 +23,8 @@ pub use paging::{
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use crate::sync::Mutex;
 use galexy_core::Bitmap;
-use spin::Mutex;
 use x86_64::structures::paging::{PhysFrame, Size4KiB};
 use x86_64::PhysAddr;
 

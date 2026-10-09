@@ -19,12 +19,12 @@ pub mod pipe;
 pub mod ramdisk;
 pub mod syscalls;
 
+use crate::sync::Mutex;
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
-use spin::Mutex;
 use x86_64::instructions::interrupts;
 use x86_64::structures::paging::{Mapper, Page, PageTableFlags, PhysFrame, Size4KiB};
 use x86_64::{PhysAddr, VirtAddr};
@@ -1513,20 +1513,37 @@ fn format_inspect_line(dst: &mut [u8], id: u64, name: &str, state: &str) -> usiz
 
 /// `(name, ticks)` for every RUNNING thread. The name is copied so the
 /// status bar can format it after the table lock drops.
+///
+/// Nothing allocates while `THREADS` is held: the names land in a
+/// fixed-size stack snapshot under the lock, and the `String`s are built
+/// after it drops. This is the 1 Hz status-bar path; an allocation that
+/// grew the heap under `THREADS` is what wedged `passwd` (galexy.os#86).
+/// The lock relax now acks shootdowns regardless, but the hot path should
+/// not depend on the safety net.
 pub fn thread_stats() -> alloc::vec::Vec<(alloc::string::String, u64)> {
-    interrupts::without_interrupts(|| {
-        THREADS
-            .lock()
+    let mut snap: [([u8; NAME_CAP], u8, u64); MAX_THREADS] = [([0; NAME_CAP], 0, 0); MAX_THREADS];
+    let count = interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let mut n = 0;
+        for t in threads
             .iter()
             .filter(|t| t.state.load(Ordering::Relaxed) == STATE_RUNNING)
-            .map(|t| {
-                (
-                    alloc::string::String::from(t.name()),
-                    t.ticks.load(Ordering::Relaxed),
-                )
-            })
-            .collect()
-    })
+        {
+            if n == snap.len() {
+                break;
+            }
+            snap[n] = (t.name_bytes, t.name_len, t.ticks.load(Ordering::Relaxed));
+            n += 1;
+        }
+        n
+    });
+    snap[..count]
+        .iter()
+        .map(|(bytes, len, ticks)| {
+            let name = core::str::from_utf8(&bytes[..*len as usize]).unwrap_or("");
+            (alloc::string::String::from(name), *ticks)
+        })
+        .collect()
 }
 
 /// Is any RUNNING thread registered under `name`?
@@ -4070,30 +4087,34 @@ pub(crate) fn task_passwd(name: Option<&str>, password: &[u8]) -> Result<(), Sys
         return Err(SysError::BadCap);
     }
     let mut name_buf = [0u8; 32];
-    let name_len = interrupts::without_interrupts(|| {
+    // Resolve the target and whether it is the caller's own account under
+    // one THREADS hold. The caller's root is fixed for the life of the
+    // session, so the flag read here is still valid after the KDF.
+    let (name_len, own_account, fs_root) = interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
         let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
         if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
             return Err(SysError::BadCap);
         }
+        if thread.fs_root == galfs::NO_OBJECT {
+            return Err(SysError::AccessDenied);
+        }
         let is_admin = admin_caller(thread.fs_root, &thread.fs_tokens);
+        let mut self_name = [0u8; 32];
+        let self_len = galfs::name_of_root(thread.fs_root, &mut self_name)?;
         if let Some(n) = name {
-            if !is_admin {
-                let nlen = galfs::name_of_root(thread.fs_root, &mut name_buf)?;
-                if &name_buf[..nlen] != n.as_bytes() {
-                    return Err(SysError::AccessDenied);
-                }
+            let own = &self_name[..self_len] == n.as_bytes();
+            if !is_admin && !own {
+                return Err(SysError::AccessDenied);
             }
             if n.len() > name_buf.len() {
                 return Err(SysError::BadValue);
             }
             name_buf[..n.len()].copy_from_slice(n.as_bytes());
-            Ok(n.len())
+            Ok((n.len(), own, thread.fs_root))
         } else {
-            if thread.fs_root == galfs::NO_OBJECT {
-                return Err(SysError::AccessDenied);
-            }
-            galfs::name_of_root(thread.fs_root, &mut name_buf)
+            name_buf[..self_len].copy_from_slice(&self_name[..self_len]);
+            Ok((self_len, true, thread.fs_root))
         }
     })?;
     let name_str = core::str::from_utf8(&name_buf[..name_len]).map_err(|_| SysError::BadValue)?;
@@ -4102,18 +4123,18 @@ pub(crate) fn task_passwd(name: Option<&str>, password: &[u8]) -> Result<(), Sys
         return Err(err);
     }
     serial_println!("[auth] passwd user={}", name_str);
-    interrupts::without_interrupts(|| {
-        let mut threads = THREADS.lock();
-        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-        let mut self_name = [0u8; 32];
-        let Ok(n) = galfs::name_of_root(thread.fs_root, &mut self_name) else {
-            return Ok(());
-        };
-        if &self_name[..n] == name_str.as_bytes() {
-            thread.must_change = galfs::actor_must_change(thread.fs_root);
-        }
-        Ok(())
-    })
+    if own_account {
+        // Clearing the gate re-reads galfs (TABLE) BEFORE taking THREADS:
+        // one lock at a time on the IF=0 syscall path.
+        let must_change = galfs::actor_must_change(fs_root);
+        interrupts::without_interrupts(|| {
+            let mut threads = THREADS.lock();
+            if let Some(thread) = threads.get_mut(slot - 1) {
+                thread.must_change = must_change;
+            }
+        });
+    }
+    Ok(())
 }
 
 /// Deletes an empty actor. Refuses admin and roots still in use.

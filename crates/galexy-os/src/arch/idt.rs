@@ -1,6 +1,7 @@
 //! Interrupt Descriptor Table: fault and device interrupt handlers.
 
-use spin::{LazyLock, Mutex};
+use crate::sync::Mutex;
+use spin::LazyLock;
 use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::VirtAddr;

@@ -6,8 +6,8 @@
 //!
 //! Serial lines name the actor and TTY only — never a password.
 
+use crate::sync::Mutex;
 use galexy_core::{LoginLockout, LOCKOUT_COOLDOWN_MS, LOCKOUT_MAX_FAILS};
-use spin::Mutex;
 use x86_64::instructions::interrupts;
 
 use crate::serial_println;

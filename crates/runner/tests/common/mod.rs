@@ -1055,6 +1055,84 @@ fn boot_and_type_on(
     timeout: Duration,
 ) -> String {
     let serial_path = serial_log_path("typing");
+    let mut cmd = qemu_command_opts(&img_path, &serial_path, "q35", virtio_kbd);
+    if uefi {
+        const OVMF_FD_DEFAULT: &str = "/usr/share/ovmf/x64/OVMF.4m.fd";
+        let ovmf_fd = std::env::var("OVMF_FD").unwrap_or_else(|_| OVMF_FD_DEFAULT.into());
+        cmd.arg("-bios").arg(ovmf_fd);
+    }
+    boot_and_type_cmd(
+        cmd,
+        &serial_path,
+        sync_pairs,
+        ready_marker,
+        final_marker,
+        key_delay,
+        timeout,
+    )
+}
+
+/// Like [`boot_and_type`], but with `galfs_path` attached as the virtio-blk
+/// data disk WITHOUT a snapshot: the guest's commits persist, so a second
+/// call with the same path boots the volume the first one wrote. This is
+/// the production `cargo run` shape (`-M q35`, virtio-blk, virtio-keyboard,
+/// 2 CPUs) driven by typed keys — the interactive path a test kernel never
+/// takes (galexy.os#86).
+#[allow(clippy::too_many_arguments)]
+pub fn boot_and_type_galfs(
+    image: &Image,
+    galfs_path: &Path,
+    sync_pairs: &[(&str, &str)],
+    ready_marker: &str,
+    final_marker: &str,
+    key_delay: Duration,
+    timeout: Duration,
+) -> String {
+    let serial_path = serial_log_path("typing-galfs");
+    let cmd = qemu_command_with_galfs(
+        &image.bios,
+        galfs_path,
+        &serial_path,
+        GalfsDiskCache::Writethrough,
+        GalfsBackend::VirtioPci,
+    );
+    boot_and_type_cmd(
+        cmd,
+        &serial_path,
+        sync_pairs,
+        ready_marker,
+        final_marker,
+        key_delay,
+        timeout,
+    )
+}
+
+/// Fresh zeroed galfs image for a typing test (same size the runner's
+/// `cargo run` creates).
+pub fn fresh_galfs_image(tag: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "galexy-galfs-{tag}-{}-{}.img",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::write(&path, vec![0u8; GALFS_IMG_BYTES]).expect("create galfs image");
+    path
+}
+
+/// The typing engine behind [`boot_and_type`] and friends: `cmd` is a
+/// fully built QEMU command whose COM1 goes to `serial_path`.
+fn boot_and_type_cmd(
+    mut cmd: Command,
+    serial_path: &Path,
+    sync_pairs: &[(&str, &str)],
+    ready_marker: &str,
+    final_marker: &str,
+    key_delay: Duration,
+    timeout: Duration,
+) -> String {
     let sock = std::env::temp_dir().join(format!(
         "galexy-qmp-{}.sock",
         std::time::SystemTime::now()
@@ -1064,12 +1142,6 @@ fn boot_and_type_on(
     ));
     let _ = std::fs::remove_file(&sock);
 
-    let mut cmd = qemu_command_opts(&img_path, &serial_path, "q35", virtio_kbd);
-    if uefi {
-        const OVMF_FD_DEFAULT: &str = "/usr/share/ovmf/x64/OVMF.4m.fd";
-        let ovmf_fd = std::env::var("OVMF_FD").unwrap_or_else(|_| OVMF_FD_DEFAULT.into());
-        cmd.arg("-bios").arg(ovmf_fd);
-    }
     cmd.arg("-qmp")
         .arg(format!("unix:{},server,nowait", sock.display()));
     let mut child = KillOnDrop(

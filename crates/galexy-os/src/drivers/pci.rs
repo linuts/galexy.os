@@ -7,7 +7,8 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use spin::{Mutex, Once};
+use crate::sync::Mutex;
+use spin::Once;
 use x86_64::instructions::port::Port;
 
 use crate::arch::acpi;

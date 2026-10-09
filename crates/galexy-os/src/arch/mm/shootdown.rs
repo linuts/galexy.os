@@ -15,10 +15,18 @@
 //!   each listed VA, record `seen`. No locks, ever: a target mid-IRQ-gated
 //!   critical section (or spinning on a lock) must still be able to take
 //!   the IPI and ack, or a broadcasting initiator could never progress.
-//! - CALLER contract (the deadlock rule): the initiator must hold NO Rust
+//! - CALLER contract (the deadlock rule): the initiator should hold NO Rust
 //!   spin lock while broadcasting — a target that would block IF=0 on that
-//!   lock could never service the IPI, and the initiator would spin
-//!   forever. Lock holds stay short + IPI-free; the broadcast is lock-free.
+//!   lock could never take the IPI. Lock holds stay short + IPI-free; the
+//!   broadcast is lock-free.
+//! - SAFETY NET (galexy.os#86): the rule above cannot be enforced through
+//!   `GlobalAlloc` — any `String`/`Vec` built while a lock is held may OOM
+//!   into heap growth, which broadcasts. So every kernel spin lock
+//!   (`crate::sync::Mutex`) calls [`service_pending`] from its spin loop,
+//!   and so does a waiting initiator. A target spinning IF=0 on the
+//!   broadcaster's lock therefore still acks, and two concurrent
+//!   broadcasters ack each other. The IPI stays as the fast path; the poll
+//!   guarantees progress.
 //!
 //! ABA: `seq` values come from one machine-global monotonic counter, and a
 //! slot is only reused once EVERY target's `seen` has consumed its last
@@ -119,13 +127,17 @@ pub fn shootdown_others(vas: &[VirtAddr]) -> u64 {
 
     // Wait for every target to consume THIS seq for THIS slot (the per-CPU
     // per-slot ack the initiator spins on). Lock-free spin: targets' IPI
-    // handlers take no locks, so this always converges.
+    // handlers take no locks, so this always converges. Service other
+    // initiators' requests while waiting: two CPUs broadcasting at once
+    // (heap growth on one, a kernel-half remap on the other) each need
+    // the other's ack, and both may be IF=0.
     for (c, row) in SEEN.iter().enumerate() {
         if c == me || cpu::apic_id_of(c).is_none() {
             continue;
         }
         let mut spins: u64 = 0;
         while row[slot_index].load(Ordering::Acquire) < seq {
+            service_for(me);
             core::hint::spin_loop();
             spins += 1;
             // A target that has not acked after this many spins (seconds,
@@ -175,7 +187,36 @@ fn claim_slot() -> (usize, &'static SdSlot) {
 /// current stack — it must never touch a lock (a target holding ANY lock
 /// while IF=0 would deadlock the broadcaster otherwise).
 pub(crate) extern "x86-interrupt" fn shootdown_handler(_frame: InterruptStackFrame) {
-    let me = cpu::current_index();
+    service_for(cpu::current_index());
+    crate::arch::apic::eoi();
+}
+
+/// Services every pending shootdown request addressed to the calling CPU
+/// without waiting for the IPI. Lock-free and idempotent (INVLPG of an
+/// already-flushed VA is a no-op), so it is safe from ANY context: IRQ
+/// handlers, IF=0 critical sections, and — the reason it exists — the
+/// relax step of every kernel spin lock (`crate::sync`).
+///
+/// This closes the IF=0 ack hole: a CPU spinning IF=0 on a lock cannot
+/// take vector 0xF8, and if the lock holder is the broadcaster waiting
+/// for this CPU's ack, neither ever moves (galexy.os#86: the 1 Hz status
+/// bar grew the heap under `THREADS` while the other CPU's `passwd`
+/// syscall spun on `THREADS`). Polling from the spin loop lets the waiter
+/// ack regardless of IF, so the holder's broadcast completes and the lock
+/// is released.
+///
+/// No-op before this CPU's per-CPU bring-up (no index yet — and no IPI can
+/// target a CPU that is not online).
+#[inline]
+pub fn service_pending() {
+    if let Some(me) = cpu::try_current_index() {
+        service_for(me);
+    }
+}
+
+/// The handler body for logical CPU `me`.
+#[inline]
+fn service_for(me: usize) {
     for (i, s) in MAILBOX.iter().enumerate() {
         let seq = s.seq.load(Ordering::Acquire);
         if SEEN[me][i].load(Ordering::Relaxed) == seq {
@@ -188,9 +229,12 @@ pub(crate) extern "x86-interrupt" fn shootdown_handler(_frame: InterruptStackFra
             // stale or future mappings are both safe to flush.
             unsafe { core::arch::asm!("invlpg [{}]", in(reg) va.as_u64(), options(nostack)) };
         }
-        SEEN[me][i].store(seq, Ordering::Release);
+        // `fetch_max`, not `store`: the IPI handler can land in the middle
+        // of a polled pass on the same CPU and record a newer `seq` first.
+        // The older pass must not roll the ack back (a regressed ack only
+        // delays a waiting initiator, but there is no reason to allow it).
+        SEEN[me][i].fetch_max(seq, Ordering::Release);
     }
-    crate::arch::apic::eoi();
 }
 
 /// Completed broadcast count (diagnostics + test assertions).

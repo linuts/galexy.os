@@ -6,9 +6,10 @@
 //! held while delivering a byte: delivery can log, and that log takes the
 //! same lock.
 
+use crate::sync::Mutex;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, Ordering};
-use spin::{Mutex, Once};
+use spin::Once;
 use uart_16550::backend::PioBackend;
 use uart_16550::spec::registers::{FifoTriggerLevel, IER};
 use uart_16550::{Config, Uart16550};

@@ -23,10 +23,11 @@ pub mod banner;
 pub mod drivers;
 pub mod sched;
 pub mod shell;
+pub mod sync;
 
+use crate::sync::Mutex;
 use bootloader_api::config::{BootloaderConfig, Mapping};
 use core::panic::PanicInfo;
-use spin::Mutex;
 use x86_64::instructions::port::Port;
 
 /// Bootloader configuration shared by every kernel binary.

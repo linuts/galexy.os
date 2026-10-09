@@ -152,6 +152,25 @@ pub fn current_index() -> usize {
     current().cpu_index.load(Ordering::Relaxed) as usize
 }
 
+/// Logical index of the calling CPU, or `None` before this CPU's per-CPU
+/// bring-up (GS base still 0). Lock spin paths use this: they run on
+/// every CPU from the first instruction, long before `current()` may be
+/// asserted.
+#[inline]
+pub fn try_current_index() -> Option<usize> {
+    if !GS_READY.load(Ordering::Acquire) {
+        return None;
+    }
+    let base = gs_base();
+    if base == 0 {
+        return None;
+    }
+    // SAFETY: a non-zero base was WRGSBASE'd at this CPU's bring-up to its
+    // slot in `SLOTS`; the address is within the static array forever.
+    let per_cpu = unsafe { &*(base as *const PerCpu) };
+    Some(per_cpu.cpu_index.load(Ordering::Relaxed) as usize)
+}
+
 /// Writes the SYSCALL entry's kernel-stack target for THIS CPU (switch-in
 /// hook; the naked entry reads gs:[8] on the same CPU, so ownership makes
 /// this race-free without a lock).

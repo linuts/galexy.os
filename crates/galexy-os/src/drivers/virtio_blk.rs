@@ -8,7 +8,7 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 
-use spin::Mutex;
+use crate::sync::Mutex;
 use x86_64::instructions::port::Port;
 use x86_64::VirtAddr;
 

@@ -12,7 +12,7 @@
 
 use core::fmt;
 
-use spin::Mutex;
+use crate::sync::Mutex;
 
 /// Lines kept. Older lines fall off the front.
 const SLOTS: usize = 32;

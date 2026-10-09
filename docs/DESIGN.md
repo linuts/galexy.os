@@ -441,10 +441,14 @@ window (P4 203) is reserved in `mm::init`, before this sequence.
   512 GiB, so the growth path needs no new top-level structures).
 - Growth is machine-serialized by a `GROWING` flag (SMP M19). The map
   loop runs IRQ-gated; the TLB shootdown between map and `Heap::extend`
-  is lock-free (no Rust spin lock across the broadcast — see shootdown
-  below). A second CPU that OOMs mid-growth does not fail the alloc: it
-  spins with interrupts enabled until the in-flight chunk lands (a ~2s
-  watchdog panics if the grower sticks), then the caller retries.
+  holds no lock of `grow`'s own (see shootdown below). The CALLER of
+  `alloc` may hold locks — `GlobalAlloc` cannot know — which is why every
+  kernel lock's spin loop services shootdowns (`sync::Mutex`). A second
+  CPU that OOMs mid-growth does not fail the alloc: it spins, servicing
+  the mailbox so the in-flight grower gets its ack, until the chunk lands
+  (a spin-count watchdog panics if the grower sticks), then the caller
+  retries. It does NOT re-enable interrupts: the caller may be inside an
+  IRQ gate holding locks the timer path needs.
 - `shell` is the first heap consumer (String line buffers); the scheduler's
   task queues are the next one. Host unit tests never touch the heap
   (no_std tests of `galexy-core` are allocation-free by rule).
@@ -461,14 +465,26 @@ on one CPU is stale in every other TLB until invalidated.
   `seq` (ABA closed; a stale re-INVLPG is harmless).
 - Initiator (`shootdown_others`): claim a slot, publish, `send_fixed_ipi`
   to every other online CPU, spin until each target's `seen` catches
-  `seq`. Holds no Rust spin lock. Any IRQ state is fine — targets ack
-  the next time they run with IF=1. A target that has not acked after
-  2^26 spins is reported to serial (`[shootdown] cpu A waiting on cpu
-  B …`) and the wait continues — the line is the first evidence a hung
-  boot gives about which CPU is wedged IF=0.
+  `seq`, servicing other initiators' requests while it waits. Holds no
+  Rust spin lock of its own. Any IRQ state is fine. A target that has not
+  acked after 2^26 spins is reported to serial (`[shootdown] cpu A
+  waiting on cpu B …`) and the wait continues — the line is the first
+  evidence a hung boot gives about which CPU is wedged IF=0.
 - Target: the 0xF8 handler scans unseen seqs, `invlpg`s the listed VAs,
-  stores `seen`. Takes no locks, ever (an IF=0 lock holder must still be
-  able to ack, or a broadcasting initiator spins forever).
+  records `seen` (`fetch_max`). Takes no locks, ever (an IF=0 lock holder
+  must still be able to ack, or a broadcasting initiator spins forever).
+- **Polled ack (galexy.os#86).** The IPI cannot reach a CPU that is
+  spinning IF=0 on a lock. If the lock's holder is the broadcaster, both
+  CPUs stop with interrupts off and nothing prints — that was `passwd`:
+  the BSP's 1 Hz status bar built `String`s under `THREADS`, one
+  allocation grew the heap and broadcast, and the AP's `passwd` syscall
+  was spinning on `THREADS`. The same handler body is therefore exposed
+  as `shootdown::service_pending()`, and the kernel's lock type
+  (`sync::Mutex`, a `spin` mutex with a custom `RelaxStrategy`) calls it
+  on every spin. The IPI stays as the fast path; the poll guarantees
+  progress whatever the waiter's IF state. `test-lockgrow` pins an IF=0
+  lock contender to the AP and grows the heap under that lock on the BSP:
+  it hangs without the poll and passes with it.
 - `map_kernel_page_broadcast` is the single-page primitive: map, local
   flush, then broadcast. Heap `grow()` batches instead: `map_page` the
   chunk under the IRQ gate, one `shootdown_others` for every new VA (a
