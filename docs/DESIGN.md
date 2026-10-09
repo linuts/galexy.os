@@ -1123,6 +1123,8 @@ them on; `audit_strings` and the e2e boots run against that image.
 
 Not seams: `ramdisk-gxld.tar` is the same userspace linked by `gxld`
 instead of `rust-lld` — a build axis, not a behaviour switch.
+`pc-speaker` is default-on (the beep); `--no-default-features` silences
+it. The suite does not toggle it.
 
 ### Coverage: which milestone each test kernel guards
 
