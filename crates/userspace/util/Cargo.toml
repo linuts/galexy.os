@@ -52,6 +52,26 @@ path = "src/bin/stat.rs"
 name = "linger"
 path = "src/bin/linger.rs"
 
+[[bin]]
+name = "head"
+path = "src/bin/head.rs"
+
+[[bin]]
+name = "tail"
+path = "src/bin/tail.rs"
+
+[[bin]]
+name = "wc"
+path = "src/bin/wc.rs"
+
+[[bin]]
+name = "grep"
+path = "src/bin/grep.rs"
+
+[[bin]]
+name = "uptime"
+path = "src/bin/uptime.rs"
+
 [dependencies]
 galexy-rt = { path = "../galexy-rt" }
 galexy-abi = { path = "../../galexy-abi" }

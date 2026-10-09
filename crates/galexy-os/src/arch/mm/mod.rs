@@ -15,7 +15,7 @@ pub mod paging;
 pub mod shootdown;
 
 pub use paging::{
-    active_leaf_flags, frame_virt, free_user_tree, install_cr3, kernel_cr3,
+    active_leaf_flags, frame_virt, free_user_tree, install_cr3, kernel_cr3, map_active_user_page,
     map_kernel_page_broadcast, map_mmio, map_page, map_page_flags, on_kernel_tree, phys_to_virt,
     top_user_p4_index, top_user_p4_index_in, translate, translate_active, unmap_page, with_table,
     FreshL4, PageError, TaskFrameAlloc,

@@ -149,6 +149,12 @@ struct TtyGrids {
     y: [usize; super::keyboard::TTY_COUNT],
     fg: [Color; super::keyboard::TTY_COUNT],
     ansi: [AnsiParser; super::keyboard::TTY_COUNT],
+    /// Scrolled-off rows stored in the spare cells above `text_rows`.
+    hist_len: [usize; super::keyboard::TTY_COUNT],
+    /// Next spare slot to overwrite (ring).
+    hist_next: [usize; super::keyboard::TTY_COUNT],
+    /// Rows above the live view. `0` paints the live grid.
+    view: [usize; super::keyboard::TTY_COUNT],
 }
 
 fn row_differs(previous: usize, current: usize, row: usize, cols: usize) -> bool {
@@ -166,6 +172,9 @@ static GRIDS: Mutex<TtyGrids> = Mutex::new(TtyGrids {
     y: [0; super::keyboard::TTY_COUNT],
     fg: [DEFAULT_FG; super::keyboard::TTY_COUNT],
     ansi: [AnsiParser::ground(); super::keyboard::TTY_COUNT],
+    hist_len: [0; super::keyboard::TTY_COUNT],
+    hist_next: [0; super::keyboard::TTY_COUNT],
+    view: [0; super::keyboard::TTY_COUNT],
 });
 
 /// Terminal state + framebuffer handle, guarded by the global lock.
@@ -202,6 +211,8 @@ impl ScreenWriter {
         if paint {
             self.hide_mark();
         }
+        // New output leaves scrollback and shows the live grid again.
+        self.snap_to_live();
         self.dispatch_char(c);
         if paint && self.blink_on {
             self.show_mark();
@@ -719,6 +730,9 @@ impl ScreenWriter {
         for row in &mut grids.cells[focus] {
             row.fill(Cell::BLANK);
         }
+        grids.hist_len[focus] = 0;
+        grids.hist_next[focus] = 0;
+        grids.view[focus] = 0;
     }
 
     fn scroll_cells(&self) {
@@ -728,11 +742,36 @@ impl ScreenWriter {
         }
         let focus = self.focus;
         let mut grids = GRIDS.lock();
+        let spare = TTY_ROWS.saturating_sub(rows);
+        if spare > 0 {
+            let slot = grids.hist_next[focus] % spare;
+            grids.cells[focus][rows + slot] = grids.cells[focus][0];
+            grids.hist_next[focus] = (slot + 1) % spare;
+            if grids.hist_len[focus] < spare {
+                grids.hist_len[focus] += 1;
+            }
+        }
         let cells = &mut grids.cells[focus];
         for row in 1..rows {
             cells[row - 1] = cells[row];
         }
         cells[rows - 1] = [Cell::BLANK; TTY_COLS];
+    }
+
+    /// Drops a scrollback view so the next glyph paints the live rows.
+    fn snap_to_live(&mut self) {
+        let focus = self.focus;
+        if focus >= super::keyboard::TTY_COUNT {
+            return;
+        }
+        let viewing = GRIDS.lock().view[focus] != 0;
+        if !viewing {
+            return;
+        }
+        GRIDS.lock().view[focus] = 0;
+        if self.focus == self.shown {
+            self.repaint_text();
+        }
     }
 
     fn save_focus(&self) {
@@ -793,14 +832,80 @@ impl ScreenWriter {
         self.ansi = saved_ansi;
     }
 
+    /// Copies the row the user should see. `view == 0` is the live grid.
+    fn copy_view_row(&self, row: usize, out: &mut [Cell]) {
+        let cols = out.len();
+        let rows = self.text_rows().min(TTY_ROWS);
+        let focus = self.focus;
+        if focus >= super::keyboard::TTY_COUNT || cols == 0 {
+            return;
+        }
+        let grids = GRIDS.lock();
+        let hist = grids.hist_len[focus];
+        let view = grids.view[focus].min(hist);
+        if view == 0 || row >= view {
+            let live = row.saturating_sub(view);
+            if live < TTY_ROWS {
+                out.copy_from_slice(&grids.cells[focus][live][..cols]);
+            }
+            return;
+        }
+        let spare = TTY_ROWS.saturating_sub(rows);
+        if spare == 0 || hist == 0 {
+            return;
+        }
+        let hist_index = hist - view + row;
+        let slot = if hist < spare {
+            hist_index
+        } else {
+            (grids.hist_next[focus] + hist_index) % spare
+        };
+        let phys = rows + slot;
+        if phys < TTY_ROWS {
+            out.copy_from_slice(&grids.cells[focus][phys][..cols]);
+        }
+    }
+
+    /// Moves the shown TTY's scrollback by `pages` (negative is older).
+    fn scroll_view(&mut self, pages: i8) {
+        if pages == 0 {
+            return;
+        }
+        let tty = self.shown;
+        if tty >= super::keyboard::TTY_COUNT {
+            return;
+        }
+        self.focus_on(tty);
+        let rows = self.text_rows().min(TTY_ROWS);
+        let page = (rows / 2).max(1);
+        let steps = pages.unsigned_abs() as usize;
+        let delta = page.saturating_mul(steps);
+        let mut grids = GRIDS.lock();
+        let spare = TTY_ROWS.saturating_sub(rows);
+        let hist = grids.hist_len[tty].min(spare);
+        let view = grids.view[tty].min(hist);
+        let next = if pages < 0 {
+            view.saturating_add(delta).min(hist)
+        } else {
+            view.saturating_sub(delta)
+        };
+        if next == view {
+            return;
+        }
+        grids.view[tty] = next;
+        drop(grids);
+        self.hide_mark();
+        self.repaint_text();
+        if next == 0 && self.blink_on {
+            self.show_mark();
+        }
+    }
+
     fn paint_row(&mut self, row: usize, cols: usize) {
         self.fg = Color::new(0, 0, 0);
         self.clear_row_pixels(row);
         let mut row_cells = [Cell::BLANK; TTY_COLS];
-        {
-            let grids = GRIDS.lock();
-            row_cells[..cols].copy_from_slice(&grids.cells[self.focus][row][..cols]);
-        }
+        self.copy_view_row(row, &mut row_cells[..cols]);
         for (col, cell) in row_cells.iter().enumerate().take(cols) {
             if cell.ch == '\0' || cell.ch == ' ' {
                 continue;
@@ -1215,6 +1320,18 @@ pub fn repaint_shown() {
         screen.focus_on(focus);
         screen.repaint_text();
     });
+}
+
+/// Applies a Shift+PageUp / Shift+PageDown the keyboard recorded.
+///
+/// The interrupt only stores a page count. This runs from the main loop
+/// so the screen lock is never taken from IRQ context.
+pub fn apply_scrollback() {
+    let pages = super::keyboard::take_scroll();
+    if pages == 0 {
+        return;
+    }
+    with_lock(|screen| screen.scroll_view(pages));
 }
 
 /// Paints a TTY switch the keyboard recorded, if one is waiting.

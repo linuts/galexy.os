@@ -6,10 +6,12 @@
 //! screen lock. Locks are kept tiny and never nested, so this is safe to
 //! call from interrupt context.
 
-use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicI8, AtomicU64, AtomicU8, Ordering};
 
 use galexy_core::Ring;
-use pc_keyboard::{layouts, DecodedKey, HandleControl, KeyCode, PS2Keyboard, ScancodeSet1};
+use pc_keyboard::{
+    layouts, DecodedKey, HandleControl, KeyCode, KeyState, PS2Keyboard, ScancodeSet1,
+};
 use spin::Mutex;
 use x86_64::instructions::port::Port;
 
@@ -46,6 +48,8 @@ static ACTIVE: AtomicU8 = AtomicU8::new(0);
 static PENDING: AtomicU8 = AtomicU8::new(SWITCH_NONE);
 /// Characters dropped because a TTY queue was full.
 static DROPS: AtomicU64 = AtomicU64::new(0);
+/// Scrollback pages waiting for the main loop. Negative is older text.
+static SCROLL: AtomicI8 = AtomicI8::new(0);
 
 /// Brings the PS/2 controller's first port (keyboard) online: the enable
 /// command + stale-buffer drain. Formerly part of `arch::pics::init` — it
@@ -85,7 +89,25 @@ pub fn add_scancode(scancode: u8) {
         let decoded = {
             let mut keyboard = KEYBOARD.lock();
             match keyboard.add_byte(scancode) {
-                Ok(Some(key_event)) => keyboard.process_keyevent(key_event),
+                Ok(Some(key_event)) => {
+                    // Modifiers update inside `process_keyevent`, so read
+                    // them first. Shift+PageUp must not take the screen lock.
+                    let mods = keyboard.get_modifiers();
+                    let shift = mods.lshift || mods.rshift;
+                    let down = matches!(key_event.state, KeyState::Down | KeyState::SingleShot);
+                    let page_up = key_event.code == KeyCode::PageUp;
+                    let page_down = key_event.code == KeyCode::PageDown;
+                    let decoded = keyboard.process_keyevent(key_event);
+                    if shift && down && (page_up || page_down) {
+                        let dir: i8 = if page_up { -1 } else { 1 };
+                        let _ = SCROLL.try_update(Ordering::AcqRel, Ordering::Relaxed, |cur| {
+                            Some(cur.saturating_add(dir))
+                        });
+                        None
+                    } else {
+                        decoded
+                    }
+                }
                 _ => None,
             }
         };
@@ -201,6 +223,11 @@ fn arrow_csi(key: KeyCode) -> Option<&'static str> {
 /// TTY that should receive typed characters.
 pub fn set_active(tty: u8) {
     ACTIVE.store(tty.min(TTY_COUNT as u8 - 1), Ordering::Relaxed);
+}
+
+/// Takes accumulated Shift+Page scroll pages. Negative is older text.
+pub fn take_scroll() -> i8 {
+    SCROLL.swap(0, Ordering::AcqRel)
 }
 
 /// Takes the console switch the keyboard recorded, if one is waiting.

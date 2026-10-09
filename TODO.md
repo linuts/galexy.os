@@ -2212,32 +2212,32 @@ legacy paths kept only where the platform has nothing else.
 Programs today get one 256-byte argument, no heap, pipes only, and
 `sleep` as the only clock. Fill the holes a real utility hits.
 
-- [ ] **User heap**: `Syscall::Map` grows a per-task NX|RW heap region
+- [x] **User heap**: `Syscall::Map` grows a per-task NX|RW heap region
       by N pages against a per-task frame budget; `galexy-rt` ships a
       `#[global_allocator]` over it; `alloc::{Vec, String}` usable in
       shell and utils; `bin/test-userheap` (exhaustion is
       `NoResource`, reap returns every frame)
-- [ ] **argv**: spawn arg v2 — NUL-separated vector inside the 256-byte
+- [x] **argv**: spawn arg v2 — NUL-separated vector inside the 256-byte
       blob; `galexy_rt::args()` iterator; `cat a b`, `ls -l`. No `env`
       (non-goal)
-- [ ] **Clock**: `Syscall::Clock` → monotonic ms, no Cap; `uptime`
+- [x] **Clock**: `Syscall::Clock` → monotonic ms, no Cap; `uptime`
       util; stable beside `Sleep`
-- [ ] **Channels**: `Syscall::Channel` creates two endpoint Caps;
+- [x] **Channels**: `Syscall::Channel` creates two endpoint Caps;
       `send` / `recv` carry up to 256 bytes plus up to two Caps; `recv`
       parks (Milestone 57 state); design in `PROCESS.md` first;
       `bin/test-channel`
-- [ ] **Shell pipelines**: N stages of any util that reads `-`; `&`
+- [x] **Shell pipelines**: N stages of any util that reads `-`; `&`
       background jobs with a job table (`jobs`, `fg`); `Ctrl-Z` waived
-- [ ] **Shell UX**: tab completion from the files snapshot, `history`
+- [x] **Shell UX**: tab completion from the files snapshot, `history`
       builtin, Shift+PgUp scrollback over the 128-row grid
-- [ ] **Utilities**: `head`, `tail`, `wc`, `grep` (fixed string),
+- [x] **Utilities**: `head`, `tail`, `wc`, `grep` (fixed string),
       `uptime`, `ls -l` via `stat`; each with the one-line trust note
       STYLE requires
 - [x] **Editor**: `nano`, a screen editor over one text file (16 KiB
       buffer in the program image). The shell passes
       `SPAWN_GRANT_KEYBOARD` and Cap-waits. `shell_nano_typing_e2e`
       covers insert, arrows, save, reload, and `cat`
-- [ ] Docs: ABI table rows for `Map`, `Clock`, `Channel` marked
+- [x] Docs: ABI table rows for `Map`, `Clock`, `Channel` marked
       experimental until Milestone 67 closes
 
 ## Milestone 67 — Init owns shutdown and services

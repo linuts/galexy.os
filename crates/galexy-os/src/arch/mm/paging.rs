@@ -255,6 +255,40 @@ pub fn map_page_flags(
     result
 }
 
+/// Maps `frame` into the page table currently in CR3.
+///
+/// User `Map` runs on the syscall path, where CR3 is the caller's tree.
+/// The kernel mapper is a different root, so this does not use it. The
+/// caller is the only CPU in this tree and interrupts are off. The new
+/// page was not cached; `invlpg` publishes it.
+pub fn map_active_user_page(
+    page: Page<Size4KiB>,
+    frame: PhysFrame<Size4KiB>,
+) -> Result<(), PageError> {
+    use x86_64::structures::paging::mapper::MapToError;
+    let flags = PageTableFlags::PRESENT
+        | PageTableFlags::WRITABLE
+        | PageTableFlags::USER_ACCESSIBLE
+        | PageTableFlags::NO_EXECUTE;
+    let (root, _) = Cr3::read();
+    let phys = phys_offset();
+    // SAFETY: CR3 is the running task's FreshL4. Mapping a fresh user page
+    // into it does not rewrite an existing translation. The frame is
+    // allocator-owned until `map_to` succeeds.
+    let mut result = Ok(());
+    unsafe {
+        let root_ptr = (phys + root.start_address().as_u64()).as_mut_ptr::<PageTable>();
+        let mut table = OffsetPageTable::new(&mut *root_ptr, phys);
+        match table.map_to(page, frame, flags, &mut TaskFrameAlloc) {
+            Ok(flush) => flush.flush(),
+            Err(MapToError::FrameAllocationFailed) => result = Err(PageError::NoFrame),
+            Err(MapToError::PageAlreadyMapped(_)) => result = Err(PageError::AlreadyMapped),
+            Err(_) => result = Err(PageError::Internal),
+        }
+    }
+    result
+}
+
 /// Maps one KERNEL-half page (PRESENT | WRITABLE | NO_EXECUTE) and broadcasts
 /// a TLB shootdown for it to every other CPU. The kernel half is shared
 /// memory across all CPUs and task trees — a remap here is visible machine-

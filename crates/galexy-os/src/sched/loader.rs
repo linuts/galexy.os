@@ -359,6 +359,12 @@ fn spawn_program_placed(
     }
     let entry_vaddr = elf.header.pt2.entry_point();
 
+    // Heap growth broadcasts a TLB shootdown. That wait must run with
+    // interrupts enabled: the other CPU cannot ack an IPI while this
+    // load still holds the gate. The kernel stack is the allocation
+    // that grows the heap, so it happens before the gate.
+    let kstack = vec![0u8; THREAD_STACK_SIZE];
+
     interrupts::without_interrupts(|| {
         // The loader allocates. A syscall runs with interrupts off, so the
         // load stays on the main loop, which is the kernel table.
@@ -478,8 +484,8 @@ fn spawn_program_placed(
         };
 
         // Kernel-mode stack for ring 3→0 crossings: heap-backed; the
-        // scheduler paints the canary on registration.
-        let kstack = vec![0u8; THREAD_STACK_SIZE];
+        // scheduler paints the canary on registration. Allocated above,
+        // before this gate, so a heap grow can shoot down TLBs.
         let kstack_top = (kstack.as_ptr() as u64 + kstack.len() as u64) & !0xF;
 
         let child_slot = register_user_task(TaskInit {

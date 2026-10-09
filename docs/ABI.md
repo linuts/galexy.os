@@ -45,7 +45,7 @@ gaps or duplicates). Appending is allowed; inserting is not.
 | 4 | `open` | stable | ramdisk and galfs names |
 | 5 | `read` | stable | `0` means EOF / no key / empty request per cap kind |
 | 6 | `close` | stable | reserved caps are `BadCap` |
-| 7 | `spawn` | experimental | single arg blob today; argv/env vector is **Milestone 66** and bumps this row |
+| 7 | `spawn` | experimental | NUL-separated argv inside the 256-byte blob; no environment vector. `SPAWN_NO_FG` is r10 bit 5 |
 | 8 | `power` | stable | |
 | 9 | `create` | stable | |
 | 10 | `remove` | stable | |
@@ -64,8 +64,13 @@ gaps or duplicates). Appending is allowed; inserting is not.
 | 23 | `wait` | experimental | semantics fixed in Milestone 47; status flips to stable when **Milestone 67** closes init-owned shutdown |
 | 24 | `kill` | experimental | same as `wait` |
 | 25 | `sleep` | stable | Milestone 58 policy freeze |
+| 26 | `map` | experimental | per-task heap, 32 pages; stable when **Milestone 67** closes |
+| 27 | `clock` | experimental | monotonic ms (`timer_ticks`); `sleep` stays stable beside it |
+| 28 | `channel` | experimental | two endpoint Caps; stable when **Milestone 67** closes |
+| 29 | `send` | experimental | one queued message, up to 256 bytes and two file Caps |
+| 30 | `recv` | experimental | parks when empty and the peer is open |
 
-`MAX_SYSCALL = 25`. The table is capped at 64 entries until there is
+`MAX_SYSCALL = 30`. The table is capped at 64 entries until there is
 an ABI version story.
 
 ## Error codes (`SysError`) — stable
@@ -90,7 +95,7 @@ Unknown codes decode to `Unsupported`. New codes append.
 | File cap band | `FILE_CAP_BASE = 3`, eight per task | stable |
 | Process cap band | `PROC_CAP_BASE = 0x40`, `MAX_PROC_CAPS = 16` per task | experimental (ceiling may rise with **Milestone 67**) |
 | Query snapshots (`stats`, `tasks`, `threads`, `files`, `dmesg`, self) | text, one record per line; field names are informational | **unstable** — parse defensively; field set grows |
-| `spawn` grant word (`r10`) | QUERY 1, WAIT 2, INHERIT 4, KEYBOARD 8, WITH_CAPS 16, rights mask bits 8..15, file-slot nibbles bits 16..23 | experimental with `spawn` |
+| `spawn` grant word (`r10`) | QUERY 1, WAIT 2, INHERIT 4, KEYBOARD 8, WITH_CAPS 16, NO_FG 32, rights mask bits 8..15, file-slot nibbles bits 16..23 | experimental with `spawn` |
 | `spawn` limits | `SPAWN_NAME_MAX = 64`, `SPAWN_ARG_MAX = 256` | experimental with `spawn` |
 | Token rights | READ 1, WRITE 2, LIST 4, CREATE 8, REMOVE 16, ONCE 128 (`grant`/`su` only) | stable |
 | `seek` whence | SET 0, CUR 1, END 2 | stable |
@@ -99,6 +104,8 @@ Unknown codes decode to `Unsupported`. New codes append.
 | `quota` buffer | 16 bytes: four LE `u32` — objects used, objects max, bytes used, bytes max | stable |
 | `power` ops | SHUTDOWN 0, REBOOT 1 | stable |
 | `sleep` clamp | `1..=SLEEP_MS_MAX (60 000)` ms | stable |
+| `map` | `1..=USER_HEAP_PAGES (32)` pages, 512 MiB above the task image base | experimental until Milestone 67 |
+| `channel` message | `CHAN_MSG_MAX = 256` bytes, up to two file Caps; 8 channels | experimental until Milestone 67 |
 | `USER_IMAGE_BASE` | `0x0000_0C80_0000_0000`; every ELF links here; the loader accepts PT_LOADs inside `[base, base + 512 MiB)` | stable (no user ASLR — `THREAT.md`) |
 | Exit status of a killed task | `137` to Cap-waiters; the cancelled waiter's own syscall returns `Interrupted` | stable (M58) |
 | `OS_VERSION` | `"0.1.0"` banner string | informational |

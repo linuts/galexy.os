@@ -204,6 +204,32 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
                 Outcome::Resume
             }
         },
+        n if n == Syscall::Map as u64 => {
+            stamp(frame, syscall_map(frame.rdi));
+            Outcome::Resume
+        }
+        n if n == Syscall::Clock as u64 => {
+            stamp(frame, SyscallResult::ok(crate::arch::timer_ticks()));
+            Outcome::Resume
+        }
+        n if n == Syscall::Channel as u64 => {
+            stamp(frame, syscall_channel(frame.rdi));
+            Outcome::Resume
+        }
+        n if n == Syscall::Send as u64 => {
+            stamp(frame, syscall_send(frame));
+            Outcome::Resume
+        }
+        n if n == Syscall::Recv as u64 => match syscall_recv(frame) {
+            IoResult::Done(r) => {
+                stamp(frame, r);
+                Outcome::Resume
+            }
+            IoResult::Park => {
+                stamp(frame, SyscallResult::ok(0));
+                Outcome::Handoff
+            }
+        },
         // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));
@@ -1159,6 +1185,7 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
             | galexy_abi::SPAWN_INHERIT
             | galexy_abi::SPAWN_GRANT_KEYBOARD
             | galexy_abi::SPAWN_WITH_CAPS
+            | galexy_abi::SPAWN_NO_FG
             | galexy_abi::SPAWN_RIGHTS_BITS
             | (0xFF << galexy_abi::SPAWN_CAP_SHIFT))
         != 0
@@ -1228,6 +1255,7 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
     let wait_exit = frame.r10 & galexy_abi::SPAWN_WAIT != 0;
     let inherit = frame.r10 & galexy_abi::SPAWN_INHERIT != 0;
     let keyboard = frame.r10 & galexy_abi::SPAWN_GRANT_KEYBOARD != 0;
+    let no_fg = frame.r10 & galexy_abi::SPAWN_NO_FG != 0;
     let rights_mask =
         ((frame.r10 & galexy_abi::SPAWN_RIGHTS_BITS) >> galexy_abi::SPAWN_RIGHTS_SHIFT) as u8;
     match crate::sched::task_spawn(
@@ -1239,6 +1267,7 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
         inherit,
         rights_mask,
         [cap0, cap1],
+        no_fg,
     ) {
         Ok(()) => SyscallResult::ok(0),
         Err(err) => SyscallResult::err(err),
@@ -1340,3 +1369,89 @@ const MAX_NAME: u64 = 64;
 /// Rights a `write` call must see on the capability (kernel-side authority;
 /// the opaque model means userspace never "sets" them).
 pub const WRITE_RIGHTS: CapRights = CapRights::WRITE;
+
+fn syscall_map(pages: u64) -> SyscallResult {
+    match crate::sched::task_map(pages) {
+        Ok(base) => SyscallResult::ok(base),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_channel(addr: u64) -> SyscallResult {
+    if user_buffer(addr, 16, true).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    match crate::sched::task_channel() {
+        Ok((end0, end1)) => {
+            let bits = [end0.bits(), end1.bits()];
+            // SAFETY: `user_buffer` accepted 16 writable user bytes.
+            unsafe {
+                crate::arch::user_copy::copy_to_user(bits.as_ptr() as *const u8, addr, 16);
+            }
+            SyscallResult::ok(0)
+        }
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_send(frame: &Context) -> SyscallResult {
+    let len = frame.rdx;
+    if len > galexy_abi::CHAN_MSG_MAX as u64 {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if len > 0 && user_buffer(frame.rsi, len, false).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut bytes = [0u8; galexy_abi::CHAN_MSG_MAX];
+    if len > 0 {
+        // SAFETY: `user_buffer` accepted every byte of the payload.
+        unsafe {
+            crate::arch::user_copy::copy_from_user(frame.rsi, bytes.as_mut_ptr(), len as usize);
+        }
+    }
+    match crate::sched::task_send(
+        Cap::from_bits(frame.rdi),
+        &bytes[..len as usize],
+        frame.r8,
+        frame.r9,
+    ) {
+        Ok(n) => SyscallResult::ok(n as u64),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_recv(frame: &Context) -> IoResult {
+    let len = frame.rdx;
+    if len > galexy_abi::CHAN_MSG_MAX as u64 {
+        return IoResult::Done(SyscallResult::err(SysError::BadValue));
+    }
+    if len > 0 && user_buffer(frame.rsi, len, true).is_err() {
+        return IoResult::Done(SyscallResult::err(SysError::BadBuffer));
+    }
+    if frame.r8 != 0 && user_buffer(frame.r8, 16, true).is_err() {
+        return IoResult::Done(SyscallResult::err(SysError::BadBuffer));
+    }
+    match crate::sched::task_recv(Cap::from_bits(frame.rdi), frame.rsi, len as usize, frame.r8) {
+        Ok(crate::sched::RecvOp::Park) => IoResult::Park,
+        Ok(crate::sched::RecvOp::Eof) => IoResult::Done(SyscallResult::ok(0)),
+        Ok(crate::sched::RecvOp::Ready { n, bytes, caps }) => {
+            if n > 0 {
+                // SAFETY: `user_buffer` accepted `len` writable bytes and `n <= len`.
+                unsafe {
+                    crate::arch::user_copy::copy_to_user(bytes.as_ptr(), frame.rsi, n);
+                }
+            }
+            if frame.r8 != 0 {
+                let mut raw = [0u8; 16];
+                raw[..8].copy_from_slice(&caps[0].to_le_bytes());
+                raw[8..].copy_from_slice(&caps[1].to_le_bytes());
+                // SAFETY: `user_buffer` accepted 16 writable bytes at `r8`.
+                unsafe {
+                    crate::arch::user_copy::copy_to_user(raw.as_ptr(), frame.r8, 16);
+                }
+            }
+            IoResult::Done(SyscallResult::ok(n as u64))
+        }
+        Err(err) => IoResult::Done(SyscallResult::err(err)),
+    }
+}

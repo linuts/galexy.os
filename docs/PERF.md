@@ -76,6 +76,8 @@ ceiling is `NoResource`, never a panic.
 | Spawn name / arg blob | 64 / 256 bytes | `galexy_abi` |
 | User stack | 4 pages + guard | `DESIGN.md` → Memory policy |
 | User image window | 512 MiB above `USER_IMAGE_BASE` | `loader::USER_IMAGE_WINDOW` |
+| User heap (`Map`) | 32 pages / 128 KiB per task | `galexy_abi::USER_HEAP_PAGES` |
+| Channels | 8 system-wide; one message of 256 bytes and two file Caps | `sched::channel` |
 | `sleep` | 1 ms … 60 s per call | `galexy_abi::SLEEP_MS_MAX` |
 | dmesg ring | fixed line ring; `read` returns the newest lines that fit | `DESIGN.md` → console |
 

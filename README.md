@@ -14,17 +14,18 @@ programs.
 Not a Linux clone. No POSIX claim. Authority is **capabilities** (and
 galfs access cards), not global file descriptors or PIDs.
 
-**Status (October 2026):** Milestones 1–61, 63, 64, and 69 are merged (62 was
-superseded); `nano` is in the ramdisk. The QEMU suite is 106 boots plus
-host tests. The Milestone 52 review checklist is complete except the
-`review-rc1` tag, which is the owner's call; Phase 9 continues with the
-modern platform and userland work (65–67) toward `v1.0`. The honest
-scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md) → Where we stand.
-Known gaps today: legacy device paths (PIT, 8259, PS/2, PIO IDE, legacy
-virtio) are still the defaults, no user heap or argv, no network. KPTI,
-IBRS, MDS, and CET are waived for this single-tenant guest
-(`docs/THREAT.md`). PCID and a new heap allocator stay waived
-(`docs/PERF.md`).
+**Status (October 2026):** Milestones 1–61 and 63–66 are merged, plus 69
+(62 was superseded); `nano` is in the ramdisk. The QEMU suite is 109
+boots plus host tests. The Milestone 52 review checklist is complete
+except the `review-rc1` tag, which is the owner's call. Next is
+Milestone 67 (init-owned shutdown and the ABI freeze) toward `v1.0`.
+The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md) → Where
+we stand. Known gaps today: shutdown still bypasses init, and there is
+no network. Legacy device paths (PIT, 8259, PS/2, PIO IDE, legacy
+virtio) remain as named fallbacks. KPTI, IBRS, MDS, and CET are waived
+for this single-tenant guest (`docs/THREAT.md`). PCID and a new kernel
+heap allocator stay waived (`docs/PERF.md`). The per-task `Map` heap is
+separate and experimental until Milestone 67.
 
 | You want… | Read |
 | --- | --- |
@@ -132,7 +133,7 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 ```sh
 cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxc -p gxld   # host suites
 cargo test -p runner --test audit_strings   # no "password" in any serial line
-cargo test -p runner --test boot --release -- --test-threads=1   # QEMU suite (106 boots, -smp 2, release profile)
+cargo test -p runner --test boot --release -- --test-threads=1   # QEMU suite (109 boots, -smp 2, release profile)
 ```
 
 UEFI cases need `OVMF_FD` if the default firmware path is absent. Disk

@@ -163,7 +163,10 @@ moves to init.
   prompts in the shell.
 - Shell Cap-waits the spawned Cap for pipeline status.
 
-v1: one foreground child; background jobs waived.
+v1 was one foreground child. Milestone 66 adds a fixed shell job table
+(`cmd &`, `jobs`, `fg`). Ctrl-Z stays waived. Ctrl-C still kills only the
+foreground task (exit `137`); a background spawn does not become that
+foreground until `fg` Cap-waits it.
 
 ## Auth interaction
 
@@ -194,8 +197,50 @@ process Cap never grants galfs rights on the child’s files.
 | **53** ✅ | Userspace init; orphan Cap transfer; kill-init denied; retire `ensure_shell` policy |
 | **54** ✅ | Seats under init; supervise Caps (service table + `svc` moved to 67) |
 | **55** ✅ | Session/job Caps; foreground Ctrl-C |
-| **66** | Capability channels (`Channel` / `send` / `recv` carrying Caps); background job table in the shell |
+| **66** ✅ | Capability channels (below); shell job table (`&`, `jobs`, `fg`) |
 | **67** | Ordered shutdown through init; service table with backoff; `svc`; session id on the seat Cap; ABI freeze |
 
 `SPAWN_WAIT` remains a convenience beside Cap-wait. New code must not
 dig a deeper PID-shaped API beside this plan.
+
+## Capability channels (Milestone 66)
+
+Channels are a second IPC object beside pipes. A pipe moves bytes. A
+channel moves one message that may also carry capabilities.
+
+`Syscall::Channel` matches `Pipe`: the caller passes a 16-byte user
+buffer and receives two endpoint Caps, both with READ|WRITE. Either
+end may `Send` or `Recv`. The kernel keeps a fixed table (8 channels).
+A full table is `NoResource`.
+
+One message is outstanding per channel, not per direction. The message
+is at most 256 bytes plus up to two file Caps (not process Caps, and
+not either endpoint of this same channel). `Send` copies the bytes and
+**moves** the Caps out of the sender immediately. If a message is
+already queued, `Send` returns `NoResource` and the Caps stay with the
+sender (it does not park). `Recv` on an empty channel parks in
+`STATE_WAITING` until a message arrives or the other end is closed
+(Milestone 57). A closed peer and an empty queue is end-of-file (`0`).
+
+Caps are delivered at `Recv`, installed in the receiver's file table,
+and the new Cap bits are written to a 16-byte user buffer (`0` when
+that slot was empty). If the receiver has no free file slot for a Cap
+the message is carrying, the message **stays queued** and `Recv`
+returns `NoResource` so a later retry can install them. Caps are never
+dropped on that path. When both endpoints have closed, a still-queued
+message's Caps are released (pipe ends closed, channel ends closed).
+
+`Send` / `Recv` are their own syscall numbers, appended after `Channel`.
+All three stay experimental until Milestone 67, beside `Map` and `Clock`.
+
+`Clock` reads the same monotonic millisecond counter as `Sleep`
+(`timer_ticks`). It takes no Cap and does not change `Sleep`.
+
+`Map` grows the calling task's heap: NX|RW|user pages 512 MiB above
+that task's image base (ramdisk ELFs: `USER_IMAGE_BASE + 512 MiB`), at
+most 32 pages. The return value is the base of the newly mapped pages.
+Past the budget is `NoResource`. Reap walks the task's own P4 slot, so
+those frames come back with the rest of the tree.
+`galexy-rt` bumps an allocator over that region; `dealloc` does not
+unmap. `SPAWN_NO_FG` (r10 bit 5) is how the shell starts a background
+job without making it the TTY's Ctrl-C target.
