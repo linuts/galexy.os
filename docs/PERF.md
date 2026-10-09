@@ -82,9 +82,10 @@ ceiling is `NoResource`, never a panic.
 ## What is not budgeted
 
 - **Wall-clock accuracy.** There is no RTC read; `timer_ticks` is
-  monotonic and PIT-calibrated at boot (`SCHEDULING.md`).
-- **Disk bandwidth.** ATA is PIO. virtio-blk completes on INTx (legacy
-  IO BAR; MSI-X is Milestone 65). Correctness under `cache=none` /
+  monotonic. The rate comes from a measured HPET (or PIT) window,
+  cross-checked against CPUID 0x15 / 0x16 (`SCHEDULING.md`).
+- **Disk bandwidth.** ATA is PIO. virtio-blk completes on MSI-X (INTx
+  if the function has no MSI-X table). Correctness under `cache=none` /
   `writeback` / `writethrough` is tested; throughput is not.
 - **Memory.** Free frames are reported by `stats`; a soft reserve
   refuses user spawns before the kernel heap is starved

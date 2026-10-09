@@ -15,7 +15,7 @@ Not a Linux clone. No POSIX claim. Authority is **capabilities** (and
 galfs access cards), not global file descriptors or PIDs.
 
 **Status (October 2026):** Milestones 1–61, 63, 64, and 69 are merged (62 was
-superseded); `nano` is in the ramdisk. The QEMU suite is 104 boots plus
+superseded); `nano` is in the ramdisk. The QEMU suite is 106 boots plus
 host tests. The Milestone 52 review checklist is complete except the
 `review-rc1` tag, which is the owner's call; Phase 9 continues with the
 modern platform and userland work (65–67) toward `v1.0`. The honest
@@ -55,8 +55,10 @@ cargo run --release -- --uefi       # UEFI — set OVMF_FD if the default path i
 ```
 
 `cargo run --release` attaches a persistent `galfs.img` as **virtio-blk-pci**
-(legacy IO BAR; boot image stays IDE master `index=0` with `snapshot=on`).
-Guest galfs prefers virtio-blk when present, else the ATA primary slave.
+on `-M q35` (virtio 1.x; boot image stays IDE index 0 with `snapshot=on`,
+which q35 places on AHCI). A `virtio-keyboard-pci` device is the keyboard;
+PS/2 is the fallback when that device is absent. Guest galfs prefers
+virtio-blk when present, else the ATA primary slave.
 Override the image path with `GALEXY_GALFS_IMG=/path/to/img`. Set
 `GALEXY_GALFS_IDE=1` to force the IDE-slave attach. Delete `galfs.img` to
 force a fresh format after a layout bump. Persistence e2e covers IDE
@@ -130,7 +132,7 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 ```sh
 cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxc -p gxld   # host suites
 cargo test -p runner --test audit_strings   # no "password" in any serial line
-cargo test -p runner --test boot --release -- --test-threads=1   # QEMU suite (104 boots, -smp 2, release profile)
+cargo test -p runner --test boot --release -- --test-threads=1   # QEMU suite (106 boots, -smp 2, release profile)
 ```
 
 UEFI cases need `OVMF_FD` if the default firmware path is absent. Disk
@@ -157,7 +159,7 @@ a workflow dimension, so a failure points at one boot:
 | Firmware | BIOS for every kernel; UEFI via `uefi_image_boots_and_timer_ticks`, `shell_run_hello_typing_e2e_uefi` |
 | CPUs | `-smp 2 -cpu max` on every boot; `smp_*`, `ipi_*`, `smpuser_*`, `smpstress_*` |
 | galfs disk | off for most kernels; on for `galfs_disk_*`, `share_disk_*`, `assert_galfs_disk_persists`, `crash_injection_*` |
-| Disk transport | virtio-blk (`galfs_disk_persists_virtio_blk`), IDE/ATA (`galfs_disk_persists_across_reboot`, `ata_absent_returns_unsupported`), partition offset |
+| Disk transport | virtio 1.x (`galfs_disk_persists_virtio_blk`), legacy virtio I/O BAR (`galfs_disk_persists_virtio_legacy`), IDE/ATA on `-M pc` (`galfs_disk_persists_across_reboot`, `ata_absent_returns_unsupported`), partition offset |
 | Cache mode | `galfs_disk_persists_writeback_cache`, `galfs_disk_persists_none_cache` |
 | Linker | `rust-lld` image for every kernel; `gxld` image via `gxld_image_*_e2e` |
 

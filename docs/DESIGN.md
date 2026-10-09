@@ -252,14 +252,19 @@ pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError>
 pub fn flush() -> Result<(), SysError>
 ```
 
-### virtio_blk — virtio-blk legacy PCI (`drivers/`)
+### virtio_blk — virtio 1.x PCI (`drivers/`)
 
-Transitional virtio-blk with a legacy I/O BAR (`disable-modern=on`,
-`queue-size=128`). PCI scan via `drivers/pci`. One outstanding request.
-Completion is the used-ring INTx (I/O APIC, level, active-low); the
-requester parks `STATE_WAITING` + `IO_BLOCK`, and a missed line is
-noticed on the next timer tick. MSI-X is Milestone 65. FLUSH via
+Virtio 1.x over PCI capabilities (common / notify / ISR / device cfg)
+and MMIO BARs, with `VIRTIO_F_VERSION_1`. PCI config is ECAM when ACPI
+published `MCFG`, else ports `0xCF8` / `0xCFC`. The scan walks PCI-PCI
+bridges so a function behind a q35 root port is visible. One outstanding
+request. Completion prefers MSI-X; INTx (I/O APIC, level, active-low)
+is the fallback. The requester parks `STATE_WAITING` + `IO_BLOCK`, and
+a missed line is noticed on the next timer tick. FLUSH via
 `VIRTIO_BLK_T_FLUSH`. galfs selects this over ATA when probe succeeds.
+`disable-modern=on` keeps the legacy I/O BAR and logs
+`legacy IO BAR`. The runner default is `-M q35` without
+`disable-modern=on`.
 
 ```rust
 pub struct VirtioBlk; // impl BlockDevice
@@ -271,9 +276,12 @@ context is safe. Queue overflow drops the newest key (documented).
 
 ### arch — "the plumbing"
 
-Init order: GDT/TSS (per-CPU slot 0) → per-CPU GS substrate → ACPI (MADT)
-→ LAPIC (+calibration) → I/O APIC (keyboard route) → legacy PICs (masked)
-→ i8042 enable → AP boot (trampoline + per-AP init + timer arms) → `sti`.
+Init order: GDT/TSS (per-CPU slot 0) → per-CPU GS substrate → ACPI
+(MADT, FADT boot-arch, MCFG, HPET) → LAPIC (x2APIC when CPUID reports
+it, then calibration) → I/O APIC (COM1) → 8259 (remap+mask, or mask
+only when the FADT says the pair is absent) → virtio-input or i8042 →
+AP boot (trampoline + per-AP init + timer arms) → `sti`. The MMIO
+window (P4 203) is reserved in `mm::init`, before this sequence.
 
 - GDT + TSS: per-CPU slots SLOTS[c] (see arch/cpu + arch/gdt) — the same
   selector layout replicated on every CPU (STAR stays selector-indexed).
@@ -1115,6 +1123,8 @@ them on; `audit_strings` and the e2e boots run against that image.
 
 Not seams: `ramdisk-gxld.tar` is the same userspace linked by `gxld`
 instead of `rust-lld` — a build axis, not a behaviour switch.
+`pc-speaker` is default-on (the beep); `--no-default-features` silences
+it. The suite does not toggle it.
 
 ### Coverage: which milestone each test kernel guards
 
@@ -1137,7 +1147,7 @@ main image and are listed at the end.
 | `test-rings`, `test-userpreempt`, `test-syscall`, `test-user` | `rings_test_passes`, `userpreempt_test_passes`, `syscall_test_passes`, `user_lifecycle_test_passes` | M12–M13 ring 3 and the first syscall |
 | `test-freshl4`, `test-cloneroot`, `test-treechurn`, `test-userfault`, `test-wx` | `freshl4_test_passes`, `cloneroot_test_passes`, `treechurn_test_passes`, `userfault_test_passes`, `wx_test_passes` | M14 isolation, M28 clone root, M48 W^X and address-space lifecycle |
 | `test-ramdisk`, `test-realprogram`, `test-open`, `test-runshell` | `ramdisk_test_passes`, `realprogram_test_passes`, `open_test_passes`, `runshell_test_passes` | M15 ELF + ramdisk, M20 files as Caps, M31 launch by name; M51 ramdisk measurement |
-| `test-acpi`, `test-apic` | `acpi_test_passes`, `apic_test_passes` | M17 APIC family |
+| `test-acpi`, `test-apic` | `acpi_test_passes`, `apic_test_passes` | M17 APIC family; M65 x2APIC / TSC-deadline follow CPUID |
 | `test-smp`, `test-ipi`, `test-smpuser`, `test-smpstress` | `smp_test_passes`, `ipi_test_passes`, `smpuser_test_passes`, `smpstress_test_passes` | M18–M19 SMP, shootdown, steal |
 | `test-shutdown`, `test-reboot` | `shutdown_test_powers_off`, `reboot_test_resets` | M23 power |
 | `test-audit` | `audit_console_test_passes` | M49 keyboard overflow, dmesg ring, blink |
@@ -1218,25 +1228,35 @@ pinned in `galexy-abi` tests.
 - APIC discovery is MADT-based (RSDP → XSDT/RSDT walk, checksums enforced);
   no fallback to hard-coded MMIO bases — a machine without ACPI tables
   fails loudly rather than guessing.
-- The LAPIC timer calibration assumes the PIT exists (it does on every
-  x86 platform worth booting; QEMU emulates it under both SeaBIOS and
-  OVMF). Milestone 65 calibrates from CPUID 0x15 / 0x16 or HPET first
-  and uses TSC-deadline mode where CPUID reports it; PIT becomes the
-  fallback.
-- x2APIC-mode hosts take the MSR path (`0x800 + offset>>4`); QEMU defaults
-  to xAPIC — both are exercised by the access-layer abstraction, only xAPIC
-  by the QEMU test suite (assert in `bin/test-apic`). Milestone 65 adds
-  an x2APIC run.
-- Legacy device paths that remain the default: 8259 remap + mask, PS/2
-  i8042 keyboard, PIO IDE, virtio-blk over the legacy IO BAR (INTx
-  completion, not a poll), PCI config through ports 0xCF8 / 0xCFC,
-  `-M pc`. Milestone 65 moves the default to `q35` + ECAM + virtio 1.x
-  + MSI-X + virtio-input and keeps each legacy path as a named fallback
-  with one regression case (ROADMAP standing principle).
+- LAPIC calibration measures a 10 ms HPET window (PIT channel 2 if
+  the HPET is absent) and accepts CPUID 0x15 / 0x16 only when that
+  nominal rate is within 2× of the measurement. TCG often advertises a
+  crystal the emulated timer does not run; the measured window wins and
+  the disagreement is logged. TSC-deadline mode is used when CPUID.1
+  ECX bit 24 is set. QEMU TCG still does not enumerate that bit, so the
+  suite observes one-shot mode. `bin/test-apic` checks the LVT against
+  the same bit. `IDLE_MAX_MS` and the quantum are unchanged.
+- x2APIC is enabled (IA32_APIC_BASE EN, then EN|EXTD) when CPUID.1 ECX
+  bit 21 is set; otherwise the guest stays on xAPIC MMIO and says so.
+  `-cpu max,+x2apic` requests the bit. QEMU TCG through 8.2 drops it
+  ("TCG doesn't support requested feature"); QEMU 9+ TCG keeps it.
+  `bin/test-apic` asserts the MSR path when the bit is present and the
+  MMIO path when it is not.
+- Default machine is `-M q35`: ECAM, virtio 1.x, MSI-X, virtio-input.
+  Named fallbacks, each with one regression boot: 8259 remap when the
+  FADT says the pair is present (mask-only when it does not), PS/2
+  i8042 (`shell_ps2_typing_e2e`), PIO IDE on `-M pc`
+  (`galfs_disk_persists_across_reboot`, log `config via 0xCF8`), legacy
+  virtio I/O BAR (`galfs_disk_persists_virtio_legacy`, log
+  `legacy IO BAR`). The PC speaker (`pc-speaker`, default on) is the
+  only audio device and the only PIT user after boot.
+- Stated non-goals for this platform pass: 5-level paging, huge user
+  pages, USB, a GPU beyond the GOP framebuffer, and a network stack
+  (Phase 10).
 - The measured path is `cargo run --release` and
   `cargo test -p runner --test boot --release`. The runner picks
   `-accel kvm -cpu host` when `/dev/kvm` is writable, else
-  `-accel tcg -cpu max` (`GALEXY_ACCEL` overrides). Numbers live in
+  `-accel tcg -cpu max,+x2apic` (`GALEXY_ACCEL` overrides). Numbers live in
   `docs/PERF.md`. PCID and a second heap allocator stay waived.
 - `-no-reboot` is always passed to QEMU so triple faults surface as an exit
   instead of an infinite reboot loop. A `reboot` request still pulses the

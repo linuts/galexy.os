@@ -1,9 +1,9 @@
-//! PIT timer: tick accounting and configuration.
+//! Tick accounting. The clock is the LAPIC (TSC-deadline or one-shot).
 //!
-//! The PIT's remaining duties after the APIC-era delivery swap:
-//! - channel 2 is the one-SHOT REFERENCE the LAPIC-timer calibration and
-//!   these delay helpers use (BSP-only: global ports, global time),
-//! - channel 0 keeps its legacy programming for symmetry (masked line).
+//! [`delay_ms`] busy-waits on the TSC after calibration. The PIT channel 2
+//! one-shot remains only as the calibration fallback inside `arch::apic`
+//! when CPUID 0x15 / 0x16 and the HPET are both absent, and as the PC
+//! speaker. Channel 0 is not programmed.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::instructions::port::Port;
@@ -14,20 +14,8 @@ static TICKS: AtomicU64 = AtomicU64::new(0);
 /// PIT crystal frequency in Hz.
 const PIT_FREQ: u32 = 1_193_182;
 
-/// Configures PIT channel 0 for ~1 kHz (required later by scheduling).
-pub fn init() {
-    const PIT_COMMAND_PORT: u16 = 0x43;
-    const PIT_CHANNEL_0_DATA_PORT: u16 = 0x40;
-    // 1.193182 MHz / divisor ≈ 1 kHz
-    const DIVISOR: u16 = 1193;
-
-    // SAFETY: fixed PIT ports; standard channel-0 square wave programming.
-    unsafe {
-        Port::new(PIT_COMMAND_PORT).write(0x36_u8); // channel 0, lo/hi, square wave
-        Port::new(PIT_CHANNEL_0_DATA_PORT).write((DIVISOR & 0xFF) as u8);
-        Port::new(PIT_CHANNEL_0_DATA_PORT).write((DIVISOR >> 8) as u8);
-    }
-}
+/// Nothing to program. The LAPIC timer is armed from `arch::apic`.
+pub fn init() {}
 
 /// Advances the monotonic tick counter by `n` milliseconds of machine time.
 ///
@@ -49,14 +37,19 @@ pub fn ticks() -> u64 {
     TICKS.load(Ordering::Relaxed)
 }
 
-/// Busy-waits `ms` milliseconds using a PIT channel-2 one-shot per
-/// millisecond (gate ON, speaker OFF). BSP-only: these are GLOBAL ports and
-/// a GLOBAL pit — only the boot-time flow (AP bring-up waits, LAPIC
-/// calibration) may call before the scheduler runs.
+/// Busy-waits `ms` milliseconds.
 ///
-/// Used with interrupts DISABLED by its callers (each 1 ms granule is
-/// programmed + drained standalone, so virtual-clock under TCG is exact).
+/// Uses the TSC rate from LAPIC calibration. The PIT channel-2 fallback
+/// runs only when that rate is not published yet. BSP-only for the PIT
+/// path: those ports are global.
 pub fn delay_ms(ms: u32) {
+    if crate::arch::apic::spin_ms(ms) {
+        return;
+    }
+    pit_delay_ms(ms);
+}
+
+fn pit_delay_ms(ms: u32) {
     const PIT_COMMAND_PORT: u16 = 0x43;
     const PIT_CHANNEL_2_DATA_PORT: u16 = 0x42;
     const PIT_GATE_PORT: u16 = 0x61;

@@ -61,12 +61,13 @@ fn main() {
         cmd.arg("-bios").arg(ovmf_fd);
     }
     // Boot image is snapshotted; the galfs data disk is not — guest writes persist.
-    // Default attach is virtio-blk-pci (legacy IO BAR). Set GALEXY_GALFS_IDE=1
-    // for the older primary-IDE-slave path (still covered by boot tests).
+    // Default machine is q35 with virtio 1.x. Set GALEXY_GALFS_IDE=1 for the
+    // legacy `-M pc` primary-IDE-slave path (still covered by boot tests).
+    let use_ide = std::env::var_os("GALEXY_GALFS_IDE").is_some();
+    cmd.arg("-M").arg(if use_ide { "pc" } else { "q35" });
     cmd.arg("-drive").arg(format!(
         "format=raw,file={img_path},if=ide,index=0,snapshot=on"
     ));
-    let use_ide = std::env::var_os("GALEXY_GALFS_IDE").is_some();
     if use_ide {
         cmd.arg("-drive").arg(format!(
             "format=raw,file={},if=ide,index=1,cache=writethrough",
@@ -78,7 +79,8 @@ fn main() {
             galfs_path.display()
         ));
         cmd.arg("-device")
-            .arg("virtio-blk-pci,drive=galfs,disable-legacy=off,disable-modern=on,queue-size=128");
+            .arg("virtio-blk-pci,drive=galfs,disable-legacy=off,queue-size=128");
+        cmd.arg("-device").arg("virtio-keyboard-pci");
     }
     // SMP: 2 cores, exposed by the per-CPU substrate (gs:[8] syscall path,
     // per-CPU GDT/TSS). KVM + `-cpu host` when `/dev/kvm` is writable,
@@ -89,7 +91,7 @@ fn main() {
         cmd.arg("-accel").arg("kvm").arg("-cpu").arg("host");
     } else {
         eprintln!("[runner] accel=tcg");
-        cmd.arg("-accel").arg("tcg").arg("-cpu").arg("max");
+        cmd.arg("-accel").arg("tcg").arg("-cpu").arg("max,+x2apic");
     }
     // COM1 is the console: the guest mirrors the visible TTY onto it and
     // reads keystrokes back. Headless is the default so that text is this

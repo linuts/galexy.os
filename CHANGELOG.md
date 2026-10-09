@@ -8,6 +8,13 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#84](https://github.com/linuts/galexy.os/pull/84) — M65 — `-M q35`
+  by default; PCIe ECAM when ACPI publishes `MCFG`; virtio-blk 1.x with
+  MSI-X (legacy I/O BAR logs `legacy IO BAR`); virtio-input keyboard
+  with a PS/2 fallback; HPET calibration cross-checked against CPUID
+  0x15/0x16; TSC-deadline and x2APIC when CPUID reports them; 8259
+  remap skipped when the FADT says the pair is absent. The PC speaker
+  stays the only audio path
 - [#83](https://github.com/linuts/galexy.os/pull/83) — M64 — release
   images (`opt-level = 3`, fat LTO, debug assertions on); KVM when
   `/dev/kvm` is writable; `bin/test-bench` and `docs/PERF.md`; virtio-blk

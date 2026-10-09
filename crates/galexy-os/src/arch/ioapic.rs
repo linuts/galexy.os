@@ -131,10 +131,20 @@ pub fn init() {
         pins
     );
 
-    // ISA IRQ -> GSI (override or identity) -> pin, edge-triggered,
-    // active-high, physical dest = this CPU's LAPIC ID.
-    wire_isa(page, pins, 1, KEYBOARD_INTERRUPT_ID, "keyboard");
+    // COM1 is always wired. The PS/2 keyboard line is unmasked only when
+    // virtio-input is absent (`drivers/keyboard::init`).
     wire_isa(page, pins, 4, SERIAL_INTERRUPT_ID, "serial");
+}
+
+/// Unmasks the PS/2 keyboard (ISA IRQ1) onto its vector.
+pub fn wire_ps2_keyboard() {
+    let page_u = IOAPIC_PAGE.load(Ordering::Acquire);
+    if page_u == 0 {
+        return;
+    }
+    let page = VirtAddr::new(page_u);
+    let pins = (read_reg(page, 0x01) >> 16) + 1;
+    wire_isa(page, pins, 1, KEYBOARD_INTERRUPT_ID, "keyboard");
 }
 
 /// Unmasks one ISA IRQ onto `vector`. Edge, active-high, BSP destination.

@@ -1,16 +1,23 @@
 //! PC speaker (PIT channel 2 + port 0x61).
 //!
-//! Square-wave tones for console BEL / shell cues. BSP-only: the gate and
-//! PIT channel 2 are global (same ports as [`super::timer::delay_ms`]);
-//! callers must not nest a beep inside LAPIC calibration.
+//! The only audio device. There is no virtio-sound. Feature `pc-speaker`
+//! is on by default; with it off, [`beep`] is silent. This is the only
+//! PIT user after boot (channel 2 square wave). Calibration may still
+//! program channel 2 once when CPUID 0x15 / 0x16 and the HPET are absent.
+//!
+//! BSP-only: the gate and PIT channel 2 are global. Callers must not nest
+//! a beep inside LAPIC calibration.
 //!
 //! Duration is timed from PIT OUT2 edges so it works with IF=0 (SYSCALL
 //! runs under SFMASK with interrupts masked — timer ticks will not advance).
 
+#[cfg(feature = "pc-speaker")]
 use x86_64::instructions::port::Port;
 
 /// PIT crystal frequency in Hz.
+#[cfg(feature = "pc-speaker")]
 const PIT_FREQ: u32 = 1_193_182;
+#[cfg(feature = "pc-speaker")]
 const PIT_COMMAND_PORT: u16 = 0x43;
 const PIT_CHANNEL_2_DATA_PORT: u16 = 0x42;
 const PIT_GATE_PORT: u16 = 0x61;
@@ -26,10 +33,12 @@ const BEEP_MS: u32 = 80;
 
 /// Short square-wave beep on the PC speaker.
 pub fn beep() {
+    #[cfg(feature = "pc-speaker")]
     beep_hz(BEEP_HZ, BEEP_MS);
 }
 
 /// Tone at `hz` for about `ms` milliseconds, then silence.
+#[cfg(feature = "pc-speaker")]
 pub fn beep_hz(hz: u32, ms: u32) {
     let hz = hz.clamp(37, 10_000);
     let divisor = (PIT_FREQ / hz) as u16;

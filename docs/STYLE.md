@@ -194,6 +194,9 @@ machines: ACPI, x2APIC, PCIe, virtio 1.x, UEFI + GOP.
   config, `-M pc`) stays only when the platform offers nothing newer.
   The fallback logs one serial line naming itself and keeps exactly one
   runner regression case. New code never adds a legacy-only path.
+  Milestone 65 made `-M q35`, ECAM, virtio 1.x, MSI-X, and virtio-input
+  the defaults. The PC speaker (`pc-speaker`, default on) is the only
+  audio path.
 - **Hardware security features default on.** SMEP, SMAP, UMIP, NX, and
   KASLR are enabled wherever CPUID reports them (Milestone 63). Every
   copy to or from a user virtual address goes through `arch::user_copy`

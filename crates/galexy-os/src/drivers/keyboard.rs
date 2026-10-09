@@ -53,6 +53,11 @@ static DROPS: AtomicU64 = AtomicU64::new(0);
 /// lives with the keyboard driver and runs on EVERY boot path (BIOS and
 /// UEFI alike; OVMF may leave the port disabled).
 pub fn init() {
+    if crate::drivers::virtio_input::probe() {
+        return;
+    }
+    crate::serial_println!("[kbd] ps/2 i8042");
+    crate::arch::ioapic::wire_ps2_keyboard();
     // SAFETY: fixed controller command/data ports.
     unsafe {
         Port::new(0x64).write(0xAE_u8);

@@ -97,9 +97,11 @@ Rules reviewers need:
    re-arms.
 4. Sleep deadlines shorten the idle arm to
    `min(next_sleeper, next_second)` (clamped by `IDLE_MAX_MS`).
-5. TSC-deadline mode and CPUID / HPET calibration are Milestone 65;
-   until then, PIT-calibrated one-shot is the story. The frozen numbers
-   below do not change with the timer source.
+5. TSC-deadline mode is used when CPUID.1 ECX bit 24 is set. Otherwise
+   the timer is one-shot, calibrated from a measured HPET window (PIT
+   channel 2 if there is no HPET), accepting CPUID 0x15 / 0x16 only
+   when it agrees within 2×. The frozen numbers below do not change
+   with the timer source.
 
 ## Target shape (Phase 7 — shipped)
 

@@ -1,9 +1,10 @@
 //! Local APIC: xAPIC/x2APIC access layer + bring-up.
 //!
 //! Enabled from the MADT's published base (see `arch::acpi`). Supports both
-//! the legacy MMIO interface (xAPIC) and the MSR interface (x2APIC) — real
-//! hardware frequently ships x2APIC-enabled, so the mode is DETECTED, not
-//! assumed. QEMU defaults to xAPIC for our configs; both paths must work.
+//! the legacy MMIO interface (xAPIC) and the MSR interface (x2APIC). x2APIC
+//! is turned on when CPUID.1 ECX bit 21 reports it. The timer is
+//! TSC-deadline when CPUID.1 ECX bit 24 is set; otherwise a one-shot count.
+//! Calibration prefers CPUID 0x15 / 0x16, then the HPET, then the PIT.
 //!
 //! All register access routes through [`reg_read`]/[`reg_write`]: xAPIC
 //! reads/writes the mapped MMIO page; x2APIC converts the MMIO offset to an
@@ -14,7 +15,7 @@
 //! the LAPIC's spurious vector is 0xFF (unused); the timer vector is wired
 //! in a later commit, keyboard delivery goes through the I/O APIC.
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use spin::Once;
 use x86_64::instructions::interrupts;
@@ -28,6 +29,8 @@ use crate::serial_println;
 
 /// IA32_APIC_BASE: bit 11 = APIC global enable, bit 10 = x2APIC mode.
 const IA32_APIC_BASE: u32 = 0x1B;
+/// IA32_TSC_DEADLINE. Written with the absolute TSC at which the timer fires.
+const IA32_TSC_DEADLINE: u32 = 0x6E0;
 /// x2APIC MSR base: an xAPIC MMIO offset maps to 0x800 + (offset >> 4).
 const X2APIC_MSR_BASE: u32 = 0x800;
 /// Lapic register offsets (subset we drive).
@@ -162,9 +165,18 @@ pub fn timer_interrupt_id() -> u8 {
     crate::arch::pics::TIMER_INTERRUPT_ID
 }
 
-/// Reads the LAPIC ID register (xAPIC layout; ID in bits 24..31).
+/// Reads the LAPIC ID (xAPIC: bits 24..31; x2APIC: the whole register).
 pub fn lapic_id() -> u8 {
-    (reg(REG_ID) >> 24) as u8
+    let raw = reg(REG_ID);
+    let id = match mode() {
+        LapicMode::XApic => raw >> 24,
+        LapicMode::X2Apic => raw,
+    };
+    assert!(
+        id <= 0xFF,
+        "apic: id {id:#x} does not fit an 8-bit destination"
+    );
+    id as u8
 }
 
 /// Ends an interrupt if interrupts are on (convenience for handler paths).
@@ -178,12 +190,49 @@ pub fn init(lapic_base: u64) {
     init_timer();
 }
 
+/// Enables x2APIC when CPUID reports it and the LAPIC is still in xAPIC mode.
+fn prefer_x2apic() {
+    let (_eax, _ebx, ecx, _edx) = crate::arch::cpu::cpuid(1, 0);
+    // CPUID.1:ECX[21] — x2APIC.
+    if ecx & (1 << 21) == 0 {
+        // QEMU TCG through 8.2 drops this bit even with `-cpu max,+x2apic`
+        // ("TCG doesn't support requested feature"). Stay on xAPIC MMIO.
+        static PRINTED: AtomicBool = AtomicBool::new(false);
+        if PRINTED
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            serial_println!("[apic] x2apic not enumerated; xAPIC MMIO");
+        }
+        return;
+    }
+    let mut apic_base = Msr::new(IA32_APIC_BASE);
+    // SAFETY: IA32_APIC_BASE exists on every 64-bit x86 CPU with an APIC.
+    let value = unsafe { apic_base.read() };
+    if value & (1 << 10) == 0 {
+        let enabled = value | (1 << 11);
+        // SAFETY: the SDM requires EN=1 before EXTD=1. Two writes, not one.
+        unsafe {
+            apic_base.write(enabled);
+            apic_base.write(enabled | (1 << 10));
+        }
+    }
+    static PRINTED: AtomicBool = AtomicBool::new(false);
+    if PRINTED
+        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+        .is_ok()
+    {
+        serial_println!("[apic] x2apic enabled (IA32_APIC_BASE.EXTD, msr path)");
+    }
+}
+
 /// LAPIC bring-up WITHOUT the timer: mode detection, page mapping, spurious
 /// vector, TPR. Each CPU calls this at its own bring-up (BSP
 /// [`init`] = this + calibration); the LAPIC MMIO base is hardware-
 /// redirected per CPU (every address 0xFEE00000 write from this CPU lands
 /// in THIS CPU's own LAPIC), so the shared mapped page serves every core.
 pub fn bring_up(lapic_base: u64) {
+    prefer_x2apic();
     // Detection FIRST: MSR 0x1B bit 11 must be set, bit 10 chooses x2APIC.
     let apic_base = Msr::new(IA32_APIC_BASE);
     // SAFETY: IA32_APIC_BASE exists on every 64-bit x86 CPU; EN is usually
@@ -290,6 +339,10 @@ fn map_lapic_page(base: u64) -> VirtAddr {
 
 /// Calibrated timer rate in ticks per millisecond.
 static TICKS_PER_MS: Once<u32> = Once::new();
+/// TSC ticks per millisecond, for TSC-deadline and `spin_ms`.
+static TSC_PER_MS: AtomicU64 = AtomicU64::new(0);
+/// True when the LAPIC timer LVT is in TSC-deadline mode.
+static USE_DEADLINE: AtomicBool = AtomicBool::new(false);
 
 /// Per-CPU armed one-shot duration (ms). The IRQ path consumes this so
 /// `timer_ticks` advances by the deadline that actually fired (tickless).
@@ -317,45 +370,189 @@ pub fn quantum_ms() -> u32 {
     (crate::arch::cpu::online() as u32).max(1)
 }
 
-/// Calibrates the LAPIC timer against the PIT. Arming is one-shot /
-/// deadline-based ([`arm_timer`] / [`arm_oneshot_ms`]) — not a 1 kHz
-/// periodic metronome.
+/// Calibrates the timer. Arming is one-shot or TSC-deadline
+/// ([`arm_timer`] / [`arm_oneshot_ms`]) — not a 1 kHz periodic metronome.
 ///
-/// Interrupts must be OFF. Uses the PIT channel 2 in one-shot mode (gate =
-/// port 0x61 bit 0, speaker bit cleared): ~10 ms window, counted by the
-/// LAPIC's down-counter. Ratio math only — no wall-clock assumptions, so
-/// TCG timing quirks cannot skew the result.
+/// Interrupts must be OFF. CPUID 0x15 / 0x16 supply the frequency when
+/// they enumerate one that agrees (within 2×) with a measured HPET or PIT
+/// window. TCG often advertises a crystal the emulated timer does not run
+/// at; the measured window wins in that case so deadlines stay honest.
+/// TSC-deadline is used when CPUID.1 ECX bit 24 is set. `IDLE_MAX_MS` and
+/// the quantum are not touched here.
 fn init_timer() {
     if TICKS_PER_MS.get().is_some() {
         panic!("apic: timer calibrated twice");
     }
+    let (_eax, _ebx, ecx, _edx) = crate::arch::cpu::cpuid(1, 0);
+    let deadline = ecx & (1 << 24) != 0;
+    let (meas_tsc, meas_lapic, meas_name) = measure_reference();
+    let (tsc_per_ms, lapic_per_ms, source) = match cpuid_rates() {
+        Some((name, tsc_hz, lapic_hz)) => {
+            let nom_tsc = tsc_hz / 1000;
+            let nom_lapic = lapic_hz.map(|hz| u32::try_from(hz / 1000).unwrap_or(u32::MAX).max(1));
+            let tsc_ok = within_2x(nom_tsc, meas_tsc);
+            let lapic_ok =
+                nom_lapic.is_some_and(|n| within_2x(u64::from(n), u64::from(meas_lapic)));
+            if tsc_ok && (deadline || lapic_ok) {
+                let lapic = if lapic_ok {
+                    nom_lapic.unwrap()
+                } else {
+                    meas_lapic
+                };
+                (nom_tsc.max(1), lapic, name)
+            } else {
+                serial_println!(
+                        "[apic] cpuid {} disagrees with {} (nominal {}/ms measured {}/ms); using measured",
+                        name,
+                        meas_name,
+                        nom_tsc,
+                        meas_tsc
+                    );
+                (meas_tsc, meas_lapic, meas_name)
+            }
+        }
+        None => (meas_tsc, meas_lapic, meas_name),
+    };
+    TSC_PER_MS.store(tsc_per_ms, Ordering::Relaxed);
+    USE_DEADLINE.store(deadline, Ordering::Relaxed);
+    let published = if deadline {
+        u32::try_from(tsc_per_ms).unwrap_or(u32::MAX).max(1)
+    } else {
+        lapic_per_ms.max(1)
+    };
+    TICKS_PER_MS.call_once(|| published);
+    if deadline {
+        // SAFETY: TSC-deadline is enumerated; 0 disarms until `arm_timer`.
+        unsafe { Msr::new(IA32_TSC_DEADLINE).write(0) };
+        set_reg(REG_LVT_TIMER, MASKED_BIT | LVT_TSC_DEADLINE);
+        serial_println!(
+            "[apic] timer tsc-deadline source={} {} ticks/ms",
+            source,
+            published
+        );
+    } else {
+        set_reg(REG_INITIAL_COUNT, 0);
+        serial_println!(
+            "[apic] timer oneshot source={} {} ticks/ms",
+            source,
+            published
+        );
+    }
+}
 
-    // ---- Calibrate ----
-    // Deadline: count LAPIC ticks over a ~10 ms PIT one-shot.
-    const CAL_MS: u32 = 10;
-    // PIT crystal ≈ 1.193182 MHz; channel-2 one-shot for exactly 10 ms.
-    const PIT_FREQ: u32 = 1_193_182;
-    const PIT_COUNTS: u32 = PIT_FREQ / 1000 * CAL_MS; // ≈ 11931
+/// Busy-waits `ms` milliseconds on the TSC. False before calibration.
+pub fn spin_ms(ms: u32) -> bool {
+    let per = TSC_PER_MS.load(Ordering::Relaxed);
+    if per == 0 {
+        return false;
+    }
+    let start = rdtsc();
+    let need = per.saturating_mul(u64::from(ms));
+    while rdtsc().wrapping_sub(start) < need {
+        core::hint::spin_loop();
+    }
+    true
+}
 
-    // Put the LAPIC timer in one-shot, divide-by-1, masked (no IRQs while
-    // we calibrate — the tick handler must not fire mid-measurement).
+fn rdtsc() -> u64 {
+    // SAFETY: rdtsc has no side effects.
+    unsafe { core::arch::x86_64::_rdtsc() }
+}
+
+fn within_2x(a: u64, b: u64) -> bool {
+    if a == 0 || b == 0 {
+        return false;
+    }
+    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+    hi / lo <= 2
+}
+
+/// `(name, tsc_hz, lapic_hz)` from CPUID 0x15, else 0x16.
+fn cpuid_rates() -> Option<(&'static str, u64, Option<u64>)> {
+    let (eax, ebx, ecx, _edx) = crate::arch::cpu::cpuid(0x15, 0);
+    if eax != 0 && ebx != 0 && ecx != 0 {
+        let tsc = u64::from(ecx).saturating_mul(u64::from(ebx)) / u64::from(eax);
+        if tsc != 0 {
+            return Some(("cpuid-15", tsc, Some(u64::from(ecx))));
+        }
+    }
+    let (eax, _ebx, ecx, _edx) = crate::arch::cpu::cpuid(0x16, 0);
+    if eax != 0 {
+        let tsc = u64::from(eax).saturating_mul(1_000_000);
+        let lapic = (ecx != 0).then_some(u64::from(ecx).saturating_mul(1_000_000));
+        return Some(("cpuid-16", tsc, lapic));
+    }
+    None
+}
+
+fn measure_reference() -> (u64, u32, &'static str) {
+    if let Some(base) = crate::arch::acpi::hpet_base() {
+        if let Some((tsc, lapic)) = measure_hpet(base) {
+            return (tsc, lapic, "hpet");
+        }
+    }
+    let (tsc, lapic) = measure_pit();
+    (tsc, lapic, "pit")
+}
+
+fn measure_hpet(phys: u64) -> Option<(u64, u32)> {
+    const CAL_MS: u64 = 10;
+    let base = crate::arch::mm::map_mmio(phys, 4096);
+    let caps = mmio_read64(base, 0);
+    let period_fs = caps >> 32;
+    if period_fs == 0 {
+        return None;
+    }
+    let ticks = (CAL_MS * 1_000_000_000_000) / period_fs;
+    if ticks == 0 {
+        return None;
+    }
+    let cfg = mmio_read64(base, 0x10);
+    // Bit 0 enables the main counter. Bit 1 (legacy replacement) stays off.
+    mmio_write64(base, 0x10, cfg | 1);
     set_reg(REG_LVT_TIMER, MASKED_BIT);
     set_reg(REG_DIV_CONF, DIV_1);
-    // Arm the PIT channel 2 one-shot first, then the LAPIC counter, so the
-    // LAPIC count INCLUDES the ~1 µs it takes to program it (negligible
-    // asymmetry; the ratio is what matters).
-    pit_oneshot_10ms(PIT_COUNTS);
     set_reg(REG_INITIAL_COUNT, u32::MAX);
-    // Wait for the PIT one-shot to drain (OUT2 goes low again on port 0x61
-    // bit 5); the LAPIC counts in parallel.
-    while !pit_drained() {}
-    let elapsed = u32::MAX - reg(REG_CURRENT_COUNT);
+    let t0 = rdtsc();
+    let h0 = mmio_read64(base, 0xF0);
+    while mmio_read64(base, 0xF0).wrapping_sub(h0) < ticks {
+        core::hint::spin_loop();
+    }
+    let elapsed = u32::MAX.wrapping_sub(reg(REG_CURRENT_COUNT));
+    let t1 = rdtsc();
+    set_reg(REG_INITIAL_COUNT, 0);
+    let tsc_per = t1.wrapping_sub(t0) / CAL_MS;
+    if tsc_per == 0 {
+        return None;
+    }
+    Some((tsc_per, (elapsed / CAL_MS as u32).max(1)))
+}
 
-    // Quantize to ticks-per-ms with a floor of 1. Accuracy: ±2% at the
-    // 10 ms window — far under the scheduler's needs.
-    let per_ms = (elapsed / CAL_MS).max(1);
-    TICKS_PER_MS.call_once(|| per_ms);
-    serial_println!("[apic] timer calibrated: {} ticks/ms", per_ms);
+fn mmio_read64(base: x86_64::VirtAddr, off: u64) -> u64 {
+    // SAFETY: `base` is a mapped HPET page; the counter and config are aligned.
+    unsafe { ((base.as_u64() + off) as *const u64).read_volatile() }
+}
+
+fn mmio_write64(base: x86_64::VirtAddr, off: u64, value: u64) {
+    // SAFETY: as [`mmio_read64`].
+    unsafe { ((base.as_u64() + off) as *mut u64).write_volatile(value) };
+}
+
+fn measure_pit() -> (u64, u32) {
+    const CAL_MS: u32 = 10;
+    const PIT_FREQ: u32 = 1_193_182;
+    const PIT_COUNTS: u32 = PIT_FREQ / 1000 * CAL_MS;
+    set_reg(REG_LVT_TIMER, MASKED_BIT);
+    set_reg(REG_DIV_CONF, DIV_1);
+    pit_oneshot_10ms(PIT_COUNTS);
+    let t0 = rdtsc();
+    set_reg(REG_INITIAL_COUNT, u32::MAX);
+    while !pit_drained() {}
+    let elapsed = u32::MAX.wrapping_sub(reg(REG_CURRENT_COUNT));
+    let t1 = rdtsc();
+    set_reg(REG_INITIAL_COUNT, 0);
+    let tsc_per = t1.wrapping_sub(t0) / u64::from(CAL_MS);
+    ((tsc_per.max(1)), (elapsed / CAL_MS).max(1))
 }
 
 /// Arms THIS CPU's first deadline (preempt quantum). Called by the BSP
@@ -378,11 +575,20 @@ pub fn arm_oneshot_ms(ms: u32) {
     interrupts::without_interrupts(|| {
         let cpu = crate::arch::cpu::current_index();
         ARMED_MS[cpu].store(ms, Ordering::Relaxed);
-        let icr = ticks_per_ms().saturating_mul(ms).max(1);
-        set_reg(REG_DIV_CONF, DIV_1);
-        // One-shot: LVT timer bit 17 clear. EOI still comes from the switch.
-        set_reg(REG_LVT_TIMER, u32::from(TIMER_VECTOR));
-        set_reg(REG_INITIAL_COUNT, icr);
+        if USE_DEADLINE.load(Ordering::Relaxed) {
+            let per = TSC_PER_MS.load(Ordering::Relaxed).max(1);
+            let delta = per.saturating_mul(u64::from(ms)).max(1);
+            set_reg(REG_LVT_TIMER, u32::from(TIMER_VECTOR) | LVT_TSC_DEADLINE);
+            let now = rdtsc();
+            // SAFETY: TSC-deadline was enumerated at calibration.
+            unsafe { Msr::new(IA32_TSC_DEADLINE).write(now.wrapping_add(delta)) };
+        } else {
+            let icr = ticks_per_ms().saturating_mul(ms).max(1);
+            set_reg(REG_DIV_CONF, DIV_1);
+            // One-shot: LVT timer bits 18:17 clear.
+            set_reg(REG_LVT_TIMER, u32::from(TIMER_VECTOR));
+            set_reg(REG_INITIAL_COUNT, icr);
+        }
     });
 }
 
@@ -443,9 +649,10 @@ fn pit_drained() -> bool {
 /// scheduler quantum all keep their meaning across the delivery swap.
 const TIMER_VECTOR: u8 = crate::arch::pics::TIMER_INTERRUPT_ID;
 
-/// LVT timer flags: masked-off (bit 16). Periodic mode (bit 17) is unused —
-/// deadlines are one-shot and re-armed from the IRQ / idle path.
+/// LVT timer flags: masked-off (bit 16). Periodic mode (bit 17) is unused.
+/// Bit 18 selects TSC-deadline when CPUID reports it.
 const MASKED_BIT: u32 = 1 << 16;
+const LVT_TSC_DEADLINE: u32 = 1 << 18;
 /// Divide-by-1 (divide-configuration register encoding).
 const DIV_1: u32 = 0b1011;
 

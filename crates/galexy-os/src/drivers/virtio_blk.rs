@@ -1,11 +1,10 @@
-//! Virtio-blk (legacy PCI) as a [`BlockDevice`].
+//! Virtio-blk as a [`BlockDevice`].
 //!
-//! QEMU: `-drive if=none,id=galfs,file=galfs.img,format=raw` plus
-//! `-device virtio-blk-pci,drive=galfs,disable-legacy=off,disable-modern=on`.
-//! Completion is the used-ring interrupt (INTx via the I/O APIC). The
-//! requester parks `STATE_WAITING` + `IO_BLOCK` instead of spinning.
-//! MSI-X is Milestone 65. One outstanding request at a time. A missed
-//! INTx is noticed on the next timer tick.
+//! Prefers virtio 1.x (MMIO BARs, `VIRTIO_F_VERSION_1`, MSI-X). The legacy
+//! I/O BAR path remains when the function has no modern capabilities, and
+//! names itself on the serial line. Completion parks `STATE_WAITING` +
+//! `IO_BLOCK`. One outstanding request at a time. A missed interrupt is
+//! noticed on the next timer tick.
 
 use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 
@@ -17,10 +16,16 @@ use galexy_abi::SysError;
 
 use super::block::{BlockDevice, SECTOR};
 use super::pci;
+use super::virtio_pci;
 use crate::arch::mm;
 
 const VIRTIO_VENDOR: u16 = 0x1AF4;
-const VIRTIO_BLK_DEVICE: u16 = 0x1001;
+/// Legacy / transitional virtio-blk.
+const VIRTIO_BLK_LEGACY: u16 = 0x1001;
+/// Modern-only virtio-blk (`0x1040 + 2`).
+const VIRTIO_BLK_MODERN: u16 = 0x1042;
+/// `VIRTIO_BLK_F_FLUSH` in feature word 0.
+const VIRTIO_BLK_F_FLUSH: u32 = 1 << 9;
 
 const REG_HOST_FEATURES: u16 = 0x00;
 const REG_GUEST_FEATURES: u16 = 0x04;
@@ -106,8 +111,18 @@ const _: () = assert!(core::mem::offset_of!(DmaRegion, used) == 4096);
 const _: () = assert!(core::mem::size_of::<VirtqDesc>() == 16);
 const _: () = assert!(core::mem::size_of::<VirtqAvail>() == AVAIL_BYTES);
 
+enum Transport {
+    /// Legacy I/O BAR. `io` is the port base.
+    Legacy { io: u16 },
+    /// Virtio 1.x MMIO. `notify_off` is the queue 0 notify offset.
+    Modern {
+        dev: virtio_pci::Modern,
+        notify_off: u16,
+    },
+}
+
 struct DeviceState {
-    io_base: u16,
+    transport: Transport,
     last_used: u16,
 }
 
@@ -115,6 +130,10 @@ static PROBED: AtomicBool = AtomicBool::new(false);
 static READY: AtomicBool = AtomicBool::new(false);
 static CAPACITY: AtomicU64 = AtomicU64::new(0);
 static IO_BASE: AtomicU16 = AtomicU16::new(0);
+/// Virtual address of the virtio 1.x ISR byte, or 0 on the legacy path.
+static ISR_VIRT: AtomicU64 = AtomicU64::new(0);
+/// True when completion is an I/O APIC level line (needs an IOAPIC EOI).
+static INTX_ROUTED: AtomicBool = AtomicBool::new(false);
 /// `used.idx` the in-flight request is waiting for. Armed only while
 /// a requester is parked or about to park.
 static WANT_USED: AtomicU16 = AtomicU16::new(0);
@@ -292,12 +311,103 @@ fn check_range(lba: u32, count: usize) -> Result<(), SysError> {
 }
 
 fn probe() -> bool {
-    let Some(dev) = pci::find(VIRTIO_VENDOR, VIRTIO_BLK_DEVICE) else {
+    let Some(dev) = pci::find_any(VIRTIO_VENDOR, &[VIRTIO_BLK_LEGACY, VIRTIO_BLK_MODERN]) else {
         return false;
     };
     pci::enable_bus_master(dev);
+    if let Some(modern) = virtio_pci::claim(dev) {
+        if probe_modern(dev, modern) {
+            return true;
+        }
+        crate::serial_println!("[virtio-blk] virtio 1.x setup failed; trying legacy IO BAR");
+    }
+    if dev.device != VIRTIO_BLK_LEGACY {
+        return false;
+    }
+    probe_legacy(dev)
+}
+
+fn probe_modern(dev: pci::Device, modern: virtio_pci::Modern) -> bool {
+    if !virtio_pci::negotiate(&modern, VIRTIO_BLK_F_FLUSH) {
+        crate::serial_println!("[virtio-blk] device refused VIRTIO_F_VERSION_1");
+        return false;
+    }
+    let mut dma = DMA.lock();
+    zero_dma(&mut dma);
+    let virt = VirtAddr::new(core::ptr::from_ref(&*dma) as u64);
+    let Some(phys) = mm::translate(virt) else {
+        crate::serial_println!("[virtio-blk] DMA page not mapped");
+        return false;
+    };
+    let used_virt = VirtAddr::new(core::ptr::from_ref(&dma.used) as u64);
+    let Some(used_phys) = mm::translate(used_virt) else {
+        crate::serial_println!("[virtio-blk] used ring not mapped");
+        return false;
+    };
+    let Some(notify_off) = virtio_pci::setup_queue(
+        &modern,
+        0,
+        QUEUE_SIZE as u16,
+        phys.as_u64(),
+        phys.as_u64() + core::mem::offset_of!(DmaRegion, avail) as u64,
+        used_phys.as_u64(),
+    ) else {
+        crate::serial_println!("[virtio-blk] virtio 1.x queue rejected");
+        return false;
+    };
+    let capacity = virtio_pci::read_dev_u64(&modern, 0);
+    if capacity == 0 {
+        crate::serial_println!("[virtio-blk] zero capacity");
+        return false;
+    }
+    drop(dma);
+    ISR_VIRT.store(modern.isr_addr(), Ordering::Release);
+    let msix = virtio_pci::enable_msix(
+        dev,
+        &modern,
+        0,
+        0,
+        VIRTIO_VECTOR,
+        crate::arch::apic::lapic_id(),
+    );
+    let route = if msix {
+        "msi-x"
+    } else if wire_intx(dev) {
+        "intx"
+    } else {
+        "no-irq"
+    };
+    virtio_pci::driver_ok(&modern);
+    *DEV.lock() = Some(DeviceState {
+        transport: Transport::Modern {
+            dev: modern,
+            notify_off,
+        },
+        last_used: 0,
+    });
+    CAPACITY.store(capacity, Ordering::Release);
+    crate::serial_println!(
+        "[virtio-blk] virtio 1.x ready ({} sectors, {})",
+        capacity,
+        route
+    );
+    true
+}
+
+fn wire_intx(dev: pci::Device) -> bool {
+    let line = pci::interrupt_line(dev);
+    if line == 0
+        || !crate::arch::ioapic::wire_pci_level(u32::from(line), VIRTIO_VECTOR, "virtio-blk")
+    {
+        return false;
+    }
+    INTX_ROUTED.store(true, Ordering::Release);
+    true
+}
+
+fn probe_legacy(dev: pci::Device) -> bool {
     let Some(io) = pci::io_bar0(dev) else {
-        crate::serial_println!("[virtio-blk] BAR0 is not IO-mapped (need transitional)");
+        crate::serial_println!("[virtio-blk] legacy IO BAR missing");
         return false;
     };
 
@@ -361,35 +471,45 @@ fn probe() -> bool {
         return false;
     }
 
+    IO_BASE.store(io, Ordering::Release);
     outb(
         io + REG_STATUS,
         STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_DRIVER_OK,
     );
     drop(dma);
 
+    let route = if wire_intx(dev) { "intx" } else { "no-irq" };
     *DEV.lock() = Some(DeviceState {
-        io_base: io,
+        transport: Transport::Legacy { io },
         last_used: 0,
     });
-    IO_BASE.store(io, Ordering::Release);
     CAPACITY.store(capacity, Ordering::Release);
-    let line = pci::interrupt_line(dev);
-    if line == 0
-        || !crate::arch::ioapic::wire_pci_level(u32::from(line), VIRTIO_VECTOR, "virtio-blk")
-    {
-        crate::serial_println!("[virtio-blk] legacy poll (no INTx line)");
-    }
-    crate::serial_println!("[virtio-blk] ready ({} sectors, io=0x{:x})", capacity, io);
+    crate::serial_println!(
+        "[virtio-blk] legacy IO BAR ready ({} sectors, io=0x{:x}, {})",
+        capacity,
+        io,
+        route
+    );
     true
 }
 
-/// Reads the legacy ISR, which acknowledges the INTx line.
+/// Acknowledges the virtio interrupt (1.x ISR byte, or the legacy port).
 pub fn ack_isr() {
+    let isr = ISR_VIRT.load(Ordering::Acquire);
+    if isr != 0 {
+        let _ = virtio_pci::ack_isr(isr);
+        return;
+    }
     let io = IO_BASE.load(Ordering::Acquire);
     if io == 0 {
         return;
     }
     let _ = inb(io + REG_ISR);
+}
+
+/// True when virtio-blk completion is a level-triggered INTx line.
+pub fn intx_routed() -> bool {
+    INTX_ROUTED.load(Ordering::Acquire)
 }
 
 /// CPU currently halted inside a transfer, if any.
@@ -490,7 +610,7 @@ fn submit_xfer(
     len: usize,
 ) -> Result<u16, SysError> {
     let mut dma = DMA.lock();
-    let io = state.io_base;
+    let transport = &state.transport;
 
     dma.req.type_ = type_;
     dma.req.reserved = 0;
@@ -567,7 +687,10 @@ fn submit_xfer(
     }
     core::sync::atomic::fence(Ordering::SeqCst);
 
-    outw(io + REG_QUEUE_NOTIFY, 0);
+    match transport {
+        Transport::Legacy { io } => outw(io + REG_QUEUE_NOTIFY, 0),
+        Transport::Modern { dev, notify_off } => virtio_pci::notify(dev, 0, *notify_off),
+    }
 
     let want = state.last_used.wrapping_add(1);
     drop(dma);

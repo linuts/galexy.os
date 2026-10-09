@@ -215,7 +215,7 @@ fn about() {
     out_lines(&[
         "galexy.os - a small Rust OS".into(),
         "boot: BIOS/UEFI via the bootloader crate".into(),
-        "kernel: framebuffer screen, PS/2 keyboard, PIT timer,".into(),
+        "kernel: framebuffer screen, virtio or PS/2 keyboard, LAPIC timer,".into(),
         "frame allocator, paging, heap, cooperative tasks +".into(),
         "preemptive threads".into(),
     ]);
