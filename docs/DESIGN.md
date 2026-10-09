@@ -777,9 +777,11 @@ rejects a name that already has a live task (`NoResource`), so typing
 always receives the console, and it writes the console of the task that
 spawned it. `SPAWN_GRANT_KEYBOARD` also gives the child the keyboard
 so an interactive program (`nano`) can read keys while the shell
-Cap-waits. The loader and power stay with the shell once it is logged in. Boot starts one shell on each F-key, pinned to the BSP,
+Cap-waits. The loader stays with the shell once it is logged in. Power
+stays on init while init is alive. Boot starts one shell on each F-key, pinned to the BSP,
 logged out (pre-login grants, no tokens, login banner with 1-based TTY).
-Password login restores loader/query (and power for admin). F1's shell
+Password login restores loader/query. An admin login receives Power
+only when init is not running. F1's shell
 is named `shell`; the others are `shell2` through `shell12`. F1–F12
 select which cell grid is painted.
 The keyboard interrupt only records that index; the main loop paints

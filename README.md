@@ -114,7 +114,8 @@ frames). Up/down arrows recall session history (written to
 | `echo $?` | Exit status of the last Cap-waited program |
 | `logout` | Back to the login screen |
 | `hello` / `linger` / `nap` | Sample user programs |
-| `shutdown` / `reboot` | Power (admin) |
+| `svc status\|start\|stop\|restart <name>` | Service table, through init |
+| `shutdown` / `reboot` | Ask init to power off or reset (admin) |
 
 Typing `shell` is refused — seats are F-keys, not programs you spawn.
 
