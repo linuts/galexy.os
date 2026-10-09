@@ -177,6 +177,10 @@ fn main() -> i32 {
             let _ = spawn_svc(i);
         }
     }
+    // Autostart used the single pending-spawn slot. Say so only after
+    // those spawns have returned, so a later spawn is not `NoResource`
+    // because stamp is still being loaded.
+    log(b"[init] ready\n");
 
     let mut cursor = 0usize;
     loop {

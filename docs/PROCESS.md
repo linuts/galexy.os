@@ -128,6 +128,9 @@ by a magic “PID 1” in the public ABI. Cap-kill of init is always
   (`once`, started at boot), `probe` (`restart`, started only by
   `svc start`; a fast exit backs off 0, then 250, 500, 1000, and
   2000 ms), `spare` (`ignore`)
+- Logs `[init] ready` after autostart spawns have returned. The
+  kernel has one pending spawn slot; a spawn during that window is
+  `NoResource`
 - First `channel` call is the control channel. Init holds both ends.
   Seats `send` on the reserved init Cap (`0x8008`); the kernel stamps
   admin, tty, debug id, and session generation. One RPC is in flight

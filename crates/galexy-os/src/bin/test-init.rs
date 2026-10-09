@@ -24,6 +24,7 @@ const TICK_TIMEOUT: u64 = 12_000;
 struct Report {
     done: u64,
     spawn_ok: u64,
+    spawn_err: u64,
 }
 
 fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
@@ -56,20 +57,23 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         "init must be marked immortal to Cap-kill"
     );
 
-    // Milestone 54: init spawns twelve seats via the single PENDING_SPAWN
-    // slot — wait until seats are up so orphan-parent's linger spawn is
-    // not rejected with NoResource.
+    // Milestone 54/67: init spawns seats and stamp through the single
+    // PENDING_SPAWN slot. Wait until it logs ready, after those spawns
+    // have returned, so linger is not rejected with NoResource.
+    let mut boot_log = [0u8; 4096];
     let mut elapsed = 0u64;
     loop {
         x86_64::instructions::hlt();
         sched::drain_spawn();
         sched::reap();
-        if sched::seats_are_live() && !sched::spawn_is_pending() {
+        let n = galexy_os::drivers::dmesg::snapshot(&mut boot_log);
+        let text = core::str::from_utf8(&boot_log[..n]).unwrap_or("");
+        if text.contains("[init] ready") && sched::seats_are_live() && !sched::spawn_is_pending() {
             break;
         }
         elapsed += 1;
         if elapsed > TICK_TIMEOUT {
-            panic!("init never finished spawning seats");
+            panic!("init never finished autostart; dmesg:\n{text}");
         }
     }
 
@@ -97,7 +101,11 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
             panic!("orphan-parent never finished spawn");
         }
     };
-    assert_eq!(report.spawn_ok, 1, "spawn linger must succeed");
+    assert_eq!(
+        report.spawn_ok, 1,
+        "spawn linger must succeed (err={})",
+        report.spawn_err
+    );
 
     elapsed = 0;
     loop {
@@ -260,6 +268,7 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     mov_r64_imm(&mut code, 10, 0);
     code.extend_from_slice(&[0x0F, 0x05]);
     store(&mut code, 2, 0x08);
+    store(&mut code, 0, 0x10);
 
     mov_r64_imm(&mut code, 0, DONE);
     store(&mut code, 0, 0x00);
