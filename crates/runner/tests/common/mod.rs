@@ -78,41 +78,20 @@ fn serial_log_path(name: &str) -> PathBuf {
 ///
 /// `-smp 2` plus either `-accel kvm -cpu host` or `-accel tcg -cpu max`.
 ///
-/// KVM when `/dev/kvm` is writable (or `GALEXY_ACCEL=kvm`). Otherwise TCG.
-/// `GALEXY_ACCEL=tcg` forces the software path. `-cpu max` / `host` exposes
-/// FSGSBASE, which the per-CPU substrate requires. 2 cores exercise those
-/// paths in every test.
+/// KVM when a vCPU can be created (or `GALEXY_ACCEL=kvm`, which fails the
+/// boot instead of hanging when the probe does not). Otherwise TCG.
+/// `GALEXY_ACCEL=tcg` forces the software path and skips the probe.
+/// `-cpu max` / `host` exposes FSGSBASE, which the per-CPU substrate
+/// requires. 2 cores exercise those paths in every test.
 fn apply_accel(cmd: &mut Command) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static PRINTED: AtomicBool = AtomicBool::new(false);
-    let kvm = use_kvm();
-    if PRINTED
-        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
-        .is_ok()
-    {
-        eprintln!("[runner] accel={}", if kvm { "kvm" } else { "tcg" });
-    }
-    if kvm {
-        cmd.arg("-accel").arg("kvm").arg("-cpu").arg("host");
-    } else {
-        // `+x2apic` is the Milestone 65 MSR-path case. `max` already
-        // includes it; the flag keeps the test explicit.
-        cmd.arg("-accel").arg("tcg").arg("-cpu").arg("max,+x2apic");
+    // `+x2apic` on the TCG path is the Milestone 65 MSR-path case. `max`
+    // already includes it; `configure_accel` keeps the flag explicit.
+    if let Err(err) = runner::configure_accel(cmd) {
+        panic!("{err}");
     }
 }
 
-/// True when this process will boot QEMU with KVM.
-pub fn use_kvm() -> bool {
-    match std::env::var("GALEXY_ACCEL").ok().as_deref() {
-        Some("tcg") => false,
-        Some("kvm") => true,
-        _ => std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open("/dev/kvm")
-            .is_ok(),
-    }
-}
+pub use runner::use_kvm;
 
 fn qemu_command(img_path: &str, serial_path: &Path) -> Command {
     qemu_command_opts(img_path, serial_path, "q35", true)

@@ -196,7 +196,7 @@ OVMF image for UEFI. Nothing else.
 
 ```sh
 cargo build -p runner                       # every image under target/
-cargo run --release                         # BIOS, headless, -smp 2; KVM if /dev/kvm is writable, else TCG
+cargo run --release                         # BIOS, headless, -smp 2; KVM if a vCPU can be created, else TCG
 cargo run --release -- --display            # same, plus the framebuffer window
 OVMF_FD=/usr/share/ovmf/OVMF.fd cargo run --release -- --uefi   # UEFI; path varies per distro
 scripts/review-smoke.sh                     # focused subset: host suites + 11 boots (~10 min TCG)

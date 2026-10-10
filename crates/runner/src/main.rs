@@ -21,18 +21,6 @@ fn image_path(name: &str, kind: &str) -> String {
         .unwrap_or_else(|| panic!("no {name} {kind} image built"))
 }
 
-fn kvm_available() -> bool {
-    match std::env::var("GALEXY_ACCEL").ok().as_deref() {
-        Some("tcg") => false,
-        Some("kvm") => true,
-        _ => std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open("/dev/kvm")
-            .is_ok(),
-    }
-}
-
 fn main() {
     let uefi = std::env::args().any(|arg| arg == "--uefi");
     let display = std::env::args().any(|arg| arg == "--display");
@@ -83,15 +71,11 @@ fn main() {
         cmd.arg("-device").arg("virtio-keyboard-pci");
     }
     // SMP: 2 cores, exposed by the per-CPU substrate (gs:[8] syscall path,
-    // per-CPU GDT/TSS). KVM + `-cpu host` when `/dev/kvm` is writable,
+    // per-CPU GDT/TSS). KVM + `-cpu host` when a vCPU can be created,
     // otherwise TCG + `-cpu max`. Both expose FSGSBASE.
     cmd.arg("-smp").arg("2");
-    if kvm_available() {
-        eprintln!("[runner] accel=kvm");
-        cmd.arg("-accel").arg("kvm").arg("-cpu").arg("host");
-    } else {
-        eprintln!("[runner] accel=tcg");
-        cmd.arg("-accel").arg("tcg").arg("-cpu").arg("max,+x2apic");
+    if runner::configure_accel(&mut cmd).is_err() {
+        std::process::exit(1);
     }
     // COM1 is the console: the guest mirrors the visible TTY onto it and
     // reads keystrokes back. Headless is the default so that text is this
