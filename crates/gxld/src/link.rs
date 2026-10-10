@@ -67,6 +67,24 @@ struct Segment {
     flags: u32,
 }
 
+/// The TLS block: `.tdata` initialization image followed by `.tbss`,
+/// described by one `PT_TLS`. x86_64 is TLS variant II: the thread
+/// pointer sits just past the end of the block, so every `TPOFF` is
+/// negative — `S - (vaddr + align_up(memsz, align))`.
+#[derive(Debug, Clone, Copy)]
+struct Tls {
+    vaddr: u64,
+    filesz: u64,
+    memsz: u64,
+    align: u64,
+}
+
+impl Tls {
+    fn thread_pointer(&self) -> u64 {
+        self.vaddr + align_up(self.memsz, self.align)
+    }
+}
+
 struct Link {
     objects: Vec<Object>,
     table: BTreeMap<String, Def>,
@@ -75,6 +93,7 @@ struct Link {
     got_names: Vec<String>,
     got_addr: u64,
     segments: Vec<Segment>,
+    tls: Option<Tls>,
     image_base: u64,
 }
 
@@ -114,6 +133,7 @@ pub fn link(inputs: &[Input<'_>], opts: &Options) -> Result<Vec<u8>> {
         got_names: Vec::new(),
         got_addr: 0,
         segments: Vec::new(),
+        tls: None,
         image_base: opts.image_base,
     };
     link.resolve()?;
@@ -213,12 +233,6 @@ impl Link {
             };
             if bind == STB_LOCAL || name.is_empty() || matches!(stype, STT_SECTION | STT_FILE) {
                 continue;
-            }
-            if stype == STT_TLS {
-                return Err(Error::Unsupported {
-                    what: format!("TLS symbol `{name}` (Milestone 70)"),
-                    input: self.objects[oi].name.clone(),
-                });
             }
             match shndx {
                 Shndx::Undef => {
@@ -462,8 +476,11 @@ impl Link {
             },
         ];
 
-        // R: headers, rodata, GOT.
-        let mut cur = (EHDR_SIZE + 3 * PHDR_SIZE) as u64;
+        // R: headers, rodata, GOT. Three PT_LOADs, plus PT_TLS when any
+        // live section is TLS.
+        let tls_align = self.tls_align();
+        let phdrs = 3 + usize::from(tls_align.is_some());
+        let mut cur = (EHDR_SIZE + phdrs * PHDR_SIZE) as u64;
         self.place_class(Class::Rodata, SEG_R, &mut cur);
         if !self.got.is_empty() {
             cur = align_up(cur, 8);
@@ -482,12 +499,30 @@ impl Link {
         segs[SEG_RX].filesz = cur;
         segs[SEG_RX].memsz = cur;
 
-        // RW: data then bss, then COMMON.
+        // RW: data, the TLS image (tdata | tbss), then bss, then COMMON.
+        // The TLS block occupies real RW memory: it is the template a
+        // runtime copies per thread, and keeping `.tbss` addressable
+        // lets `sym_addr` work unchanged for TLS symbols.
         let data_va = align_up(text_va + segs[SEG_RX].memsz, PAGE);
         segs[SEG_RW].vaddr = data_va;
         let mut cur = 0u64;
         self.place_class(Class::Data, SEG_RW, &mut cur);
-        segs[SEG_RW].filesz = cur;
+        if let Some(align) = tls_align {
+            cur = align_up(cur, align);
+            let start = cur;
+            self.place_class(Class::Tdata, SEG_RW, &mut cur);
+            let filesz = cur - start;
+            segs[SEG_RW].filesz = cur;
+            self.place_class(Class::Tbss, SEG_RW, &mut cur);
+            self.tls = Some(Tls {
+                vaddr: data_va + start,
+                filesz,
+                memsz: cur - start,
+                align,
+            });
+        } else {
+            segs[SEG_RW].filesz = cur;
+        }
         self.place_class(Class::Bss, SEG_RW, &mut cur);
         for obj in self.objects.iter_mut().filter(|o| o.loaded) {
             for s in obj.symbols.iter_mut() {
@@ -543,6 +578,18 @@ impl Link {
         Ok(())
     }
 
+    /// Alignment of the TLS block (the largest live TLS section's), or
+    /// `None` when the image has no TLS.
+    fn tls_align(&self) -> Option<u64> {
+        self.objects
+            .iter()
+            .filter(|o| o.loaded)
+            .flat_map(|o| o.sections.iter())
+            .filter(|s| s.live && matches!(s.class, Class::Tdata | Class::Tbss))
+            .map(|s| s.align)
+            .max()
+    }
+
     fn place_class(&mut self, class: Class, seg: usize, cur: &mut u64) {
         for obj in self.objects.iter_mut().filter(|o| o.loaded) {
             for sec in obj.sections.iter_mut() {
@@ -585,13 +632,38 @@ impl Link {
         }
     }
 
+    /// Thread-pointer-relative offset of a defined TLS symbol (variant
+    /// II, so always negative). Non-TLS symbols and images without a TLS
+    /// block are errors: a `TPOFF` against them would be a code-gen bug.
+    fn tp_offset(&self, oi: usize, si: usize, where_: &str) -> Result<i128> {
+        let sym = &self.objects[oi].symbols[si];
+        if sym.stype != STT_TLS {
+            return Err(Error::Input {
+                input: where_.to_string(),
+                detail: format!("TLS relocation against non-TLS symbol `{}`", sym.name),
+            });
+        }
+        let tls = self.tls.ok_or_else(|| Error::Input {
+            input: where_.to_string(),
+            detail: format!(
+                "TLS relocation against `{}` but the image has no TLS block",
+                sym.name
+            ),
+        })?;
+        Ok(self.sym_addr(oi, si)? as i128 - tls.thread_pointer() as i128)
+    }
+
     // ---------------- relocations ----------------
 
     fn apply_relocations(&mut self) -> Result<()> {
-        // GOT contents first.
+        // GOT contents first: an address, or for a TLS symbol (reached
+        // through `GOTTPOFF`) its thread-pointer offset.
         let got_entries: Vec<(SymKey, u64)> = self.got.iter().map(|(k, v)| (*k, *v)).collect();
         for (key, slot) in got_entries {
             let value = match key {
+                SymKey::Def(o, s) if self.objects[o].symbols[s].stype == STT_TLS => {
+                    self.tp_offset(o, s, "GOT")? as i64 as u64
+                }
                 SymKey::Def(o, s) => self.sym_addr(o, s)?,
                 SymKey::Named(_) => 0,
             };
@@ -656,8 +728,7 @@ impl Link {
                     };
                     let got_addr = self.got_addr;
                     let field_off = (place.offset + r.offset) as usize;
-                    let buf = &mut self.segments[place.seg].buf;
-                    if field_off + field_len > buf.len() {
+                    if field_off + field_len > self.segments[place.seg].buf.len() {
                         return Err(Error::Input {
                             input: where_,
                             detail: format!("relocation at {:#x} runs past the section", r.offset),
@@ -676,15 +747,28 @@ impl Link {
                         R_X86_64_GOTPCREL
                         | R_X86_64_GOTPCRELX
                         | R_X86_64_REX_GOTPCRELX
-                        | R_X86_64_CODE_4_GOTPCRELX => {
+                        | R_X86_64_CODE_4_GOTPCRELX
+                        | R_X86_64_GOTTPOFF => {
                             (got_addr + got_slot.unwrap_or(0)) as i128 + a - p128
                         }
                         R_X86_64_GOTPC32 => got_addr as i128 + a - p128,
                         R_X86_64_SIZE32 | R_X86_64_SIZE64 => z as i128 + a,
+                        R_X86_64_TPOFF32 | R_X86_64_TPOFF64 => {
+                            let Some((o, s)) = target else {
+                                return Err(Error::Input {
+                                    input: where_,
+                                    detail: format!(
+                                        "TLS relocation against undefined `{sym_name}`"
+                                    ),
+                                });
+                            };
+                            self.tp_offset(o, s, &where_)? + a
+                        }
                         _ => unreachable!("field_size filtered the type"),
                     };
+                    let buf = &mut self.segments[place.seg].buf;
                     match r.rtype {
-                        R_X86_64_64 | R_X86_64_PC64 | R_X86_64_SIZE64 => {
+                        R_X86_64_64 | R_X86_64_PC64 | R_X86_64_SIZE64 | R_X86_64_TPOFF64 => {
                             write_u64(buf, field_off, value as u64);
                         }
                         R_X86_64_32 | R_X86_64_SIZE32 => {
@@ -711,11 +795,12 @@ impl Link {
     fn emit(&self, entry: u64) -> Vec<u8> {
         let base = self.image_base;
         let loads: Vec<&Segment> = self.segments.iter().filter(|s| s.memsz > 0).collect();
+        let phnum = loads.len() + usize::from(self.tls.is_some());
         let file_len = loads
             .iter()
             .map(|s| (s.vaddr - base + s.filesz) as usize)
             .max()
-            .unwrap_or(EHDR_SIZE + 3 * PHDR_SIZE);
+            .unwrap_or(EHDR_SIZE + phnum * PHDR_SIZE);
         let mut out = vec![0u8; file_len];
         for seg in &loads {
             let off = (seg.vaddr - base) as usize;
@@ -737,7 +822,7 @@ impl Link {
         write_u32(&mut out, 48, 0);
         write_u16(&mut out, 52, EHDR_SIZE as u16);
         write_u16(&mut out, 54, PHDR_SIZE as u16);
-        write_u16(&mut out, 56, loads.len() as u16);
+        write_u16(&mut out, 56, phnum as u16);
         write_u16(&mut out, 58, 0);
         write_u16(&mut out, 60, 0);
         write_u16(&mut out, 62, 0);
@@ -755,6 +840,19 @@ impl Link {
             write_u64(&mut out, at + 40, seg.memsz);
             write_u64(&mut out, at + 48, PAGE);
         }
+        // PT_TLS last: the Galexy loader maps only PT_LOADs and skips it;
+        // a runtime that sets up native TLS reads it from the file.
+        if let Some(tls) = self.tls {
+            let at = EHDR_SIZE + loads.len() * PHDR_SIZE;
+            write_u32(&mut out, at, PT_TLS);
+            write_u32(&mut out, at + 4, PF_R);
+            write_u64(&mut out, at + 8, (tls.vaddr - base).min(file_len as u64));
+            write_u64(&mut out, at + 16, tls.vaddr);
+            write_u64(&mut out, at + 24, tls.vaddr);
+            write_u64(&mut out, at + 32, tls.filesz);
+            write_u64(&mut out, at + 40, tls.memsz);
+            write_u64(&mut out, at + 48, tls.align);
+        }
         out
     }
 }
@@ -762,7 +860,11 @@ impl Link {
 fn needs_got(rtype: u32) -> bool {
     matches!(
         rtype,
-        R_X86_64_GOTPCREL | R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX | R_X86_64_CODE_4_GOTPCRELX
+        R_X86_64_GOTPCREL
+            | R_X86_64_GOTPCRELX
+            | R_X86_64_REX_GOTPCRELX
+            | R_X86_64_CODE_4_GOTPCRELX
+            | R_X86_64_GOTTPOFF
     )
 }
 
@@ -770,10 +872,10 @@ fn is_pc_relative(rtype: u32) -> bool {
     matches!(rtype, R_X86_64_PC32 | R_X86_64_PLT32 | R_X86_64_PC64)
 }
 
-/// Width of the relocated field, or `None` for a type outside v0.
+/// Width of the relocated field, or `None` for an unsupported type.
 fn field_size(rtype: u32) -> Option<usize> {
     match rtype {
-        R_X86_64_64 | R_X86_64_PC64 | R_X86_64_SIZE64 => Some(8),
+        R_X86_64_64 | R_X86_64_PC64 | R_X86_64_SIZE64 | R_X86_64_TPOFF64 => Some(8),
         R_X86_64_PC32
         | R_X86_64_PLT32
         | R_X86_64_32
@@ -783,7 +885,9 @@ fn field_size(rtype: u32) -> Option<usize> {
         | R_X86_64_REX_GOTPCRELX
         | R_X86_64_CODE_4_GOTPCRELX
         | R_X86_64_GOTPC32
-        | R_X86_64_SIZE32 => Some(4),
+        | R_X86_64_SIZE32
+        | R_X86_64_GOTTPOFF
+        | R_X86_64_TPOFF32 => Some(4),
         _ => None,
     }
 }

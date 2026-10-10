@@ -38,9 +38,20 @@ Deviations from the plan below, decided by the real inputs:
 | differential via `rustc --emit=obj` + hand link line | `-Clinker=gxld -Clinker-flavor=ld` | the real link line, including `symbols.o`, `compiler_builtins` and `--gc-sections`, is what Milestone 73 will send |
 | GOT in the RW segment | GOT in the R segment | the image is static; slots are filled at link time and never written again |
 
-Still open from this plan: TLS (`TPOFF32`, `.tdata`/`.tbss`) with
-Milestone 70; the ring-3 program with Milestone 71; `.eh_frame` kept
-for `unwinding` as a 72 follow-on; cg_clif output in 73.
+Milestone 70 added TLS: `.tdata`/`.tbss` are laid out as one block in
+the RW segment (after `.data`, before `.bss`), described by a fourth
+program header `PT_TLS` that follows the three `PT_LOAD`s, and
+`R_X86_64_TPOFF32` / `TPOFF64` / `GOTTPOFF` resolve to variant-II
+thread-pointer offsets (`S - (tls_vaddr + align_up(memsz, align))`,
+always negative; `GOTTPOFF` puts that offset in a GOT slot). The
+Galexy loader maps only `PT_LOAD`s and skips `PT_TLS`, and the
+`x86_64-unknown-galexy` target keeps `has-thread-local = false` (std uses
+key-based TLS over the FS base), so no shipped program carries a TLS
+block today; the linker side exists so cg_clif output with native
+`#[thread_local]` links the day a runtime consumes `PT_TLS`.
+
+Still open from this plan: the ring-3 program with Milestone 71;
+`.eh_frame` kept for `unwinding` as a 72 follow-on; cg_clif output in 73.
 
 ## Why a linker at all
 
@@ -110,7 +121,7 @@ appear for calls. cg_clif output for the sysroot may use either.
 |---|---|---|
 | rodata | R | `.rodata*`, the synthesized GOT, `.gcc_except_table`, later `.eh_frame` |
 | text | RX | `.text*`, `.init`/`.fini` if present |
-| data | RW | `.data*`, `.data.rel.ro*` (static image, so it is just data), `.bss*` as `memsz > filesz`, `.tbss`/`.tdata` once TLS exists |
+| data | RW | `.data*`, `.data.rel.ro*` (static image, so it is just data), then the TLS block (`.tdata` file-backed, `.tbss` zero; also described by `PT_TLS`), then `.bss*` and `COMMON` as `memsz > filesz` |
 
 Discarded in v0: `.eh_frame`, `.eh_frame_hdr`, `.debug_*`, `.comment`,
 `.note*`, `.llvm_addrsig`, `.symtab`/`.strtab` (no symbol table in the
@@ -136,7 +147,8 @@ image; the loader does not read one). `.eh_frame` returns when
 | `R_X86_64_PC32` | `S + A - P` |
 | `R_X86_64_PLT32` | `S + A - P` — no PLT, direct call |
 | `R_X86_64_GOTPCREL`, `GOTPCRELX`, `REX_GOTPCRELX` | One GOT slot per symbol in the rodata segment, `G + GOT + A - P`; relaxation to a direct `lea`/`mov` is an optimization, not v0 |
-| `R_X86_64_TPOFF32` | Milestone 70, with threads and TLS |
+| `R_X86_64_TPOFF32`, `TPOFF64` | `S + A - TP` where `TP = tls_vaddr + align_up(tls_memsz, tls_align)` (variant II); the symbol must be `STT_TLS` and the image must have a TLS block, else `Err` (Milestone 70) |
+| `R_X86_64_GOTTPOFF` | GOT slot holding `S - TP`, `G + GOT + A - P` (Milestone 70) |
 | anything else | `Err` naming the kind, object and section |
 
 - **Errors over panics**: every input-derived value is bounds-checked;
@@ -172,7 +184,7 @@ galexy-target sysroot plus `hello.rs` compiled by cg_clif.
 | Milestone | Delivers |
 |---|---|
 | **69** ✅ | `crates/gxld` library + CLI; `gxc` emits a relocatable object and links through it (`gxc::elf` deleted); `galexy-os-gxld` differential image (`hello`, `init`, `shell`, `util`); hostile-input tests |
-| **70** | `TPOFF32` and `.tdata`/`.tbss` the same milestone threads and TLS arrive |
+| **70** ✅ | `TPOFF32` / `TPOFF64` / `GOTTPOFF`, `.tdata`/`.tbss` as one block with `PT_TLS`, the same milestone threads arrive |
 | **71** | Ring-3 `gxld` over Caps; `bin/test-gxld` links two ramdisk objects into a program that runs |
 | **72** (follow-on) | `.eh_frame` kept for `unwinding` |
 | **73** | Links cg_clif output: rlibs with `lib.rmeta` skipped; `rustc -Clinker=gxld` on-OS; the Phase 11 gate |
