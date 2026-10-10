@@ -8,11 +8,12 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- KVM is selected only when `KVM_CREATE_VCPU` succeeds. Opening
-  `/dev/kvm` is not enough: a snapshot restore can leave `CR4.VMXE`
-  set after VMXON state is gone, and the next `VMCLEAR` BUGs the host
-  in `kvm_spurious_fault` while QEMU stays up with an empty serial
-  log. The probe runs in a child (the fault kills that process).
+- [#91](https://github.com/linuts/galexy.os/pull/91) — KVM is selected
+  only when `KVM_CREATE_VCPU` succeeds. Opening `/dev/kvm` is not
+  enough: a snapshot restore can leave `CR4.VMXE` set after VMXON
+  state is gone, and the next `VMCLEAR` BUGs the host in
+  `kvm_spurious_fault` while QEMU stays up with an empty serial log.
+  The probe runs in a child (the fault kills that process).
   `GALEXY_ACCEL=tcg` skips it. `GALEXY_ACCEL=kvm` on a broken host
   fails immediately. The v1.0 KVM suite and `PERF.md` KVM cells still
   wait on a host where the probe exits 0.
