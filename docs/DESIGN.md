@@ -1365,8 +1365,9 @@ pinned in `galexy-abi` tests.
   (Phase 10).
 - The measured path is `cargo run --release` and
   `cargo test -p runner --test boot --release`. The runner picks
-  `-accel kvm -cpu host` when `/dev/kvm` is writable, else
-  `-accel tcg -cpu max,+x2apic` (`GALEXY_ACCEL` overrides). Numbers live in
+  `-accel kvm -cpu host` when `KVM_CREATE_VCPU` succeeds, else
+  `-accel tcg -cpu max,+x2apic` (`GALEXY_ACCEL` overrides; `kvm` refuses
+  to boot when the probe fails). Numbers live in
   `docs/PERF.md`. PCID and a second heap allocator stay waived.
 - `-no-reboot` is always passed to QEMU so triple faults surface as an exit
   instead of an infinite reboot loop. A `reboot` request still pulses the

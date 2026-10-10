@@ -2265,8 +2265,12 @@ The Milestone 53–54 follow-ons, finished.
       checked or carries a written waiver; the `review-rc1` tag is the
       one owner-deferred item)
 - [ ] Suite green on BIOS + UEFI, TCG + KVM, `q35` + the `pc` legacy
-      case (BIOS + UEFI, TCG, `q35` + `pc` are green at 114 boots; the
-      KVM pass needs a host whose `/dev/kvm` can create a vCPU)
+      case (BIOS + UEFI, TCG, `q35` + `pc` are green at 114 boots. The
+      KVM pass needs a host where `KVM_CREATE_VCPU` succeeds. On the
+      landing host `/dev/kvm` opens, then `VMCLEAR` faults in
+      `alloc_loaded_vmcs`: a snapshot restore dropped VMXON while
+      `CR4.VMXE` stayed set. The runner probes and refuses
+      `-accel kvm` there instead of waiting on an empty serial log)
 - [ ] `PERF.md` numbers within budget under KVM (TCG release cells
       recorded; KVM cells empty for the same host reason)
 - [ ] Tag `v1.0` with the changelog

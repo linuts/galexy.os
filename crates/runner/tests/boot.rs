@@ -3569,9 +3569,10 @@ fn main_kernel_boots_and_timer_ticks() {
 }
 
 /// KVM-only ceilings (µs). TCG is recorded in `docs/PERF.md` and is not
-/// gated. These are loose until a host whose KVM can create a vCPU
-/// records a release run; this landing host's `kvm_arch_vcpu_create`
-/// BUGs, so the numbers were not tightened here.
+/// gated. These are loose until a host where `KVM_CREATE_VCPU` succeeds
+/// records a release run. The landing host faults on `VMCLEAR` during
+/// that probe, so `use_kvm()` is false there and these ceilings stay
+/// unenforced.
 const BENCH_YIELD_US: u64 = 2_000_000;
 const BENCH_SPAWN_US: u64 = 2_000_000;
 const BENCH_PIPE_US: u64 = 2_000_000;

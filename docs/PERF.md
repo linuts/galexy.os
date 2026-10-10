@@ -11,12 +11,19 @@ the target is *does not fall over when exercised*.
 
 `cargo test -p runner --test boot --release` image,
 `GALEXY_ACCEL=tcg`, `-cpu max`, `-smp 2`. Guest TSC calibrated over a
-20 ms halt against `timer_ticks`. The landing host cannot create a KVM
-vCPU (`kvm_arch_vcpu_create` hits kernel BUG at `arch/x86/kvm/x86.c:702`,
-and SeaBIOS writes nothing under `-accel kvm`), so there is no KVM
-column from this machine. Re-run
+20 ms halt against `timer_ticks`. There is no KVM column from the
+landing host. `/dev/kvm` opens and `KVM_CREATE_VM` succeeds, then
+`KVM_CREATE_VCPU` faults: `dmesg` shows `kernel BUG at
+arch/x86/kvm/x86.c:702` (`kvm_spurious_fault`) on `VMCLEAR` inside
+`alloc_loaded_vmcs`. `CR4.VMXE` is set because the kernel ran `VMXON`
+at boot (`kvm.enable_virt_at_load=Y`), and the snapshot this VM was
+restored from does not keep that VMX state. The guest is never
+entered. The runner probes `KVM_CREATE_VCPU` in a child process and
+passes `-accel kvm` only when that child exits 0. `GALEXY_ACCEL=kvm`
+on this host fails immediately. Re-run
 `GALEXY_ACCEL=kvm cargo test -p runner --test boot --release -- --exact bench_test_passes`
-on a host where `/dev/kvm` executes a guest, and replace the KVM cells.
+on a host where the probe succeeds (a cold boot of the same kernel
+can), and replace the KVM cells.
 
 | Bench | What it times | TCG release (µs) at `7f7b416` | KVM ceiling the runner asserts (µs) |
 | --- | --- | --- | --- |

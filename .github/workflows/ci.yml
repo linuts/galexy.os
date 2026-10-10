@@ -63,7 +63,7 @@ jobs:
 
   # Boots every test kernel under QEMU (BIOS and UEFI, -smp 2).
   # Release profile (debug assertions still on). Accel is kvm when
-  # /dev/kvm is writable, otherwise tcg; the log line is `[runner] accel=`.
+  # KVM_CREATE_VCPU succeeds, otherwise tcg; the log line is `[runner] accel=`.
   # Boots run in parallel (libtest's default, one test per CPU).
   # Each QEMU has its own serial log, galfs image, and QMP socket.
   qemu:
