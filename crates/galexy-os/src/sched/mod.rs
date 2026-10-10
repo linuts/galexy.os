@@ -137,6 +137,7 @@ pub use thread::thread_stats;
 pub use thread::thread_tick_total;
 pub use thread::threads_count;
 pub use thread::unreaped_threads;
+pub use thread::user_exit_code;
 pub(crate) use thread::Grant;
 pub(crate) use thread::Grants;
 pub(crate) use thread::OpenFile;

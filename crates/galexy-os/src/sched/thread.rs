@@ -1513,6 +1513,28 @@ pub fn is_name_live(name: &str) -> bool {
     })
 }
 
+/// Exit code of the user task named `name`, once that slot is `EXITED` or `FREED`.
+///
+/// The code stays on the slot through reap, until that slot is reused.
+/// An AP owner zero-wipes the task tree from its idle loop the moment
+/// the task exits, so a scratch-page peek on the BSP loses under load
+/// (`test-smpuser`). The exit code is the record that survives the wipe.
+pub fn user_exit_code(name: &str) -> Option<u64> {
+    interrupts::without_interrupts(|| {
+        THREADS.lock().iter().find_map(|t| {
+            if !t.is_user || t.name() != name {
+                return None;
+            }
+            let state = t.state.load(Ordering::Acquire);
+            if state == STATE_EXITED || state == STATE_FREED {
+                Some(t.exit_code.load(Ordering::Acquire))
+            } else {
+                None
+            }
+        })
+    })
+}
+
 /// The owner CPU of the thread named `name` ("pinned at spawn" — SMP M18);
 /// `None` when no RUNNING thread by that name exists.
 pub fn thread_owner(name: &str) -> Option<u8> {

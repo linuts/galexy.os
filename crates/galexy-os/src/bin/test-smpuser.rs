@@ -94,11 +94,18 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     // The scratch addrs (user VAs) fold to the same bits per task; the
     // PHYSICAL frame addresses differ. Keep them for peeking.
     let scratch_phys = [region_a.scratch_phys, region_b.scratch_phys];
+    // The blob's last `mov rdi` is the scratch address, and `exit` reports
+    // RDI. That code stays on the thread slot after the AP reaps and
+    // zero-wipes the scratch page — a BSP peek alone loses that race
+    // when the host stalls this vCPU.
+    let names = ["cpu0", "cpu1"];
+    let scratch_va = [region_a.scratch.as_u64(), region_b.scratch.as_u64()];
     let mut state = [Phase::Running; 2];
 
     // Spin-peek both scratches before any local reap. The AP reaps its own
     // task independently and wipes frames — hlt would lose the race. IRQs
-    // stay on so BSP-pinned work still rotates.
+    // stay on so BSP-pinned work still rotates. The exit code is the
+    // fallback when the wipe wins.
     x86_64::instructions::interrupts::enable();
     let deadline = arch::timer_ticks() + 5_000;
     loop {
@@ -109,7 +116,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
             // SAFETY: phys map is present in every address space.
             let ptr: *const u32 = arch::mm::frame_virt(scratch_phys[idx]).as_ptr();
             let mark = unsafe { core::ptr::read_volatile(ptr) };
-            if mark == DONE_MARK {
+            let exited = sched::user_exit_code(names[idx]) == Some(scratch_va[idx]);
+            if mark == DONE_MARK || exited {
                 state[idx] = Phase::Marked;
                 serial_println!("[test-smpuser] task {} marked done at cpu time", idx);
             }
