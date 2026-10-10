@@ -384,8 +384,14 @@ fn read_elf_dir(bin_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
     bins
 }
 
-/// `hello`, `init`, `shell`, `util` with `-Zbuild-std=core,alloc`, plus
-/// `stdmin` with `-Zbuild-std=std,panic_abort` on the Galexy PAL overlay.
+/// `no_std` programs built with `-Zbuild-std=core,alloc`.
+const NOSTD_PACKAGES: [&str; 5] = ["hello", "init", "shell", "util", "threadtest"];
+/// `std` programs built with `-Zbuild-std=std,panic_abort` on the Galexy
+/// PAL overlay. They share one target dir (one std build), separate from
+/// the `no_std` one.
+const STD_PACKAGES: [&str; 2] = ["stdmin", "stdtest"];
+
+/// [`NOSTD_PACKAGES`] plus [`STD_PACKAGES`], as ramdisk entries.
 fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
     let target_dir = out_dir.join("userspace-target");
     let workspace = repo_root().join("Cargo.toml");
@@ -397,7 +403,7 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
         .arg("--target-dir")
         .arg(&target_dir);
     galexy_cargo_args(&mut cmd, "core,alloc");
-    for pkg in ["hello", "init", "shell", "util"] {
+    for pkg in NOSTD_PACKAGES {
         cmd.arg("-p").arg(pkg);
     }
     if release {
@@ -410,42 +416,46 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
         panic!("galexy userspace build failed");
     }
 
-    let std_target = out_dir.join("stdmin-target");
-    let manifest = repo_root().join("crates/userspace/stdmin/Cargo.toml");
-    let mut cmd = nested_cargo();
-    cmd.arg("build")
-        .arg("--manifest-path")
-        .arg(&manifest)
-        .arg("--target-dir")
-        .arg(&std_target);
-    galexy_cargo_args(&mut cmd, "std,panic_abort");
-    if release {
-        cmd.arg("--release");
-    }
-    let sysroot = galexy_std_sysroot(out_dir);
-    // Cargo caches `rustc --print sysroot` per (rustc, wrapper) in this
-    // file; it does not key on `GALEXY_SYSROOT`, so a regenerated overlay
-    // (new content hash, old one removed) would otherwise be invisible.
-    let _ = std::fs::remove_file(std_target.join(".rustc_info.json"));
-    cmd.env(
-        "RUSTC_WRAPPER",
-        repo_root().join("scripts/galexy-rustc-wrapper.py"),
-    );
-    cmd.env("GALEXY_SYSROOT", &sysroot);
-    let status = cmd.status().expect("spawn cargo for stdmin");
-    if !status.success() {
-        panic!("stdmin build failed");
-    }
-
     let profile = if release { "release" } else { "debug" };
     let mut bins = read_elf_dir(&target_dir.join(galexy_target_dir_name()).join(profile));
-    let stdmin = std_target
-        .join(galexy_target_dir_name())
-        .join(profile)
-        .join("stdmin");
-    let bytes = std::fs::read(&stdmin).unwrap_or_else(|e| panic!("read {}: {e}", stdmin.display()));
-    assert!(bytes.starts_with(b"\x7fELF"), "stdmin is not an ELF");
-    bins.insert("stdmin".into(), bytes);
+
+    let sysroot = galexy_std_sysroot(out_dir);
+    let std_target = out_dir.join("std-target");
+    for pkg in STD_PACKAGES {
+        let manifest = repo_root().join(format!("crates/userspace/{pkg}/Cargo.toml"));
+        let mut cmd = nested_cargo();
+        cmd.arg("build")
+            .arg("--manifest-path")
+            .arg(&manifest)
+            .arg("--target-dir")
+            .arg(&std_target);
+        galexy_cargo_args(&mut cmd, "std,panic_abort");
+        if release {
+            cmd.arg("--release");
+        }
+        // Cargo caches `rustc --print sysroot` per (rustc, wrapper) in this
+        // file; it does not key on `GALEXY_SYSROOT`, so a regenerated overlay
+        // (new content hash, old one removed) would otherwise be invisible.
+        let _ = std::fs::remove_file(std_target.join(".rustc_info.json"));
+        cmd.env(
+            "RUSTC_WRAPPER",
+            repo_root().join("scripts/galexy-rustc-wrapper.py"),
+        );
+        cmd.env("GALEXY_SYSROOT", &sysroot);
+        let status = cmd
+            .status()
+            .unwrap_or_else(|e| panic!("spawn cargo for {pkg}: {e}"));
+        if !status.success() {
+            panic!("{pkg} build failed");
+        }
+        let elf = std_target
+            .join(galexy_target_dir_name())
+            .join(profile)
+            .join(pkg);
+        let bytes = std::fs::read(&elf).unwrap_or_else(|e| panic!("read {}: {e}", elf.display()));
+        assert!(bytes.starts_with(b"\x7fELF"), "{pkg} is not an ELF");
+        bins.insert(pkg.into(), bytes);
+    }
     bins
 }
 
@@ -509,7 +519,7 @@ fn build_gxld_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Ve
         .arg("--target-dir")
         .arg(&target_dir);
     galexy_cargo_args(&mut cmd, "core,alloc");
-    for pkg in ["hello", "init", "shell", "util"] {
+    for pkg in NOSTD_PACKAGES {
         cmd.arg("-p").arg(pkg);
     }
     if release {

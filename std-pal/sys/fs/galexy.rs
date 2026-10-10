@@ -259,6 +259,11 @@ impl File {
             Err(e) => return Err(err(e)),
         };
         let file = File { cap };
+        // `Open` itself always succeeds on a readable name; a ramdisk file
+        // comes back READ-only, so the write request is refused here.
+        if writing && !cap.rights().contains(abi::CapRights::WRITE) {
+            return Err(err(SysError::AccessDenied));
+        }
         if opts.append {
             file.seek(SeekFrom::End(0))?;
         }
