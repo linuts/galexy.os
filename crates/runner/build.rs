@@ -317,6 +317,9 @@ fn watch_tree(dir: &Path) {
 
 fn watch_userspace() {
     watch_tree(&repo_root().join("crates/userspace"));
+    // The std PAL and the ABI it is generated from feed the std overlay.
+    watch_tree(&repo_root().join("std-pal"));
+    watch_tree(&repo_root().join("crates/galexy-abi/src"));
     println!("cargo:rerun-if-changed={}", galexy_target().display());
     println!(
         "cargo:rerun-if-changed={}",
@@ -382,7 +385,7 @@ fn read_elf_dir(bin_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
 }
 
 /// `hello`, `init`, `shell`, `util` with `-Zbuild-std=core,alloc`, plus
-/// `stdmin` with `-Zbuild-std=std,panic_abort` on the unsupported PAL.
+/// `stdmin` with `-Zbuild-std=std,panic_abort` on the Galexy PAL overlay.
 fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
     let target_dir = out_dir.join("userspace-target");
     let workspace = repo_root().join("Cargo.toml");
@@ -420,6 +423,10 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
         cmd.arg("--release");
     }
     let sysroot = galexy_std_sysroot(out_dir);
+    // Cargo caches `rustc --print sysroot` per (rustc, wrapper) in this
+    // file; it does not key on `GALEXY_SYSROOT`, so a regenerated overlay
+    // (new content hash, old one removed) would otherwise be invisible.
+    let _ = std::fs::remove_file(std_target.join(".rustc_info.json"));
     cmd.env(
         "RUSTC_WRAPPER",
         repo_root().join("scripts/galexy-rustc-wrapper.py"),

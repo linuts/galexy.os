@@ -17,7 +17,7 @@
   "panic-strategy": "abort",
   "position-independent-executables": false,
   "relocation-model": "static",
-  "singlethread": true,
+  "singlethread": false,
   "rustc-abi": "softfloat",
   "target-pointer-width": 64,
   "vendor": "unknown"

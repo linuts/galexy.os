@@ -567,7 +567,6 @@ name = "stdmin"
 version = "0.1.0"
 dependencies = [
  "galexy-abi",
- "galexy-rt",
 ]
 
 [[package]]
