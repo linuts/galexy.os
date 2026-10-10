@@ -29,7 +29,7 @@ impl Thread {
         // asking for 8 MiB still runs on 256 KiB far more often than not.
         let pages = (stack.div_ceil(4096) as u64).clamp(1, THREAD_STACK_PAGES_MAX);
         let data = Box::into_raw(init);
-        match syscall::thread_spawn(thread_start, data as usize as u64, pages) {
+        match syscall::thread_spawn(thread_start, data.expose_provenance() as u64, pages) {
             Ok(join) => Ok(Thread { join }),
             Err(e) => {
                 // SAFETY: the kernel never saw `data`; reclaim it.
@@ -58,7 +58,7 @@ fn rust_main_thread_not_inlined(init: Box<ThreadInit>) {
 
 unsafe extern "C" fn thread_start(data: u64) -> ! {
     // SAFETY: recreating the box `Thread::new` leaked.
-    let init = unsafe { Box::from_raw(data as usize as *mut ThreadInit) };
+    let init = unsafe { Box::from_raw(crate::ptr::with_exposed_provenance_mut(data as usize)) };
 
     // Run the main thread with an inline(never) barrier to prevent
     // dealloc calls from being reordered to after the TLS has been destroyed.

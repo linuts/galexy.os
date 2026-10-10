@@ -31,7 +31,8 @@ unsafe impl dlmalloc::Allocator for GalexyMap {
     fn alloc(&self, size: usize) -> (*mut u8, usize, u32) {
         let pages = size.div_ceil(4096).max(1);
         match syscall::map_pages(pages as u64) {
-            Ok(base) => (base as *mut u8, pages * 4096, 0),
+            // Fresh pages from the kernel: no prior provenance to inherit.
+            Ok(base) => (crate::ptr::with_exposed_provenance_mut(base as usize), pages * 4096, 0),
             // `NoResource`: the per-task budget is spent.
             Err(_) => (crate::ptr::null_mut(), 0, 0),
         }

@@ -21,7 +21,6 @@
 use super::env::{CommandEnv, CommandEnvs, CommandResolvedEnvs};
 pub use crate::ffi::OsString as EnvKey;
 use crate::ffi::{OsStr, OsString};
-use crate::io::Read;
 use crate::num::NonZero;
 use crate::os::galexy::ffi::OsStrExt;
 use crate::path::Path;

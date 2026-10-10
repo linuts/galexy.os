@@ -97,12 +97,6 @@ pub fn io_error(err: SysError) -> io::Error {
     io::Error::from_raw_os_error(err as i32)
 }
 
-/// `Result<u64, SysError>` → `io::Result<u64>`.
-#[inline]
-pub fn to_io(res: Result<u64, SysError>) -> io::Result<u64> {
-    res.map_err(io_error)
-}
-
 /// Terminates the whole process. Never returns; a return would be a kernel
 /// bug, so park on a privileged instruction the kernel turns into a kill.
 pub fn exit(code: u64) -> ! {
@@ -166,12 +160,12 @@ pub fn file_cap(slot: u64, rights: CapRights) -> Cap {
 }
 
 pub fn write(cap: Cap, bytes: &[u8]) -> Result<usize, SysError> {
-    syscall(Syscall::Write, cap.bits(), bytes.as_ptr() as u64, bytes.len() as u64)
+    syscall(Syscall::Write, cap.bits(), bytes.as_ptr().addr() as u64, bytes.len() as u64)
         .map(|n| n as usize)
 }
 
 pub fn read(cap: Cap, buf: &mut [u8]) -> Result<usize, SysError> {
-    syscall(Syscall::Read, cap.bits(), buf.as_mut_ptr() as u64, buf.len() as u64)
+    syscall(Syscall::Read, cap.bits(), buf.as_mut_ptr().addr() as u64, buf.len() as u64)
         .map(|n| n as usize)
 }
 
@@ -181,27 +175,27 @@ pub fn close(cap: Cap) -> Result<(), SysError> {
 
 /// Opens an existing ramdisk entry (READ) or galfs file (READ|WRITE).
 pub fn open(path: &[u8]) -> Result<Cap, SysError> {
-    syscall(Syscall::Open, path.as_ptr() as u64, path.len() as u64, 0).map(Cap::from_bits)
+    syscall(Syscall::Open, path.as_ptr().addr() as u64, path.len() as u64, 0).map(Cap::from_bits)
 }
 
 /// Creates a galfs file (READ|WRITE Cap) or, with a trailing `/`, a
 /// directory (`Cap::null()`). `replace` empties an existing file instead
 /// of failing.
 pub fn create(path: &[u8], replace: bool) -> Result<Cap, SysError> {
-    syscall(Syscall::Create, path.as_ptr() as u64, path.len() as u64, u64::from(replace))
+    syscall(Syscall::Create, path.as_ptr().addr() as u64, path.len() as u64, u64::from(replace))
         .map(Cap::from_bits)
 }
 
 pub fn remove(path: &[u8]) -> Result<(), SysError> {
-    syscall(Syscall::Remove, path.as_ptr() as u64, path.len() as u64, 0).map(|_| ())
+    syscall(Syscall::Remove, path.as_ptr().addr() as u64, path.len() as u64, 0).map(|_| ())
 }
 
 pub fn rename(old: &[u8], new: &[u8]) -> Result<(), SysError> {
     syscall6(
         Syscall::Rename,
-        old.as_ptr() as u64,
+        old.as_ptr().addr() as u64,
         old.len() as u64,
-        new.as_ptr() as u64,
+        new.as_ptr().addr() as u64,
         new.len() as u64,
         0,
     )
@@ -220,9 +214,9 @@ pub fn truncate(cap: Cap, size: u64) -> Result<(), SysError> {
 pub fn stat(path: &[u8], buf: &mut [u8; super::abi::STAT_LEN]) -> Result<(), SysError> {
     syscall6(
         Syscall::Stat,
-        path.as_ptr() as u64,
+        path.as_ptr().addr() as u64,
         path.len() as u64,
-        buf.as_mut_ptr() as u64,
+        buf.as_mut_ptr().addr() as u64,
         buf.len() as u64,
         0,
     )
@@ -236,7 +230,7 @@ pub fn sync() -> Result<(), SysError> {
 /// Creates a pipe: `(read end, write end)`.
 pub fn pipe() -> Result<(Cap, Cap), SysError> {
     let mut out = [0u64; 2];
-    syscall(Syscall::Pipe, out.as_mut_ptr() as u64, 0, 0)?;
+    syscall(Syscall::Pipe, out.as_mut_ptr().addr() as u64, 0, 0)?;
     Ok((Cap::from_bits(out[0]), Cap::from_bits(out[1])))
 }
 
@@ -245,9 +239,9 @@ pub fn spawn(name: &[u8], arg: &[u8], grants: u64) -> Result<Cap, SysError> {
     finish(raw_syscall(
         Syscall::Spawn as u64,
         loader_cap().bits(),
-        name.as_ptr() as u64,
+        name.as_ptr().addr() as u64,
         name.len() as u64,
-        arg.as_ptr() as u64,
+        arg.as_ptr().addr() as u64,
         arg.len() as u64,
         grants,
     ))
@@ -284,7 +278,7 @@ pub fn futex_wait(word: &Atomic<u32>, expected: u32, timeout_ms: u64) -> Result<
     syscall6(
         Syscall::Futex,
         super::abi::FUTEX_WAIT,
-        word.as_ptr() as u64,
+        word.as_ptr().addr() as u64,
         u64::from(expected),
         timeout_ms,
         0,
@@ -294,7 +288,7 @@ pub fn futex_wait(word: &Atomic<u32>, expected: u32, timeout_ms: u64) -> Result<
 
 /// Wakes up to `count` waiters on `word`; returns how many.
 pub fn futex_wake(word: &Atomic<u32>, count: u64) -> Result<u64, SysError> {
-    syscall(Syscall::Futex, super::abi::FUTEX_WAKE, word.as_ptr() as u64, count)
+    syscall(Syscall::Futex, super::abi::FUTEX_WAKE, word.as_ptr().addr() as u64, count)
 }
 
 /// Reads the self snapshot (`id=… name=… state=…`) and returns the name.

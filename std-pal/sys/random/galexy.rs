@@ -14,8 +14,9 @@ static HAS_RDRAND: Atomic<u8> = AtomicU8::new(0);
 fn has_rdrand() -> bool {
     match HAS_RDRAND.load(Relaxed) {
         0 => {
-            // SAFETY: CPUID is unprivileged on x86-64.
-            let leaf = unsafe { core::arch::x86_64::__cpuid(1) };
+            // CPUID is unprivileged on x86-64 (`__cpuid` is safe on this
+            // toolchain).
+            let leaf = core::arch::x86_64::__cpuid(1);
             let present = leaf.ecx & (1 << 30) != 0;
             HAS_RDRAND.store(if present { 2 } else { 1 }, Relaxed);
             present
@@ -24,9 +25,11 @@ fn has_rdrand() -> bool {
     }
 }
 
-/// One 64-bit sample, or `None` when the hardware reported no entropy.
+/// One 64-bit sample into `out`; `false` when the hardware reported no
+/// entropy. FFI-shaped (`#[inline(never)] extern "C"`) like every other
+/// `asm!` stub in the PAL.
 #[inline(never)]
-extern "C" fn rdrand64() -> Option<u64> {
+extern "C" fn rdrand64(out: &mut u64) -> bool {
     let value: u64;
     let ok: u8;
     // SAFETY: `rdrand` has no memory effects; CF reports success. The
@@ -40,14 +43,16 @@ extern "C" fn rdrand64() -> Option<u64> {
             options(nomem, nostack),
         );
     }
-    if ok != 0 { Some(value) } else { None }
+    *out = value;
+    ok != 0
 }
 
 fn next_word() -> u64 {
     if has_rdrand() {
+        let mut value = 0u64;
         for _ in 0..16 {
-            if let Some(v) = rdrand64() {
-                return v;
+            if rdrand64(&mut value) {
+                return value;
             }
         }
     }

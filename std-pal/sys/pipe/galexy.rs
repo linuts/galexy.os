@@ -20,10 +20,6 @@ pub fn pipe() -> io::Result<(Pipe, Pipe)> {
 }
 
 impl Pipe {
-    pub(crate) fn cap(&self) -> Cap {
-        self.cap
-    }
-
     /// Gives the Cap up without closing it (it moved into a child).
     pub(crate) fn into_cap(self) -> Cap {
         let cap = self.cap;
