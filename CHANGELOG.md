@@ -8,7 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Milestone 68 — `targets/x86_64-unknown-galexy.json` replaces
+- [#92](https://github.com/linuts/galexy.os/pull/92) — Milestone 68 —
+  `targets/x86_64-unknown-galexy.json` replaces
   `x86_64-unknown-none` for userspace. `hello`, `init`, `shell` and
   `util` build with `-Zbuild-std=core,alloc`. `stdmin` builds
   `std` + `panic_abort` on the unsupported PAL (a build-time overlay
