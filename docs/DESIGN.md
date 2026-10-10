@@ -697,7 +697,10 @@ children it permits. `open` of a path with no slash and no `@` still
 hits the ramdisk first and grants READ. Any other path walks galfs and
 must name a file (READ|WRITE). A directory open is `Unsupported`. A
 path with no covering token is `AccessDenied`. `write` on a galfs
-cap appends; the read cursor stays at the start. A ramdisk name at
+cap is positional (Milestone 70): bytes land at the cursor, overwriting
+in place and appending past the end, and the cursor advances by the
+count. `seek` moves that same cursor, so `seek(0)` then `read` sees
+what was just written. A ramdisk name at
 `/`, or a name that already exists, is `Unsupported`. A missing parent
 is `NotFound`. A full object table is `NoResource`. `close` drops the
 task's cap; the bytes stay until `remove`. `write` on an
@@ -724,9 +727,9 @@ READ cap and a WRITE cap into a 16-byte user buffer for an anonymous
 pipe (8 pipes × 256-byte rings). `give(cap, task, len)` (syscall 14)
 moves an open file or pipe end to another live user task and returns
 the target's new Cap bits. `seek(cap, offset, whence)` (syscall 15)
-sets the **read** cursor on an archive or galfs open (`SEEK_SET` /
-`SEEK_CUR` / `SEEK_END`); a pipe is `Unsupported`. galfs `write` stays
-**append-only** (seek does not move the write point). `cp` and `mv` are
+sets the file cursor on an archive or galfs open (`SEEK_SET` /
+`SEEK_CUR` / `SEEK_END`); a pipe is `Unsupported`. galfs `read` and
+`write` share that cursor. `cp` and `mv` are
 ramdisk programs; `mv` prefers `rename` (syscall 17) and falls back to
 copy+remove. `user(addr, len, op)` (syscall 16) manages actors:
 `USER_WHOAMI` / `USER_USERS` write names into a buffer; `USER_ADD`
@@ -1201,7 +1204,7 @@ it is how that program is built, not a switch in the default image.
 
 ### Coverage: which milestone each test kernel guards
 
-One row per `crates/galexy-os/src/bin/test-*.rs` (78). The boot test is
+One row per `crates/galexy-os/src/bin/test-*.rs` (81). The boot test is
 the `runner/tests/boot.rs` function that boots it; the milestone is the
 one whose promise breaks first if the kernel goes red. Typing e2e boots
 (`shell_*_typing_e2e`, `gxld_image_*`, `util_typing_e2e_on`) run the
@@ -1235,6 +1238,7 @@ main image and are listed at the end.
 | `test-users`, `test-mustchange`, `test-lockout`, `test-idle`, `test-unlock` | `users_test_passes`, `mustchange_test_passes`, `lockout_test_passes`, `idle_test_passes`, `unlock_test_passes` | M37 / M42 / M43 auth, M44 sealed unlock |
 | `test-pipe` | `pipe_test_passes` | M36 pipes + `give`, M57 block/wake |
 | `test-userheap`, `test-channel` | `userheap_test_passes`, `channel_test_passes` | M66 per-task `Map` budget and reap, `Clock`, channel send/recv and `give` |
+| `test-thread`, `test-futex`, `test-std` | `thread_test_passes`, `futex_test_passes`, `std_test_passes` | M70 user threads and futex; `std` PAL (`stdtest`, unpatched `toml`) |
 | `test-proccap`, `test-selfcap`, `test-procgive`, `test-procbudget`, `test-capforge`, `test-orphan` | `proccap_test_passes`, `selfcap_test_passes`, `procgive_test_passes`, `procbudget_test_passes`, `capforge_test_passes`, `orphan_test_passes` | M47 process Caps and forge battery |
 | `test-init`, `test-jobcap` | `init_test_passes`, `jobcap_test_passes` | M53 init orphan root, M55 job Cap / Ctrl-C |
 | `test-sleep`, `test-idle` | `sleep_test_passes`, `idle_test_passes` | M56 time and deadlines, M58 policy freeze |

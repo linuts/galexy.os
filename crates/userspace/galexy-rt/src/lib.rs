@@ -205,7 +205,8 @@ pub fn give(cap: Cap, task: &[u8]) -> SyscallResult {
     )
 }
 
-/// Sets the read cursor on an open file. `whence` is [`galexy_abi::SEEK_SET`],
+/// Sets the file cursor on an open file. galfs `read` and `write` share
+/// it. `whence` is [`galexy_abi::SEEK_SET`],
 /// [`galexy_abi::SEEK_CUR`], or [`galexy_abi::SEEK_END`].
 pub fn seek(cap: Cap, offset: i64, whence: u64) -> SyscallResult {
     syscall(Syscall::Seek as u64, cap.bits(), offset as u64, whence)

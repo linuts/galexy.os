@@ -267,3 +267,32 @@ those frames come back with the rest of the tree.
 `galexy-rt` bumps an allocator over that region; `dealloc` does not
 unmap. `SPAWN_NO_FG` (r10 bit 5) is how the shell starts a background
 job without making it the TTY's Ctrl-C target.
+
+## Threads and futexes (Milestone 70)
+
+A process is still one address space and one Cap table. `ThreadSpawn`
+adds a thread inside it: a new kernel slot, the same CR3, a fresh user
+stack (default 16 pages, at most 64) and a fresh kernel stack, `FS`
+base 0. The return value is a process Cap with `PROC_PARENT` on the
+shared table; `Wait` on it is join and yields the thread's exit code.
+The caller parks until the thread is registered — the kernel allocates
+on the main loop, not inside the syscall. More than 16 live records in
+one address space, or a full kernel thread table, is `NoResource`. An
+entry outside the image window, or a stack past the maximum, is
+`BadValue`.
+
+`ThreadExit` ends the calling thread only. From the process leader (the
+slot the loader created) it is `Exit`: the whole process ends, and
+siblings die with it. A leader exit reaps the address space; a sibling
+exit stays a joinable record until `Wait`.
+
+`Futex` is the park/wake primitive `std`'s locks use. `FUTEX_WAIT`
+parks while the aligned `u32` at `addr` still holds `expected` (a
+mismatch returns immediately). `FUTEX_WAKE` wakes up to `count` waiters.
+Waiters are keyed by address space and address, so a word is private to
+one process. A non-zero timeout (clamped to `SLEEP_MS_MAX`) returns
+`TimedOut`. The kernel never writes `FS`; each thread sets its own base
+with `wrfsbase` for key-based TLS.
+
+`ThreadSpawn`, `ThreadExit`, and `Futex` are stable as of Milestone 70.
+`spawn` stays experimental.

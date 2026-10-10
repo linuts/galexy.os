@@ -47,7 +47,7 @@ jobs:
       - name: Clippy (host crates, all targets)
         run: >
           cargo clippy
-          -p galexy-abi -p galexy-core -p galexy-crypto -p galexy-galf
+          -p galexy-abi -p galexy-core -p galexy-crypto -p galexy-galf -p xtask
           -p galfs-fsck -p gxc -p gxld
           --all-targets -- -D warnings
 

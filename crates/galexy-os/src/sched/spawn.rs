@@ -1517,7 +1517,8 @@ pub(in crate::sched) fn task_give_proc(cap: Cap, target: &str) -> Result<Cap, Sy
     })
 }
 
-/// Sets the read cursor on an archive or galfs open. Returns the new offset.
+/// Sets the file cursor on an archive or galfs open. `read` and galfs
+/// `write` share it. Returns the new offset.
 pub(crate) fn task_seek(cap: Cap, offset: i64, whence: u64) -> Result<u64, SysError> {
     let index = file_slot(cap)?;
     let slot = current_slot();

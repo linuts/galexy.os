@@ -404,6 +404,9 @@ pub enum Syscall {
     ///
     /// Args: `RDI = cap bits (u64)`, `RSI = user address`, `RDX = byte count`.
     /// Returns: `SyscallResult` (rax). Requires CapRights::WRITE.
+    /// On a galfs file the bytes land at the cursor: overwrite in place,
+    /// append past the end, and advance the cursor by the count (Milestone
+    /// 70). A pipe is unchanged.
     Write,
     /// `cap_info(cap)` — TEMPLATE/test syscall: return the handle's own
     /// bits back (proves the dispatch machinery; removed at ABI 1.0).
@@ -523,7 +526,9 @@ pub enum Syscall {
     /// are `BadCap`. A missing task or a full target table is `NotFound`
     /// / `NoResource`.
     Give,
-    /// `seek(cap, offset, whence)` — set the read cursor on an open file.
+    /// `seek(cap, offset, whence)` — set the file cursor on an open file.
+    ///
+    /// galfs `read` and `write` share this cursor (Milestone 70).
     ///
     /// Args: `RDI = cap bits`, `RSI = signed offset as u64 bits`,
     /// `RDX = whence` ([`SEEK_SET`], [`SEEK_CUR`], or [`SEEK_END`]).

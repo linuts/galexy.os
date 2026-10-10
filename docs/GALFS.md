@@ -289,7 +289,8 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 
 - `rename` / `truncate` / `stat` syscalls; shell `mv` / `truncate` / `stat`
 - Directory listing stays the `FILES` snapshot (`ls`); no dir `open`
-- `write` is append-only; `seek` adjusts the read cursor only
+- `write` is positional at the file cursor (overwrite, then append);
+  `seek` moves that cursor for both `read` and `write` (Milestone 70)
 - No hard links, symlinks, or sparse holes (truncate grow zero-fills)
 - Names: ASCII alphanumeric plus `.` `_` `-`; `.` / `..` rejected
 
