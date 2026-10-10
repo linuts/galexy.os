@@ -136,14 +136,17 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 ```sh
 cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxc -p gxld   # host suites
 cargo test -p runner --test audit_strings   # no "password" in any serial line
-cargo test -p runner --test boot --release -- --test-threads=1   # QEMU suite (114 boots, -smp 2, release profile)
+cargo test -p runner --test boot --release   # QEMU suite (114 boots, -smp 2, release profile)
 ```
 
-UEFI cases need `OVMF_FD` if the default firmware path is absent. Disk
-and typing cases want `--test-threads=1`; the suite runs under TCG
-(no KVM yet — Milestone 64) so a full pass takes a while. Test kernels
-live under `crates/galexy-os/src/bin/` (73 today); the runner builds
-one image per binary and checks exit codes + serial.
+UEFI cases need `OVMF_FD` if the default firmware path is absent. The
+suite runs one QEMU per test, in parallel up to the CPU count. Each
+boot has its own serial log, data disk, and QMP socket, and the boot
+disk is a private snapshot. `--test-threads=1` forces them one at a
+time when a failure is easier to read that way. Accel is KVM when
+`/dev/kvm` can run a guest, otherwise TCG (`GALEXY_ACCEL` overrides).
+Test kernels live under `crates/galexy-os/src/bin/` (73 today); the
+runner builds one image per binary and checks exit codes + serial.
 
 ### CI
 
@@ -153,7 +156,7 @@ pull request, on the toolchain pinned in `rust-toolchain.toml`:
 | Job | What it proves |
 |---|---|
 | `host` | `cargo fmt --all -- --check`; host suites (abi, core, crypto, galf, fsck, gxc, gxld); `clippy -D warnings` on the host crates (`--all-targets`), the kernel bins (`x86_64-unknown-none`), and the userspace programs |
-| `qemu` | builds every image, `clippy` on the runner and its tests, `audit_strings`, then the full boot suite with `--test-threads=1` under TCG on `ubuntu-latest` (`qemu-system-x86` + `ovmf`, `OVMF_FD=/usr/share/ovmf/OVMF.fd`) |
+| `qemu` | builds every image, `clippy` on the runner and its tests, `audit_strings`, then the full boot suite in parallel (libtest's default, one test per CPU) under TCG on `ubuntu-latest` (`qemu-system-x86` + `ovmf`, `OVMF_FD=/usr/share/ovmf/OVMF.fd`) |
 
 The boot suite *is* the matrix — each axis is a named test rather than
 a workflow dimension, so a failure points at one boot:

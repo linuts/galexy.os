@@ -5,7 +5,7 @@ mod common;
 
 use common::{
     boot, boot_and_type, boot_and_type_ps2, boot_and_type_uefi, boot_galfs_once,
-    boot_galfs_once_virtio, boot_liveness, boot_uefi, boot_with_galfs,
+    boot_galfs_once_virtio, boot_liveness_until, boot_uefi, boot_uefi_until, boot_with_galfs,
     boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
     boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio,
     boot_with_galfs_virtio_legacy, image, uart_login_serial, use_kvm, GalfsDiskCache,
@@ -3510,8 +3510,8 @@ fn uefi_image_boots_and_timer_ticks() {
     let image = image("galexy-os");
     let mut last = String::new();
     for _ in 0..3 {
-        last = boot_uefi(&image, Duration::from_secs(45));
-        if serial_uptime_secs(&last) >= 1 {
+        last = boot_uefi_until(&image, Duration::from_secs(45), uefi_shell_live);
+        if uefi_shell_live(&last) {
             break;
         }
     }
@@ -3542,7 +3542,14 @@ fn main_kernel_boots_and_timer_ticks() {
     // The interactive kernel never exits; verify liveness markers instead.
     // (Generous window: TCG boot + banner render stretch badly when the
     // host is loaded — 20 s was observed to cut the first heartbeat off.)
-    let serial = boot_liveness(&image("galexy-os"), Duration::from_secs(45));
+    // The cap stays 45s for a loaded host. The boot returns as soon as
+    // the markers are in the log; sitting out the rest of the window
+    // does not check anything further.
+    let serial = boot_liveness_until(&image("galexy-os"), Duration::from_secs(45), |serial| {
+        serial_uptime_secs(serial) >= 1
+            && serial.contains("boot info: rsdp_addr")
+            && serial.contains("[loader] program 'shell' ready")
+    });
     assert!(
         serial.contains("boot info: rsdp_addr"),
         "boot info marker missing; serial:\n{serial}"
@@ -3607,6 +3614,16 @@ fn bench_test_passes() {
         assert!(galfs_us < BENCH_GALFS_US, "galfs {galfs_us} us");
         assert!(repaint_us < BENCH_REPAINT_US, "repaint {repaint_us} us");
     }
+}
+
+/// True when the UEFI interactive boot has shown every marker the test
+/// asserts, including a one-second timer heartbeat.
+fn uefi_shell_live(serial: &str) -> bool {
+    serial_uptime_secs(serial) >= 1
+        && serial.contains("boot info: rsdp_addr")
+        && serial.contains("[mm] frame allocator ready")
+        && serial.contains("[acpi] madt ready")
+        && serial.contains("[apic] lapic up")
 }
 
 /// Highest `Ns:` uptime prefix seen in a serial transcript (tickless may

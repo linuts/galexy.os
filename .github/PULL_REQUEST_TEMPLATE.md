@@ -11,7 +11,7 @@
 
 - [ ] Host suites: `cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxc -p gxld`
 - [ ] `cargo test -p runner --test audit_strings`
-- [ ] Targeted boots: `cargo test -p runner --test boot -- <names> --test-threads=1`
+- [ ] Targeted boots: `cargo test -p runner --test boot --release -- <names>`
 - [ ] Full boot suite (required for a milestone-closing PR, BIOS + UEFI)
 - [ ] New QEMU behaviour has a matching `bin/test-*` or typing e2e
 - [ ] `cargo fmt --all -- --check` and the three clippy invocations in `.github/workflows/ci.yml`

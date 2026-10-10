@@ -1148,6 +1148,10 @@ eleven boots that touch every axis (BIOS + UEFI, SMP, auth, sealed disk
 persist + recover, hostile ELF, negative suite, capacity, typing e2e);
 `--full` runs the whole suite. CI (`.github/workflows/ci.yml`) always
 runs the whole suite — README → CI maps each matrix axis to its boots.
+Boots run together, one QEMU per CPU. Each test has its own serial log,
+data disk, and QMP socket, and the boot disk is a private snapshot.
+`--test-threads=1` is the serial fallback. An interactive boot returns
+as soon as its serial markers are present; the timeout is only the cap.
 
 ### Test seams (feature-gated; off in the default image)
 
