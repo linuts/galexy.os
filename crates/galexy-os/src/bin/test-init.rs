@@ -161,6 +161,62 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     );
     serial_println!("[test-init] logged-out init rpc denied");
 
+    // A non-admin session may ask status but may not change service
+    // state: `svc stop` on another user's seat is refused in the reply
+    // and the seat keeps running.
+    let eve_root =
+        galexy_os::sched::galfs::add_actor_named("eve", b"evepass1").expect("add non-admin actor");
+    let eve = galexy_os::sched::galfs::FsCred::launcher(eve_root);
+    let (status, status_reply) = run_rpc_reply(
+        "rpc-eve-status",
+        eve,
+        &[
+            galexy_abi::INIT_OP_STATUS,
+            6,
+            b's',
+            b'h',
+            b'e',
+            b'l',
+            b'l',
+            b'2',
+        ],
+    );
+    sched::reap();
+    assert_eq!(status.rdx, 1, "non-admin svc status must be accepted");
+    assert!(
+        status_reply.starts_with(b"shell2 "),
+        "status reply names the service: {:?}",
+        core::str::from_utf8(&status_reply).unwrap_or("?")
+    );
+    let (stop, stop_reply) = run_rpc_reply(
+        "rpc-eve-stop",
+        eve,
+        &[
+            galexy_abi::INIT_OP_STOP,
+            6,
+            b's',
+            b'h',
+            b'e',
+            b'l',
+            b'l',
+            b'2',
+        ],
+    );
+    sched::reap();
+    assert_eq!(stop.rdx, 1, "non-admin svc stop reaches init");
+    assert!(
+        stop_reply.starts_with(b"access denied"),
+        "non-admin svc stop must be refused, got {:?}",
+        core::str::from_utf8(&stop_reply).unwrap_or("?")
+    );
+    // The seat is parked on its keyboard read (WAITING), so "live", not
+    // "running".
+    assert!(
+        sched::is_name_live("shell2"),
+        "shell2 must survive a non-admin stop"
+    );
+    serial_println!("[test-init] non-admin svc stop denied");
+
     // Admin session starts the restart-storm fixture. The second fast
     // exit is the 250 ms backoff the service table promises.
     let started = run_rpc(
@@ -201,20 +257,33 @@ struct RpcReport {
 }
 
 fn run_rpc(name: &str, fs: galexy_os::sched::galfs::FsCred, payload: &[u8]) -> RpcReport {
+    run_rpc_reply(name, fs, payload).0
+}
+
+/// Like [`run_rpc`], also returning init's reply bytes (scratch + 0x100).
+fn run_rpc_reply(
+    name: &str,
+    fs: galexy_os::sched::galfs::FsCred,
+    payload: &[u8],
+) -> (RpcReport, [u8; 64]) {
     let (region, _) = sched::spawn_user_launcher_with(name, fs, |gr| {
         unsafe {
             core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
         }
         build_rpc_blob(gr.code.as_u64(), gr.scratch.as_u64(), payload)
     });
-    let scratch: *const RpcReport = mm::frame_virt(region.scratch_phys).as_ptr();
+    let base = mm::frame_virt(region.scratch_phys);
+    let scratch: *const RpcReport = base.as_ptr();
+    let reply_ptr: *const [u8; 64] = (base + 0x100u64).as_ptr();
     let mut elapsed = 0u64;
     loop {
         x86_64::instructions::hlt();
         sched::drain_spawn();
         let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*scratch).done)) };
         if done == DONE {
-            return unsafe { core::ptr::read_volatile(scratch) };
+            let report = unsafe { core::ptr::read_volatile(scratch) };
+            let reply = unsafe { core::ptr::read_volatile(reply_ptr) };
+            return (report, reply);
         }
         elapsed += 1;
         if elapsed > TICK_TIMEOUT {

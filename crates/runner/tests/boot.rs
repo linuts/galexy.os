@@ -4,11 +4,12 @@
 mod common;
 
 use common::{
-    boot, boot_and_type, boot_and_type_ps2, boot_and_type_uefi, boot_galfs_once, boot_liveness,
-    boot_uefi, boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache,
-    boot_with_galfs_crash, boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn,
-    boot_with_galfs_virtio, boot_with_galfs_virtio_legacy, image, uart_login_serial, use_kvm,
-    GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
+    boot, boot_and_type, boot_and_type_ps2, boot_and_type_uefi, boot_galfs_once,
+    boot_galfs_once_virtio, boot_liveness, boot_uefi, boot_with_galfs,
+    boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
+    boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio,
+    boot_with_galfs_virtio_legacy, image, uart_login_serial, use_kvm, GalfsDiskCache,
+    GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
 };
 use std::time::Duration;
 
@@ -902,6 +903,38 @@ fn galfs_disk_persists_virtio_legacy() {
         "disable-modern must not take the 1.x path; serial:\n{serial1}"
     );
     assert_galfs_disk_persists((code1, serial1, img, code2, serial2), "virtio-legacy");
+}
+
+/// virtio-blk DMA follows the buffer's physical pages, not `translate(buf)`
+/// plus a length: a sector straddling two non-adjacent frames lands in
+/// both and never in the frame that happens to be physically next. Both
+/// transports share the descriptor builder; both are booted.
+#[test]
+fn dmasplit_test_passes() {
+    for legacy in [false, true] {
+        let (code, serial) = boot_galfs_once_virtio(&image("test-dmasplit"), legacy);
+        let label = if legacy { "legacy" } else { "virtio 1.x" };
+        assert!(
+            !serial.contains("[PANIC]") && !serial.contains("PAGE FAULT in ring 0"),
+            "test-dmasplit ({label}) panicked or faulted; serial:\n{serial}"
+        );
+        assert!(
+            serial.contains("[test-dmasplit] straddling read stayed in the buffer")
+                && serial.contains("[test-dmasplit] multi-page read stayed in the buffer")
+                && serial.contains("[test-dmasplit] straddling write came from the buffer")
+                && serial.contains("[test-dmasplit] 48-sector round trip"),
+            "test-dmasplit ({label}) did not reach every stage; serial:\n{serial}"
+        );
+        assert!(
+            serial.contains("[test-dmasplit] passed"),
+            "test-dmasplit ({label}) must pass; serial:\n{serial}"
+        );
+        assert_eq!(
+            code,
+            Some(QEMU_EXIT_SUCCESS),
+            "test-dmasplit ({label}) exit code; serial:\n{serial}"
+        );
+    }
 }
 
 /// GALF dual slots start at LBA 2048 — absolute LBA 0 stays empty.
@@ -3112,6 +3145,126 @@ fn shell_command_center_typing_e2e() {
     );
 }
 
+/// Sealed-disk boot: the volume passphrase prompt comes before the login
+/// banner. Default bring-up passphrase, masked.
+const UNLOCK_VOLUME_KEYS: &[(&str, &str)] = &[
+    ("g", "*"),
+    ("a", "*"),
+    ("l", "*"),
+    ("f", "*"),
+    ("s", "*"),
+    ("ret", "Login as: "),
+];
+
+/// `sync` (explicit commit, silent) then `whoami` after a `passwd`: proves
+/// the shell is live and accepting commands after the password change.
+const SYNC_WHOAMI_KEYS: &[(&str, &str)] = &[
+    ("s", "s"),
+    ("y", "y"),
+    ("n", "n"),
+    ("c", "c"),
+    ("ret", "admin@galexy> "),
+    ("w", "w"),
+    ("h", "h"),
+    ("o", "o"),
+    ("a", "a"),
+    ("m", "m"),
+    ("i", "i"),
+    ("ret", "admin\n"),
+];
+
+#[test]
+fn passwd_on_sealed_disk_typing_e2e() {
+    // galexy.os#86: on the production image with the data disk attached
+    // (the `cargo run` shape), `passwd` froze the guest after the audit
+    // line. Boot 1 unlocks a fresh sealed disk, logs in with the default
+    // password, changes it, runs commands, and must see the commit. Boot 2
+    // reopens the same disk and logs in with the new password.
+    let disk = common::fresh_galfs_image("passwd");
+    let mut keys: Vec<(&str, &str)> = UNLOCK_VOLUME_KEYS.to_vec();
+    keys.extend(LOGIN_ADMIN_KEYS.iter().copied());
+    keys.extend(CLEAR_DEFAULT_PASSWD.iter().copied());
+    keys.extend(SYNC_WHOAMI_KEYS.iter().copied());
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &keys,
+        "Volume passphrase: ",
+        "",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    assert_passwords_masked(&serial);
+    assert!(
+        !serial.contains("[PANIC]"),
+        "boot 1 panicked; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[galfs] formatted sealed disk"),
+        "unlock did not format the fresh disk; serial:\n{serial}"
+    );
+    let audit = serial
+        .find("[auth] passwd user=admin")
+        .unwrap_or_else(|| panic!("passwd audit line missing; serial:\n{serial}"));
+    let after = &serial[audit..];
+    assert!(
+        after.contains("admin@galexy> "),
+        "no prompt after passwd (galexy.os#86 shape); serial:\n{serial}"
+    );
+    assert!(
+        after.contains("[galfs] committing slot"),
+        "the new hash never committed to disk; serial:\n{serial}"
+    );
+    assert!(
+        !after.contains("sync skipped"),
+        "unlocked volume must not skip its sync; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("passwd: change the default password"),
+        "boot 1 must have started on the default password; serial:\n{serial}"
+    );
+
+    // Boot 2: same disk, new password, no must-change gate.
+    let mut keys: Vec<(&str, &str)> = UNLOCK_VOLUME_KEYS.to_vec();
+    keys.extend(LOGIN_ADMIN_TESTPASS_KEYS.iter().copied());
+    keys.extend([
+        ("w", "w"),
+        ("h", "h"),
+        ("o", "o"),
+        ("a", "a"),
+        ("m", "m"),
+        ("i", "i"),
+        ("ret", "admin\n"),
+    ]);
+    let serial2 = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &keys,
+        "Volume passphrase: ",
+        "",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    let _ = std::fs::remove_file(&disk);
+    assert_passwords_masked(&serial2);
+    assert!(
+        !serial2.contains("[PANIC]"),
+        "boot 2 panicked; serial:\n{serial2}"
+    );
+    assert!(
+        serial2.contains("[galfs] unlocked slot"),
+        "boot 2 did not reopen the sealed volume; serial:\n{serial2}"
+    );
+    assert!(
+        !serial2.contains("passwd: change the default password"),
+        "the new password must clear the must-change gate across reboot; serial:\n{serial2}"
+    );
+    assert!(
+        serial2.contains("[auth] session login user=admin"),
+        "boot 2 login with the new password failed; serial:\n{serial2}"
+    );
+}
+
 /// Init's own log lines are kernel serial (`Ns: [init] …`), not the seat
 /// console. A login screen that contains `[init]` without that prefix
 /// means init wrote on the TTY it shares with F1.
@@ -3279,6 +3432,27 @@ fn ipi_test_passes() {
     assert!(
         serial.contains("[test-ipi] passed"),
         "test-ipi success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn lockgrow_test_passes() {
+    // galexy.os#86: heap growth under a held lock must not deadlock
+    // against a CPU spinning IF=0 on that lock. The AP's lock spin acks
+    // the BSP's shootdown without the IPI.
+    let (code, serial) = boot(&image("test-lockgrow"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-lockgrow should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-lockgrow] passed"),
+        "test-lockgrow success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[shootdown] cpu 0 waiting on cpu 1"),
+        "the AP must ack from its lock spin, not stall the BSP; serial:\n{serial}"
     );
 }
 

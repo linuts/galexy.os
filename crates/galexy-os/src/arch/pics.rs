@@ -5,8 +5,9 @@
 //! flag says there is no 8259, skip the remap and only write the mask
 //! ports. Delivery is the APIC either way.
 
+use crate::sync::Mutex;
 use pic8259::ChainedPics;
-use spin::{LazyLock, Mutex};
+use spin::LazyLock;
 use x86_64::instructions::port::Port;
 
 use crate::arch::acpi;

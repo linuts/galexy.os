@@ -339,8 +339,19 @@ fn handle(msg: &[u8]) {
     }
     let op = msg[galexy_abi::INIT_RPC_HDR];
     let name = &msg[start..start + name_len];
+    // The kernel stamps `msg[0]` from the sender's session (admin root or
+    // not); the sender cannot forge it. Any logged-in seat may ask
+    // `status`. Everything that changes service state — start, stop,
+    // restart, power — is the operator's: a non-admin seat must not be
+    // able to kill another user's seat or churn the service table.
+    let admin = msg[0] != 0;
     match op {
         galexy_abi::INIT_OP_STATUS => status(name),
+        galexy_abi::INIT_OP_START | galexy_abi::INIT_OP_STOP | galexy_abi::INIT_OP_RESTART
+            if !admin =>
+        {
+            reply(b"access denied\n")
+        }
         galexy_abi::INIT_OP_START => start_svc(name),
         galexy_abi::INIT_OP_STOP => stop_svc(name),
         galexy_abi::INIT_OP_RESTART => restart_svc(name),

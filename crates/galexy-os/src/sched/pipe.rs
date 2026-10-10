@@ -1,6 +1,6 @@
 //! Anonymous pipes: fixed ring buffers shared by open ends.
 
-use spin::Mutex;
+use crate::sync::Mutex;
 
 use galexy_abi::SysError;
 

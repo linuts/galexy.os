@@ -5,9 +5,9 @@
 //! else is echoed back (the original echo-shell behavior). The status bar
 //! renders live system stats at the bottom of the screen.
 
+use crate::sync::Mutex;
 use alloc::string::String;
 use alloc::vec::Vec;
-use spin::Mutex;
 
 use crate::arch::mm;
 use crate::drivers::{keyboard, screen};

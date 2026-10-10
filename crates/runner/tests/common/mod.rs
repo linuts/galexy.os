@@ -597,6 +597,34 @@ pub fn boot_galfs_once(image: &Image) -> (Option<i32>, String) {
     result
 }
 
+/// One boot of `image` with a fresh 1 MiB virtio-blk disk on the given
+/// transport (`-M q35`, `cache=writethrough`). Returns `(exit, serial)`.
+pub fn boot_galfs_once_virtio(image: &Image, legacy: bool) -> (Option<i32>, String) {
+    let galfs_path = std::env::temp_dir().join(format!(
+        "galexy-galfs-virtio-{}-{}.img",
+        image.name.replace('-', "_"),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::write(&galfs_path, vec![0u8; GALFS_IMG_BYTES]).expect("create galfs.img");
+    let backend = if legacy {
+        GalfsBackend::VirtioLegacy
+    } else {
+        GalfsBackend::VirtioPci
+    };
+    let result = boot_once_with_galfs(
+        &image.bios,
+        &galfs_path,
+        &image.name,
+        GalfsDiskCache::Writethrough,
+        backend,
+    );
+    let _ = std::fs::remove_file(&galfs_path);
+    result
+}
+
 /// Boots `image` headless until it exits or the timeout elapses.
 ///
 /// Returns the QEMU exit code (see [`QEMU_EXIT_SUCCESS`] / [`QEMU_EXIT_FAILED`];
@@ -1055,6 +1083,84 @@ fn boot_and_type_on(
     timeout: Duration,
 ) -> String {
     let serial_path = serial_log_path("typing");
+    let mut cmd = qemu_command_opts(&img_path, &serial_path, "q35", virtio_kbd);
+    if uefi {
+        const OVMF_FD_DEFAULT: &str = "/usr/share/ovmf/x64/OVMF.4m.fd";
+        let ovmf_fd = std::env::var("OVMF_FD").unwrap_or_else(|_| OVMF_FD_DEFAULT.into());
+        cmd.arg("-bios").arg(ovmf_fd);
+    }
+    boot_and_type_cmd(
+        cmd,
+        &serial_path,
+        sync_pairs,
+        ready_marker,
+        final_marker,
+        key_delay,
+        timeout,
+    )
+}
+
+/// Like [`boot_and_type`], but with `galfs_path` attached as the virtio-blk
+/// data disk WITHOUT a snapshot: the guest's commits persist, so a second
+/// call with the same path boots the volume the first one wrote. This is
+/// the production `cargo run` shape (`-M q35`, virtio-blk, virtio-keyboard,
+/// 2 CPUs) driven by typed keys — the interactive path a test kernel never
+/// takes (galexy.os#86).
+#[allow(clippy::too_many_arguments)]
+pub fn boot_and_type_galfs(
+    image: &Image,
+    galfs_path: &Path,
+    sync_pairs: &[(&str, &str)],
+    ready_marker: &str,
+    final_marker: &str,
+    key_delay: Duration,
+    timeout: Duration,
+) -> String {
+    let serial_path = serial_log_path("typing-galfs");
+    let cmd = qemu_command_with_galfs(
+        &image.bios,
+        galfs_path,
+        &serial_path,
+        GalfsDiskCache::Writethrough,
+        GalfsBackend::VirtioPci,
+    );
+    boot_and_type_cmd(
+        cmd,
+        &serial_path,
+        sync_pairs,
+        ready_marker,
+        final_marker,
+        key_delay,
+        timeout,
+    )
+}
+
+/// Fresh zeroed galfs image for a typing test (same size the runner's
+/// `cargo run` creates).
+pub fn fresh_galfs_image(tag: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "galexy-galfs-{tag}-{}-{}.img",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::write(&path, vec![0u8; GALFS_IMG_BYTES]).expect("create galfs image");
+    path
+}
+
+/// The typing engine behind [`boot_and_type`] and friends: `cmd` is a
+/// fully built QEMU command whose COM1 goes to `serial_path`.
+fn boot_and_type_cmd(
+    mut cmd: Command,
+    serial_path: &Path,
+    sync_pairs: &[(&str, &str)],
+    ready_marker: &str,
+    final_marker: &str,
+    key_delay: Duration,
+    timeout: Duration,
+) -> String {
     let sock = std::env::temp_dir().join(format!(
         "galexy-qmp-{}.sock",
         std::time::SystemTime::now()
@@ -1064,12 +1170,6 @@ fn boot_and_type_on(
     ));
     let _ = std::fs::remove_file(&sock);
 
-    let mut cmd = qemu_command_opts(&img_path, &serial_path, "q35", virtio_kbd);
-    if uefi {
-        const OVMF_FD_DEFAULT: &str = "/usr/share/ovmf/x64/OVMF.4m.fd";
-        let ovmf_fd = std::env::var("OVMF_FD").unwrap_or_else(|_| OVMF_FD_DEFAULT.into());
-        cmd.arg("-bios").arg(ovmf_fd);
-    }
     cmd.arg("-qmp")
         .arg(format!("unix:{},server,nowait", sock.display()));
     let mut child = KillOnDrop(
@@ -1116,10 +1216,10 @@ fn boot_and_type_on(
             let _ = child.wait();
             panic!(
                 "ready marker '{ready_marker}' never appeared; serial:\n{}",
-                std::fs::read_to_string(&serial_path).unwrap_or_default()
+                std::fs::read_to_string(serial_path).unwrap_or_default()
             );
         }
-        if std::fs::read_to_string(&serial_path)
+        if std::fs::read_to_string(serial_path)
             .map(|s| s.contains(ready_marker))
             .unwrap_or(false)
         {
@@ -1144,7 +1244,7 @@ fn boot_and_type_on(
         loop {
             if Instant::now() > deadline {
                 let serial =
-                    typing_visible(&std::fs::read_to_string(&serial_path).unwrap_or_default());
+                    typing_visible(&std::fs::read_to_string(serial_path).unwrap_or_default());
                 let lo = seen.saturating_sub(400).min(serial.len());
                 let hi = (seen + 200).min(serial.len());
                 panic!(
@@ -1156,7 +1256,7 @@ fn boot_and_type_on(
             // Read the log before treating exit as failure. Shutdown
             // powers the machine off on the last key, and the echo is
             // already in the file when QEMU's process is gone.
-            let raw = std::fs::read_to_string(&serial_path).unwrap_or_default();
+            let raw = std::fs::read_to_string(serial_path).unwrap_or_default();
             let exited = child.try_wait().expect("try_wait failed").is_some();
             let data = typing_visible(&raw);
             // A multi-byte marker may start before `seen` (the per-key
@@ -1186,10 +1286,10 @@ fn boot_and_type_on(
             if Instant::now() > deadline {
                 panic!(
                     "final marker '{final_marker}' never appeared; serial tail:\n{}",
-                    std::fs::read_to_string(&serial_path).unwrap_or_default()
+                    std::fs::read_to_string(serial_path).unwrap_or_default()
                 );
             }
-            let serial = std::fs::read_to_string(&serial_path).unwrap_or_default();
+            let serial = std::fs::read_to_string(serial_path).unwrap_or_default();
             if serial.contains(final_marker) {
                 break;
             }
@@ -1203,5 +1303,5 @@ fn boot_and_type_on(
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_file(&sock);
-    std::fs::read_to_string(&serial_path).unwrap_or_default()
+    std::fs::read_to_string(serial_path).unwrap_or_default()
 }

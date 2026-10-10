@@ -12,7 +12,7 @@
 
 use core::fmt;
 
-use spin::Mutex;
+use crate::sync::Mutex;
 
 /// Lines kept. Older lines fall off the front.
 const SLOTS: usize = 32;
@@ -120,6 +120,17 @@ fn login_fail(s: &str) -> bool {
 }
 
 static DMESG: Mutex<Log> = Mutex::new(Log::new());
+
+/// Panic path only: the `[PANIC]` line goes through [`record`], which
+/// takes `DMESG`; a panic raised under that lock would otherwise hang the
+/// handler silently. See `serial::force_unlock_for_panic`.
+///
+/// # Safety
+/// Only from the panic handler, which never returns to the holder.
+pub unsafe fn force_unlock_for_panic() {
+    // SAFETY: caller contract above.
+    unsafe { DMESG.force_unlock() };
+}
 
 struct LineWriter<'a> {
     buf: &'a mut [u8],

@@ -9,8 +9,8 @@
 //! `set_color`), so callers don't care about pixels or fonts. Must be
 //! [`init`](self::init)ed with the `BootInfo` framebuffer before output.
 
+use crate::sync::Mutex;
 use core::fmt;
-use spin::Mutex;
 
 use crate::serial_println;
 use noto_sans_mono_bitmap::{get_raster, FontWeight, RasterHeight};

@@ -6,9 +6,10 @@
 //! held while delivering a byte: delivery can log, and that log takes the
 //! same lock.
 
+use crate::sync::Mutex;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, Ordering};
-use spin::{Mutex, Once};
+use spin::Once;
 use uart_16550::backend::PioBackend;
 use uart_16550::spec::registers::{FifoTriggerLevel, IER};
 use uart_16550::{Config, Uart16550};
@@ -22,6 +23,22 @@ static SERIAL1: Once<Mutex<Uart16550<PioBackend>>> = Once::new();
 fn serial1() -> &'static Mutex<Uart16550<PioBackend>> {
     // SAFETY: port 0x3F8 is the standard COM1 base; valid for the whole run.
     SERIAL1.call_once(|| Mutex::new(unsafe { Uart16550::new_port(0x3F8).unwrap() }))
+}
+
+/// Panic path only: drops whatever hold `SERIAL1` is under so `[PANIC]`
+/// can print. A panic raised while this CPU held the UART (a `Display`
+/// impl inside `serial_println!`, say) would otherwise re-take the lock
+/// and go silent, and silence after the last line is indistinguishable
+/// from an IF=0 deadlock (galexy.os#86). Tearing another CPU's line at
+/// panic time is the lesser evil: the machine is about to exit.
+///
+/// # Safety
+/// Only from the panic handler, which never returns to the holder.
+pub unsafe fn force_unlock_for_panic() {
+    if let Some(uart) = SERIAL1.get() {
+        // SAFETY: caller contract above.
+        unsafe { uart.force_unlock() };
+    }
 }
 
 /// Initializes COM1 (8-N-1, FIFO on, receive interrupt armed).

@@ -63,11 +63,15 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let baseline = galexy_os::arch::mm::free_frames();
 
     for cycle in 0..CYCLES {
-        let (region, _) = sched::spawn_user_task("churn", |gr| build_blob(console_cap_bits, gr));
+        // Pinned to the BSP: the owner CPU reaps, and an AP owner would reap
+        // (zero-wiping scratch) from its idle loop before this loop peeks.
+        // On the BSP the only reaper is the explicit `sched::reap()` below.
+        let (region, _) =
+            sched::spawn_user_task_on("churn", 0, |gr| build_blob(console_cap_bits, gr));
         let scratch_virt: *const u32 =
             galexy_os::arch::mm::frame_virt(region.scratch_phys).as_ptr();
 
-        // Spin-peek before reap — an AP-pinned churn is reaped remotely.
+        // Spin-peek before reap.
         x86_64::instructions::interrupts::enable();
         let deadline = galexy_os::arch::timer_ticks() + 5_000;
         loop {

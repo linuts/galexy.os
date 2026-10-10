@@ -270,6 +270,24 @@ a missed line is noticed on the next timer tick. FLUSH via
 pub struct VirtioBlk; // impl BlockDevice
 ```
 
+**DMA follows physical pages, not `translate(buf) + len`.** A kernel
+buffer is contiguous in virtual memory only. The bootloader's `.bss`
+frames are usually adjacent, which is why a single translation ever
+worked; at a 2 MiB boundary it allocates a page-table frame between two
+data frames, and a sector straddling that boundary used to DMA into the
+page table (`[pf] PAGE FAULT in ring 0` inside galfs `DISK_BUF` on the
+boots where KASLR put it across the boundary; on a write, page-table
+bytes went to disk). `push_data_descs` translates every 4 KiB page of a
+request and emits one descriptor per physically contiguous run, so a
+request is up to `MAX_BATCH_SECTORS` (32 sectors, at most five
+descriptors) regardless of alignment. galfs' `DISK_BUF` is page-aligned
+(`SectorBuf`) so the common request is one descriptor. The legacy ring
+layout (desc + avail on one page, used on the next) still requires those
+two frames to be physically adjacent and refuses the device otherwise.
+`bin/test-dmasplit` maps two non-adjacent frames at adjacent pages,
+plants a sentinel in the frame that is physically next, and checks
+straddling reads and writes on both transports.
+
 The keyboard handler never takes the screen lock. Locks are tiny and
 never nested (decode under one lock, push under another), so IRQ
 context is safe. Queue overflow drops the newest key (documented).
@@ -441,10 +459,14 @@ window (P4 203) is reserved in `mm::init`, before this sequence.
   512 GiB, so the growth path needs no new top-level structures).
 - Growth is machine-serialized by a `GROWING` flag (SMP M19). The map
   loop runs IRQ-gated; the TLB shootdown between map and `Heap::extend`
-  is lock-free (no Rust spin lock across the broadcast — see shootdown
-  below). A second CPU that OOMs mid-growth does not fail the alloc: it
-  spins with interrupts enabled until the in-flight chunk lands (a ~2s
-  watchdog panics if the grower sticks), then the caller retries.
+  holds no lock of `grow`'s own (see shootdown below). The CALLER of
+  `alloc` may hold locks — `GlobalAlloc` cannot know — which is why every
+  kernel lock's spin loop services shootdowns (`sync::Mutex`). A second
+  CPU that OOMs mid-growth does not fail the alloc: it spins, servicing
+  the mailbox so the in-flight grower gets its ack, until the chunk lands
+  (a spin-count watchdog panics if the grower sticks), then the caller
+  retries. It does NOT re-enable interrupts: the caller may be inside an
+  IRQ gate holding locks the timer path needs.
 - `shell` is the first heap consumer (String line buffers); the scheduler's
   task queues are the next one. Host unit tests never touch the heap
   (no_std tests of `galexy-core` are allocation-free by rule).
@@ -461,14 +483,26 @@ on one CPU is stale in every other TLB until invalidated.
   `seq` (ABA closed; a stale re-INVLPG is harmless).
 - Initiator (`shootdown_others`): claim a slot, publish, `send_fixed_ipi`
   to every other online CPU, spin until each target's `seen` catches
-  `seq`. Holds no Rust spin lock. Any IRQ state is fine — targets ack
-  the next time they run with IF=1. A target that has not acked after
-  2^26 spins is reported to serial (`[shootdown] cpu A waiting on cpu
-  B …`) and the wait continues — the line is the first evidence a hung
-  boot gives about which CPU is wedged IF=0.
+  `seq`, servicing other initiators' requests while it waits. Holds no
+  Rust spin lock of its own. Any IRQ state is fine. A target that has not
+  acked after 2^26 spins is reported to serial (`[shootdown] cpu A
+  waiting on cpu B …`) and the wait continues — the line is the first
+  evidence a hung boot gives about which CPU is wedged IF=0.
 - Target: the 0xF8 handler scans unseen seqs, `invlpg`s the listed VAs,
-  stores `seen`. Takes no locks, ever (an IF=0 lock holder must still be
-  able to ack, or a broadcasting initiator spins forever).
+  records `seen` (`fetch_max`). Takes no locks, ever (an IF=0 lock holder
+  must still be able to ack, or a broadcasting initiator spins forever).
+- **Polled ack (galexy.os#86).** The IPI cannot reach a CPU that is
+  spinning IF=0 on a lock. If the lock's holder is the broadcaster, both
+  CPUs stop with interrupts off and nothing prints — that was `passwd`:
+  the BSP's 1 Hz status bar built `String`s under `THREADS`, one
+  allocation grew the heap and broadcast, and the AP's `passwd` syscall
+  was spinning on `THREADS`. The same handler body is therefore exposed
+  as `shootdown::service_pending()`, and the kernel's lock type
+  (`sync::Mutex`, a `spin` mutex with a custom `RelaxStrategy`) calls it
+  on every spin. The IPI stays as the fast path; the poll guarantees
+  progress whatever the waiter's IF state. `test-lockgrow` pins an IF=0
+  lock contender to the AP and grows the heap under that lock on the BSP:
+  it hangs without the poll and passes with it.
 - `map_kernel_page_broadcast` is the single-page primitive: map, local
   flush, then broadcast. Heap `grow()` batches instead: `map_page` the
   chunk under the IRQ gate, one `shootdown_others` for every new VA (a
@@ -1034,7 +1068,10 @@ returns, so a broken canary fails that boot. The user stack's guard
 page is unmapped; `test-userfault` recurses into it, kills only that
 task, and requires `free_frames` back at the boot baseline.
 `test-treechurn` and `test-smpstress` are the same budget after N
-spawn/exit cycles.
+spawn/exit cycles. Tests that peek a task's scratch page after it
+exits pin the task to the BSP (`spawn_user_task_on(.., 0, ..)`,
+`spawn_user_launcher`): the owner CPU reaps, and an AP owner would
+zero-wipe the tree from its idle loop before the BSP's peek.
 
 **Debug vs release.** Canary mismatch always panics. GALF structural
 checks return failure and refuse the image (soft) in every build.
@@ -1052,12 +1089,12 @@ IRQ that already has IF=0) around the acquire.
 
 | Lock | May hold while taking | IRQ-gate |
 | --- | --- | --- |
-| `THREADS` | galfs `TABLE`, then `VOLUME_KEY`, then `VOLUME_PASS`, then `CHANS` | yes |
-| galfs `TABLE` | `DISK_BUF` only while encoding; not `THREADS` | yes, on the syscall path |
+| `THREADS` | galfs `TABLE`, then `VOLUME_KEY`, then `VOLUME_PASS`, then `CHANS`. No heap allocation while held (snapshot into fixed arrays, allocate after the drop) | yes |
+| galfs `TABLE` | `DISK_BUF` only while encoding; not `THREADS`. The PBKDF2 for `login` / `passwd` / `useradd` runs before the lock is taken (`PasswordCred`) | yes. Syscalls arrive IF=0; the main-loop entries (`sync_to_disk`, `wipe_volume_key`, `seal_and_lock`) gate themselves — a preempted main-loop holder on the BSP deadlocked the shell's next galfs syscall on the same CPU (galexy.os#86) |
 | `VOLUME_KEY` | `VOLUME_PASS` | with the caller |
 | `LOCKOUT` | nothing above | yes; never under `THREADS` or `TABLE` |
 | Frame `USED` then `USABLE` | nothing else | yes |
-| Heap `INNER` | nothing else; growth drops it before shootdown | yes |
+| Heap `INNER` | nothing else; growth drops it before shootdown. A second grower that lost the race polls `shootdown::service_pending()` while it waits and never re-enables IF (galexy.os#86) | yes |
 | `ATA` / virtio `DEV` then `DMA` | nothing else. The timer may take `DMA` alone to read `used.idx`; it never takes `DEV`. The waiter holds `DEV` across the halt and stays on that CPU (`xfer_wait_cpu`) so a same-CPU switch cannot spin on it | with the caller (syscall or BSP); `used.idx` disables interrupts around `DMA` |
 | Screen `SCREEN` / `GRIDS` | nothing else | BSP; IRQ handlers do not take it |
 | Keyboard queue | nothing else (drop warning takes `DMESG` after the queue lock drops) | IRQ may push; readers gate |
@@ -1065,7 +1102,7 @@ IRQ that already has IF=0) around the acquire.
 | COM1 `SERIAL1` | nothing (received bytes are delivered after it drops) | TX path gates; the receive IRQ takes it |
 | `CHANS` | nothing else | yes; only after `THREADS` |
 | `SCHED`, `RAMDISK`, `PIPES`, `PENDING_SPAWN` | not `THREADS` | yes when called from preemptable code |
-| Shootdown handler | **no lock** | runs at IPI; initiator holds none across the broadcast |
+| Shootdown handler | **no lock** | runs at IPI, and from the relax step of every `sync::Mutex` spin via `service_pending()` so an IF=0 lock waiter still acks; the initiator services other CPUs' requests while it waits and holds no lock across the broadcast |
 
 Init order (`galexy-os` `main`): serial → framebuffer → ramdisk publish
 → `mm` (frames, paging, heap) → `arch` (GDT, IDT, ACPI, FSGSBASE,
@@ -1157,6 +1194,7 @@ main image and are listed at the end.
 | `test-ramdisk`, `test-realprogram`, `test-open`, `test-runshell` | `ramdisk_test_passes`, `realprogram_test_passes`, `open_test_passes`, `runshell_test_passes` | M15 ELF + ramdisk, M20 files as Caps, M31 launch by name; M51 ramdisk measurement |
 | `test-acpi`, `test-apic` | `acpi_test_passes`, `apic_test_passes` | M17 APIC family; M65 x2APIC / TSC-deadline follow CPUID |
 | `test-smp`, `test-ipi`, `test-smpuser`, `test-smpstress` | `smp_test_passes`, `ipi_test_passes`, `smpuser_test_passes`, `smpstress_test_passes` | M18–M19 SMP, shootdown, steal |
+| `test-lockgrow` | `lockgrow_test_passes` | heap growth under a held lock vs an IF=0 waiter on the other CPU (galexy.os#86); shootdown acks from the lock spin |
 | `test-shutdown`, `test-reboot` | `shutdown_test_powers_off`, `reboot_test_resets` | M23 power |
 | `test-audit` | `audit_console_test_passes` | M49 keyboard overflow, dmesg ring, blink |
 | `test-scratch`, `test-rm`, `test-seek` | `scratch_test_passes`, `rm_test_passes`, `seek_test_passes` | M27 / M30 / M36 scratch files, remove, seek |
@@ -1165,6 +1203,7 @@ main image and are listed at the end.
 | `test-galfs-disk`, `test-galfs-part`, `test-share-disk` | `galfs_disk_persists_*`, `assert_galfs_disk_persists`, `galfs_disk_persists_partition_offset`, `share_disk_persists_across_reboot` | M38 / M46 disk-backed galfs, cache modes, virtio, partition offset |
 | `test-galfs-corrupt`, `test-galfs-idempotent`, `test-crash` | `galfs_disk_recovers_*`, `galfs_disk_refuses_format_when_both_slots_corrupt`, `galfs_idempotent_after_recover`, `crash_injection_picks_consistent_slot` | M39 / M45 crash safety |
 | `test-ata` | `ata_absent_returns_unsupported` | M45 ATA error propagation |
+| `test-dmasplit` | `dmasplit_test_passes` | virtio-blk DMA splits at physical discontinuities (both transports); sentinel frame stays untouched |
 | `test-users`, `test-mustchange`, `test-lockout`, `test-idle`, `test-unlock` | `users_test_passes`, `mustchange_test_passes`, `lockout_test_passes`, `idle_test_passes`, `unlock_test_passes` | M37 / M42 / M43 auth, M44 sealed unlock |
 | `test-pipe` | `pipe_test_passes` | M36 pipes + `give`, M57 block/wake |
 | `test-userheap`, `test-channel` | `userheap_test_passes`, `channel_test_passes` | M66 per-task `Map` budget and reap, `Clock`, channel send/recv and `give` |

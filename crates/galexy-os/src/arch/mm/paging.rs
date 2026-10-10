@@ -14,7 +14,7 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use spin::Mutex;
+use crate::sync::Mutex;
 use x86_64::registers::control::{Cr3, Cr3Flags};
 use x86_64::structures::paging::{
     FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB,

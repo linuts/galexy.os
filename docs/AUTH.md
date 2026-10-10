@@ -211,7 +211,10 @@ Returning to admin after `su` elsewhere uses `su admin` when the seat
 was born/logged-in as admin (`born_admin` survives `su` away — it is
 only cleared by `logout` or a password `login` as a non-admin), or
 `login admin <pass>`. Non-admin sessions have no Power grant: `shutdown`
-/ `reboot` return access denied.
+/ `reboot` return access denied. The same admin bit, stamped by the
+kernel on the init control header, gates `svc start|stop|restart`
+through init; `svc status` is open to any logged-in seat
+(`PROCESS.md` → Init).
 
 Login and logout bump a session generation (`[auth] session login
 user=… gen=N tty=K`). It is an audit counter, not a capability. A

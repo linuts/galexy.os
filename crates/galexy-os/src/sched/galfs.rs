@@ -15,7 +15,7 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use spin::Mutex;
+use crate::sync::Mutex;
 
 use galexy_abi::SysError;
 use galexy_core::{crc32, HASH_LEN, SALT_LEN};
@@ -157,13 +157,11 @@ impl Actor {
         (self.max_objects & !MUST_CHANGE_BIT) as u32
     }
 
-    fn set_password(&mut self, password: &[u8]) {
-        crate::arch::rand::fill_bytes(&mut self.salt);
-        // `passwd` and format both re-derive at the boot's default cost,
-        // not at whatever count the previous hash used.
-        let iters = password_kdf_iters();
-        self.kdf_iters = iters;
-        hash_password_iters(password, &self.salt, iters, &mut self.pass_hash);
+    /// Stores an already-derived credential (see [`PasswordCred`]).
+    fn install_password(&mut self, cred: &PasswordCred, password: &[u8]) {
+        self.salt = cred.salt;
+        self.kdf_iters = cred.iters;
+        self.pass_hash = cred.hash;
         // Default admin password keeps the must-change flag across reboot.
         if self.name_is(ADMIN_NAME) && password == ADMIN_DEFAULT_PASSWORD.as_bytes() {
             self.max_objects |= MUST_CHANGE_BIT;
@@ -172,19 +170,63 @@ impl Actor {
         }
     }
 
-    fn check_password(&self, password: &[u8]) -> bool {
+    /// The stored salt/cost/hash, for a check that runs after the table
+    /// lock drops ([`verify_password`]).
+    fn password_cred(&self) -> PasswordCred {
+        PasswordCred {
+            salt: self.salt,
+            iters: self.kdf_iters,
+            hash: self.pass_hash,
+        }
+    }
+}
+
+/// Salt, cost and hash of one password: everything the KDF needs, so the
+/// multi-ms PBKDF2 runs with NO table lock held.
+///
+/// Syscalls run IF=0. Holding `TABLE` across 100 000 iterations stalled
+/// every other `TABLE` user — the 1 Hz sync and status bar on the other
+/// CPU spin IF=0 for the whole derivation (galexy.os#86). Derive first,
+/// then take the lock only to copy 60 bytes.
+struct PasswordCred {
+    salt: [u8; SALT_LEN],
+    iters: u32,
+    hash: [u8; HASH_LEN],
+}
+
+impl PasswordCred {
+    /// Fresh salt + the boot's default cost. `passwd` and format both
+    /// re-derive at that cost, not at whatever count the previous hash used.
+    fn derive(password: &[u8]) -> Self {
+        let mut cred = Self {
+            salt: [0; SALT_LEN],
+            iters: password_kdf_iters(),
+            hash: [0; HASH_LEN],
+        };
+        crate::arch::rand::fill_bytes(&mut cred.salt);
+        hash_password_iters(password, &cred.salt, cred.iters, &mut cred.hash);
+        cred
+    }
+
+    fn check(&self, password: &[u8]) -> bool {
         // A hostile image can store a huge count. Refuse it instead of
         // wedging the CPU. A stored older cost (including the test-kernel
         // 10 000) still verifies.
         const KDF_ITERS_MAX: u32 = 1_000_000;
-        if self.kdf_iters == 0 || self.kdf_iters > KDF_ITERS_MAX {
+        if self.iters == 0 || self.iters > KDF_ITERS_MAX {
             return false;
         }
         let mut got = [0u8; HASH_LEN];
-        hash_password_iters(password, &self.salt, self.kdf_iters, &mut got);
-        let ok = hash_eq(&got, &self.pass_hash);
+        hash_password_iters(password, &self.salt, self.iters, &mut got);
+        let ok = hash_eq(&got, &self.hash);
         wipe_bytes(&mut got);
         ok
+    }
+
+    fn wipe(&mut self) {
+        wipe_bytes(&mut self.salt);
+        wipe_bytes(&mut self.hash);
+        self.iters = 0;
     }
 }
 
@@ -339,8 +381,31 @@ pub const VOLUME_PASSPHRASE: &[u8] = b"galfs";
 /// Max bytes accepted by [`unlock_volume`] (matches the syscall staging cap).
 const PASSPHRASE_MAX: usize = 64;
 
-static DISK_BUF: Mutex<[[u8; block::SECTOR]; DISK_SECTORS]> =
-    Mutex::new([[0u8; block::SECTOR]; DISK_SECTORS]);
+/// The slot staging buffer, page-aligned so no sector straddles a page.
+///
+/// The virtio driver splits a request at every physical discontinuity, so
+/// alignment is not what keeps DMA inside the buffer; it keeps every
+/// request a single descriptor and makes the layout independent of where
+/// KASLR puts `.bss` (galexy.os#86 follow-up: an unaligned buffer crossing
+/// a 2 MiB boundary once DMA'd into the page table between its frames).
+#[repr(C, align(4096))]
+struct SectorBuf([[u8; block::SECTOR]; DISK_SECTORS]);
+
+impl core::ops::Deref for SectorBuf {
+    type Target = [[u8; block::SECTOR]; DISK_SECTORS];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for SectorBuf {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+static DISK_BUF: Mutex<SectorBuf> = Mutex::new(SectorBuf([[0u8; block::SECTOR]; DISK_SECTORS]));
+const _: () = assert!(core::mem::align_of::<SectorBuf>() == 4096);
 /// First LBA of slot 0 (partition offset). Default 0; set before [`init`].
 static LBA_BASE: AtomicU32 = AtomicU32::new(0);
 /// Unwrapped volume key while the disk is mounted. `None` when locked.
@@ -410,6 +475,9 @@ pub fn disk_capacity_sectors() -> u64 {
 
 /// Set when the in-RAM table differs from the last flushed dual slot.
 static DIRTY: AtomicBool = AtomicBool::new(false);
+/// Set after the "sync skipped: volume locked" line was printed for the
+/// current locked period; cleared by the next successful encode.
+static LOCKED_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Marks the table dirty so the next [`sync_if_dirty`] / [`sync`] flushes.
 pub fn mark_dirty() {
@@ -478,9 +546,10 @@ pub fn init() {
 
 /// In-RAM admin tree. Does not install a volume key or touch the disk.
 fn format_ram_table() {
+    let default = ADMIN_DEFAULT_PASSWORD.as_bytes();
+    let cred = PasswordCred::derive(default);
     let mut table = TABLE.lock();
-    let admin =
-        add_actor(&mut table, ADMIN_NAME, ADMIN_DEFAULT_PASSWORD.as_bytes()).expect("galfs: admin");
+    let admin = add_actor(&mut table, ADMIN_NAME, default, &cred).expect("galfs: admin");
     ADMIN_ROOT.store(admin, Ordering::Relaxed);
     mkdir_locked(&mut table, admin, "Desktop").expect("galfs: admin Desktop");
     drop(table);
@@ -603,7 +672,9 @@ pub fn seal_and_lock() {
     if !disk_usable() {
         return;
     }
-    if VOLUME_KEY.lock().is_some() {
+    let unlocked =
+        x86_64::instructions::interrupts::without_interrupts(|| VOLUME_KEY.lock().is_some());
+    if unlocked {
         sync_if_dirty();
     }
     wipe_volume_key();
@@ -612,7 +683,15 @@ pub fn seal_and_lock() {
 /// Zero the volume key and stored passphrase. Disk image is left as last synced.
 ///
 /// Residual RAM remanence after this wipe is an accepted cold-boot risk.
+///
+/// IRQ-gated: the main loop reaches here through idle logout with IF=1,
+/// and `VOLUME_KEY` / `VOLUME_PASS` are also taken by syscalls (IF=0) on
+/// the same CPU — a preempted holder would wedge them (lock-audit rule).
 pub fn wipe_volume_key() {
+    x86_64::instructions::interrupts::without_interrupts(wipe_volume_key_gated);
+}
+
+fn wipe_volume_key_gated() {
     let mut had = false;
     {
         let mut key = VOLUME_KEY.lock();
@@ -673,7 +752,23 @@ pub fn sync_explicit() -> Result<(), SysError> {
     }
 }
 
+/// Commits the table: encode under `DISK_BUF` + `TABLE`, then write and
+/// flush the inactive slot.
+///
+/// IRQ-gated as a whole (galexy.os#86, second hang). The BSP main loop
+/// calls this with IF=1 once a second when the table is dirty. Holding
+/// `TABLE` / `DISK_BUF` preemptibly broke the lock-audit rule: the timer
+/// switched the preempted main loop out for the shell thread on the same
+/// CPU, whose next galfs syscall (the prompt's `whoami`, or `sync`) spun
+/// IF=0 on a lock only the parked main loop could release. With the gate,
+/// the encode runs to completion; the block I/O below re-enables
+/// interrupts for its halt-wait on its own terms (`XFER_CPU` pins the CPU
+/// to the holder), then returns with the gate intact.
 fn sync_to_disk() -> bool {
+    x86_64::instructions::interrupts::without_interrupts(sync_to_disk_gated)
+}
+
+fn sync_to_disk_gated() -> bool {
     if !disk_usable() || DISK_CORRUPT.load(Ordering::Acquire) {
         return false;
     }
@@ -683,14 +778,22 @@ fn sync_to_disk() -> bool {
     let mut buf = DISK_BUF.lock();
     {
         let table = TABLE.lock();
-        if !encode_table(&table, next_gen, &mut buf) {
-            crate::serial_println!("[galfs] sync skipped: volume locked");
+        if !encode_table(&table, next_gen, &mut buf.0) {
+            // A dirty RAM table on a locked volume stays dirty (nothing
+            // can seal it) and the 1 Hz tick retries forever. Say so once
+            // per lock state, not once a second for the rest of the boot.
+            if !LOCKED_SKIP_LOGGED.swap(true, Ordering::AcqRel) {
+                crate::serial_println!(
+                    "[galfs] sync skipped: volume locked (RAM-only until unlock)"
+                );
+            }
             return false;
         }
     }
+    LOCKED_SKIP_LOGGED.store(false, Ordering::Release);
     crate::serial_println!("[galfs] committing slot {}", next_slot);
     let d = disk();
-    if d.write_sectors(lba, &*buf).is_err() {
+    if d.write_sectors(lba, &buf.0).is_err() {
         crate::serial_println!("[galfs] disk sync write failed");
         return false;
     }
@@ -723,7 +826,7 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
     let mut cand = LOAD_CAND.lock();
     for slot in 0..DISK_SLOT_COUNT as u32 {
         let lba = slot_lba(slot);
-        if disk().read_sectors(lba, &mut *buf).is_err() {
+        if disk().read_sectors(lba, &mut buf.0).is_err() {
             continue;
         }
         let magic = buf[0][0..4] == DISK_MAGIC;
@@ -742,7 +845,7 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
             saw_corrupt_current = true;
             continue;
         }
-        let Some(gen) = decode_table(&mut buf, &mut cand, passphrase) else {
+        let Some(gen) = decode_table(&mut buf.0, &mut cand, passphrase) else {
             if magic && version == DISK_VERSION {
                 saw_corrupt_current = true;
                 bad_with_magic += 1;
@@ -1338,34 +1441,68 @@ pub fn add_user(name: &str, password: &[u8]) -> Result<u16, SysError> {
     if !password_ok(password) {
         return Err(SysError::BadValue);
     }
+    // KDF before the lock (see `PasswordCred`).
+    let mut cred = PasswordCred::derive(password);
     let mut table = TABLE.lock();
-    let root = add_actor(&mut table, name, password)?;
-    mkdir_locked(&mut table, root, "Desktop")?;
-    Ok(root)
+    let result = add_actor(&mut table, name, password, &cred)
+        .and_then(|root| mkdir_locked(&mut table, root, "Desktop").map(|_| root));
+    drop(table);
+    cred.wipe();
+    result
 }
 
 /// True when `password` verifies for actor `name`.
+///
+/// The table lock is held only to copy the stored salt/cost/hash; the
+/// derivation runs unlocked. A concurrent `passwd` on the same actor
+/// races benignly: the check runs against whichever credential was
+/// stored when the copy was taken.
 pub fn verify_password(name: &str, password: &[u8]) -> Result<bool, SysError> {
-    let table = TABLE.lock();
-    let Some(actor) = table.actors.iter().find(|a| a.used && a.name_is(name)) else {
-        return Err(SysError::NotFound);
+    let mut cred = {
+        let table = TABLE.lock();
+        let Some(actor) = table.actors.iter().find(|a| a.used && a.name_is(name)) else {
+            return Err(SysError::NotFound);
+        };
+        actor.password_cred()
     };
-    Ok(actor.check_password(password))
+    let ok = cred.check(password);
+    cred.wipe();
+    Ok(ok)
 }
 
 /// Sets the password for actor `name`.
+///
+/// Derives first (unlocked), then takes the table lock only to store the
+/// new salt/cost/hash.
 pub fn set_password(name: &str, password: &[u8]) -> Result<(), SysError> {
     if !password_ok(password) {
         return Err(SysError::BadValue);
     }
-    let mut table = TABLE.lock();
-    let Some(actor) = table.actors.iter_mut().find(|a| a.used && a.name_is(name)) else {
+    let exists = TABLE
+        .lock()
+        .actors
+        .iter()
+        .any(|a| a.used && a.name_is(name));
+    if !exists {
         return Err(SysError::NotFound);
+    }
+    let mut cred = PasswordCred::derive(password);
+    let result = {
+        let mut table = TABLE.lock();
+        match table.actors.iter_mut().find(|a| a.used && a.name_is(name)) {
+            Some(actor) => {
+                actor.install_password(&cred, password);
+                Ok(())
+            }
+            // Deleted while we derived.
+            None => Err(SysError::NotFound),
+        }
     };
-    actor.set_password(password);
-    drop(table);
-    mark_dirty();
-    Ok(())
+    cred.wipe();
+    if result.is_ok() {
+        mark_dirty();
+    }
+    result
 }
 
 fn password_ok(password: &[u8]) -> bool {
@@ -1555,8 +1692,12 @@ pub fn add_actor_named(name: &str, password: &[u8]) -> Result<u16, SysError> {
     if !password_ok(password) {
         return Err(SysError::BadValue);
     }
+    let mut cred = PasswordCred::derive(password);
     let mut table = TABLE.lock();
-    add_actor(&mut table, name, password)
+    let result = add_actor(&mut table, name, password, &cred);
+    drop(table);
+    cred.wipe();
+    result
 }
 
 fn admin_quota_limits() -> (u16, u32) {
@@ -1611,7 +1752,15 @@ fn subtree_usage(table: &Table, root: u16) -> (u32, u32) {
     (objects, bytes)
 }
 
-fn add_actor(table: &mut Table, name: &str, password: &[u8]) -> Result<u16, SysError> {
+/// Adds an actor whose credential was derived BEFORE `table` was locked
+/// (see [`PasswordCred`]); `password` is only compared against the default
+/// for the must-change flag.
+fn add_actor(
+    table: &mut Table,
+    name: &str,
+    password: &[u8],
+    cred: &PasswordCred,
+) -> Result<u16, SysError> {
     if !component_ok(name) || name.len() > ACTOR_NAME {
         return Err(SysError::BadValue);
     }
@@ -1637,7 +1786,7 @@ fn add_actor(table: &mut Table, name: &str, password: &[u8]) -> Result<u16, SysE
     actor.root = oi as u16;
     actor.max_objects = max_objects;
     actor.max_bytes = max_bytes;
-    actor.set_password(password);
+    actor.install_password(cred, password);
     let obj = &mut table.objects[oi];
     *obj = Object::empty();
     obj.kind = KIND_DIR;

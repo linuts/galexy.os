@@ -32,8 +32,12 @@ static HEAP_CURRENT_SIZE: AtomicUsize = AtomicUsize::new(HEAP_SIZE);
 /// Set once by [`init`]; growth before that is a bug.
 static READY: AtomicBool = AtomicBool::new(false);
 /// Set while a growth step is in progress (a second OOM allocation must not
-/// map the same pages twice; it simply fails instead).
+/// map the same pages twice; it waits for the in-flight chunk instead).
 static GROWING: AtomicBool = AtomicBool::new(false);
+/// Spins a second grower waits behind an in-flight growth before declaring
+/// the grower wedged (2^28 pause-loads: tens of seconds under loaded TCG,
+/// a few on metal — a real growth step is microseconds to milliseconds).
+const GROW_WAIT_SPINS: u64 = 1 << 28;
 
 static INNER: LockedHeap = LockedHeap::empty();
 
@@ -49,10 +53,12 @@ pub struct InterruptSafeAlloc;
 // GATE SPLIT (SMP M19): the fast path holds the gate (lock-audit rule —
 // the heap lock must never be held by preemptable code with IF=1), but the
 // OOM path runs LOCK-FREE between gates: `grow` maps under the gate, then
-// broadcasts its shootdowns with NO lock held and NO gate held (the
-// shootdown deadlock rule — a target blocked IF=0 on a lock held by the
-// initiator could never ack the IPI). Naked/IRQ paths never reach the OOM
-// path at all (they do not allocate).
+// broadcasts its shootdowns with NO lock of its own held and NO gate held.
+// The CALLER may still hold locks (any `format!` under `THREADS`, say) —
+// `GlobalAlloc` cannot know. That is why every kernel spin lock services
+// shootdowns from its spin loop (`crate::sync`): a target blocked IF=0 on
+// the caller's lock acks anyway. Naked/IRQ paths never reach the OOM path
+// at all (they do not allocate).
 unsafe impl GlobalAlloc for InterruptSafeAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         loop {
@@ -105,10 +111,11 @@ pub fn init() {
 /// then feeds them to the allocator.
 ///
 /// SMP protocol: the GROWING flag serializes growth machine-wide. When a
-/// second CPU hits OOM mid-growth, it does NOT fail — it waits (with
-/// interrupts ENABLED, so it can still ack the other CPU's shootdown IPIs;
-/// waiting IF=0 here would deadlock the broadcaster) for the in-flight
-/// chunk to land and reports progress so the caller retries its alloc.
+/// second CPU hits OOM mid-growth, it does NOT fail — it waits for the
+/// in-flight chunk to land, servicing the other CPU's shootdown mailbox
+/// while it spins (the broadcaster needs our ack; polling delivers it
+/// without re-enabling interrupts inside the caller's gate), and reports
+/// progress so the caller retries its alloc.
 ///
 /// Gate discipline: mapping + extend run under the gate (mapper/heap
 /// locks); the shootdown broadcast runs LOCK-FREE between them (no Rust
@@ -123,14 +130,20 @@ fn grow() -> bool {
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         .is_err()
     {
-        // Another CPU is mid-growth. Wait for its chunk to land (its
-        // broadcast needs our handler: spin with IF=1). Watchdog: a stuck
-        // grower is a kernel bug — fail loudly instead of hanging.
-        let deadline = crate::arch::timer_ticks() + 2000; // ~2 machine-seconds
+        // Another CPU is mid-growth. Wait for its chunk to land. Its
+        // broadcast needs OUR ack, so service the mailbox while spinning
+        // — the caller may be IF=0 inside a gate holding locks, and
+        // enabling interrupts here would let the timer preempt that gate
+        // (the lock-audit rule); the poll acks without touching IF.
+        // Watchdog: a stuck grower is a kernel bug — fail loudly instead
+        // of hanging. Bounded by spins, not ticks: with IF=0 on every CPU
+        // the tick counter may not advance.
+        let mut spins: u64 = 0;
         while GROWING.load(Ordering::Relaxed) {
-            x86_64::instructions::interrupts::enable();
+            super::shootdown::service_pending();
             core::hint::spin_loop();
-            if crate::arch::timer_ticks() > deadline {
+            spins += 1;
+            if spins > GROW_WAIT_SPINS {
                 panic!("heap: stuck behind in-flight growth (deadlocked grower?)");
             }
         }

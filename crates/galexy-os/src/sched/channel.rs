@@ -3,7 +3,7 @@
 //! The design lives in `docs/PROCESS.md` (Milestone 66). This module is
 //! the table. The scheduler installs Caps and parks receivers.
 
-use spin::Mutex;
+use crate::sync::Mutex;
 
 use galexy_abi::{SysError, CHAN_MSG_MAX};
 

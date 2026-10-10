@@ -135,8 +135,11 @@ by a magic “PID 1” in the public ABI. Cap-kill of init is always
   Seats `send` on the reserved init Cap (`0x8008`); the kernel stamps
   admin, tty, debug id, and session generation. One RPC is in flight
 - `svc status|start|stop|restart` and `shutdown` / `reboot` are that
-  RPC. Operators never receive a service Cap. A non-admin shutdown is
-  refused in the reply. An admin shutdown Cap-kills every seat except
+  RPC. Operators never receive a service Cap. `svc status` answers any
+  logged-in seat; `svc start|stop|restart`, `shutdown`, and `reboot`
+  are admin-only and a non-admin request is refused in the reply
+  (`access denied`; `init_test_passes` covers a non-admin `stop`
+  against a live seat). An admin shutdown Cap-kills every seat except
   the sender's, syncs, then calls Power. The sender stays parked until
   the machine is off, or hears `the machine stayed up` if Power returns
 - Logged-in admin seats do not hold the Power grant while init is
@@ -162,7 +165,8 @@ by a magic “PID 1” in the public ABI. Cap-kill of init is always
 
 Operator surface: `svc status|start|stop|restart <name>` sends on the
 init Cap. The reply is text (`shell running`, `probe stopped`,
-`unknown`). Operators do not receive raw Caps to every service.
+`unknown`, `access denied` for a non-admin mutation). Operators do not
+receive raw Caps to every service.
 
 F1–F12 **console switching** stays in the kernel; only task lifecycle
 moves to init.
@@ -213,7 +217,7 @@ process Cap never grants galfs rights on the child’s files.
 | **54** ✅ | Seats under init; supervise Caps (service table + `svc` moved to 67) |
 | **55** ✅ | Session/job Caps; foreground Ctrl-C |
 | **66** ✅ | Capability channels (below); shell job table (`&`, `jobs`, `fg`) |
-| **67** | Ordered shutdown through init; service table with backoff; `svc`; session id on the seat Cap; ABI freeze |
+| **67** ✅ | Ordered shutdown through init; service table with backoff; `svc` (mutations admin-only); session id on the seat Cap; ABI freeze |
 
 `SPAWN_WAIT` remains a convenience beside Cap-wait. New code must not
 dig a deeper PID-shaped API beside this plan.

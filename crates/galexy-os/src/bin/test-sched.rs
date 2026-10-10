@@ -5,13 +5,13 @@
 #![no_main]
 
 use bootloader_api::{entry_point, BootInfo};
+use galexy_os::sync::Mutex;
 use galexy_os::{
     drivers::screen,
     exit_qemu, println,
     sched::{self, TaskCtx, TaskStatus},
     serial_println, QemuExitCode,
 };
-use spin::Mutex;
 
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 

@@ -9,8 +9,8 @@
 //! Read path is `galexy_core::TarCursor`; every access re-walks the tar
 //! (no caching yet — programs are small, churn is near zero).
 
+use crate::sync::Mutex;
 use galexy_core::TarCursor;
-use spin::Mutex;
 
 use crate::serial_println;
 
