@@ -123,13 +123,15 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert_eq!(sched::channel::in_use(), 0, "self channel must be gone");
     assert_eq!(sched::pipe::in_use(), 0, "self pipe must be gone");
 
-    let (consumer_region, _) = sched::spawn_user_task("receiver", |gr| {
+    // `selfchan` already took the BSP pin. These two stay on the BSP as
+    // well: an AP owner reaps and wipes the report page before the peek.
+    let (consumer_region, _) = sched::spawn_user_task_on("receiver", 0, |gr| {
         unsafe {
             core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
         }
         build_consumer(gr.scratch.as_u64())
     });
-    let (producer_region, _) = sched::spawn_user_task("sender", |gr| {
+    let (producer_region, _) = sched::spawn_user_task_on("sender", 0, |gr| {
         unsafe {
             core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
         }
