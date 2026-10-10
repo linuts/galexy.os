@@ -329,7 +329,19 @@ fn syscall_write_console(cap: Cap, addr: u64, len: u64) -> SyscallResult {
         }
         return SyscallResult::ok(len);
     }
-    let allowed = crate::sched::console_take_budget(len as usize);
+    // The per-tick budget may be smaller than this write. Cutting a CSI
+    // sequence in half lets the next COM1 line (a kernel log, the rest of
+    // the write after a yield) land inside the sequence. The host terminal
+    // then stops painting until some later byte happens to resync it — the
+    // editor or a long `ls` looks frozen. Commit only a prefix that ends
+    // outside ESC/CSI. A prefix of 0 means "yield and retry"; the budget
+    // is not charged for bytes that were not sent.
+    let room = crate::sched::console_budget_room();
+    let commit = galexy_core::console_commit_len(&staged[..len as usize], room);
+    if commit == 0 {
+        return SyscallResult::ok(0);
+    }
+    let allowed = crate::sched::console_take_budget(commit);
     if allowed == 0 {
         return SyscallResult::ok(0);
     }

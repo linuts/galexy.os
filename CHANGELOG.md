@@ -8,6 +8,19 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#89](https://github.com/linuts/galexy.os/pull/89) — scheduler and shell
+  split, nano help, console escape cut. The
+  preemptive scheduler moves out of `sched/mod.rs` into `thread`
+  (table, reap, pin), `spawn` (queued spawn, shells, wait/kill,
+  sessions), `task` (file, pipe, and channel syscalls), and `iowait`
+  (timer, parked I/O, console budget). The shell moves out of
+  `main.rs` into `state`, `edit`, `builtins`, and `jobs`. `nano`
+  Ctrl-G opens a help page of keys that are not already on the
+  shortcut bar; the next key closes it and is not inserted. A console
+  write commits only a prefix that ends outside ESC/CSI, so the
+  512-byte budget cannot tear a cursor sequence on the shared COM1
+  line and leave the host terminal looking frozen. The shell yields
+  when a keyboard read returns nothing. Suite: 114 boots.
 - [#90](https://github.com/linuts/galexy.os/pull/90) — Boot suite runs in parallel. Each QEMU has its own serial log, galfs
   image, and QMP socket (pid plus a counter, so two `cargo test`
   processes do not share `/tmp` files). libtest's default thread count

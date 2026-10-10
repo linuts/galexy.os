@@ -39,6 +39,16 @@ Dependency order: `galexy-core, galexy-abi → (nothing)`;
 Userspace programs NEVER link against the kernel — `galexy-abi` is the only
 contract between them.
 
+The preemptive scheduler is split so the file does not keep growing.
+`sched/thread.rs` is the thread table, reap, and pin. `sched/spawn.rs` is
+queued spawn, shells, wait/kill, and login sessions. `sched/task.rs` is
+the file, pipe, and channel syscalls. `sched/iowait.rs` is the timer
+handoff, parked I/O, and the per-tick console budget. `sched/mod.rs`
+keeps the cooperative queue and re-exports the names the rest of the
+kernel already calls. The shell is split the same way: `state`, `edit`,
+`builtins`, and `jobs`. `userspace/shell/src/main.rs` is login and the
+dashboard.
+
 ## Boundary rules (enforced by structure, checked in review)
 
 1. **`main.rs` is a wiring file.** Logic never accumulates there — it moves
@@ -793,6 +803,8 @@ one per line. The shell keeps the current directory and accepts a leading
 programs: the shell composes the path and `spawn`s them. `ls` and `rm`
 also receive the query grant, so they can read the files snapshot.
 `nano` also receives the keyboard grant and the shell Cap-waits on it.
+Ctrl-G opens a help page of the keys that are not already on the shortcut
+bar; the next key closes that page and is not inserted.
 `cd` stays in the shell, because that path lives there. A program name
 on its own is a launch: `spawn` on the loader cap (EXEC) parks the
 caller (`STATE_WAITING`) until the main loop has loaded the ELF, then
@@ -820,6 +832,14 @@ is named `shell`; the others are `shell2` through `shell12`. F1–F12
 select which cell grid is painted.
 The keyboard interrupt only records that index; the main loop paints
 it. Keys go to the visible console. COM1 mirrors only that console.
+A console write is committed only up to a byte that is not inside an
+escape sequence: the per-tick budget (512 bytes) used to slice a CSI
+cursor command in half, and the next kernel log on COM1 then landed
+inside that sequence. The host terminal stopped painting until a later
+byte resynced it, so a screen editor (and a long listing) looked frozen
+the way `ls` did before the shell waited for the child. A write that
+cannot fit the next whole sequence returns a short `0` and the runtime
+yields and retries.
 Presenting a reserved index is not enough; the task must have been
 granted it. A ramdisk entry that is not an ELF is `Unsupported`. The
 main loop, which is on the kernel page
@@ -1163,7 +1183,7 @@ them on; `audit_strings` and the e2e boots run against that image.
 | Seam | Kind | Where | What it changes | Who turns it on |
 | --- | --- | --- | --- | --- |
 | `crash-seam` | Cargo feature on `shell` | `userspace/shell` | adds the `crash` command (commit `keep`, start a second mutate, get killed) | `runner/build.rs` builds a second ramdisk (`ramdisk-crash.tar`) and the `galexy-os-crashseam-*` image for `crash_injection_picks_consistent_slot`; `default_image_has_no_crash_seam_e2e` proves the main image lacks it |
-| `verbose-sched` | Cargo feature on `galexy-os` | `sched/mod.rs` | prints an idle-steal trace line per steal | nobody in the suite; a developer flag. The one-line `[sched] reap` count is unconditional because the suite reads it |
+| `verbose-sched` | Cargo feature on `galexy-os` | `sched/iowait.rs` | prints an idle-steal trace line per steal | nobody in the suite; a developer flag. The one-line `[sched] reap` count is unconditional because the suite reads it |
 | `expect_panic` | runtime registration | `galexy_os::test` | a panic exits QEMU with `Success` instead of `Failed` | `bin/test-should-panic`, `bin/test-memory` (allocator exhaustion) |
 | Inline `login user pass` | shell command form | `userspace/shell` | password on the command line (no masked prompt) | scripted typing e2e; production UX is the masked prompt (`AUTH.md`) |
 | `GALEXY_GALFS_IMG`, `GALEXY_GALFS_IDE`, `GALEXY_ACCEL` | runner env | `runner/src/main.rs`, `runner/tests/common` | disk path / IDE-slave attach / `kvm` or `tcg` accel for `cargo run` and the suite | the developer; CI logs `[runner] accel=` |

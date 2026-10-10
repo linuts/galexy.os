@@ -2793,6 +2793,10 @@ const NANO_KEYS: &[(&str, &str)] = &[
     ("ret", "@1,1@"),
     ("h", "@1,2@"),
     ("i", "@1,3@"),
+    // Ctrl-G used to repeat the shortcut bar. The page lists keys that
+    // are not on that bar; the next key closes it and is not inserted.
+    ("ctrl+g", "close this help"),
+    ("x", "@1,3@"),
     ("left", "@1,2@"),
     ("right", "@1,3@"),
     ("ret", "@2,1@"),
