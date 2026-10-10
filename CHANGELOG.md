@@ -8,7 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Milestone 70 — `std` for `x86_64-unknown-galexy`. `std-pal/` is the
+- [#93](https://github.com/linuts/galexy.os/pull/93) — Milestone 70 —
+  `std` for `x86_64-unknown-galexy`. `std-pal/` is the
   platform layer; `scripts/galexy-std-sysroot.py` installs it into the
   pinned nightly's `library/`. Kernel: `ThreadSpawn` / `ThreadExit`
   (one address space, join via process-Cap `Wait`), `Futex`, positional
