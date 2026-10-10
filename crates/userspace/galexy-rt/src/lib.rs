@@ -10,8 +10,14 @@
 #![deny(clippy::all)]
 #![deny(missing_docs)]
 
+#[cfg(not(target_os = "galexy"))]
+compile_error!(
+    "galexy-rt builds only for targets/x86_64-unknown-galexy.json (target_os = \"galexy\")"
+);
+
 use core::arch::asm;
 use core::cell::UnsafeCell;
+#[cfg(not(feature = "std"))]
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
@@ -937,6 +943,9 @@ macro_rules! entry {
 }
 
 /// User panic: report through the console (best effort), die with code 1.
+///
+/// Absent when the `std` feature is on: `panic_abort` provides the handler.
+#[cfg(not(feature = "std"))]
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     write_console(b"[user task panicked]\n");

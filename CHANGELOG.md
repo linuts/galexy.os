@@ -8,6 +8,14 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#92](https://github.com/linuts/galexy.os/pull/92) — Milestone 68 —
+  `targets/x86_64-unknown-galexy.json` replaces
+  `x86_64-unknown-none` for userspace. `hello`, `init`, `shell` and
+  `util` build with `-Zbuild-std=core,alloc`. `stdmin` builds
+  `std` + `panic_abort` on the unsupported PAL (a build-time overlay
+  for the four `cfg_select` gaps on nightly-2026-10-08, not a
+  rust-lang/rust fork) and writes a `HashMap<String, Vec<u32>>` through
+  the console Cap. `shell_stdmin_typing_e2e` types it.
 - [#91](https://github.com/linuts/galexy.os/pull/91) — KVM is selected
   only when `KVM_CREATE_VCPU` succeeds. Opening `/dev/kvm` is not
   enough: a snapshot restore can leave `CR4.VMXE` set after VMXON

@@ -13,6 +13,7 @@ members = [
     "crates/userspace/init",
     "crates/userspace/shell",
     "crates/userspace/util",
+    "crates/userspace/stdmin",
     "crates/gxc",
     "crates/gxld",
 ]

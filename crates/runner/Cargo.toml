@@ -12,7 +12,7 @@ tar = "0.4"
 galexy-crypto = { path = "../galexy-crypto" }
 gxc = { path = "../gxc" }
 galexy-os = { path = "../galexy-os", artifact = "bin", target = "x86_64-unknown-none" }
-hello = { path = "../userspace/hello", artifact = "bin", target = "x86_64-unknown-none" }
-init = { path = "../userspace/init", artifact = "bin", target = "x86_64-unknown-none" }
-shell = { path = "../userspace/shell", artifact = "bin", target = "x86_64-unknown-none" }
-util = { path = "../userspace/util", artifact = "bin", target = "x86_64-unknown-none" }
+# Userspace is not an artifact dependency. It builds for the JSON target
+# `targets/x86_64-unknown-galexy.json` with `-Zbuild-std`, which a
+# workspace `cargo build` cannot apply to one artifact without also
+# rebuilding `core` for the host. `build.rs` runs that cargo itself.

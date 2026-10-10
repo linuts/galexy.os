@@ -97,12 +97,11 @@ output is emitted by hand (`link.rs` → `emit`) because the output
 shape is fixed and tiny: ELF header, up to three program headers, the
 segment bytes. No section headers, no symbol table.
 
-Two relocation styles must both work: today's userspace is compiled
-for `x86_64-unknown-none`, which is PIC by default (so `PLT32` and
-`GOTPCRELX` dominate even though the final image is `--no-pie`); the
-Milestone 68 target sets `relocation-model = static`, which shifts
-objects toward `PC32` / `32S`. cg_clif output for the sysroot may be
-either.
+Two relocation styles must both work. The galexy target is
+`relocation-model = static` with `code-model = large`, so static
+references are `R_X86_64_64`: `USER_IMAGE_BASE` (`0xc8000000000`) does
+not fit in a signed 32-bit absolute (`32S`). `PC32` / `PLT32` still
+appear for calls. cg_clif output for the sysroot may use either.
 
 **Output.** One `ET_EXEC`, `e_entry = _start`, three page-aligned
 `PT_LOAD`s at `USER_IMAGE_BASE` in this order, each obeying W^X:

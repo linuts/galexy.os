@@ -155,7 +155,7 @@ pull request, on the toolchain pinned in `rust-toolchain.toml`:
 
 | Job | What it proves |
 |---|---|
-| `host` | `cargo fmt --all -- --check`; host suites (abi, core, crypto, galf, fsck, gxc, gxld); `clippy -D warnings` on the host crates (`--all-targets`), the kernel bins (`x86_64-unknown-none`), and the userspace programs |
+| `host` | `cargo fmt --all -- --check`; host suites (abi, core, crypto, galf, fsck, gxc, gxld); `clippy -D warnings` on the host crates (`--all-targets`), the kernel bins (`x86_64-unknown-none`), and the userspace programs (`x86_64-unknown-galexy`) |
 | `qemu` | builds every image, `clippy` on the runner and its tests, `audit_strings`, then the full boot suite in parallel (libtest's default, one test per CPU) under TCG on `ubuntu-latest` (`qemu-system-x86` + `ovmf`, `OVMF_FD=/usr/share/ovmf/OVMF.fd`) |
 
 The boot suite *is* the matrix — each axis is a named test rather than
@@ -293,8 +293,19 @@ cargo run -p gxld -- -o hello-gxc.elf hello-gxc.o                           # sa
 
 The runner packs that ELF as ramdisk `hello-gxc` for QEMU
 (`test-hellogxc`). Any userspace program links the same way:
-`RUSTFLAGS="-Clinker=target/release/gxld -Clinker-flavor=ld" cargo build -p shell --target x86_64-unknown-none`.
-Details: [`docs/COMPILER.md`](docs/COMPILER.md), [`docs/LINKER.md`](docs/LINKER.md).
+
+```sh
+RUSTFLAGS="-Clinker=target/release/gxld -Clinker-flavor=ld" \
+  cargo build -p shell \
+  --target targets/x86_64-unknown-galexy.json \
+  -Zbuild-std=core,alloc \
+  -Zbuild-std-features=compiler-builtins-mem \
+  -Zjson-target-spec
+```
+
+`stdmin` is the `std` program (`HashMap`, `format!`); its build uses
+`-Zbuild-std=std,panic_abort` and `scripts/galexy-std-sysroot.py`.
+Details: [`docs/COMPILER.md`](docs/COMPILER.md), [`docs/LINKER.md`](docs/LINKER.md), [`docs/RUSTC.md`](docs/RUSTC.md).
 
 Details: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 

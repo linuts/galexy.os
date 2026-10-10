@@ -1,0 +1,16 @@
+[package]
+name = "stdmin"
+version = "0.1.0"
+edition = "2021"
+description = "Smallest std program on x86_64-unknown-galexy: HashMap, String, Vec, format!, written through the console Cap."
+
+[[bin]]
+name = "stdmin"
+path = "src/main.rs"
+
+[dependencies]
+galexy-rt = { path = "../galexy-rt", features = ["std"] }
+galexy-abi = { path = "../../galexy-abi" }
+
+[build-dependencies]
+galexy-abi = { path = "../../galexy-abi" }

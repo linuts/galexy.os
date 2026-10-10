@@ -2290,19 +2290,19 @@ run under KVM (Milestone 64).
 
 ## Milestone 68 — `x86_64-unknown-galexy` target (no fork)
 
-- [ ] `targets/x86_64-unknown-galexy.json`: `os = "galexy"`, no
+- [x] `targets/x86_64-unknown-galexy.json`: `os = "galexy"`, no
       `target_family`, `panic-strategy = "abort"`, static relocation
       model, `rust-lld` gnu flavor, `executables = true`
-- [ ] All userspace crates build with `--target` the JSON +
+- [x] All userspace crates build with `--target` the JSON +
       `-Zbuild-std=core,alloc`; `galexy-rt` keys on
       `cfg(target_os = "galexy")`; `x86_64-unknown-none` removed from
       userspace build scripts
-- [ ] `-Zbuild-std=std,panic_abort` on the `unsupported` PAL;
+- [x] `-Zbuild-std=std,panic_abort` on the `unsupported` PAL;
       `#![feature(restricted_std)]` (or `-Zcrate-attr`) on the graph;
       `galexy-rt` `#[global_allocator]` over `Map` (Milestone 66)
-- [ ] `bin/test-std-min`: `HashMap<String, Vec<u32>>` + `format!` through
+- [x] `bin/test-std-min`: `HashMap<String, Vec<u32>>` + `format!` through
       the console Cap; typed E2E
-- [ ] Docs: `RUSTC.md` Stage 1 ✅; README build line for the target
+- [x] Docs: `RUSTC.md` Stage 1 ✅; README build line for the target
 
 ## Milestone 69 — `gxld`, a static linker (host library first) ✅ (ring-3 program → Milestone 71)
 

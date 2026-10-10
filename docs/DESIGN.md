@@ -109,7 +109,9 @@ BIOS/UEFI
 ```
 
 - The kernel is compiled as a freestanding ELF for the prebuilt
-  `x86_64-unknown-none` target (no custom target JSON needed).
+  `x86_64-unknown-none` target. Userspace is
+  `targets/x86_64-unknown-galexy.json` (`target_os = "galexy"`), built
+  with `-Zbuild-std` (Milestone 68, `docs/RUSTC.md`).
 - `runner` is a host-side crate: its `build.rs` uses artifact dependencies
   (`bindeps`) to build the kernel, then `bootloader::BiosBoot`/`UefiBoot` to
   produce `galexy-os-bios.img` / `galexy-os-uefi.img`. Its `main` boots the
@@ -1193,7 +1195,9 @@ them on; `audit_strings` and the e2e boots run against that image.
 Not seams: `ramdisk-gxld.tar` is the same userspace linked by `gxld`
 instead of `rust-lld` — a build axis, not a behaviour switch.
 `pc-speaker` is default-on (the beep); `--no-default-features` silences
-it. The suite does not toggle it.
+it. The suite does not toggle it. `galexy-rt`'s `std` feature drops the
+panic handler so a `std` + `panic_abort` program (`stdmin`) can link;
+it is how that program is built, not a switch in the default image.
 
 ### Coverage: which milestone each test kernel guards
 
@@ -1238,7 +1242,7 @@ main image and are listed at the end.
 | `test-badelf`, `test-negative` | `badelf_test_passes`, `negative_test_passes` | M51 hostile ELF oracle and negative suite; M63 loader returns `SysError` and caps image pages |
 | `test-smep`, `test-smap`, `test-umip`, `test-kaslr` | `smep_test_passes`, `smap_test_passes`, `umip_test_passes`, `kaslr_kernel_base_differs_across_boots` | M63 SMEP, SMAP, UMIP, kernel KASLR (`kaslr` boots the image twice) |
 | `test-soak`, `test-fairness`, `test-pathological`, `test-bench` | `soak_test_passes`, `fairness_test_passes`, `pathological_test_passes`, `bench_test_passes` | M51 soak (exact table closure per round), steal fairness under load, console-budget flood; M64 `test-bench` prints `[bench] name=… us=…` and the runner asserts KVM ceilings |
-| main image | `main_kernel_boots_and_timer_ticks`, `uefi_image_boots_and_timer_ticks`, `shell_*_typing_e2e`, `shell_run_hello_typing_e2e_uefi`, `shell_tty_switch_e2e`, `util_typing_e2e_on`, `assert_passwords_masked`, `uart_console_login_e2e` | M21 / M29 / M33 / M40 / M43 / M50 / M54 seats, shell, utilities, masked prompts; `shell_password_paste_typing_e2e` (M51 pathological input), `default_image_has_no_crash_seam_e2e` (M52 default-build audit), `uart_console_login_e2e` (COM1 is the console: DEL, CR, masked password) |
+| main image | `main_kernel_boots_and_timer_ticks`, `uefi_image_boots_and_timer_ticks`, `shell_*_typing_e2e`, `shell_run_hello_typing_e2e_uefi`, `shell_tty_switch_e2e`, `util_typing_e2e_on`, `assert_passwords_masked`, `uart_console_login_e2e`, `shell_stdmin_typing_e2e` | M21 / M29 / M33 / M40 / M43 / M50 / M54 seats, shell, utilities, masked prompts; `shell_password_paste_typing_e2e` (M51 pathological input), `default_image_has_no_crash_seam_e2e` (M52 default-build audit), `uart_console_login_e2e` (COM1 is the console: DEL, CR, masked password); `shell_stdmin_typing_e2e` (M68 `std` on the galexy target) |
 | `gxld` image | `gxld_image_run_hello_typing_e2e`, `gxld_image_util_typing_e2e` | M69 linker differential |
 
 Host suites (no QEMU): `galexy-abi` (table integrity), `galexy-core`

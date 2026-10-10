@@ -3371,6 +3371,48 @@ fn shell_run_hello_typing_e2e_uefi() {
     );
 }
 
+/// Milestone 68: `stdmin` is a `std` program (`HashMap<String, Vec<u32>>`,
+/// `format!`) on `x86_64-unknown-galexy`. The line it writes is the proof
+/// the unsupported PAL linked and the `galexy-rt` allocator served it.
+#[test]
+fn shell_stdmin_typing_e2e() {
+    const LINE: &str = "stdmin: a=[1, 2]";
+    const KEYS: &[(&str, &str)] = &[
+        ("s", "s"),
+        ("t", "t"),
+        ("d", "d"),
+        ("m", "m"),
+        ("i", "i"),
+        ("n", "n"),
+        ("ret", LINE),
+    ];
+    let keys = with_login(KEYS);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "exited (syscall)",
+        Duration::from_millis(30),
+        Duration::from_secs(90),
+    );
+    assert!(
+        serial.contains(LINE),
+        "typed `stdmin` never produced the HashMap line; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("exited (syscall)"),
+        "stdmin exit marker missing; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[pf] ring-3 task fault"),
+        "stdmin faulted; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[user task panicked]"),
+        "stdmin panicked; serial:\n{serial}"
+    );
+}
+
 /// F2 runs a command on the second shell; F1 returns to the first.
 #[test]
 fn shell_tty_switch_e2e() {
