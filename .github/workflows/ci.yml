@@ -64,8 +64,8 @@ jobs:
   # Boots every test kernel under QEMU (BIOS and UEFI, -smp 2).
   # Release profile (debug assertions still on). Accel is kvm when
   # /dev/kvm is writable, otherwise tcg; the log line is `[runner] accel=`.
-  # `--test-threads=1`: galfs disk and QMP typing cases share host
-  # files and keyboard timing, so they do not run in parallel.
+  # Boots run in parallel (libtest's default, one test per CPU).
+  # Each QEMU has its own serial log, galfs image, and QMP socket.
   qemu:
     name: QEMU boot suite
     runs-on: ubuntu-latest
@@ -103,7 +103,7 @@ jobs:
         run: cargo test -p runner --test audit_strings --release
 
       - name: Boot suite
-        run: cargo test -p runner --test boot --release -- --test-threads=1
+        run: cargo test -p runner --test boot --release
 
       - name: Upload serial logs on failure
         if: failure()

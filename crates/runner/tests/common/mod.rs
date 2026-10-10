@@ -1,5 +1,10 @@
 //! Boot-test helper: boots a galexy.os kernel image in headless QEMU and
 //! returns (exit code, serial output).
+//!
+//! Each boot gets its own serial log, galfs image, and QMP socket, and the
+//! boot disk is opened with a private snapshot. The suite is safe to run
+//! at libtest's default thread count (one test per CPU). `--test-threads=1`
+//! is the serial fallback when a failure is easier to read that way.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -47,21 +52,25 @@ pub const QEMU_EXIT_SUCCESS: i32 = 33;
 /// How long a kernel may run before it is treated as hung.
 const TEST_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Unique per-call serial log file path.
+/// Host path that no other boot in this process, or in another `cargo test`,
+/// will open. The suite runs many QEMUs at once; a shared serial log or
+/// disk image would mix their output.
 ///
-/// The counter restarts with every test process, so a name can collide
-/// with a log left by an earlier run. QEMU truncates the file only when
-/// its chardev opens, some hundred milliseconds after `spawn()`, and the
-/// harnesses that poll the serial while the guest runs (crash injection,
-/// typing) would act on the stale contents in that window. Remove it up
-/// front so every poll sees only this boot's output.
-fn serial_log_path(name: &str) -> PathBuf {
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+/// The file is removed up front. QEMU truncates its chardev only once the
+/// machine is up, and a poll in that window must not see a previous boot.
+fn scratch_path(prefix: &str, ext: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let path =
-        std::env::temp_dir().join(format!("galexy-serial-{}-{n}.log", name.replace('-', "_")));
+        std::env::temp_dir().join(format!("galexy-{prefix}-{}-{n}.{ext}", std::process::id()));
     let _ = std::fs::remove_file(&path);
     path
+}
+
+/// Unique per-call serial log file path.
+fn serial_log_path(name: &str) -> PathBuf {
+    scratch_path(&format!("serial-{}", name.replace('-', "_")), "log")
 }
 
 /// Builds the QEMU command for `img_path`: headless, COM1 to `serial_path`,
@@ -336,14 +345,10 @@ pub fn boot_with_galfs_both_corrupt(
     writer: &Image,
     reader: &Image,
 ) -> (Option<i32>, String, Vec<u8>, Option<i32>, String, Vec<u8>) {
-    let galfs_path = std::env::temp_dir().join(format!(
-        "galexy-galfs-both-{}-{}.img",
-        writer.name.replace('-', "_"),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos()
-    ));
+    let galfs_path = scratch_path(
+        &format!("galfs-both-{}", writer.name.replace('-', "_")),
+        "img",
+    );
     std::fs::write(&galfs_path, vec![0u8; GALFS_IMG_BYTES]).expect("create galfs.img");
     let cache = GalfsDiskCache::Writethrough;
     let backend = GalfsBackend::IdeSlave;
@@ -376,14 +381,7 @@ fn boot_with_galfs_inner(
     backend: GalfsBackend,
     img_bytes: usize,
 ) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
-    let galfs_path = std::env::temp_dir().join(format!(
-        "galexy-galfs-{}-{}.img",
-        image.name.replace('-', "_"),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos()
-    ));
+    let galfs_path = scratch_path(&format!("galfs-{}", image.name.replace('-', "_")), "img");
     std::fs::write(&galfs_path, vec![0u8; img_bytes]).expect("create galfs.img");
 
     let (code1, serial1) =
@@ -519,14 +517,10 @@ fn boot_once_with_galfs(
 /// progress (key wrap, before the new slot is published), and kills QEMU.
 /// The second boot must observe a consistent slot.
 pub fn boot_with_galfs_crash(image: &Image) -> (String, Option<i32>, String) {
-    let galfs_path = std::env::temp_dir().join(format!(
-        "galexy-galfs-crash-{}-{}.img",
-        image.name.replace('-', "_"),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos()
-    ));
+    let galfs_path = scratch_path(
+        &format!("galfs-crash-{}", image.name.replace('-', "_")),
+        "img",
+    );
     std::fs::write(&galfs_path, vec![0u8; GALFS_IMG_BYTES]).expect("create galfs.img");
     let serial_path = serial_log_path(&format!("{}-kill", image.name));
     let mut child = qemu_command_with_galfs(
@@ -577,14 +571,10 @@ pub fn boot_with_galfs_crash(image: &Image) -> (String, Option<i32>, String) {
 
 /// One boot with a fresh zeroed GALF image on the IDE slave.
 pub fn boot_galfs_once(image: &Image) -> (Option<i32>, String) {
-    let galfs_path = std::env::temp_dir().join(format!(
-        "galexy-galfs-once-{}-{}.img",
-        image.name.replace('-', "_"),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos()
-    ));
+    let galfs_path = scratch_path(
+        &format!("galfs-once-{}", image.name.replace('-', "_")),
+        "img",
+    );
     std::fs::write(&galfs_path, vec![0u8; GALFS_IMG_BYTES]).expect("create galfs.img");
     let result = boot_once_with_galfs(
         &image.bios,
@@ -600,14 +590,10 @@ pub fn boot_galfs_once(image: &Image) -> (Option<i32>, String) {
 /// One boot of `image` with a fresh 1 MiB virtio-blk disk on the given
 /// transport (`-M q35`, `cache=writethrough`). Returns `(exit, serial)`.
 pub fn boot_galfs_once_virtio(image: &Image, legacy: bool) -> (Option<i32>, String) {
-    let galfs_path = std::env::temp_dir().join(format!(
-        "galexy-galfs-virtio-{}-{}.img",
-        image.name.replace('-', "_"),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos()
-    ));
+    let galfs_path = scratch_path(
+        &format!("galfs-virtio-{}", image.name.replace('-', "_")),
+        "img",
+    );
     std::fs::write(&galfs_path, vec![0u8; GALFS_IMG_BYTES]).expect("create galfs.img");
     let backend = if legacy {
         GalfsBackend::VirtioLegacy
@@ -671,12 +657,7 @@ pub fn uart_login_serial(image: &Image) -> String {
     use std::io::Write;
     use std::os::unix::net::UnixStream;
 
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let sock_path = std::env::temp_dir().join(format!("galexy-uart-{nanos}.sock"));
-    let _ = std::fs::remove_file(&sock_path);
+    let sock_path = scratch_path("uart", "sock");
 
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.arg("-M")
@@ -794,47 +775,62 @@ fn uart_read_until(
     false
 }
 
-/// Boots `image` under UEFI (OVMF) and kills the guest after `timeout`.
-/// Returns the serial output.
+/// Boots `image` under UEFI (OVMF) and kills the guest after `timeout`,
+/// or sooner if the guest exits. Returns the serial output.
 pub fn boot_uefi(image: &Image, timeout: Duration) -> String {
+    boot_uefi_until(image, timeout, |_| false)
+}
+
+/// Like [`boot_uefi`], but returns as soon as `ready` is true.
+///
+/// The interactive kernel never exits. Waiting out `timeout` after the
+/// markers are already in the log does not test anything else.
+pub fn boot_uefi_until(image: &Image, timeout: Duration, ready: impl Fn(&str) -> bool) -> String {
     const OVMF_FD_DEFAULT: &str = "/usr/share/ovmf/x64/OVMF.4m.fd";
     let ovmf_fd = std::env::var("OVMF_FD").unwrap_or_else(|_| OVMF_FD_DEFAULT.into());
 
     let serial_path = serial_log_path(&image.name);
     let mut cmd = qemu_command(&image.uefi, &serial_path);
     cmd.arg("-bios").arg(ovmf_fd);
-    let mut child = cmd.spawn().expect("failed to launch qemu-system-x86_64");
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if child.try_wait().expect("try_wait failed").is_some() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-
-    std::fs::read_to_string(&serial_path).unwrap_or_default()
+    let child = cmd.spawn().expect("failed to launch qemu-system-x86_64");
+    run_until(child, &serial_path, timeout, &ready)
 }
 
-/// Boots `image` and kills the guest after `timeout` instead of failing —
-/// for liveness checks of the interactive kernel (it never exits on its own).
-pub fn boot_liveness(image: &Image, timeout: Duration) -> String {
+/// Boots `image` and kills the guest after `timeout`, or sooner when
+/// `ready` is true. The interactive kernel never exits on its own.
+pub fn boot_liveness_until(
+    image: &Image,
+    timeout: Duration,
+    ready: impl Fn(&str) -> bool,
+) -> String {
     let serial_path = serial_log_path(&image.name);
-    let mut child = qemu_command(&image.bios, &serial_path)
+    let child = qemu_command(&image.bios, &serial_path)
         .spawn()
         .expect("failed to launch qemu-system-x86_64");
+    run_until(child, &serial_path, timeout, &ready)
+}
+
+/// Polls `child` until it exits, `ready` accepts the serial log, or
+/// `timeout` elapses, then kills whatever is left.
+fn run_until(
+    mut child: std::process::Child,
+    serial_path: &Path,
+    timeout: Duration,
+    ready: &dyn Fn(&str) -> bool,
+) -> String {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if child.try_wait().expect("try_wait failed").is_some() {
             break;
         }
-        std::thread::sleep(Duration::from_millis(100));
+        if ready(&std::fs::read_to_string(serial_path).unwrap_or_default()) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
     let _ = child.kill();
     let _ = child.wait();
-
-    std::fs::read_to_string(&serial_path).unwrap_or_default()
+    std::fs::read_to_string(serial_path).unwrap_or_default()
 }
 
 /* ------------- QMP-driven typing (true end-to-end input) ------------- */
@@ -1138,14 +1134,7 @@ pub fn boot_and_type_galfs(
 /// Fresh zeroed galfs image for a typing test (same size the runner's
 /// `cargo run` creates).
 pub fn fresh_galfs_image(tag: &str) -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "galexy-galfs-{tag}-{}-{}.img",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos()
-    ));
+    let path = scratch_path(&format!("galfs-{tag}"), "img");
     std::fs::write(&path, vec![0u8; GALFS_IMG_BYTES]).expect("create galfs image");
     path
 }
@@ -1161,14 +1150,7 @@ fn boot_and_type_cmd(
     key_delay: Duration,
     timeout: Duration,
 ) -> String {
-    let sock = std::env::temp_dir().join(format!(
-        "galexy-qmp-{}.sock",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos()
-    ));
-    let _ = std::fs::remove_file(&sock);
+    let sock = scratch_path("qmp", "sock");
 
     cmd.arg("-qmp")
         .arg(format!("unix:{},server,nowait", sock.display()));

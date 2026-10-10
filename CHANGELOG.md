@@ -8,6 +8,13 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- Boot suite runs in parallel. Each QEMU has its own serial log, galfs
+  image, and QMP socket (pid plus a counter, so two `cargo test`
+  processes do not share `/tmp` files). libtest's default thread count
+  replaces `--test-threads=1` in CI, the README, and
+  `scripts/review-smoke.sh`. Interactive BIOS and UEFI liveness boots
+  return when their serial markers are present instead of sitting out
+  the rest of the 45s cap. Same 114 boots.
 - [#88](https://github.com/linuts/galexy.os/pull/88) — stability and
   security review — fixes
   [#86](https://github.com/linuts/galexy.os/issues/86) (`passwd` hung a
