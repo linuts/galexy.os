@@ -1,2 +1,5 @@
 [unstable]
 bindeps = true
+
+[alias]
+xtask = "run --quiet --package xtask --"

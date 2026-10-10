@@ -18,6 +18,7 @@ members = [
     "crates/userspace/threadtest",
     "crates/gxc",
     "crates/gxld",
+    "crates/xtask",
 ]
 default-members = ["crates/runner"]
 
