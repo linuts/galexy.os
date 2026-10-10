@@ -1258,6 +1258,20 @@ pub fn spawn_user_with(
     spawn_user_with_grants(name, fs, Grants::console(), build, None)
 }
 
+/// Like [`spawn_user_with`], pinned to `cpu`.
+///
+/// A scratch peek loses when an AP owner reaps and zero-wipes the tree
+/// from its idle loop. Pinning to the BSP keeps that reap in the test's
+/// own `reap` call (`test-galfs`).
+pub fn spawn_user_with_on(
+    name: &str,
+    fs: galfs::FsCred,
+    cpu: u8,
+    build: impl FnOnce(UserRegion) -> Vec<u8>,
+) -> (UserRegion, u8) {
+    spawn_user_with_grants(name, fs, Grants::console(), build, Some(cpu))
+}
+
 /// Like [`spawn_user_with`], with an explicit grant set.
 ///
 /// `owner = None` → pin-at-spawn round-robin; `Some(cpu)` forces that CPU.

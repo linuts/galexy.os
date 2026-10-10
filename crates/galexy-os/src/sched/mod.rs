@@ -128,6 +128,7 @@ pub use thread::spawn_user_launcher_with;
 pub use thread::spawn_user_task;
 pub use thread::spawn_user_task_on;
 pub use thread::spawn_user_with;
+pub use thread::spawn_user_with_on;
 pub use thread::steal_count;
 pub(crate) use thread::task_proc_inspect;
 pub(crate) use thread::task_self_inspect;
