@@ -8,7 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Scheduler and shell split, nano help, console escape cut. The
+- [#89](https://github.com/linuts/galexy.os/pull/89) — scheduler and shell
+  split, nano help, console escape cut. The
   preemptive scheduler moves out of `sched/mod.rs` into `thread`
   (table, reap, pin), `spawn` (queued spawn, shells, wait/kill,
   sessions), `task` (file, pipe, and channel syscalls), and `iowait`
