@@ -28,6 +28,9 @@ pub enum Outcome {
     Handoff,
     /// Hand the CPU away with the task tombstoned (exit: never resumes).
     Exit,
+    /// Milestone 70: like `Exit`, but a thread takes only itself down.
+    /// From the process leader it is a whole-process exit.
+    ThreadExit,
 }
 
 /// Binds one syscall number → behavior + handoff decision.
@@ -237,6 +240,21 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
                 Outcome::Handoff
             }
         },
+        n if n == Syscall::ThreadSpawn as u64 => {
+            match crate::sched::task_thread_spawn(frame.rdi, frame.rsi, frame.rdx) {
+                Ok(()) => {
+                    // Parked; the drain stamps the join Cap bits.
+                    stamp(frame, SyscallResult::ok(0));
+                    Outcome::Handoff
+                }
+                Err(err) => {
+                    stamp(frame, SyscallResult::err(err));
+                    Outcome::Resume
+                }
+            }
+        }
+        n if n == Syscall::ThreadExit as u64 => Outcome::ThreadExit,
+        n if n == Syscall::Futex as u64 => syscall_futex(frame),
         // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));
@@ -1404,6 +1422,48 @@ fn syscall_map(pages: u64) -> SyscallResult {
     match crate::sched::task_map(pages) {
         Ok(base) => SyscallResult::ok(base),
         Err(err) => SyscallResult::err(err),
+    }
+}
+
+/// `futex(op, addr, value, timeout_ms)` (Milestone 70). The word must be
+/// four readable user bytes of the caller's own tree; a wait that parks
+/// hands the CPU away, every other path resumes.
+fn syscall_futex(frame: &mut Context) -> Outcome {
+    let (op, addr, value, timeout_ms) = (frame.rdi, frame.rsi, frame.rdx, frame.r8);
+    if !addr.is_multiple_of(4) || user_buffer(addr, 4, false).is_err() {
+        stamp(frame, SyscallResult::err(SysError::BadBuffer));
+        return Outcome::Resume;
+    }
+    match op {
+        galexy_abi::FUTEX_WAIT => {
+            match crate::sched::task_futex_wait(addr, value as u32, timeout_ms) {
+                Ok(true) => {
+                    // Parked; a wake stamps ok(0), a timeout TimedOut.
+                    stamp(frame, SyscallResult::ok(0));
+                    Outcome::Handoff
+                }
+                Ok(false) => {
+                    stamp(frame, SyscallResult::ok(0));
+                    Outcome::Resume
+                }
+                Err(err) => {
+                    stamp(frame, SyscallResult::err(err));
+                    Outcome::Resume
+                }
+            }
+        }
+        galexy_abi::FUTEX_WAKE => {
+            let result = match crate::sched::task_futex_wake(addr, value) {
+                Ok(n) => SyscallResult::ok(n),
+                Err(err) => SyscallResult::err(err),
+            };
+            stamp(frame, result);
+            Outcome::Resume
+        }
+        _ => {
+            stamp(frame, SyscallResult::err(SysError::BadValue));
+            Outcome::Resume
+        }
     }
 }
 

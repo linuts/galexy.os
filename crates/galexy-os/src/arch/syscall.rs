@@ -205,5 +205,10 @@ unsafe extern "C" fn syscall_rust(frame: *mut crate::sched::context::Context, sy
             // guarantees a nonzero target (never returns to the dead task).
             unsafe { crate::sched::syscall_handoff(frame, true, "syscall") }
         }
+        crate::sched::syscalls::Outcome::ThreadExit => {
+            // SAFETY: as above. The reason string tells the handoff that a
+            // non-leader thread leaves its siblings running.
+            unsafe { crate::sched::syscall_handoff(frame, true, crate::sched::THREAD_EXIT_REASON) }
+        }
     }
 }

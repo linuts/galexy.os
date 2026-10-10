@@ -2270,6 +2270,55 @@ pub(crate) fn append(index: u16, src: &[u8]) -> Option<usize> {
     if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
         return None;
     }
+    Some(append_locked(&mut table, i, src))
+}
+
+/// Positional write: bytes inside the current length are overwritten in
+/// place (no quota charge — the bytes are already accounted for), bytes at
+/// or past the end are appended under the usual file/pool/quota limits. A
+/// `start` beyond the end is zero-filled first, so a seek past EOF followed
+/// by a write behaves like POSIX. Returns the byte count written.
+pub(crate) fn write_at(index: u16, start: usize, src: &[u8]) -> Option<usize> {
+    let mut table = TABLE.lock();
+    let i = index as usize;
+    if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
+        return None;
+    }
+    let len = table.objects[i].len as usize;
+    let mut done = 0usize;
+    if start < len {
+        let overwrite = src.len().min(len - start);
+        while done < overwrite {
+            let pos = start + done;
+            let slot = pos / BLOCK_SIZE;
+            let off = pos % BLOCK_SIZE;
+            let b = data_block(&table, i, slot);
+            if b == NO_BLOCK || b as usize >= BLOCK_SLOTS {
+                return None;
+            }
+            let n = (BLOCK_SIZE - off).min(overwrite - done);
+            table.blocks[b as usize][off..off + n].copy_from_slice(&src[done..done + n]);
+            done += n;
+        }
+    } else if start > len {
+        let zeros = [0u8; BLOCK_SIZE];
+        let mut gap = start - len;
+        while gap > 0 {
+            let n = append_locked(&mut table, i, &zeros[..gap.min(BLOCK_SIZE)]);
+            if n == 0 {
+                return Some(0);
+            }
+            gap -= n;
+        }
+    }
+    if done < src.len() {
+        done += append_locked(&mut table, i, &src[done..]);
+    }
+    Some(done)
+}
+
+/// Append loop shared by `append` and `write_at`; `i` must be a file slot.
+fn append_locked(table: &mut Table, i: usize, src: &[u8]) -> usize {
     let ai = table.objects[i].actor as usize;
     let mut written = 0usize;
     while written < src.len() {
@@ -2277,19 +2326,19 @@ pub(crate) fn append(index: u16, src: &[u8]) -> Option<usize> {
         if pos >= FILE_BYTES {
             break;
         }
-        if !can_add_bytes(&table, ai, 1) {
+        if !can_add_bytes(table, ai, 1) {
             break;
         }
         let slot = pos / BLOCK_SIZE;
         let off = pos % BLOCK_SIZE;
-        let Some(bi) = ensure_data_block(&mut table, i, slot) else {
+        let Some(bi) = ensure_data_block(table, i, slot) else {
             break;
         };
         let bi = bi as usize;
         let mut room = (BLOCK_SIZE - off)
             .min(src.len() - written)
             .min(FILE_BYTES - pos);
-        let (_, used) = actor_usage(&table, ai);
+        let (_, used) = actor_usage(table, ai);
         let headroom = table.actors[ai].max_bytes.saturating_sub(used) as usize;
         if headroom == 0 {
             break;
@@ -2299,7 +2348,7 @@ pub(crate) fn append(index: u16, src: &[u8]) -> Option<usize> {
         table.objects[i].len = (pos + room) as u16;
         written += room;
     }
-    Some(written)
+    written
 }
 
 /// Copies `dst.len()` bytes from file offset `start`.

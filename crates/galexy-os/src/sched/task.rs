@@ -32,10 +32,8 @@ pub(crate) fn task_open(name: &str) -> Result<Cap, SysError> {
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &mut threads[owner];
         let Some(index) = thread.files.iter().position(|slot| slot.is_none()) else {
             return Err(SysError::NoResource);
         };
@@ -57,10 +55,8 @@ pub(in crate::sched) fn install_open(body: FileBody, rights: CapRights) -> Resul
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &mut threads[owner];
         let Some(index) = thread.files.iter().position(|slot| slot.is_none()) else {
             return Err(SysError::NoResource);
         };
@@ -109,7 +105,8 @@ pub(in crate::sched) fn task_read_inner(cap: Cap, dst: &mut [u8]) -> Result<IoOp
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &mut threads[owner];
         let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
         let effective = file.rights.intersection(cap.rights());
         if !effective.contains(CapRights::READ) {
@@ -150,11 +147,15 @@ pub(in crate::sched) fn task_read_inner(cap: Cap, dst: &mut [u8]) -> Result<IoOp
     })
 }
 
-/// Appends `src` to a galfs file. An archive open is `Unsupported`.
+/// Writes `src` into a galfs file at the cursor. An archive open is
+/// `Unsupported`.
 ///
-/// The read cursor stays put, so a later `read` still starts at the
-/// beginning. A write that does not fit is short: the count is the bytes
-/// copied, and `0` means the buffer is already full.
+/// Milestone 70: positional. Bytes under the cursor are overwritten in
+/// place, the remainder (cursor at or past the end) is appended, and the
+/// cursor advances by the count — `seek(0)` then `read` sees the bytes
+/// just written, and `write` after `read` continues where the read
+/// stopped. A write that does not fit is short: the count is the bytes
+/// copied, and `0` means the file is already at its maximum.
 /// Sync wrapper around [`task_write_ex`]; keep for call sites that cannot park.
 #[allow(dead_code)]
 pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
@@ -173,7 +174,8 @@ pub(crate) fn task_write_ex(cap: Cap, src: &[u8]) -> Result<IoOp, SysError> {
     }
     let (op, galfs_wrote, wake_pipe) = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &mut threads[owner];
         let must_change = thread.must_change;
         let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
         let effective = file.rights.intersection(cap.rights());
@@ -188,7 +190,8 @@ pub(crate) fn task_write_ex(cap: Cap, src: &[u8]) -> Result<IoOp, SysError> {
         }
         match file.body {
             FileBody::Galfs(obj) => {
-                let n = galfs::append(obj, src).ok_or(SysError::BadCap)?;
+                let n = galfs::write_at(obj, file.offset, src).ok_or(SysError::BadCap)?;
+                file.offset += n;
                 Ok((IoOp::Ready(n), n > 0, None))
             }
             FileBody::Pipe { id, end } => {
@@ -237,10 +240,8 @@ pub(crate) fn task_create(name: &str, replace: bool) -> Result<Cap, SysError> {
     }
     let cap = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &mut threads[owner];
         deny_must_change(thread)?;
         let file_index = thread.files.iter().position(|slot| slot.is_none());
         let created = galfs::create(thread.fs_root, &thread.fs_tokens, name, replace)?;
@@ -284,15 +285,10 @@ pub(crate) fn task_remove(name: &str) -> Result<(), SysError> {
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        {
-            let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-            if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-                return Err(SysError::BadCap);
-            }
-            deny_must_change(thread)?;
-        }
         let (fs_root, fs_tokens) = {
-            let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
+            let owner = running_proc_index(&threads, slot)?;
+            let thread = &threads[owner];
+            deny_must_change(thread)?;
             (thread.fs_root, thread.fs_tokens)
         };
         let removed = galfs::remove(fs_root, &fs_tokens, name)?;
@@ -335,10 +331,8 @@ pub(crate) fn task_rename(old: &str, new: &str) -> Result<(), SysError> {
     }
     interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &threads[owner];
         deny_must_change(thread)?;
         galfs::rename(thread.fs_root, &thread.fs_tokens, old, new)
     })?;
@@ -358,7 +352,8 @@ pub(crate) fn task_truncate(cap: Cap, new_len: u64) -> Result<(), SysError> {
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &mut threads[owner];
         deny_must_change(thread)?;
         let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
         let effective = file.rights.intersection(cap.rights());
@@ -397,10 +392,8 @@ pub(crate) fn task_stat(name: &str, out: &mut [u8]) -> Result<usize, SysError> {
     }
     interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &threads[owner];
         galfs::stat(thread.fs_root, &thread.fs_tokens, name, out)
     })
 }
@@ -430,10 +423,8 @@ pub(crate) fn task_map(pages: u64) -> Result<u64, SysError> {
     }
     let (already, image) = interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &threads[owner];
         // Ramdisk ELFs live at `USER_IMAGE_BASE`. Hand-built tasks use
         // whichever P4 slot the loader picked. Reap walks only that slot.
         Ok((thread.heap_pages, (thread.user_p4 as u64) << 39))
@@ -466,8 +457,9 @@ pub(crate) fn task_map(pages: u64) -> Result<u64, SysError> {
         return Err(SysError::NoResource);
     }
     interrupts::without_interrupts(|| {
-        if let Some(thread) = THREADS.lock().get_mut(slot - 1) {
-            thread.heap_pages = thread.heap_pages.saturating_add(mapped as u16);
+        let mut threads = THREADS.lock();
+        if let Some(owner) = proc_index(&threads, slot) {
+            threads[owner].heap_pages = threads[owner].heap_pages.saturating_add(mapped as u16);
         }
     });
     if mapped < pages {
@@ -484,10 +476,8 @@ pub(crate) fn task_channel() -> Result<(Cap, Cap), SysError> {
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &mut threads[owner];
         let mut free = [usize::MAX; 2];
         let mut nfree = 0usize;
         for (i, slot) in thread.files.iter().enumerate() {
@@ -542,10 +532,8 @@ pub(crate) fn task_send(cap: Cap, bytes: &[u8], cap0: u64, cap1: u64) -> Result<
     }
     let id = interrupts::without_interrupts(|| -> Result<u8, SysError> {
         let mut threads = THREADS.lock();
-        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &mut threads[owner];
         let (id, end) = channel_end(thread, cap)?;
         let ctrl = INIT_CTRL.load(Ordering::Acquire);
         if ctrl != 0xFF && id == ctrl && end == 0 {
@@ -624,10 +612,8 @@ pub(crate) fn task_init_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let (admin, tty, debug_id, session_gen) = {
-            let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-            if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-                return Err(SysError::BadCap);
-            }
+            let owner = running_proc_index(&threads, slot)?;
+            let thread = &threads[owner];
             if thread.fs_root == galfs::NO_OBJECT {
                 return Err(SysError::AccessDenied);
             }
@@ -772,11 +758,9 @@ pub(crate) fn task_recv(
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
+        let owner = running_proc_index(&threads, slot)?;
         let (id, end) = {
-            let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-            if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-                return Err(SysError::BadCap);
-            }
+            let thread = &threads[owner];
             let (id, end) = channel_end(thread, cap)?;
             let file = thread.files[file_slot(cap)?]
                 .as_ref()
@@ -798,11 +782,7 @@ pub(crate) fn task_recv(
                         channel::unpull(ch, delivery);
                         return Err(SysError::BadBuffer);
                     }
-                    let free = threads[slot - 1]
-                        .files
-                        .iter()
-                        .filter(|s| s.is_none())
-                        .count();
+                    let free = threads[owner].files.iter().filter(|s| s.is_none()).count();
                     if need > free {
                         channel::unpull(ch, delivery);
                         return Err(SysError::NoResource);
@@ -815,12 +795,12 @@ pub(crate) fn task_recv(
                         let Some(file) = file else { continue };
                         // `need <= free` was checked above, still holding
                         // `THREADS`. `release_file` would re-lock `CHANS`.
-                        let Some(index) = threads[slot - 1].files.iter().position(|s| s.is_none())
+                        let Some(index) = threads[owner].files.iter().position(|s| s.is_none())
                         else {
                             continue;
                         };
                         let rights = file.rights;
-                        threads[slot - 1].files[index] = Some(file);
+                        threads[owner].files[index] = Some(file);
                         caps[i] = Cap::new(galexy_abi::FILE_CAP_BASE + index as u64, rights).bits();
                     }
                     Ok(RecvOp::Ready { n, bytes, caps })
@@ -861,7 +841,8 @@ pub(crate) fn task_close(cap: Cap) -> Result<(), SysError> {
     if let Ok(pi) = proc_slot(cap) {
         return interrupts::without_interrupts(|| {
             let mut threads = THREADS.lock();
-            let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+            let owner = running_proc_index(&threads, slot)?;
+            let thread = &mut threads[owner];
             let Some(_) = thread.procs[pi].take() else {
                 return Err(SysError::BadCap);
             };
@@ -871,7 +852,8 @@ pub(crate) fn task_close(cap: Cap) -> Result<(), SysError> {
     let index = file_slot(cap)?;
     let (wake_pipe, wake_chan) = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &mut threads[owner];
         let Some(file) = thread.files[index].take() else {
             return Err(SysError::BadCap);
         };
