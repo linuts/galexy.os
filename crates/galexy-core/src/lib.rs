@@ -12,6 +12,9 @@
 mod bitmap;
 #[cfg(test)]
 mod bitmap_test;
+mod console_cut;
+#[cfg(test)]
+mod console_cut_test;
 mod crc32;
 #[cfg(test)]
 mod crc32_test;
@@ -30,6 +33,7 @@ mod tar;
 mod tar_test;
 
 pub use bitmap::Bitmap;
+pub use console_cut::console_commit_len;
 pub use crc32::crc32;
 pub use lockout::{
     FailNote, LoginLockout, LOCKOUT_ACTORS, LOCKOUT_COOLDOWN_MS, LOCKOUT_MAX_FAILS, LOCKOUT_NAME,

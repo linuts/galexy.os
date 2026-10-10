@@ -54,6 +54,9 @@ struct Editor {
     readonly: bool,
     quit_armed: bool,
     cut_len: usize,
+    /// Ctrl-G replaced the text area with the key list. The next key
+    /// closes it and is not inserted.
+    help: bool,
     note: Note,
 }
 
@@ -66,7 +69,6 @@ enum Note {
     Full,
     Cut,
     Paste,
-    Help,
     Failed,
 }
 
@@ -104,6 +106,7 @@ fn main() -> i32 {
         readonly: loaded.readonly,
         quit_armed: false,
         cut_len: 0,
+        help: false,
         note: if loaded.new_file {
             Note::New
         } else {
@@ -126,6 +129,14 @@ fn main() -> i32 {
             continue;
         }
         let n = (got.value as usize).min(buf.len());
+        // One key closes help, including the rest of this read (an arrow
+        // is several bytes). None of them are inserted.
+        if ed.help {
+            ed.help = false;
+            parse = Parse::Normal;
+            draw(doc, path, &mut ed);
+            continue;
+        }
         let mut redraw = false;
         for &byte in &buf[..n] {
             match feed(&mut parse, doc, cut, path, &mut ed, byte) {
@@ -315,7 +326,7 @@ fn feed_normal(
         }
         0x07 => {
             ed.quit_armed = false;
-            ed.note = Note::Help;
+            ed.help = true;
             Step::Redraw
         }
         0x01 => {
@@ -567,6 +578,12 @@ fn draw(doc: &[u8], path: &[u8], ed: &mut Editor) {
     }
     let hscroll = col.saturating_sub(COLS - 1);
     draw_title(path, ed);
+    if ed.help {
+        draw_help_page();
+        draw_status(ed, line, col);
+        draw_shortcuts();
+        return;
+    }
     for row in 0..VIEW_ROWS {
         let mut out = Row::new();
         out.goto(2 + row, 1);
@@ -577,7 +594,7 @@ fn draw(doc: &[u8], path: &[u8], ed: &mut Editor) {
         out.flush();
     }
     draw_status(ed, line, col);
-    draw_help();
+    draw_shortcuts();
     let mut out = Row::new();
     out.goto(2 + line - ed.top, 1 + col - hscroll);
     out.flush();
@@ -631,10 +648,12 @@ fn draw_status(ed: &Editor, line: usize, col: usize) {
         Note::Full => out.push(b"Buffer full"),
         Note::Cut => out.push(b"Cut"),
         Note::Paste => out.push(b"Pasted"),
-        Note::Help => out.push(b"^X exit  ^O save  ^K cut  ^U paste"),
         Note::Failed => out.push(b"Save failed"),
         Note::None if ed.dirty => out.push(b"Modified"),
         Note::None => {}
+    }
+    if ed.help {
+        out.push(b"any key closes help  ");
     }
     out.push(b"  @");
     out.push_u(line + 1);
@@ -645,12 +664,36 @@ fn draw_status(ed: &Editor, line: usize, col: usize) {
     out.flush();
 }
 
-fn draw_help() {
+fn draw_shortcuts() {
     let mut out = Row::new();
     out.goto(3 + VIEW_ROWS, 1);
     out.erase();
     out.push(b"\x1b[90m ^X Exit  ^O Save  ^K Cut  ^U Paste  ^G Help\x1b[0m");
     out.flush();
+}
+
+/// Keys that are not already on the shortcut bar.
+fn draw_help_page() {
+    const LINES: [&[u8]; 8] = [
+        b"arrows            move the cursor",
+        b"Ctrl-A / Ctrl-E   start / end of the line",
+        b"Ctrl-Y / Ctrl-V   page up / down",
+        b"Ctrl-D            delete at the cursor",
+        b"Ctrl-K / Ctrl-U   cut the line / paste it",
+        b"Ctrl-O            save",
+        b"Ctrl-X            exit; Ctrl-X again discards",
+        b"Ctrl-G or any key close this help",
+    ];
+    for row in 0..VIEW_ROWS {
+        let mut out = Row::new();
+        out.goto(2 + row, 1);
+        out.erase();
+        if let Some(line) = LINES.get(row) {
+            out.push(b" ");
+            out.push(line);
+        }
+        out.flush();
+    }
 }
 
 fn tail(bytes: &[u8], max: usize) -> &[u8] {

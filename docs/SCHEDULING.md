@@ -137,7 +137,7 @@ waiter    → park until Cap event
 
 | Rule | Value | Code |
 | --- | --- | --- |
-| Dispatch | RR over runnable owned slots; main is slot 0 | `sched/mod.rs` rotation scan |
+| Dispatch | RR over runnable owned slots; main is slot 0 | `sched/iowait.rs` timer scan |
 | Placement | RR pin at spawn across `online()` CPUs | spawn path pin assignment |
 | Migration | Idle-pass steal only | idle scan + `CTX_STABLE` |
 | Steal cooldown | **100** ticks | `STEAL_COOLDOWN_TICKS` |
