@@ -1068,7 +1068,10 @@ returns, so a broken canary fails that boot. The user stack's guard
 page is unmapped; `test-userfault` recurses into it, kills only that
 task, and requires `free_frames` back at the boot baseline.
 `test-treechurn` and `test-smpstress` are the same budget after N
-spawn/exit cycles.
+spawn/exit cycles. Tests that peek a task's scratch page after it
+exits pin the task to the BSP (`spawn_user_task_on(.., 0, ..)`,
+`spawn_user_launcher`): the owner CPU reaps, and an AP owner would
+zero-wipe the tree from its idle loop before the BSP's peek.
 
 **Debug vs release.** Canary mismatch always panics. GALF structural
 checks return failure and refuse the image (soft) in every build.

@@ -1064,6 +1064,25 @@ pub fn spawn_user_task(name: &str, build: impl FnOnce(UserRegion) -> Vec<u8>) ->
     spawn_user_with(name, galfs::admin_cred(), build)
 }
 
+/// Like [`spawn_user_task`], pinned to `cpu`.
+///
+/// Test kernels that peek a task's scratch page after it exits must own the
+/// reap: an AP owner reaps (and zero-wipes) the tree from its idle loop the
+/// moment the task exits, racing the BSP's peek (`test-treechurn`).
+pub fn spawn_user_task_on(
+    name: &str,
+    cpu: u8,
+    build: impl FnOnce(UserRegion) -> Vec<u8>,
+) -> (UserRegion, u8) {
+    spawn_user_with_grants(
+        name,
+        galfs::admin_cred(),
+        Grants::console(),
+        build,
+        Some(cpu),
+    )
+}
+
 /// Like [`spawn_user_task`], with shell-grade grants (loader, queries, …).
 ///
 /// Pinned to the BSP so the BIOS harness can peek scratch before any
