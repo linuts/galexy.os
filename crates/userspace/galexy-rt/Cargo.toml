@@ -12,9 +12,9 @@ path = "src/lib.rs"
 galexy-abi = { path = "../../galexy-abi" }
 
 [features]
-# A `std` + `panic_abort` program (Milestone 68) links this crate for
-# the allocator and the syscall wrappers. `panic_abort` owns the panic
-# handler, so this feature leaves that lang item out. Built in its own
-# cargo invocation: enabling it beside a `no_std` program would strip
-# the handler those programs need.
+# A `std` program (Milestone 68/70) links this crate for the syscall
+# wrappers only. `panic_abort` owns the panic handler and the PAL's
+# `System` owns the heap, so this feature leaves both lang items out.
+# Built in its own cargo invocation: enabling it beside a `no_std`
+# program would strip the handler and allocator those programs need.
 std = []
