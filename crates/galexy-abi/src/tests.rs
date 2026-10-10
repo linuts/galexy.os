@@ -85,7 +85,7 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(INIT_OP_REBOOT, 6);
     assert_eq!(RECV_POLL, 1);
     assert_eq!(WAIT_POLL, 1);
-    assert_eq!(MAX_SYSCALL, 30);
+    assert_eq!(MAX_SYSCALL, 33);
     assert_eq!(POWER_SHUTDOWN, 0);
     assert_eq!(POWER_REBOOT, 1);
     assert_eq!(CapRights::POWER.bits(), 1 << 5);
@@ -126,6 +126,15 @@ fn reserved_caps_have_permanent_indexes() {
     assert!(matches!(SYSCALLS[28], Syscall::Channel));
     assert!(matches!(SYSCALLS[29], Syscall::Send));
     assert!(matches!(SYSCALLS[30], Syscall::Recv));
+    assert!(matches!(SYSCALLS[31], Syscall::ThreadSpawn));
+    assert!(matches!(SYSCALLS[32], Syscall::ThreadExit));
+    assert!(matches!(SYSCALLS[33], Syscall::Futex));
+    assert_eq!(FUTEX_WAIT, 0);
+    assert_eq!(FUTEX_WAKE, 1);
+    assert_eq!(THREAD_STACK_PAGES_DEFAULT, 16);
+    assert_eq!(THREAD_STACK_PAGES_MAX, 64);
+    assert_eq!(THREADS_PER_PROCESS, 16);
+    assert_eq!(SysError::TimedOut as u64, 10);
     assert_eq!(SPAWN_NO_FG, 32);
     assert_eq!(USER_HEAP_PAGES, 32);
     assert_eq!(CHAN_MSG_MAX, 256);
@@ -200,7 +209,7 @@ fn reserved_caps_have_permanent_indexes() {
 
 #[test]
 fn result_codes_roundtrip() {
-    for code in [SysError::BadCap as u64, 2, 3, 4, 5, 6, 7, 8, 9] {
+    for code in [SysError::BadCap as u64, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
         let r = SyscallResult {
             ok: false,
             value: code,
@@ -211,4 +220,15 @@ fn result_codes_roundtrip() {
     assert_eq!(ok.to_result(), Ok(0x9999));
     assert_eq!(SyscallResult::err(SysError::AccessDenied).value, 2);
     assert!(!SyscallResult::err(SysError::BadBuffer).ok);
+    assert_eq!(SysError::from_code(10), SysError::TimedOut);
+    assert_eq!(SysError::from_code(11), SysError::Unsupported);
+}
+
+#[test]
+fn result_is_repr_c_two_words() {
+    // The `extern "C"` syscall stubs return this by value: `ok` first,
+    // then the payload, 16 bytes total.
+    assert_eq!(core::mem::size_of::<SyscallResult>(), 16);
+    assert_eq!(core::mem::offset_of!(SyscallResult, ok), 0);
+    assert_eq!(core::mem::offset_of!(SyscallResult, value), 8);
 }
