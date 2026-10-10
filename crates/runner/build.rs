@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    watch_userspace();
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
 
     // The main kernel binary comes from the artifact dependency; test kernels
@@ -35,50 +36,10 @@ fn main() {
     {
         // Host-side context for each file (name → bytes).
         let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
-        // Program bins from the userspace tree: one package dir per
-        // program (dir name == package name == bin name), built via the
-        // artifact dep env vars (same mechanism the kernel bins use).
-        let userspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../userspace");
-        if let Ok(pkg_dirs) = std::fs::read_dir(&userspace_root) {
-            for pkg in pkg_dirs.flatten() {
-                if !pkg.path().join("src").is_dir() {
-                    continue; // the galexy-rt LIB is not a program
-                }
-                let pkg_name = pkg
-                    .path()
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
-                let env_crate = pkg_name.replace('-', "_").to_uppercase();
-                let mut bin_files: Vec<(String, String)> = Vec::new(); // (stem, env var)
-                if let Ok(bin_dir) = std::fs::read_dir(pkg.path().join("src/bin")) {
-                    for entry in bin_dir.flatten() {
-                        let stem = entry
-                            .path()
-                            .file_stem()
-                            .unwrap()
-                            .to_string_lossy()
-                            .to_string();
-                        let var = format!("CARGO_BIN_FILE_{}_{}", env_crate, stem);
-                        bin_files.push((stem, var));
-                    }
-                }
-                let main_rs = pkg.path().join("src/main.rs");
-                if main_rs.is_file() {
-                    bin_files.push((
-                        pkg_name.clone(),
-                        format!("CARGO_BIN_FILE_{}_{}", env_crate, pkg_name),
-                    ));
-                }
-                for (stem, var) in bin_files {
-                    if let Some(path) = std::env::var_os(&var) {
-                        let bytes = std::fs::read(&path)
-                            .unwrap_or_else(|e| panic!("ramdisk: read {path:?}: {e}"));
-                        entries.push((stem, bytes));
-                    }
-                }
-            }
+        // Userspace ELFs for `x86_64-unknown-galexy` (`build.rs` invokes
+        // cargo; they are not artifact deps — see `build_userspace`).
+        for (name, bytes) in build_userspace(&out_dir) {
+            entries.push((name, bytes));
         }
         // Standing file: proof-of-plumbing marker for tests.
         entries.push((
@@ -328,6 +289,159 @@ fn is_release() -> bool {
     std::env::var("PROFILE").as_deref() == Ok("release")
 }
 
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn galexy_target() -> PathBuf {
+    repo_root().join("targets/x86_64-unknown-galexy.json")
+}
+
+/// Directory cargo uses for a JSON target: the file stem.
+fn galexy_target_dir_name() -> &'static str {
+    "x86_64-unknown-galexy"
+}
+
+fn watch_tree(dir: &Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                watch_tree(&path);
+            } else {
+                println!("cargo:rerun-if-changed={}", path.display());
+            }
+        }
+    }
+}
+
+fn watch_userspace() {
+    watch_tree(&repo_root().join("crates/userspace"));
+    println!("cargo:rerun-if-changed={}", galexy_target().display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        repo_root().join("scripts/galexy-std-sysroot.py").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        repo_root()
+            .join("scripts/galexy-rustc-wrapper.py")
+            .display()
+    );
+}
+
+/// `-Zbuild-std` for the galexy JSON target. `core,alloc` for `no_std`
+/// programs; `std,panic_abort` for `stdmin`.
+fn galexy_cargo_args(cmd: &mut Command, build_std: &str) {
+    cmd.arg("--target")
+        .arg(galexy_target())
+        .arg(format!("-Zbuild-std={build_std}"))
+        .arg("-Zbuild-std-features=compiler-builtins-mem")
+        .arg("-Zjson-target-spec");
+}
+
+fn galexy_std_sysroot(out_dir: &Path) -> PathBuf {
+    let script = repo_root().join("scripts/galexy-std-sysroot.py");
+    let overlay = out_dir.join("galexy-std-overlay");
+    let output = Command::new("python3")
+        .arg(&script)
+        .arg("--out")
+        .arg(&overlay)
+        .output()
+        .unwrap_or_else(|e| panic!("spawn galexy-std-sysroot: {e}"));
+    if !output.status.success() {
+        panic!(
+            "galexy-std-sysroot failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let path = String::from_utf8(output.stdout).expect("sysroot path is utf-8");
+    PathBuf::from(path.trim())
+}
+
+fn read_elf_dir(bin_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut bins = std::collections::BTreeMap::new();
+    for entry in std::fs::read_dir(bin_dir)
+        .unwrap_or_else(|e| panic!("read {}: {e}", bin_dir.display()))
+        .flatten()
+    {
+        let path = entry.path();
+        if !path.is_file() || path.extension().is_some() {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        if bytes.starts_with(b"\x7fELF") {
+            bins.insert(name, bytes);
+        }
+    }
+    bins
+}
+
+/// `hello`, `init`, `shell`, `util` with `-Zbuild-std=core,alloc`, plus
+/// `stdmin` with `-Zbuild-std=std,panic_abort` on the unsupported PAL.
+fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let target_dir = out_dir.join("userspace-target");
+    let workspace = repo_root().join("Cargo.toml");
+    let release = is_release();
+    let mut cmd = nested_cargo();
+    cmd.arg("build")
+        .arg("--manifest-path")
+        .arg(&workspace)
+        .arg("--target-dir")
+        .arg(&target_dir);
+    galexy_cargo_args(&mut cmd, "core,alloc");
+    for pkg in ["hello", "init", "shell", "util"] {
+        cmd.arg("-p").arg(pkg);
+    }
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env_remove("RUSTC_WRAPPER");
+    cmd.env_remove("GALEXY_SYSROOT");
+    let status = cmd.status().expect("spawn cargo for galexy userspace");
+    if !status.success() {
+        panic!("galexy userspace build failed");
+    }
+
+    let std_target = out_dir.join("stdmin-target");
+    let manifest = repo_root().join("crates/userspace/stdmin/Cargo.toml");
+    let mut cmd = nested_cargo();
+    cmd.arg("build")
+        .arg("--manifest-path")
+        .arg(&manifest)
+        .arg("--target-dir")
+        .arg(&std_target);
+    galexy_cargo_args(&mut cmd, "std,panic_abort");
+    if release {
+        cmd.arg("--release");
+    }
+    let sysroot = galexy_std_sysroot(out_dir);
+    cmd.env(
+        "RUSTC_WRAPPER",
+        repo_root().join("scripts/galexy-rustc-wrapper.py"),
+    );
+    cmd.env("GALEXY_SYSROOT", &sysroot);
+    let status = cmd.status().expect("spawn cargo for stdmin");
+    if !status.success() {
+        panic!("stdmin build failed");
+    }
+
+    let profile = if release { "release" } else { "debug" };
+    let mut bins = read_elf_dir(&target_dir.join(galexy_target_dir_name()).join(profile));
+    let stdmin = std_target
+        .join(galexy_target_dir_name())
+        .join(profile)
+        .join("stdmin");
+    let bytes = std::fs::read(&stdmin).unwrap_or_else(|e| panic!("read {}: {e}", stdmin.display()));
+    assert!(bytes.starts_with(b"\x7fELF"), "stdmin is not an ELF");
+    bins.insert("stdmin".into(), bytes);
+    bins
+}
+
 /// Shell ELF with the `crash` test seam. A separate target dir so this
 /// build does not fight the parent cargo lock or feature unification.
 fn build_crash_shell(out_dir: &Path) -> Vec<u8> {
@@ -338,12 +452,11 @@ fn build_crash_shell(out_dir: &Path) -> Vec<u8> {
     cmd.arg("build")
         .arg("--manifest-path")
         .arg(&manifest)
-        .arg("--target")
-        .arg("x86_64-unknown-none")
         .arg("--features")
         .arg("crash-seam")
         .arg("--target-dir")
         .arg(&target_dir);
+    galexy_cargo_args(&mut cmd, "core,alloc");
     if release {
         cmd.arg("--release");
     }
@@ -353,7 +466,7 @@ fn build_crash_shell(out_dir: &Path) -> Vec<u8> {
     }
     let profile = if release { "release" } else { "debug" };
     let elf = target_dir
-        .join("x86_64-unknown-none")
+        .join(galexy_target_dir_name())
         .join(profile)
         .join("shell");
     std::fs::read(&elf).unwrap_or_else(|e| panic!("read {}: {e}", elf.display()))
@@ -386,10 +499,9 @@ fn build_gxld_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Ve
     cmd.arg("build")
         .arg("--manifest-path")
         .arg(&workspace)
-        .arg("--target")
-        .arg("x86_64-unknown-none")
         .arg("--target-dir")
         .arg(&target_dir);
+    galexy_cargo_args(&mut cmd, "core,alloc");
     for pkg in ["hello", "init", "shell", "util"] {
         cmd.arg("-p").arg(pkg);
     }
@@ -405,21 +517,5 @@ fn build_gxld_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Ve
         panic!("gxld-linked userspace build failed");
     }
     let profile = if release { "release" } else { "debug" };
-    let bin_dir = target_dir.join("x86_64-unknown-none").join(profile);
-    let mut bins = std::collections::BTreeMap::new();
-    for entry in std::fs::read_dir(&bin_dir).unwrap().flatten() {
-        let path = entry.path();
-        if !path.is_file() || path.extension().is_some() {
-            continue;
-        }
-        let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        if name.starts_with('.') {
-            continue;
-        }
-        let bytes = std::fs::read(&path).unwrap();
-        if bytes.starts_with(b"\x7fELF") {
-            bins.insert(name, bytes);
-        }
-    }
-    bins
+    read_elf_dir(&target_dir.join(galexy_target_dir_name()).join(profile))
 }

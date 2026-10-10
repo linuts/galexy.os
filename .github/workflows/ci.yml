@@ -56,10 +56,21 @@ jobs:
           cargo clippy -p galexy-os
           --target x86_64-unknown-none --no-deps --bins -- -D warnings
 
-      - name: Clippy (userspace programs, x86_64-unknown-none)
-        run: >
-          cargo clippy -p galexy-rt -p hello -p init -p shell -p util
-          --target x86_64-unknown-none --no-deps -- -D warnings
+      - name: Clippy (userspace programs, x86_64-unknown-galexy)
+        run: |
+          cargo clippy -p galexy-rt -p hello -p init -p shell -p util \
+            --target targets/x86_64-unknown-galexy.json \
+            -Zbuild-std=core,alloc \
+            -Zbuild-std-features=compiler-builtins-mem \
+            -Zjson-target-spec -- -D warnings
+          overlay="$(python3 scripts/galexy-std-sysroot.py --out target/ci-std-overlay)"
+          RUSTC_WRAPPER="$PWD/scripts/galexy-rustc-wrapper.py" \
+            GALEXY_SYSROOT="$overlay" \
+            cargo clippy -p stdmin \
+            --target targets/x86_64-unknown-galexy.json \
+            -Zbuild-std=std,panic_abort \
+            -Zbuild-std-features=compiler-builtins-mem \
+            -Zjson-target-spec -- -D warnings
 
   # Boots every test kernel under QEMU (BIOS and UEFI, -smp 2).
   # Release profile (debug assertions still on). Accel is kvm when

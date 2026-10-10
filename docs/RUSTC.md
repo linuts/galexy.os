@@ -78,28 +78,42 @@ surface (heap, threads, big files), plus one linker decision.
 Each stage leaves the suite green and is useful on its own. The first
 two need no fork of the Rust repository and no kernel change.
 
-### Stage 1 — `x86_64-unknown-galexy` target (Milestone 68)
+### Stage 1 — `x86_64-unknown-galexy` target (Milestone 68) ✅
 
-A target spec JSON in-tree (`targets/x86_64-unknown-galexy.json`):
-`os = "galexy"`, no `target_family`, `panic-strategy = "abort"`,
-`relocation-model = "static"`, `linker-flavor = "gnu-lld"` with
-`rust-lld`, `executables = true`, `has-thread-local = false` for now,
-`disable-redzone = false` (SYSCALL switches to the kernel stack; the
-red zone is the user's). All userspace crates build with
-`--target targets/x86_64-unknown-galexy.json -Zbuild-std=core,alloc`
-instead of `x86_64-unknown-none`; `galexy-rt` gets `cfg(target_os =
-"galexy")` instead of `cfg(target_arch)` tricks.
+`targets/x86_64-unknown-galexy.json`: `os = "galexy"`, no
+`target_family`, `panic-strategy = "abort"`, `relocation-model =
+"static"`, `code-model = "large"`, `linker-flavor = "gnu-lld"` with
+`rust-lld`, `executables = true`, `has-thread-local = false`,
+`singlethread = true`, `disable-redzone = false` (SYSCALL switches to
+the kernel stack; the red zone is the user's). The large code model is
+required: a static `R_X86_64_32S` cannot name `USER_IMAGE_BASE`
+(`0xc8000000000`). The kernel stays on the prebuilt
+`x86_64-unknown-none` target.
 
-Then `-Zbuild-std=std,panic_abort`. Upstream `std` falls through to the
-`unsupported` PAL, sets `restricted_std`, and every crate opts in with
-`#![feature(restricted_std)]` (or `-Zcrate-attr=feature(restricted_std)`
-for the whole graph). The `unsupported` allocator returns null, so the
-binary registers `galexy-rt`'s `#[global_allocator]` over `Map`
-(Milestone 66). Result: `String`, `Vec`, `HashMap`, `format!`, `Box<dyn
-Error>` work in a Galexy program; `std::fs`, threads, `println!` do not.
+`hello`, `init`, `shell` and `util` build with
+`--target targets/x86_64-unknown-galexy.json -Zbuild-std=core,alloc
+-Zbuild-std-features=compiler-builtins-mem -Zjson-target-spec`.
+`galexy-rt` refuses any other `target_os`. The runner's `build.rs`
+invokes that cargo itself: a workspace `-Zbuild-std` would also rebuild
+`core` for the host and break the prebuilt `std` the host crates link.
 
-Exit: `bin/test-std-min` — a `std` crate that builds a `HashMap<String,
-Vec<u32>>`, formats it, and writes through the console Cap.
+`-Zbuild-std=std,panic_abort` is `stdmin`. On nightly-2026-10-08,
+upstream `std` does not compile for an OS it has never listed: `cfg_select`
+in `sys/alloc`, `sys/io/error`, and `sys/random` has no default, and the
+single-thread TLS path is not selected by `not(target_has_threads)`.
+`scripts/galexy-std-sysroot.py` copies the toolchain `library/` and adds
+those unsupported fallbacks (null allocator, generic I/O errors, static
+TLS, address-derived `HashMap` keys). That is not a rust-lang/rust fork;
+Milestone 70 is the fork, and it deletes this overlay. `stdmin` opts in
+with `#![feature(restricted_std)]` and the `galexy-rt` `std` feature,
+which drops `galexy-rt`'s panic handler so `panic_abort` can provide it.
+The `#[global_allocator]` stays: it is the `Map` bump allocator from
+Milestone 66. `String`, `Vec`, `HashMap`, and `format!` work.
+`std::fs`, threads, and `println!` do not.
+
+Exit (met): ramdisk program `stdmin` builds a `HashMap<String, Vec<u32>>`,
+formats it, and writes through the console Cap. `shell_stdmin_typing_e2e`
+types the name and checks the line.
 
 ### Stage 2 — `gxld`, the static linker (Milestone 69) ✅
 

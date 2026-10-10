@@ -109,7 +109,9 @@ BIOS/UEFI
 ```
 
 - The kernel is compiled as a freestanding ELF for the prebuilt
-  `x86_64-unknown-none` target (no custom target JSON needed).
+  `x86_64-unknown-none` target. Userspace is
+  `targets/x86_64-unknown-galexy.json` (`target_os = "galexy"`), built
+  with `-Zbuild-std` (Milestone 68, `docs/RUSTC.md`).
 - `runner` is a host-side crate: its `build.rs` uses artifact dependencies
   (`bindeps`) to build the kernel, then `bootloader::BiosBoot`/`UefiBoot` to
   produce `galexy-os-bios.img` / `galexy-os-uefi.img`. Its `main` boots the

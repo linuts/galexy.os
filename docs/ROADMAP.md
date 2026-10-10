@@ -428,9 +428,9 @@ futex, large files, bigger argv and open-file limits — plus one static
 linker, which is the only piece with no kernel dependency and so comes
 first.
 
-1. **68 Target** — `x86_64-unknown-galexy.json`; userspace builds with
+1. **68 Target** ✅ — `x86_64-unknown-galexy.json`; userspace builds with
    `-Zbuild-std`; `std` on the `unsupported` PAL (`restricted_std`) with
-   `galexy-rt`'s allocator over `Map`. No fork. Can start now
+   `galexy-rt`'s allocator over `Map`. No fork. `shell_stdmin_typing_e2e`
 2. **69 `gxld`** ✅ — static ELF64 linker as a `no_std + alloc` library
    over the `object` crate plus a GNU-ld-compatible CLI; absorbed
    `gxc::elf`; proven by the `galexy-os-gxld` image, where `hello`,
