@@ -20,7 +20,7 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
   write commits only a prefix that ends outside ESC/CSI, so the
   512-byte budget cannot tear a cursor sequence on the shared COM1
   line and leave the host terminal looking frozen. The shell yields
-  when a keyboard read returns nothing.
+  when a keyboard read returns nothing. Suite: 114 boots.
 - [#88](https://github.com/linuts/galexy.os/pull/88) — stability and
   security review — fixes
   [#86](https://github.com/linuts/galexy.os/issues/86) (`passwd` hung a
