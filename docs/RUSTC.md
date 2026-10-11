@@ -4,7 +4,8 @@ Plan for getting the real Rust toolchain onto Galexy.OS by the lowest
 path of resistance: reuse what upstream already built for new operating
 systems, and grow the kernel only where a compiler actually hits a wall.
 This is the Phase 11 plan; checkboxes live in `TODO.md` Milestones
-**68–73**; the linker has its own plan in `LINKER.md`. `gxc` was
+**68–73**. Milestones **74–77** (Phase 12) are the login shell.
+The linker has its own plan in `LINKER.md`. `gxc` was
 removed in Milestone 73 (`COMPILER.md`); this document is about running
 *upstream* `rustc` on Galexy.
 
@@ -21,6 +22,8 @@ because the second is impossible without the first:
 2. **`rustc` runs on Galexy.** The compiler itself — cross-built on the
    host for the Galexy target, with the Cranelift backend — compiles
    `hello.rs` in ring 3, links it, and the shell runs the result.
+   Milestone 73 proved the compile and the link inside a test kernel.
+   The shell half is Milestones 74–77.
 
 Self-hosting in the strong sense (Galexy rebuilding `rustc` on Galexy) is
 **not** a goal of this plan. A Cranelift-built `rustc` compiling `rustc`
@@ -325,6 +328,26 @@ prints `files-ok`. `gxld` linked the sysroot hello, so `wild` was not
 ported. `.eh_frame` stays out until `panic=unwind`. `std` closes every
 file cap in `rt::cleanup`: stdio is not a `File`, and `Command::output`
 reads the linker pipe to EOF before `Wait`.
+
+### On the shell (Milestones 74–77)
+
+`test-rustc-hello` is not a seat. Three gaps sit between that boot
+and typing `rustc` at the login prompt:
+
+- The compiler ramdisk (~214 MiB ELF, ~90 MiB sysroot) is attached
+  only to `test-rustc` and `test-rustc-hello`. The login image uses
+  the shared ~24 MiB ramdisk. Milestone 74 adds `galexy-os-rustc`
+  and `cargo run --rustc`, and leaves every other image alone.
+- Those test kernels copy the JSON and `srlib/*` into the RAM store
+  before they spawn `rustc`. The login kernel does not. A v12 disk
+  file cannot hold `core`'s ~66 MiB `.rmeta`. Milestone 75 repeats
+  that import on every boot of an image whose ramdisk contains
+  `srlib/`.
+- The shell starts a ramdisk program only when the line has no
+  spaces, and `spawn` only loads a ramdisk label (`file_name_ok`
+  rejects `/`). Milestone 76 passes argv and waits. Milestone 77
+  loads `/hello` from galfs. The typed gate is `rustc hello.rs -o
+  hello` and then `/hello`.
 
 ## Explicit non-goals
 
