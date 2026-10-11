@@ -459,7 +459,9 @@ pub(crate) fn task_map(pages: u64) -> Result<u64, SysError> {
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         if let Some(owner) = proc_index(&threads, slot) {
-            threads[owner].heap_pages = threads[owner].heap_pages.saturating_add(mapped as u16);
+            threads[owner].heap_pages = threads[owner]
+                .heap_pages
+                .saturating_add(u32::try_from(mapped).unwrap_or(u32::MAX));
         }
     });
     if mapped < pages {

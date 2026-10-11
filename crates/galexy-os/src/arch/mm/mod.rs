@@ -31,8 +31,12 @@ use x86_64::PhysAddr;
 use crate::serial_println;
 use bootloader_api::info::{BootInfo, MemoryRegionKind};
 
-/// Frames tracked by the allocator (2 Ki bitmap = 512 MiB coverage).
-const BITMAP_WORDS: usize = 2048;
+/// Frames tracked by the allocator.
+///
+/// 16384 words × 64 bits = 1 048 576 frames = 4 GiB of physical
+/// addresses. QEMU `-m 2G` fits under that, including a hole below 4 GiB.
+/// Milestone 6 left the bitmap at 512 MiB; Milestone 71 lifts it.
+const BITMAP_WORDS: usize = 16384;
 /// Physical page size.
 const FRAME_SIZE: usize = 4096;
 /// Total trackable frames.

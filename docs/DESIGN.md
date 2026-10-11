@@ -417,8 +417,8 @@ window (P4 203) is reserved in `mm::init`, before this sequence.
 
 - Frame allocator over the `BootInfo` memory map: only `Usable` regions are
   allocatable, tracked in `.bss`-resident bitmap pair (`USED`/`USABLE`,
-  fixed lock order USED→USABLE), 512 MiB coverage (beyond that: serial
-  warning + frames stay unused).
+  fixed lock order USED→USABLE), 4 GiB coverage
+  (`BITMAP_WORDS = 16384`; Milestone 71). Frames past that stay unused.
 - `allocate_frame()` is first-fit; `deallocate_frame` panics on double-free
   and on non-`Usable` frames — bootloader/kernel memory protected by
   construction.
@@ -674,18 +674,21 @@ printable-ASCII staging; screen output **+ serial mirror** — console =
 screen + COM1, which is what makes userland output observable headless);
 `cap_info` echoes handles (dispatch proving ground). `open`/`read`/`close`
 are ramdisk files as capabilities (Milestone 20): each user task has a
-fixed table of **8** opens (`MAX_OPEN_FILES` — kept small on purpose so
-`open` never heap-allocates on the IF=0 syscall path; a grow would force
-a shootdown ack from every CPU). Indexes from `FILE_CAP_BASE` (3),
-authoritative grant intersected with the handle snapshot. Raising the
-cap is a later change with a non-blocking allocation story. `read` copies the next bytes of an open file
+table of **64** opens (`MAX_OPEN_FILES`). The table is a heap `Vec`
+allocated when the task is registered, before the IRQ gate, so `open`
+only indexes a slot on the IF=0 path. Indexes from `FILE_CAP_BASE`
+(3), authoritative grant intersected with the handle snapshot.
+`read` copies the next bytes of an open file
 (short-read at 1 KiB, 0 at EOF);
 `close` drops the slot. `create(name, len, flags)` (syscall 9) puts a
 path in a fixed galfs table (128 objects, 32 actors with one root each,
 64-byte component names, shared 256×512-byte block pool with 8 direct
-pointers plus one single-indirect block per file / 32 KiB max, no heap
-on the syscall path — Milestone 45 / GALF v11). A path ending in `/` is
-a directory and returns 0. A file returns
+pointers plus one single-indirect block per file / 32 KiB on the v12
+image — Milestone 45 / GALF v12). A write past 32 KiB promotes that
+file into the RAM large store (4 KiB blocks, 64 MiB; Milestone 71);
+that promotion allocates on the kernel heap while the write syscall
+holds the thread table. A path ending in `/` is a directory and
+returns 0. A file returns
 READ|WRITE. `RDX == 1` empties an existing file; any other value creates
 only when the name is new. Uniqueness is the parent plus the component.
 The first path component may be `owner@name` (`dan@Desktop`); without an
@@ -768,8 +771,9 @@ and power-off zero the volume key (cold-boot remanence accepted). The
 payload MAC stays HMAC-SHA256; RFC 8439 Poly1305 waits for a versioned
 cutover. `bin/test-unlock` covers wipe, a rejected guess, and remount.
 Empty files allocate no blocks; append grows through direct
-then single-indirect pointers (32 KiB max); remove frees blocks back to
-the bitmap. `cargo run` attaches a persistent `galfs.img`.
+then single-indirect pointers (32 KiB on the v12 image). Past that the
+file promotes into the RAM large store (Milestone 71). Remove frees
+v12 blocks back to the bitmap and drops the large body. `cargo run` attaches a persistent `galfs.img`.
 `bin/test-galfs-disk` proves multi-block persist and dual-slot recover;
 `test-galfs-corrupt` refuses format on a both-bad image; `test-fsck`
 runs live-table consistency after mutate; `test-quota` covers
@@ -1061,7 +1065,7 @@ one. The ramdisk is still trusted input — measured, not signed
 
 **User pointers.** Syscalls copy path, name, password, and write bytes
 into stack buffers only after a length check (`MAX_NAME`, `MAX_READ` /
-`MAX_WRITE`, `SPAWN_ARG_MAX` 256, password ≤ 64) and a `user_buffer`
+`MAX_WRITE`, `SPAWN_ARG_MAX` 4096, password ≤ 64) and a `user_buffer`
 walk. `user_buffer(0)` is an empty range, not `BadBuffer`. The copy
 itself is `arch::user_copy` (`stac` / `clac` when SMAP is on). Parse
 and KDF run on that copy, so a later store in the user page cannot
@@ -1114,8 +1118,9 @@ IRQ that already has IF=0) around the acquire.
 
 | Lock | May hold while taking | IRQ-gate |
 | --- | --- | --- |
-| `THREADS` | galfs `TABLE`, then `VOLUME_KEY`, then `VOLUME_PASS`, then `CHANS`. No heap allocation while held (snapshot into fixed arrays, allocate after the drop) | yes |
-| galfs `TABLE` | `DISK_BUF` only while encoding; not `THREADS`. The PBKDF2 for `login` / `passwd` / `useradd` runs before the lock is taken (`PasswordCred`) | yes. Syscalls arrive IF=0; the main-loop entries (`sync_to_disk`, `wipe_volume_key`, `seal_and_lock`) gate themselves — a preempted main-loop holder on the BSP deadlocked the shell's next galfs syscall on the same CPU (galexy.os#86) |
+| `THREADS` | galfs `TABLE` (then large-file `STORE`), then `VOLUME_KEY`, then `VOLUME_PASS`, then `CHANS`. Snapshots still copy into fixed arrays and allocate after the drop. A galfs write may allocate the RAM large-file store while `THREADS` is held (Milestone 71): heap growth drops `INNER` before the shootdown, and every spin lock acks (`arch/mm/heap.rs`) | yes |
+| galfs `TABLE` | large-file `STORE`; `DISK_BUF` only while encoding; not `THREADS`. The PBKDF2 for `login` / `passwd` / `useradd` runs before the lock is taken (`PasswordCred`) | yes. Syscalls arrive IF=0; the main-loop entries (`sync_to_disk`, `wipe_volume_key`, `seal_and_lock`) gate themselves — a preempted main-loop holder on the BSP deadlocked the shell's next galfs syscall on the same CPU (galexy.os#86) |
+| large-file `STORE` | nothing else. Never take `TABLE` or `THREADS` while holding it | with the caller (`TABLE`, already IF=0 on the syscall path) |
 | `VOLUME_KEY` | `VOLUME_PASS` | with the caller |
 | `LOCKOUT` | nothing above | yes; never under `THREADS` or `TABLE` |
 | Frame `USED` then `USABLE` | nothing else | yes |
@@ -1239,6 +1244,7 @@ main image and are listed at the end.
 | `test-pipe` | `pipe_test_passes` | M36 pipes + `give`, M57 block/wake |
 | `test-userheap`, `test-channel` | `userheap_test_passes`, `channel_test_passes` | M66 per-task `Map` budget and reap, `Clock`, channel send/recv and `give` |
 | `test-thread`, `test-futex`, `test-std` | `thread_test_passes`, `futex_test_passes`, `std_test_passes` | M70 user threads and futex; `std` PAL (`stdtest`, unpatched `toml`) |
+| `test-big`, `test-gxld` | `big_test_passes`, `gxld_ring3_test_passes` | M71 300 MiB map and a 20 MiB file (KVM only); ring-3 `gxldos` links two objects |
 | `test-proccap`, `test-selfcap`, `test-procgive`, `test-procbudget`, `test-capforge`, `test-orphan` | `proccap_test_passes`, `selfcap_test_passes`, `procgive_test_passes`, `procbudget_test_passes`, `capforge_test_passes`, `orphan_test_passes` | M47 process Caps and forge battery |
 | `test-init`, `test-jobcap` | `init_test_passes`, `jobcap_test_passes` | M53 init orphan root, M55 job Cap / Ctrl-C |
 | `test-sleep`, `test-idle` | `sleep_test_passes`, `idle_test_passes` | M56 time and deadlines, M58 policy freeze |
@@ -1252,12 +1258,13 @@ main image and are listed at the end.
 Host suites (no QEMU): `galexy-abi` (table integrity), `galexy-core`
 (`Ring`, tar, `parse_path` exhaustive sweep), `galexy-crypto`
 (vectors), `galexy-galf` (slot round trip, generation monotonicity,
-token algebra properties), `galfs-fsck`, `gxc`, `gxld`.
+token algebra properties, v13 image check including a 64 MiB file),
+`galfs-fsck`, `gxc`, `gxld`.
 
 ## User heap, clock, and channels (Milestone 66)
 
 `Map` appends NX|RW|user pages 512 MiB above the task's image base, at
-most 32 pages. The syscall returns the new base. Reap walks that P4
+most `USER_HEAP_PAGES` (262_144, 1 GiB; Milestone 71). The syscall returns the new base. Reap walks that P4
 slot, so the frames return with the tree. `galexy-rt` bumps an
 allocator over the region; `dealloc` does not unmap. `Clock` reads
 `timer_ticks` and does not change `Sleep`. `Channel` / `Send` / `Recv`

@@ -18,15 +18,16 @@ pub struct Thread {
     join: Cap,
 }
 
-/// 64 KiB: `THREAD_STACK_PAGES_DEFAULT` pages. Milestone 71 lifts the cap.
+/// 64 KiB: `THREAD_STACK_PAGES_DEFAULT` pages. The kernel honors a
+/// request up to `THREAD_STACK_PAGES_MAX` (8 MiB).
 pub const DEFAULT_MIN_STACK_SIZE: usize = 64 * 1024;
 
 impl Thread {
     // unsafe: see thread::Builder::spawn_unchecked for safety requirements
     pub unsafe fn new(stack: usize, init: Box<ThreadInit>) -> io::Result<Thread> {
-        // A request past the kernel maximum is clamped, not refused: the
-        // stack budget is a Milestone 71 capacity item, and a program
-        // asking for 8 MiB still runs on 256 KiB far more often than not.
+        // A request past the kernel maximum is clamped, not refused.
+        // `THREAD_STACK_PAGES_MAX` is 8 MiB, which is what `rustc` asks
+        // for on the compile thread it spawns itself.
         let pages = (stack.div_ceil(4096) as u64).clamp(1, THREAD_STACK_PAGES_MAX);
         let data = Box::into_raw(init);
         match syscall::thread_spawn(thread_start, data.expose_provenance() as u64, pages) {

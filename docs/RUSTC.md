@@ -43,24 +43,23 @@ The toolchain side is largely done upstream, and that is the lever:
 | Pure-Rust unwinder | `unwinding` crate (used by cg_clif, Hermit-class targets) | `panic=unwind` without libgcc |
 | Hardware RNG backend | `getrandom` `rdrand` backend | No `/dev/urandom` emulation |
 
-The OS side is roughly a third done. What a compiler process needs, and
-where Galexy stands today:
+Stage 4 (Milestone 71) is the capacity a compiler process needs. What
+`rustc` needs, and where Galexy stands:
 
 | `rustc` needs | Galexy today | Gap |
 |---|---|---|
-| Hundreds of MB of heap | No user heap; 4-page stack; QEMU default 128 MiB (runner passes no `-m`); frame bitmap covers 512 MiB | `Map` syscall (Milestone 66), 2 GiB QEMU memory, bitmap past 512 MiB |
-| At least one spawned thread with an 8 MiB stack, TLS, locks | `ThreadSpawn` shares CR3; `Futex`; key TLS via `wrfsbase`. Stack cap is 256 KiB (64 pages) | 8 MiB stacks (Milestone 71) |
-| Read a 30–60 MB sysroot | Ramdisk `open` + `read` + `seek` on archive names ✅ | Big tar, nothing else |
-| Write multi-MB `.o` / `.rlib` / ELF outputs | galfs: 32 KiB per file, 128 KiB pool, 8 open files per task | galfs large-volume format, 64 open files |
-| Long command lines | `SPAWN_ARG_MAX` = 256, single blob | argv v2 at ≥ 4 KiB |
-| Spawn the linker, capture its exit status / stderr | `spawn_with` + Caps at spawn + `pipe` + `wait`; the PAL's `process` module ✅ | Ring-3 `gxld` (Milestone 71) |
-| `fs`: open / read / write / seek / stat / create / remove / rename / readdir | All present ✅. galfs `write` is positional; readdir is the files snapshot | Large files (Milestone 71) |
-| Clock | `Sleep` only | `Clock` (Milestone 66) |
+| Hundreds of MB of heap | `Map` up to 1 GiB per task; QEMU `-m 2G`; frame bitmap covers 4 GiB | — |
+| At least one spawned thread with an 8 MiB stack, TLS, locks | `ThreadSpawn` shares CR3; `Futex`; key TLS via `wrfsbase`. A spawned thread may ask for 2048 pages (8 MiB); the default stays 16 pages | — |
+| Read a 30–60 MB sysroot | Ramdisk `open` + `read` + `seek`; sysroot `.rlib`s are packed under `rust/` | The packed set is the crates the PAL links, not a full 60 MB sysroot |
+| Write multi-MB `.o` / `.rlib` / ELF outputs | 64 open files. Writes past 32 KiB promote into a RAM store: 4 KiB blocks, double indirection, 64 MiB per file | Those bytes are not sealed into a v12 disk. Host v13 (`check_image`) is the on-disk large format; the kernel still syncs v12 |
+| Long command lines | `SPAWN_ARG_MAX` = 4096 | — |
+| Spawn the linker, capture its exit status / stderr | `gxldos` receives input and output Caps at spawn and does not open a path; `test-gxld` links two objects into a program that exits `0x71` | stderr capture is the existing pipe path; `test-gxld` checks the exit code |
+| `fs`: open / read / write / seek / stat / create / remove / rename / readdir | All present. `write` is positional; readdir is the files snapshot; files past 32 KiB use the RAM store | — |
+| Clock | `Clock` reads `timer_ticks` | — |
 | Environment variables, cwd | None | Waive: PAL returns empty env; cwd lives in the process |
 
-So the user's instinct is right about the *toolchain* and wrong about the
-*kernel*: the remaining work is almost entirely Galexy-side runtime
-surface (heap, threads, big files), plus one linker decision.
+The remaining work is the toolchain: cross-building Cranelift-only
+`rustc` (Stage 5) and linking its output on Galexy (Stage 6).
 
 ## Paths considered
 
@@ -202,31 +201,35 @@ galfs file, `Command::new("echo").output()`, `Instant::now()`
 monotonic, and `toml` 1.x parsing a ramdisk file with zero patches.
 `stdtest` prints `stdtest: passed (75 checks)`.
 
-### Stage 4 — Capacity for a compiler process (Milestone 71)
+### Stage 4 — Capacity for a compiler process (Milestone 71) ✅
 
-The kernel limits a compiler trips over, all already named in `TODO.md`
-as debt:
+- **Memory**: `-m 2G` in the runner and `cargo run`; the frame bitmap
+  covers 4 GiB; `Map` budget per task is 1 GiB. A spawned thread may
+  ask for 8 MiB (`THREAD_STACK_PAGES_MAX`); the leader's stack stays
+  4 pages and the thread default stays 16 pages.
+- **Storage**: writes past the v12 32 KiB file promote into a RAM
+  store with the same file body: 4 KiB blocks, `u32` length, double
+  indirection, 64 MiB. v12 disks still load and sync; promoted bytes
+  stay in RAM. Host `galexy-galf` v13 is the sealed large-volume
+  image (extent map, pool sized to the disk, files of 64 MiB).
+  `check_image` dispatches on the version, so v12 and v13 both fsck.
+  The kernel does not format or load v13 yet.
+- **Ring-3 `gxld`**: `gxldos` is a thin `main` over the Stage 2 crate.
+  The kernel test installs read Caps and one write Cap at spawn;
+  the program does not open a path. `test-gxld` links two objects
+  into a program that exits `0x71`.
+- **Limits**: `MAX_OPEN_FILES` is 64. The table is a heap `Vec`
+  allocated when the task is registered, before the IRQ gate.
+  `SPAWN_ARG_MAX` is 4 KiB, copied with `user_copy`. `PROC_CAP_BASE`
+  is `0x80` so the file band does not overlap process caps.
+- **Sysroot**: the `.rlib`s the PAL links are packed into the ramdisk
+  tar under `rust/` (one per crate, newest hash). `.rmeta` is left
+  out: it duplicates the rlib, and a debug `libcore.rmeta` is tens of
+  megabytes inside every disk image.
 
-- **Memory**: `-m 2G` in the runner and `cargo run`; frame bitmap past
-  512 MiB (Milestone 6 open box); `Map` budget per task up to 1 GiB;
-  user stack size chosen at spawn (`rustc` wants 8 MiB on its main
-  compile thread — it spawns that thread itself via the PAL).
-- **Storage**: galfs **large-volume format** (v13): 4 KiB blocks, 32-bit
-  lengths, extents or double indirection, pool sized to the disk; keep
-  the current small format readable. Files up to at least 64 MiB. If
-  this lags, a RAM-backed scratch volume with the same `FileBody`
-  interface unblocks Stage 5.
-- **Ring-3 `gxld`**: the Stage 2 crate behind a thin `main`, receiving
-  input Caps and the output Cap at spawn (`LINKER.md` → On the OS).
-- **Limits**: `MAX_OPEN_FILES` 8 → 64 (heap table on spawn, not in the
-  IF=0 path); `SPAWN_ARG_MAX` 256 → 4 KiB (one page, copied with
-  `user_copy`).
-- **Sysroot**: `lib/rustlib/x86_64-unknown-galexy/lib/*.rlib` packed into
-  the ramdisk tar under `rust/`; read-only is fine, `rustc` only reads it.
-
-Exit: `bin/test-big` — a `std` program allocates 300 MiB, writes a 20 MiB
-file, reopens it, checks a hash; `test-fsck` still passes on both
-galfs formats.
+Exit: `bin/test-big` (KVM only) allocates 300 MiB, writes a 20 MiB
+file, re-reads it, and checks a hash. `test-fsck` checks the live v12
+table and a promoted large file. Host tests check a sealed v13 image.
 
 ### Stage 5 — `rustc` cross-built for Galexy, Cranelift only (Milestone 72)
 

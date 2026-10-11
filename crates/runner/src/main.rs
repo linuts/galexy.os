@@ -53,6 +53,7 @@ fn main() {
     // legacy `-M pc` primary-IDE-slave path (still covered by boot tests).
     let use_ide = std::env::var_os("GALEXY_GALFS_IDE").is_some();
     cmd.arg("-M").arg(if use_ide { "pc" } else { "q35" });
+    cmd.arg("-m").arg("2G");
     cmd.arg("-drive").arg(format!(
         "format=raw,file={img_path},if=ide,index=0,snapshot=on"
     ));

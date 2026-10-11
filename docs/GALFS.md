@@ -253,7 +253,7 @@ block pool and reuses after remove. `bin/test-galfs-disk` proves
 multi-block persist + dual-slot recover; the host asserts plaintext
 markers are absent from the raw image. `bin/test-galfs-corrupt` boots
 a both-bad image and refuses format. `bin/test-fsck` checks the live
-table after write/truncate/remove. `bin/test-shares` records a durable
+table after write/truncate/remove, then a file promoted past 32 KiB. `bin/test-shares` records a durable
 share, proves login re-apply, unshare, and `userdel` cleanup.
 `bin/test-indirect` writes past the eight directs, truncates through
 indirect, and fills a 32 KiB file. Shell `tokens` lists the task’s
@@ -275,8 +275,19 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 
 - GALF **v12**: 32 actors / 128 objects / 32 durable shares; per-actor
   `kdf_iters`; 256×512 block
-  pool; 8 directs + single indirect/file (32 KiB max); per-actor object +
-  byte quotas (defaults for new users; admin at table max)
+  pool; 8 directs + single indirect/file (32 KiB on disk); per-actor object +
+  byte quotas (defaults for new users; admin at the large-file maximum
+  on a fresh RAM table, or the stored quota on a loaded v12 disk)
+- **Large files (Milestone 71)**: a write past 32 KiB promotes the file
+  into a RAM store (4 KiB blocks, `u32` length, double indirection, 64
+  MiB). Same file body for read, write, stat, truncate, and quota.
+  Promoted bytes are not copied into a v12 sealed image. Host
+  **v13** (`galexy-galf::v13`) is the on-disk large format: two 64 KiB
+  metadata slots holding a sealed extent map, then a 4 KiB data pool
+  sized to the disk (`MIN_DISK_BYTES` = 8 MiB, files up to 64 MiB).
+  `check_image` looks at the version and checks v12 or v13. The kernel
+  still refuses a version other than 12, so it does not format or load
+  v13 yet
 - Sealed dual-slot image (288 sectors/slot) on the IDE slave
 - Object + block fill stress; remove reuses blocks without leaks
 - Shell: `ls` / `cat` / `echo` / `touch` / `mkdir` / `rm` / `cp` / `mv`
@@ -300,7 +311,8 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
   inactive dual slot + flush
 - Boot logs slot/gen; recovery from a bad sibling is explicit
 - Both-bad GALF magic → no silent format; volume stays unavailable
-- Live `validate_table` smoke (`test-fsck`); host `galfs-fsck` / `galexy-galf`
+- Live `validate_table` smoke (`test-fsck`), including a promoted
+  large file; host `galfs-fsck` / `galexy-galf` for v12 and v13 images
 
 ### Quotas (landed)
 
@@ -354,8 +366,11 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 
 ### Open-file budget (landed)
 
-- **8** opens per task by design (`MAX_OPEN_FILES`); IF=0 syscall path
-  must not allocate. Documented; raise needs a growth plan.
+- **64** opens per task (`MAX_OPEN_FILES`, Milestone 71). The table is
+  a heap `Vec` allocated when the task is registered, before the IRQ
+  gate, so `open` still only indexes a slot on the IF=0 path.
+  `PROC_CAP_BASE` is `0x80` so the file band does not overlap process
+  caps.
 
 ### Idempotent mutate after recover (landed)
 

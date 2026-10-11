@@ -261,7 +261,7 @@ channel send: it parks until init replies.
 
 `Map` grows the calling task's heap: NX|RW|user pages 512 MiB above
 that task's image base (ramdisk ELFs: `USER_IMAGE_BASE + 512 MiB`), at
-most 32 pages. The return value is the base of the newly mapped pages.
+most `USER_HEAP_PAGES` (262_144, 1 GiB; Milestone 71). The return value is the base of the newly mapped pages.
 Past the budget is `NoResource`. Reap walks the task's own P4 slot, so
 those frames come back with the rest of the tree.
 `galexy-rt` bumps an allocator over that region; `dealloc` does not
@@ -272,7 +272,7 @@ job without making it the TTY's Ctrl-C target.
 
 A process is still one address space and one Cap table. `ThreadSpawn`
 adds a thread inside it: a new kernel slot, the same CR3, a fresh user
-stack (default 16 pages, at most 64) and a fresh kernel stack, `FS`
+stack (default 16 pages, at most 2048 / 8 MiB as of Milestone 71) and a fresh kernel stack, `FS`
 base 0. The return value is a process Cap with `PROC_PARENT` on the
 shared table; `Wait` on it is join and yields the thread's exit code.
 The caller parks until the thread is registered — the kernel allocates

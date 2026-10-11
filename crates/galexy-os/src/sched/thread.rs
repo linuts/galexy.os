@@ -89,10 +89,18 @@ pub(in crate::sched) const WAIT_PROC_NONE: u8 = 0xFF;
 /// downward through this word first — reaping detects the clobber.
 pub(in crate::sched) const STACK_CANARY: u64 = 0x0CA7_AB1E_500D_F00D;
 
-/// Open ramdisk files one task may hold at once. The table is carved into
-/// the `Thread` at spawn so `open` never allocates (the syscall runs IF=0;
-/// a heap grow there would broadcast a shootdown that targets must ack).
-pub(in crate::sched) const MAX_OPEN_FILES: usize = 8;
+/// Open files one task may hold at once. The table is a heap `Vec`
+/// allocated when the process leader is registered — not on the IF=0
+/// `open` path, which only indexes it. Milestone 71: 8 → 64.
+pub(in crate::sched) const MAX_OPEN_FILES: usize = 64;
+
+/// File table for a process leader. Allocated before the IRQ gate so
+/// `open` never grows the heap.
+pub(in crate::sched) fn user_files() -> Vec<Option<OpenFile>> {
+    let mut files = Vec::new();
+    files.resize_with(MAX_OPEN_FILES, || None);
+    files
+}
 
 /// Where an open file's bytes live. The per-task slot only keeps the cursor.
 #[derive(Clone, Copy)]
@@ -279,9 +287,11 @@ pub(in crate::sched) struct Thread {
     /// The timer tick of this thread's last steal (anti-ping-pong cooldown
     /// for the idle-CPU steal path). 0 = never stolen (eligible).
     pub(in crate::sched) stolen_at: AtomicU64,
-    /// File capabilities belonging to this task. Empty for kernel threads.
-    /// Indexes are [`galexy_abi::FILE_CAP_BASE`] + slot. Cleared on reap.
-    pub(in crate::sched) files: [Option<OpenFile>; MAX_OPEN_FILES],
+    /// File capabilities belonging to this task. Empty for kernel threads
+    /// and for sibling threads (they use the leader's table). Indexes are
+    /// [`galexy_abi::FILE_CAP_BASE`] + slot. Cleared on reap. Allocated at
+    /// spawn; the IF=0 open path only indexes it.
+    pub(in crate::sched) files: Vec<Option<OpenFile>>,
     /// Process Caps (children). Indexes are [`PROC_CAP_BASE`] + slot.
     pub(in crate::sched) procs: [Option<ProcHandle>; MAX_PROC_CAPS],
     /// Idle stealing skips this thread. The interactive shell is resident
@@ -349,8 +359,9 @@ pub(in crate::sched) struct Thread {
     /// Console bytes written during [`console_budget_tick`].
     pub(in crate::sched) console_budget_used: u32,
     /// Heap pages this task has `map`ped (Milestone 66). Reap frees them
-    /// with the rest of the user tree.
-    pub(in crate::sched) heap_pages: u16,
+    /// with the rest of the user tree. `u32` so a 1 GiB budget fits
+    /// (Milestone 71); `u16` stopped at 256 MiB.
+    pub(in crate::sched) heap_pages: u32,
     /// Second user pointer for a parked channel `recv` (cap-out buffer).
     pub(in crate::sched) io_extra: AtomicU64,
     /// Milestone 70: `0` for a process leader (the slot the loader made).
@@ -877,6 +888,7 @@ pub(crate) struct TaskInit<'a> {
 }
 
 pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
+    let files = user_files();
     interrupts::without_interrupts(|| {
         // Canary at the very bottom of the kernel-mode stack.
         let mut kstack = init.kstack;
@@ -903,7 +915,7 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
             user_p4: init.user_p4,
             owner,
             stolen_at: AtomicU64::new(0),
-            files: [None; MAX_OPEN_FILES],
+            files,
             procs: [None; MAX_PROC_CAPS],
             no_steal: init.no_steal,
             wait_child_slot: AtomicU8::new(0),
@@ -1038,7 +1050,7 @@ pub(in crate::sched) fn register_thread(leader: &LeaderSnapshot, kstack: Vec<u8>
             user_p4: leader.user_p4,
             owner,
             stolen_at: AtomicU64::new(0),
-            files: [None; MAX_OPEN_FILES],
+            files: Vec::new(),
             procs: [None; MAX_PROC_CAPS],
             no_steal: false,
             wait_child_slot: AtomicU8::new(0),
@@ -1114,7 +1126,7 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             user_p4: 0,
             owner,
             stolen_at: AtomicU64::new(0),
-            files: [None; MAX_OPEN_FILES],
+            files: Vec::new(),
             procs: [None; MAX_PROC_CAPS],
             no_steal: false,
             wait_child_slot: AtomicU8::new(0),
@@ -1438,7 +1450,7 @@ pub(crate) fn spawn_user_with_grants(
             user_p4: p4_index,
             owner,
             stolen_at: AtomicU64::new(0),
-            files: [None; MAX_OPEN_FILES],
+            files: user_files(),
             procs: [None; MAX_PROC_CAPS],
             // Hand-rolled test blobs coordinate via yield races; keep them
             // on their spawn CPU so idle steal cannot starve a waiter.

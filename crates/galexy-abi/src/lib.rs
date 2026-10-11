@@ -364,9 +364,11 @@ pub const FILE_CAP_BASE: u64 = 3;
 
 /// Lowest index for a per-task **process Cap** (handle to a child task).
 ///
-/// Lives above the file-open band (`FILE_CAP_BASE`…`FILE_CAP_BASE+7`) and
-/// below the high reserved band (`0x8000`…). Per-task, not global.
-pub const PROC_CAP_BASE: u64 = 0x40;
+/// Lives above the file-open band (`FILE_CAP_BASE`…`FILE_CAP_BASE+63`,
+/// sixty-four opens as of Milestone 71) and below the high reserved band
+/// (`0x8000`…). Per-task, not global. Moved from `0x40` when the file
+/// band grew; [`MAX_PROC_CAPS`] stays 16.
+pub const PROC_CAP_BASE: u64 = 0x80;
 /// Process Caps one task may hold at once (spawn children / transfers).
 /// Process Caps per task. Sixteen is the stable ceiling (Milestone 67):
 /// twelve seats plus a few service children. Do not raise it for init.
@@ -740,8 +742,10 @@ pub const FUTEX_WAKE: u64 = 1;
 
 /// `thread_spawn` stack size when `RDX` is `0` (64 KiB).
 pub const THREAD_STACK_PAGES_DEFAULT: u64 = 16;
-/// Largest `thread_spawn` stack (256 KiB). Milestone 71 lifts this.
-pub const THREAD_STACK_PAGES_MAX: u64 = 64;
+/// Largest `thread_spawn` stack (8 MiB). `0` in `RDX` still means
+/// [`THREAD_STACK_PAGES_DEFAULT`] (64 KiB). The main task stack stays
+/// four pages; this cap is the stack a thread asks for itself.
+pub const THREAD_STACK_PAGES_MAX: u64 = 2048;
 /// Running-or-parked records one address space may hold, leader included.
 /// Exited threads awaiting a join do not count.
 pub const THREADS_PER_PROCESS: u64 = 16;
@@ -751,11 +755,12 @@ pub const THREADS_PER_PROCESS: u64 = 16;
 pub const SPAWN_NAME_MAX: usize = 64;
 /// Maximum bytes in the spawn argument blob (`r8`/`r9`).
 ///
-/// Milestone 66: the bytes are a NUL-separated argv. No interior NUL
-/// means one argument. No environment vector.
-pub const SPAWN_ARG_MAX: usize = 256;
-/// Pages one task may `map` for its heap (128 KiB).
-pub const USER_HEAP_PAGES: u64 = 32;
+/// The bytes are a NUL-separated argv. No interior NUL means one
+/// argument. No environment vector. Milestone 71: one page, copied with
+/// `user_copy` (the Milestone 66 cap was 256).
+pub const SPAWN_ARG_MAX: usize = 4096;
+/// Pages one task may `map` for its heap (1 GiB).
+pub const USER_HEAP_PAGES: u64 = 262_144;
 /// Bytes one channel message may carry, not counting Caps.
 pub const CHAN_MSG_MAX: usize = 256;
 

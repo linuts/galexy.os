@@ -132,15 +132,15 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(FUTEX_WAIT, 0);
     assert_eq!(FUTEX_WAKE, 1);
     assert_eq!(THREAD_STACK_PAGES_DEFAULT, 16);
-    assert_eq!(THREAD_STACK_PAGES_MAX, 64);
+    assert_eq!(THREAD_STACK_PAGES_MAX, 2048);
     assert_eq!(THREADS_PER_PROCESS, 16);
     assert_eq!(SysError::TimedOut as u64, 10);
     assert_eq!(SPAWN_NO_FG, 32);
-    assert_eq!(USER_HEAP_PAGES, 32);
+    assert_eq!(USER_HEAP_PAGES, 262_144);
     assert_eq!(CHAN_MSG_MAX, 256);
-    assert_eq!(PROC_CAP_BASE, 0x40);
+    assert_eq!(PROC_CAP_BASE, 0x80);
     assert_eq!(MAX_PROC_CAPS, 16);
-    const _: () = assert!(PROC_CAP_BASE > FILE_CAP_BASE + 7);
+    const _: () = assert!(PROC_CAP_BASE > FILE_CAP_BASE + 63);
     const _: () = assert!(PROC_CAP_BASE < reserved::KEYBOARD_INDEX);
     assert_eq!(SPAWN_GRANT_QUERY, 1);
     assert_eq!(SPAWN_WAIT, 2);
@@ -153,7 +153,7 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(SPAWN_RIGHTS_BITS, 0xff << 8);
     assert_eq!(TOKEN_ONCE, 128);
     assert_eq!(SPAWN_NAME_MAX, 64);
-    assert_eq!(SPAWN_ARG_MAX, 256);
+    assert_eq!(SPAWN_ARG_MAX, 4096);
     assert_eq!(STAT_LEN, 48);
     assert_eq!(USER_TOKENS, 8);
     assert_eq!(STAT_FILE, 1);

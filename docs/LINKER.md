@@ -50,8 +50,9 @@ key-based TLS over the FS base), so no shipped program carries a TLS
 block today; the linker side exists so cg_clif output with native
 `#[thread_local]` links the day a runtime consumes `PT_TLS`.
 
-Still open from this plan: the ring-3 program with Milestone 71;
-`.eh_frame` kept for `unwinding` as a 72 follow-on; cg_clif output in 73.
+Milestone 71 landed the ring-3 program (`gxldos`, `bin/test-gxld`).
+Still open from this plan: `.eh_frame` kept for `unwinding` as a 72
+follow-on; cg_clif output in 73.
 
 ## Why a linker at all
 
@@ -83,13 +84,13 @@ Three placements, two of which are the same code:
    (`gxc::compile_elf`). This is the version that exists (Milestone 69)
    and runs in the existing CI and runner with no kernel change; the
    `gxld` binary is a thin `std` `main` over it.
-2. **Ring-3 program** (Milestone 71), a thin `main` over the same crate.
-   The compiler driver `spawn_with`s it, `give`s it read Caps on the
-   input files and one write Cap on the output, and `Wait`s on the
-   process Cap for the exit status. The linker never opens a path; it
-   can read only what it was handed and write only the one output.
-   This needs the user heap (Milestone 66) and large galfs files
-   (Milestone 71): objects for a `std` program are megabytes.
+2. **Ring-3 program** (`gxldos`, Milestone 71), a thin `main` over the
+   same crate. The kernel test installs read Caps on the inputs and
+   one write Cap on the output before the task runs (`SPAWN_WITH_CAPS`
+   moves only two file slots, so the test writes the file table
+   directly). The program scans its file caps, links, and writes the
+   image in chunks of at most 1024 bytes. It does not open a path.
+   `bin/test-gxld` links two objects into a program that exits `0x71`.
 3. **Never the kernel.** The loader stays a static-ELF mapper
    (`sched/loader.rs`). The one coupling worth adding is agreement by
    construction: the linker takes `USER_IMAGE_BASE`, the page size and
@@ -210,7 +211,7 @@ galexy-target sysroot plus `hello.rs` compiled by cg_clif.
 | cg_clif emits a relocation or section v0 does not know | The error names it; the differential test on `shell` surfaces most of them before `rustc` exists; `wild` is the written fallback (`RUSTC.md` Stage 6) |
 | `object` crate API churn | Pin the version; the read API used is small (sections, symbols, relocations, archive members) |
 | Scope creep toward `ld` | Non-goals above are the gate; a new relocation kind or section needs a checkbox |
-| Ring-3 version needs the heap and big files | Library first; the program is Milestone 71 and does not block 69 |
+| Ring-3 version needs the heap and big files | Landed in Milestone 71 (`gxldos`); the library in 69 did not wait on it |
 
 ## Related docs
 

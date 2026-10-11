@@ -16,7 +16,7 @@ use galexy_abi::{Cap, CapRights, SysError, SyscallResult, PROC_CAP_BASE};
 use x86_64::instructions::interrupts;
 
 /// Argument bytes copied onto a new task's stack. Matches the syscall cap.
-pub(crate) const ARG_MAX: usize = 256;
+pub(crate) const ARG_MAX: usize = galexy_abi::SPAWN_ARG_MAX;
 
 /// One queued `spawn`. The syscall path only copies the name and the
 /// argument (it runs IF=0); the main loop loads the ELF on the kernel
@@ -427,7 +427,7 @@ pub fn drain_spawn() {
 pub(in crate::sched) struct PendingThread {
     pub(in crate::sched) entry: u64,
     pub(in crate::sched) arg: u64,
-    pub(in crate::sched) pages: u8,
+    pub(in crate::sched) pages: u16,
     /// 1-based slot of the parked caller (leader or sibling thread).
     pub(in crate::sched) waiter_slot: u8,
     /// 1-based slot of the process leader the thread joins.
@@ -451,8 +451,9 @@ pub(in crate::sched) static PENDING_THREAD: Mutex<PendingThread> = Mutex::new(Pe
 /// the thread stacks with the rest.
 pub(in crate::sched) const THREAD_STACK_ARENA: u64 = 2 << 30;
 /// Window reserved per thread slot (the stack grows down from its top; the
-/// unmapped remainder is the guard).
-pub(in crate::sched) const THREAD_STACK_SLOT: u64 = 1 << 20;
+/// unmapped remainder is the guard). 16 MiB so an 8 MiB stack
+/// ([`galexy_abi::THREAD_STACK_PAGES_MAX`]) keeps a guard page-run.
+pub(in crate::sched) const THREAD_STACK_SLOT: u64 = 16 << 20;
 
 /// Live records (running or parked) one address space may hold, leader
 /// included. Zombies waiting for a join do not count.
@@ -509,7 +510,7 @@ pub(crate) fn task_thread_spawn(entry: u64, arg: u64, pages: u64) -> Result<(), 
         }
         pending.entry = entry;
         pending.arg = arg;
-        pending.pages = pages as u8;
+        pending.pages = pages as u16;
         pending.waiter_slot = slot as u8;
         pending.leader_slot = (owner + 1) as u8;
         pending.armed = true;
@@ -2184,4 +2185,43 @@ pub fn test_set_idle_limit(ms: u64) {
 /// True when `last` is set and `now` is at least the idle limit later.
 pub fn idle_due(last: u64, now: u64) -> bool {
     last != 0 && now.saturating_sub(last) >= idle_limit()
+}
+
+/// Spawns `bytes` paused, installs galfs objects as file caps in order,
+/// then lets the child run.
+///
+/// The child never opens a path. `caps` is `(object index, rights)` and
+/// lands at [`galexy_abi::FILE_CAP_BASE`] + slot. Milestone 71 ring-3
+/// `gxld` receives its inputs and its output this way.
+pub fn spawn_with_given_files(
+    name: &str,
+    bytes: &[u8],
+    caps: &[(u16, CapRights)],
+) -> Result<u8, SysError> {
+    if caps.len() > MAX_OPEN_FILES {
+        return Err(SysError::NoResource);
+    }
+    let slot = loader::spawn_launched(
+        name,
+        bytes,
+        Grants::console(),
+        b"",
+        0,
+        galfs::admin_cred(),
+        0,
+        true,
+    )?;
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let i = slot as usize - 1;
+        for (n, (obj, rights)) in caps.iter().enumerate() {
+            threads[i].files[n] = Some(OpenFile {
+                body: FileBody::Galfs(*obj),
+                offset: 0,
+                rights: *rights,
+            });
+        }
+        release_deferred(&mut threads, slot);
+    });
+    Ok(slot)
 }

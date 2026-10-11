@@ -5,7 +5,7 @@
 //! merge. Nothing is ever unmapped (there is no `Unmap` syscall; the whole
 //! heap goes back with the process), so `free` reports `false` and the
 //! allocator recycles the chunk itself. The per-task budget is
-//! `USER_HEAP_PAGES` (Milestone 71 lifts it); past that, `alloc` returns
+//! `USER_HEAP_PAGES` (1 GiB as of Milestone 71); past that, `alloc` returns
 //! null and `handle_alloc_error` aborts.
 //!
 //! One spin lock serializes the threads of a process (dlmalloc is not

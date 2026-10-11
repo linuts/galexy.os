@@ -45,6 +45,29 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert_eq!(galfs::blocks_used(), 0);
     assert!(galfs::fsck_ok(), "after remove");
 
+    // Past the v12 32 KiB file: the live store is 4 KiB blocks with
+    // double indirection (the RAM volume behind the same file body).
+    // Host `check_image` covers the sealed v13 image.
+    let big = galfs::create_file_under(desktop, "big").expect("big");
+    let chunk = alloc::vec![0x71u8; 4096];
+    let mut total = 0usize;
+    for _ in 0..10 {
+        let n = galfs::append_file(big, &chunk).expect("append large");
+        assert_eq!(n, chunk.len());
+        total += n;
+    }
+    assert!(total > galfs::FILE_BYTES);
+    assert_eq!(galfs::object_len(big), Some(total));
+    let mut got = [0u8; 16];
+    assert_eq!(galfs::read_file_bytes(big, &mut got), Some(16));
+    assert!(got.iter().all(|b| *b == 0x71));
+    assert!(galfs::fsck_ok(), "after large-file write");
+    galfs::truncate_file(big, 100).expect("truncate large");
+    assert_eq!(galfs::object_len(big), Some(100));
+    assert!(galfs::fsck_ok(), "after large truncate");
+    galfs::remove_as_admin("Desktop/big").expect("rm big");
+    assert!(galfs::fsck_ok(), "after large remove");
+
     // Path policy smoke.
     assert!(matches!(
         galfs::create_file_under(desktop, ".."),

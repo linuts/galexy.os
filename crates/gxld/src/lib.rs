@@ -20,8 +20,11 @@ extern crate std;
 pub mod args;
 pub mod elf;
 pub mod error;
+mod fixture;
 mod input;
 mod link;
+
+pub use fixture::sample_objects;
 
 pub use elf::validate;
 pub use error::{Error, Result};

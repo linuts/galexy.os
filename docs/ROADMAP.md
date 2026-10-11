@@ -436,13 +436,16 @@ first.
    `gxc::elf`; proven by the `galexy-os-gxld` image, where `hello`,
    `init`, `shell` and `util` are re-linked with `-Clinker=gxld` and
    pass the same typing tests as the `rust-lld` image
-3. **70 PAL** — `galexy-rust` fork with `sys/pal/galexy` modeled on
-   `uefi` / `xous`: alloc, stdio, time, args, fs, process, thread (new
-   `ThreadSpawn`, FS-base TLS), sync (new `Futex`). Sysroot shipped as
-   prebuilt `.rlib`s the Xous way. After Milestone 66
-4. **71 Capacity** — 2 GiB guest RAM, frame bitmap past 512 MiB, galfs
-   large-volume format, 64 open files, 4 KiB argv, sysroot on the
-   ramdisk; ring-3 `gxld` over Caps. After `v1.0`
+3. **70 PAL** ✅ — `std-pal/` for `x86_64-unknown-galexy` (no
+   `galexy-rust` fork): alloc, stdio, time, args, fs, process, thread
+   (`ThreadSpawn`, FS-base TLS), sync (`Futex`). `cargo xtask sysroot`
+   builds `library/sysroot`. `test-std` boots
+4. **71 Capacity** ✅ — QEMU `-m 2G`, frame bitmap covers 4 GiB, `Map`
+   budget 1 GiB, spawned stacks up to 8 MiB, 64 open files, 4 KiB
+   argv, sysroot `.rlib`s on the ramdisk under `rust/`, ring-3
+   `gxldos`. Large files live in a RAM store (64 MiB, 4 KiB blocks);
+   host v13 is the sealed large-volume image the kernel does not load
+   yet. `test-big` (KVM) and `test-gxld`
 5. **72 `rustc` for Galexy** — cross-built from the host with
    `codegen-backends = ["cranelift"]` (LLVM never ported); the small
    cfg-gated patch set (`memmap`, `jobserver`, `getrandom`, `stacker`,
