@@ -1,4 +1,5 @@
-//! User heap: 32 `Map` pages, then `NoResource`, then reap returns the frames.
+//! User heap: 32 one-page `Map`s succeed, a request past
+//! `USER_HEAP_PAGES` is `BadValue`, and reap returns the frames.
 //! Two `Clock` reads are monotonic.
 
 #![no_std]
@@ -81,8 +82,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     );
     assert_eq!(got.maps, 32, "32 one-page maps must succeed");
     assert_eq!(got.byte, 0xA5, "mapped page must store and load 0xA5");
-    assert_eq!(got.extra_rdx, 0, "33rd map must fail");
-    assert_eq!(got.extra_rax, 7, "33rd map is NoResource");
+    assert_eq!(got.extra_rdx, 0, "a map past USER_HEAP_PAGES must fail");
+    assert_eq!(got.extra_rax, galexy_abi::SysError::BadValue as u64);
     assert!(got.clock1 >= got.clock0, "clock must be monotonic");
 
     loop {
@@ -131,13 +132,17 @@ fn build(scratch: u64) -> alloc::vec::Vec<u8> {
     let back = loop_at as i32 - after_jb as i32;
     code[jb_at + 2..jb_at + 6].copy_from_slice(&back.to_le_bytes());
 
-    // Success: the stored byte, the count, then one map past the budget.
+    // Success: the stored byte, the count, then one map past the ceiling.
+    // `USER_HEAP_PAGES + 1` is `BadValue` and maps nothing.
     code.extend_from_slice(&[0x41, 0x0F, 0xB6, 0x45, 0x00]); // movzx eax, byte [r13]
     store(&mut code, 0, 0x10);
     code.extend_from_slice(&[0x4C, 0x89, 0xE0]); // mov rax, r12
     store(&mut code, 0, 0x08);
     mov_eax(&mut code, Syscall::Map as u32);
-    code.extend_from_slice(&[0xBF, 0x01, 0x00, 0x00, 0x00, 0x0F, 0x05]);
+    let over = (galexy_abi::USER_HEAP_PAGES + 1) as u32;
+    code.push(0xBF); // mov edi, imm32
+    code.extend_from_slice(&over.to_le_bytes());
+    code.extend_from_slice(&[0x0F, 0x05]);
     store(&mut code, 0, 0x18);
     code.extend_from_slice(&[0x48, 0x89, 0xD0]); // mov rax, rdx
     store(&mut code, 0, 0x20);

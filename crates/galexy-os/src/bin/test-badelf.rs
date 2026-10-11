@@ -56,6 +56,11 @@ fn put_u64(b: &mut [u8], off: usize, v: u64) {
     b[off..off + 8].copy_from_slice(&v.to_le_bytes());
 }
 
+/// ELF64 `e_type == ET_EXEC`. Relocatable objects share the magic.
+fn is_et_exec(bytes: &[u8]) -> bool {
+    bytes.len() >= E_TYPE + 2 && sched::loader::looks_like_elf(bytes) && u16_at(bytes, E_TYPE) == 2
+}
+
 /// Byte offsets of every `PT_LOAD` program header in `elf`.
 fn load_phdrs(elf: &[u8]) -> Vec<usize> {
     let phoff = u64_at(elf, E_PHOFF) as usize;
@@ -106,13 +111,14 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     };
     sched::ramdisk::init(archive);
 
-    // Every real program on the ramdisk validates; text files do not.
+    // Every ET_EXEC on the ramdisk validates. Text, archives, and
+    // relocatable objects (`a.o`, packed for `test-gxld`) do not.
     let mut names: Vec<alloc::string::String> = Vec::new();
     sched::ramdisk::for_each_name(|n| names.push(n.into()));
     let mut programs = 0;
     for name in &names {
         let bytes = sched::ramdisk::find(name).unwrap();
-        if sched::loader::looks_like_elf(bytes) {
+        if is_et_exec(bytes) {
             assert_eq!(
                 sched::loader::validate_elf(bytes),
                 Ok(()),
@@ -123,7 +129,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
             assert_eq!(
                 sched::loader::validate_elf(bytes),
                 Err(SysError::Unsupported),
-                "[test-badelf] text file '{name}' must be Unsupported"
+                "[test-badelf] non-program '{name}' must be Unsupported"
             );
         }
     }

@@ -163,11 +163,11 @@ pub fn file_cap(slot: u64, rights: CapRights) -> Cap {
 const IO_CHUNK: usize = 1024;
 
 pub fn write(cap: Cap, bytes: &[u8]) -> Result<usize, SysError> {
-    if bytes.is_empty() {
-        return Ok(0);
-    }
-    // Short write: `std::io::Write::write_all` loops. One syscall cannot
-    // carry a 20 MiB buffer (the kernel stages 1024 bytes).
+    // An empty write still reaches the kernel. `probe_stdio` uses it to
+    // tell a writable file slot from an empty one; returning Ok locally
+    // would make every program treat slot 1 as stdout.
+    // A non-empty write is short: `Write::write_all` loops. One syscall
+    // cannot carry a 20 MiB buffer (the kernel stages 1024 bytes).
     let n = bytes.len().min(IO_CHUNK);
     syscall(Syscall::Write, cap.bits(), bytes.as_ptr().addr() as u64, n as u64).map(|n| n as usize)
 }
