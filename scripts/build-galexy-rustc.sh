@@ -154,6 +154,35 @@ mkdir -p "$OUT"
 cp -a "$STAGE/bin/rustc" "$OUT/rustc"
 "$LLVM_BIN/llvm-strip" --strip-unneeded "$OUT/rustc" || true
 rm -rf "$OUT/sysroot"
-mkdir -p "$OUT/sysroot"
-cp -a "$STAGE/lib" "$OUT/sysroot/lib"
+mkdir -p "$OUT/sysroot/lib/rustlib/x86_64-unknown-galexy/lib"
+# Stage 1's own lib dir is the compiler sysroot and has no target rlibs.
+# The rlibs the guest compiles against were built by stage 0.
+RLIB_SRC=""
+for dir in \
+    "$STAGE/lib/rustlib/x86_64-unknown-galexy/lib" \
+    "$RUST_SRC/build/x86_64-unknown-linux-gnu/stage0-sysroot/lib/rustlib/x86_64-unknown-galexy/lib"
+do
+    if compgen -G "$dir/*.rlib" > /dev/null; then
+        RLIB_SRC="$dir"
+        break
+    fi
+done
+if [[ -z "$RLIB_SRC" ]]; then
+    echo "build-galexy-rustc: no galexy rlibs under $STAGE or stage0-sysroot" >&2
+    exit 1
+fi
+# Bootstrap writes metadata beside the rlib (`-Zembed-metadata=no`).
+# A no_std hello only loads core and compiler_builtins. core's
+# metadata is about 66 MiB, which is why the RAM store is 80 MiB.
+copied=0
+for base in "$RLIB_SRC"/libcore-*.rlib "$RLIB_SRC"/libcompiler_builtins-*.rlib; do
+    [[ -f "$base" ]] || continue
+    cp -a "$base" "${base%.rlib}.rmeta" "$OUT/sysroot/lib/rustlib/x86_64-unknown-galexy/lib/"
+    copied=$((copied + 1))
+done
+if [[ "$copied" -ne 2 ]]; then
+    echo "build-galexy-rustc: expected core and compiler_builtins in $RLIB_SRC" >&2
+    exit 1
+fi
 echo "build-galexy-rustc: $(wc -c < "$OUT/rustc") bytes -> $OUT/rustc"
+echo "build-galexy-rustc: core + compiler_builtins from $RLIB_SRC"

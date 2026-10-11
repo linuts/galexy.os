@@ -1703,7 +1703,7 @@ pub fn add_actor_named(name: &str, password: &[u8]) -> Result<u16, SysError> {
 
 fn admin_quota_limits() -> (u16, u32) {
     // The v12 pool is 128 KiB. Promoted files live in the large store,
-    // which holds one 64 MiB file; admin's byte quota matches that cap.
+    // which holds one max-size file; admin's byte quota matches that cap.
     (OBJECT_SLOTS as u16, super::large::LARGE_FILE_MAX)
 }
 

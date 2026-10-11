@@ -218,9 +218,11 @@ fn main() {
 
 /// Packs `target/galexy-rustc` into a tar the `test-rustc` image boots.
 ///
-/// Entries are the compiler ELF (`rustc`), the target JSON, and each
-/// sysroot `.rlib` as `srlib/<file>`. Returns false when the ELF is
-/// absent so CI can build the image without a stage-1 compiler.
+/// Entries are the compiler ELF (`rustc`), the target JSON, and the
+/// sysroot `.rlib` / `.rmeta` files as `srlib/<file>`. Metadata is
+/// separate because bootstrap builds with `-Zembed-metadata=no`.
+/// Returns false when the ELF is absent so CI can build the image
+/// without a stage-1 compiler.
 fn write_rustc_ramdisk(dest: &Path) -> bool {
     let root = repo_root().join("target/galexy-rustc");
     let bin = root.join("rustc");
@@ -252,7 +254,8 @@ fn write_rustc_ramdisk(dest: &Path) -> bool {
             };
             for entry in dir.flatten() {
                 let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("rlib") {
+                let ext = path.extension().and_then(|e| e.to_str());
+                if ext != Some("rlib") && ext != Some("rmeta") {
                     continue;
                 }
                 let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
