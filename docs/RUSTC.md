@@ -341,13 +341,12 @@ and typing `rustc` at the login prompt:
 - The login kernel copies the JSON and `srlib/*` into the RAM store
   before init when the ramdisk contains `srlib/` (Milestone 75).
   A v12 disk file cannot hold `core`'s ~66 MiB `.rmeta`, so the
-  copy is RAM-only and repeats every boot. Bare `rustc` still
-  cannot read those files: `launch` does not pass session tokens.
-- The shell starts a ramdisk program only when the line has no
-  spaces, and `spawn` only loads a ramdisk label (`file_name_ok`
-  rejects `/`). Milestone 76 passes argv and waits. Milestone 77
-  loads `/hello` from galfs. The typed gate is `rustc hello.rs -o
-  hello` and then `/hello`.
+  copy is RAM-only and repeats every boot. A program with
+  arguments inherits the session, so `rustc` can open those files
+  (Milestone 76). A bare name still does not.
+- `spawn` only loads a ramdisk label (`file_name_ok` rejects `/`).
+  Milestone 77 loads `/hello` from galfs. The typed gate is
+  `rustc hello.rs -o hello` and then `/hello`.
 
 ## Explicit non-goals
 

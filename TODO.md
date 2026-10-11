@@ -2544,13 +2544,14 @@ shell line is 80 bytes (`LINE_MAX`). The gate command fits. Spawn's
 argv blob is 4096 bytes. `getcwd` on Galexy is `/`, so `-o hello`
 lands at `/hello` when the login directory is `/`.
 
-- [ ] If the first word is a ramdisk program, split the rest on spaces
+- [x] If the first word is a ramdisk program, split the rest on spaces
       into a NUL-separated argv, spawn with `SPAWN_INHERIT`, and wait
       for exit the way `launch_util` does. No new quoting. A missing
       name is still `command not found`
-- [ ] `LINE_MAX` stays 80. A longer `rustc` line is a follow-on
-- [ ] On `galexy-os-rustc`, after Milestone 75: `rustc --print cfg`
-      prints `target_os="galexy"` and returns the prompt
+- [x] `LINE_MAX` stays 80. A longer `rustc` line is a follow-on
+- [x] On `galexy-os-rustc`, after Milestone 75: `rustc --print cfg`
+      prints `target_os="galexy"` and returns the prompt.
+      `rustc_print_cfg_typing_e2e` under TCG
 
 ## Milestone 77 — Run the program the compiler wrote (Phase 12 gate)
 
@@ -2583,11 +2584,8 @@ bytes. A longer source is `nano`.
 Open bullets below are tracked by milestone id where planned. Waived
 items stay here with rationale.
 
-- [ ] `rustc` is not yet a useful login command. Milestones 74 and 75
-      put the compiler and the sysroot on `galexy-os-rustc`. A line
-      with arguments is still `command not found`, `launch` does not
-      pass session tokens, and `spawn` cannot load the ELF `rustc`
-      writes. Milestones **76–77**
+- [ ] `rustc` can take arguments at the login shell (Milestones 74–76).
+      `spawn` still cannot load the ELF it writes. Milestone **77**
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17
       (APIC family: LAPIC timer + I/O APIC keyboard route on every boot

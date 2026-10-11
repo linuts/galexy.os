@@ -294,8 +294,8 @@ crates/
   — RUSTC.md
 - **Phase 12** — `rustc` as a login-shell command: `galexy-os-rustc`
   (✅ Milestone 74), the sysroot imported on that boot (✅ Milestone
-  75), arguments to a ramdisk program, and `spawn` of the ELF the
-  compiler wrote (Milestones 76–77)
+  75), arguments to a ramdisk program (✅ Milestone 76), and `spawn`
+  of the ELF the compiler wrote (Milestone 77)
 
 `gxc` is gone. Host `gxld` still links userspace the same way `rust-lld` does:
 
