@@ -12,6 +12,7 @@ pub mod cards;
 mod cards_test;
 #[cfg(test)]
 mod slots_test;
+pub mod v13;
 
 use galexy_core::crc32;
 use galexy_crypto::{
@@ -235,6 +236,29 @@ impl Report {
     }
 }
 
+/// A v13 image is at least [`v13::MIN_DISK_BYTES`] and one metadata slot
+/// still carries magic, version 13, and a 4 KiB block size.
+fn is_v13_image(image: &[u8]) -> bool {
+    if image.len() < v13::MIN_DISK_BYTES {
+        return false;
+    }
+    for slot in 0..v13::SLOT_COUNT {
+        let off = slot * v13::META_BYTES;
+        if off + 8 > image.len() {
+            break;
+        }
+        if image[off..off + 4] != DISK_MAGIC {
+            continue;
+        }
+        let version = u16::from_le_bytes([image[off + 4], image[off + 5]]);
+        let block = u16::from_le_bytes([image[off + 6], image[off + 7]]) as usize;
+        if version == v13::VERSION && block == v13::BLOCK {
+            return true;
+        }
+    }
+    false
+}
+
 /// Unlock the newest valid sealed slot in `image` and run structural checks.
 ///
 /// `image` must be at least [`DISK_SLOT_COUNT`] × [`DISK_SECTORS`] × [`SECTOR`]
@@ -255,6 +279,13 @@ pub fn check_image(
         issue_count: 0,
         issues: [Issue::NoValidSlot; MAX_ISSUES],
     };
+    // v13 disks are at least 8 MiB and name a 4 KiB block in the header.
+    // A smaller image, including a v12 slot whose version byte was patched
+    // to 13, stays on the v12 path (foreign versions are ignored, not
+    // corrupt). Either metadata slot may be the one that still says v13.
+    if is_v13_image(image) {
+        return v13::check(image, passphrase);
+    }
     let need = DISK_SLOT_COUNT * DISK_SECTORS * SECTOR;
     if image.len() < need || slot_buf.len() < DISK_SECTORS * SECTOR {
         report.push(Issue::NoValidSlot);

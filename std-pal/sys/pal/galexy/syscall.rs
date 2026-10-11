@@ -159,14 +159,26 @@ pub fn file_cap(slot: u64, rights: CapRights) -> Cap {
     Cap::new(super::abi::FILE_CAP_BASE + slot, rights)
 }
 
+/// Kernel stages at most this many bytes per `read` / `write`.
+const IO_CHUNK: usize = 1024;
+
 pub fn write(cap: Cap, bytes: &[u8]) -> Result<usize, SysError> {
-    syscall(Syscall::Write, cap.bits(), bytes.as_ptr().addr() as u64, bytes.len() as u64)
-        .map(|n| n as usize)
+    if bytes.is_empty() {
+        return Ok(0);
+    }
+    // Short write: `std::io::Write::write_all` loops. One syscall cannot
+    // carry a 20 MiB buffer (the kernel stages 1024 bytes).
+    let n = bytes.len().min(IO_CHUNK);
+    syscall(Syscall::Write, cap.bits(), bytes.as_ptr().addr() as u64, n as u64).map(|n| n as usize)
 }
 
 pub fn read(cap: Cap, buf: &mut [u8]) -> Result<usize, SysError> {
-    syscall(Syscall::Read, cap.bits(), buf.as_mut_ptr().addr() as u64, buf.len() as u64)
-        .map(|n| n as usize)
+    if buf.is_empty() {
+        return syscall(Syscall::Read, cap.bits(), buf.as_mut_ptr().addr() as u64, 0)
+            .map(|n| n as usize);
+    }
+    let n = buf.len().min(IO_CHUNK);
+    syscall(Syscall::Read, cap.bits(), buf.as_mut_ptr().addr() as u64, n as u64).map(|n| n as usize)
 }
 
 pub fn close(cap: Cap) -> Result<(), SysError> {

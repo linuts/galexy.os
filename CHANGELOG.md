@@ -8,6 +8,17 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- Milestone 71 — capacity for a compiler process. QEMU `-m 2G` and a
+  frame bitmap covering 4 GiB. `Map` budget is 1 GiB per task. A
+  spawned thread may ask for an 8 MiB stack (the default stays 16
+  pages; the leader stays 4). `MAX_OPEN_FILES` is 64, allocated before
+  the IRQ gate; `PROC_CAP_BASE` is `0x80`. `SPAWN_ARG_MAX` is 4 KiB.
+  Writes past the v12 32 KiB file promote into a RAM store (4 KiB
+  blocks, double indirection, 64 MiB). Host `galexy-galf` v13 seals
+  an extent map and a disk-sized pool; `check_image` accepts v12 and
+  v13. The kernel still loads and syncs v12 only. Sysroot `.rlib`s
+  pack into the ramdisk under `rust/`. `gxldos` links from Caps
+  installed at spawn. `test-big` (KVM) and `test-gxld`.
 - [#93](https://github.com/linuts/galexy.os/pull/93) — Milestone 70 —
   `std` for `x86_64-unknown-galexy`. `std-pal/` is the
   platform layer; `scripts/galexy-std-sysroot.py` installs it into the

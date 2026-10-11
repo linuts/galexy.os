@@ -41,7 +41,6 @@ pub(crate) const SHN_COMMON: u16 = 0xfff2;
 pub(crate) const SHN_XINDEX: u16 = 0xffff;
 
 pub(crate) const STB_LOCAL: u8 = 0;
-#[cfg(test)]
 pub(crate) const STB_GLOBAL: u8 = 1;
 pub(crate) const STB_WEAK: u8 = 2;
 

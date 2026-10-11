@@ -1,0 +1,14 @@
+[package]
+name = "bigtest"
+version = "0.1.0"
+edition = "2021"
+description = "Milestone 71 capacity program: a 300 MiB allocation and a 20 MiB galfs file."
+
+[[bin]]
+name = "bigtest"
+path = "src/main.rs"
+
+[dependencies]
+
+[build-dependencies]
+galexy-abi = { path = "../../galexy-abi" }

@@ -56,6 +56,7 @@ const _: () = assert!(FILE_BYTES == galexy_galf::FILE_BYTES);
 const _: () = assert!(BLOCK_SLOTS == galexy_galf::BLOCK_SLOTS);
 const _: () = assert!(MAX_DATA_BLOCKS <= DIRECT_BLOCKS + INDIRECT_PTRS);
 const _: () = assert!(FILE_BYTES <= u16::MAX as usize);
+const _: () = assert!(super::large::SLOTS == OBJECT_SLOTS);
 /// Tokens one task may hold.
 pub use galexy_galf::cards::TOKEN_SLOTS;
 /// Durable home shares recorded in the sealed image (re-applied at login).
@@ -1272,7 +1273,7 @@ fn validate_table(table: &Table) -> bool {
             return false;
         }
     }
-    true
+    super::large::ok()
 }
 
 fn mark_block(seen: &mut [bool; BLOCK_SLOTS], bitmap: &[u8], b: u16) -> bool {
@@ -1701,19 +1702,22 @@ pub fn add_actor_named(name: &str, password: &[u8]) -> Result<u16, SysError> {
 }
 
 fn admin_quota_limits() -> (u16, u32) {
-    (OBJECT_SLOTS as u16, (BLOCK_SLOTS * BLOCK_SIZE) as u32)
+    // The v12 pool is 128 KiB. Promoted files live in the large store,
+    // which holds one 64 MiB file; admin's byte quota matches that cap.
+    (OBJECT_SLOTS as u16, super::large::LARGE_FILE_MAX)
 }
 
 fn actor_usage(table: &Table, ai: usize) -> (u32, u32) {
     let mut objects = 0u32;
     let mut bytes = 0u32;
-    for obj in &table.objects {
+    for (index, obj) in table.objects.iter().enumerate() {
         if obj.kind == KIND_EMPTY || obj.actor as usize != ai {
             continue;
         }
         objects += 1;
         if obj.kind == KIND_FILE {
-            bytes = bytes.saturating_add(obj.len as u32);
+            let n = super::large::len(index).unwrap_or(obj.len as u32);
+            bytes = bytes.saturating_add(n);
         }
     }
     (objects, bytes)
@@ -2189,6 +2193,11 @@ fn free_block(table: &mut Table, block: u16) {
 }
 
 fn free_file_blocks(table: &mut Table, index: usize) {
+    super::large::clear(index);
+    free_small_blocks(table, index);
+}
+
+fn free_small_blocks(table: &mut Table, index: usize) {
     for slot in 0..MAX_DATA_BLOCKS {
         let b = data_block(table, index, slot);
         if b != NO_BLOCK {
@@ -2262,6 +2271,49 @@ fn ensure_data_block(table: &mut Table, oi: usize, slot: usize) -> Option<u16> {
     Some(b)
 }
 
+fn file_len(table: &Table, index: usize) -> usize {
+    super::large::len(index)
+        .map(|n| n as usize)
+        .unwrap_or(table.objects[index].len as usize)
+}
+
+fn headroom(table: &Table, index: usize) -> u32 {
+    let ai = table.objects[index].actor as usize;
+    let (_, used) = actor_usage(table, ai);
+    table.actors[ai].max_bytes.saturating_sub(used)
+}
+
+fn copy_small(table: &Table, index: usize, buf: &mut [u8]) -> bool {
+    let mut copied = 0usize;
+    while copied < buf.len() {
+        let slot = copied / BLOCK_SIZE;
+        let off = copied % BLOCK_SIZE;
+        let b = data_block(table, index, slot);
+        if b == NO_BLOCK || (b as usize) >= BLOCK_SLOTS {
+            return false;
+        }
+        let n = (BLOCK_SIZE - off).min(buf.len() - copied);
+        buf[copied..copied + n].copy_from_slice(&table.blocks[b as usize][off..off + n]);
+        copied += n;
+    }
+    true
+}
+
+/// Moves a v12 file into the 4 KiB store. The small blocks are freed only
+/// after the copy lands, so a failed promotion leaves the v12 file intact.
+fn promote_large(table: &mut Table, index: usize) -> bool {
+    let pos = table.objects[index].len as usize;
+    let mut buf = alloc::vec![0u8; pos];
+    if pos > 0 && !copy_small(table, index, &mut buf) {
+        return false;
+    }
+    if !super::large::create_from(index, &buf) {
+        return false;
+    }
+    free_small_blocks(table, index);
+    true
+}
+
 /// Appends `src` to a file. Returns the byte count written (short on full
 /// file, exhausted block pool, or actor byte quota).
 pub(crate) fn append(index: u16, src: &[u8]) -> Option<usize> {
@@ -2284,7 +2336,13 @@ pub(crate) fn write_at(index: u16, start: usize, src: &[u8]) -> Option<usize> {
     if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
         return None;
     }
-    let len = table.objects[i].len as usize;
+    let len = file_len(&table, i);
+    if super::large::len(i).is_some() || start.saturating_add(src.len()) > FILE_BYTES {
+        if super::large::len(i).is_none() && !promote_large(&mut table, i) {
+            return Some(0);
+        }
+        return Some(super::large::write_at(i, start, src, headroom(&table, i)));
+    }
     let mut done = 0usize;
     if start < len {
         let overwrite = src.len().min(len - start);
@@ -2319,6 +2377,14 @@ pub(crate) fn write_at(index: u16, start: usize, src: &[u8]) -> Option<usize> {
 
 /// Append loop shared by `append` and `write_at`; `i` must be a file slot.
 fn append_locked(table: &mut Table, i: usize, src: &[u8]) -> usize {
+    if super::large::len(i).is_some()
+        || (table.objects[i].len as usize).saturating_add(src.len()) > FILE_BYTES
+    {
+        if super::large::len(i).is_none() && !promote_large(table, i) {
+            return 0;
+        }
+        return super::large::append(i, src, headroom(table, i));
+    }
     let ai = table.objects[i].actor as usize;
     let mut written = 0usize;
     while written < src.len() {
@@ -2357,6 +2423,9 @@ pub(crate) fn read_at(index: u16, start: usize, dst: &mut [u8]) -> Option<usize>
     let i = index as usize;
     if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
         return None;
+    }
+    if super::large::len(i).is_some() {
+        return super::large::read(i, start, dst);
     }
     let len = table.objects[i].len as usize;
     if start >= len || dst.is_empty() {
@@ -2399,6 +2468,16 @@ pub fn remove_as_admin(name: &str) -> Result<(), SysError> {
 /// Copies file bytes into `out`. Returns the length, or `None` if missing.
 pub fn read_file_bytes(index: u16, out: &mut [u8]) -> Option<usize> {
     read_at(index, 0, out)
+}
+
+/// Byte length of a file object, including a promoted large file.
+pub fn object_len(index: u16) -> Option<usize> {
+    let table = TABLE.lock();
+    let i = index as usize;
+    if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
+        return None;
+    }
+    Some(file_len(&table, i))
 }
 
 /// How many blocks are currently allocated in the pool (test helper).
@@ -2518,10 +2597,46 @@ fn reassign_actor_subtree(table: &mut Table, root: u16, actor: u8) {
     }
 }
 
+fn truncate_large(index: u16, new_len: usize) -> Result<(), SysError> {
+    let mut table = TABLE.lock();
+    let i = index as usize;
+    if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
+        return Err(SysError::BadCap);
+    }
+    if super::large::len(i).is_none() && !promote_large(&mut table, i) {
+        return Err(SysError::NoResource);
+    }
+    let old = super::large::len(i).unwrap_or(0) as usize;
+    if new_len == old {
+        return Ok(());
+    }
+    if new_len < old {
+        super::large::truncate_to(i, new_len as u32);
+        return Ok(());
+    }
+    let mut budget = headroom(&table, i);
+    let mut left = new_len - old;
+    let chunk = super::large::LARGE_BLOCK.min(left.max(1));
+    let zeros = alloc::vec![0u8; chunk];
+    while left > 0 {
+        let n = left.min(zeros.len());
+        let w = super::large::append(i, &zeros[..n], budget);
+        if w == 0 {
+            return Err(SysError::NoResource);
+        }
+        budget = budget.saturating_sub(w as u32);
+        left -= w;
+    }
+    Ok(())
+}
+
 /// Sets a file's length, allocating or freeing data blocks as needed.
 pub(crate) fn truncate(index: u16, new_len: usize) -> Result<(), SysError> {
-    if new_len > FILE_BYTES {
+    if new_len > super::large::LARGE_FILE_MAX as usize {
         return Err(SysError::BadValue);
+    }
+    if new_len > FILE_BYTES || super::large::len(index as usize).is_some() {
+        return truncate_large(index, new_len);
     }
     let mut table = TABLE.lock();
     let i = index as usize;
@@ -2651,7 +2766,7 @@ pub(crate) fn stat(
     };
     let rights = held_rights(&table, &cred, index);
     let size = if obj.kind == KIND_FILE {
-        obj.len as u32
+        super::large::len(found).unwrap_or(obj.len as u32)
     } else {
         0
     };

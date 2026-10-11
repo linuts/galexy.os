@@ -1926,6 +1926,62 @@ fn std_test_passes() {
     );
 }
 
+/// Phase 11 boots (Milestone 71) map hundreds of megabytes. TCG does
+/// that too slowly for the parallel suite, so they run only under KVM.
+fn phase11_kvm_only(name: &str) -> bool {
+    if use_kvm() {
+        true
+    } else {
+        eprintln!("{name}: skipped (Phase 11, KVM required)");
+        false
+    }
+}
+
+/// Milestone 71: 300 MiB `Map` and a 20 MiB galfs file, hash-checked.
+#[test]
+fn big_test_passes() {
+    if !phase11_kvm_only("big_test_passes") {
+        return;
+    }
+    let (code, serial) = boot(&image("test-big"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-big should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-big] passed"),
+        "test-big success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("bigtest: passed"),
+        "bigtest hash line missing; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("bigtest: FAIL"),
+        "bigtest failed; serial:\n{serial}"
+    );
+}
+
+/// Milestone 71: ring-3 gxld links two objects delivered as Caps.
+#[test]
+fn gxld_ring3_test_passes() {
+    let (code, serial) = boot(&image("test-gxld"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-gxld should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-gxld] passed"),
+        "test-gxld success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("gxldos: linked"),
+        "gxldos did not link; serial:\n{serial}"
+    );
+}
+
 #[test]
 fn runshell_test_passes() {
     let (code, serial) = boot(&image("test-runshell"));

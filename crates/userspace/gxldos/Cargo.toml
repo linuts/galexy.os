@@ -1,0 +1,17 @@
+[package]
+name = "gxldos"
+version = "0.1.0"
+edition = "2021"
+description = "Ring-3 gxld: links the Caps it was given and writes the image to the output Cap. No path opens."
+
+[[bin]]
+name = "gxldos"
+path = "src/main.rs"
+
+[dependencies]
+galexy-rt = { path = "../galexy-rt" }
+galexy-abi = { path = "../../galexy-abi" }
+gxld = { path = "../../gxld", default-features = false }
+
+[build-dependencies]
+galexy-abi = { path = "../../galexy-abi" }

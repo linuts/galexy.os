@@ -45,7 +45,7 @@ gaps or duplicates). Appending is allowed; inserting is not.
 | 4 | `open` | stable | ramdisk and galfs names |
 | 5 | `read` | stable | `0` means EOF / no key / empty request per cap kind |
 | 6 | `close` | stable | reserved caps are `BadCap` |
-| 7 | `spawn` | experimental | NUL-separated argv inside the 256-byte blob; no environment vector. `SPAWN_NO_FG` is r10 bit 5 |
+| 7 | `spawn` | experimental | NUL-separated argv inside the 4096-byte blob; no environment vector. `SPAWN_NO_FG` is r10 bit 5 |
 | 8 | `power` | stable | |
 | 9 | `create` | stable | |
 | 10 | `remove` | stable | |
@@ -64,12 +64,12 @@ gaps or duplicates). Appending is allowed; inserting is not.
 | 23 | `wait` | stable | `RSI` bit 0 = `WAIT_POLL`: a live child is `NoResource` and does not park. Init's own blocking wait may return `Interrupted` when a control message arrives; the Cap stays installed |
 | 24 | `kill` | stable | killing init is `AccessDenied` |
 | 25 | `sleep` | stable | Milestone 58 policy freeze |
-| 26 | `map` | stable | per-task heap, 32 pages |
+| 26 | `map` | stable | per-task heap, `USER_HEAP_PAGES` (262_144, 1 GiB) as of Milestone 71 |
 | 27 | `clock` | stable | monotonic ms (`timer_ticks`); `sleep` stays stable beside it |
 | 28 | `channel` | stable | two endpoint Caps. Init's first channel is the control channel |
 | 29 | `send` | stable | one queued message, up to 256 bytes and two file Caps. `send` on init index `0x8008` parks for a reply (`R8`/`R9` = reply buffer/len); the kernel stamps a 20-byte header |
 | 30 | `recv` | stable | parks when empty and the peer is open. `R9` bit 0 = `RECV_POLL` returns `NoResource` instead of parking |
-| 31 | `thread_spawn` | stable (M70) | `RDI` entry, `RSI` arg, `RDX` stack pages (`0` = 16 pages, at most 64). Returns a process Cap with `PROC_PARENT` on the shared table; `wait` is join. Same CR3, file table, heap budget. Entry outside the image window is `BadValue` |
+| 31 | `thread_spawn` | stable (M70) | `RDI` entry, `RSI` arg, `RDX` stack pages (`0` = 16 pages, at most `THREAD_STACK_PAGES_MAX` = 2048 / 8 MiB as of Milestone 71). Returns a process Cap with `PROC_PARENT` on the shared table; `wait` is join. Same CR3, file table, heap budget. Entry outside the image window is `BadValue` |
 | 32 | `thread_exit` | stable (M70) | `RDI` = exit code. The calling thread only. From the process leader this is `exit` |
 | 33 | `futex` | stable (M70) | `RDI` = `FUTEX_WAIT` (0) or `FUTEX_WAKE` (1), `RSI` = aligned `u32`, `RDX` = expected or count, `R8` = timeout ms (`0` = none, clamped to `SLEEP_MS_MAX`). Wait returns `0` on wake or on a mismatched word, `TimedOut` if the timeout fires first. Wake returns how many woke. Keyed by address space and address |
 
@@ -95,11 +95,11 @@ Unknown codes decode to `Unsupported`. New codes append.
 | `Cap` | `u64`: bits 0..48 index, bits 48..64 rights snapshot | stable |
 | `CapRights` | `u16` mask: READ 1, WRITE 2, SIGNAL 4, WAIT 8, EXEC 16, POWER 32, PROC_WAIT 64, PROC_KILL 128, PROC_TRANSFER 256, PROC_INSPECT 512 | stable (SIGNAL / WAIT are reserved groundwork, unused) |
 | Reserved indexes | console 1, self 2, keyboard 0x8000, loader 0x8001, stats 0x8002, tasks 0x8003, threads 0x8004, power 0x8005, files 0x8006, dmesg 0x8007, init 0x8008 | stable |
-| File cap band | `FILE_CAP_BASE = 3`, eight per task | stable |
-| Process cap band | `PROC_CAP_BASE = 0x40`, `MAX_PROC_CAPS = 16` per task | stable (ceiling stays 16) |
+| File cap band | `FILE_CAP_BASE = 3`, sixty-four per task (`MAX_OPEN_FILES`) | stable (ceiling raised in Milestone 71) |
+| Process cap band | `PROC_CAP_BASE = 0x80`, `MAX_PROC_CAPS = 16` per task | stable as of Milestone 71 (base moved from `0x40` so file caps `3..=66` do not overlap; ceiling stays 16). `SPAWN_WITH_CAPS` nibbles still name slots 0–14 |
 | Query snapshots (`stats`, `tasks`, `threads`, `files`, `dmesg`, self) | text, one record per line; field names are informational | **unstable** — parse defensively; field set grows |
 | `spawn` grant word (`r10`) | QUERY 1, WAIT 2, INHERIT 4, KEYBOARD 8, WITH_CAPS 16, NO_FG 32, rights mask bits 8..15, file-slot nibbles bits 16..23 | experimental with `spawn` |
-| `spawn` limits | `SPAWN_NAME_MAX = 64`, `SPAWN_ARG_MAX = 256` | experimental with `spawn` |
+| `spawn` limits | `SPAWN_NAME_MAX = 64`, `SPAWN_ARG_MAX = 4096` | experimental with `spawn` (arg ceiling raised in Milestone 71) |
 | Token rights | READ 1, WRITE 2, LIST 4, CREATE 8, REMOVE 16, ONCE 128 (`grant`/`su` only) | stable |
 | `seek` whence | SET 0, CUR 1, END 2 | stable |
 | `user` ops | WHOAMI 0 … UNLOCK 11 (see crate) | existing ops stable; the op space is open |
@@ -107,7 +107,7 @@ Unknown codes decode to `Unsupported`. New codes append.
 | `quota` buffer | 16 bytes: four LE `u32` — objects used, objects max, bytes used, bytes max | stable |
 | `power` ops | SHUTDOWN 0, REBOOT 1 | stable |
 | `sleep` clamp | `1..=SLEEP_MS_MAX (60 000)` ms | stable |
-| `map` | `1..=USER_HEAP_PAGES (32)` pages, 512 MiB above the task image base | stable |
+| `map` | `1..=USER_HEAP_PAGES (262_144)` pages, starting 512 MiB above the task image base | stable (ceiling raised to 1 GiB in Milestone 71) |
 | `channel` message | `CHAN_MSG_MAX = 256` bytes, up to two file Caps; 8 channels | stable |
 | init RPC header | 20 bytes: admin u8, tty u8, pad 2, debug id u64, session gen u64, then the user payload (`op`, `name_len`, name). User payload max 236. Ops: status 1, start 2, stop 3, restart 4, shutdown 5, reboot 6 | stable |
 | `USER_IMAGE_BASE` | `0x0000_0C80_0000_0000`; every ELF links here; the loader accepts PT_LOADs inside `[base, base + 512 MiB)` | stable (no user ASLR — `THREAT.md`) |

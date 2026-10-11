@@ -75,10 +75,8 @@ QEMU.
       dealloc → first-fit reuse → expected double-free panic; verified
       (31239 free frames, exit 33)
 - [x] Extend bitmap coverage beyond 512 MiB — **waived** for the
-      review bar: the suite and `cargo run` boot inside 512 MiB and
-      larger maps log a serial warning and are left unused. Revisited
-      with the RAM budget in **Milestone 71** (capacity for a compiler
-      process)
+      review bar, then done in **Milestone 71**: the bitmap covers 4 GiB
+      and the runner / `cargo run` pass `-m 2G`
 
 ## Milestone 7 — Paging ✅
 
@@ -2405,24 +2403,34 @@ nightly's `library/` and teaches the `cfg_select` dispatchers about
 
 ## Milestone 71 — Capacity for a compiler process
 
-- [ ] `-m 2G` in the runner and `cargo run`; frame bitmap past 512 MiB
-      (the Milestone 6 open box); `Map` budget per task up to 1 GiB
-- [ ] Spawn-time user stack size (default stays 4 pages; `rustc` asks
-      for 8 MiB on the thread it spawns itself)
-- [ ] galfs large-volume format v13: 4 KiB blocks, 32-bit lengths,
-      extents or double indirection, pool sized to the disk, files ≥
-      64 MiB; small format still readable; `fsck` for both. Fallback if
-      it lags: RAM-backed scratch volume behind the same `FileBody`
-- [ ] `MAX_OPEN_FILES` 8 → 64 (heap table at spawn, not in the IF=0
-      path); `SPAWN_ARG_MAX` 256 → 4 KiB via `user_copy`
-- [ ] Sysroot `.rlib`s packed into the ramdisk tar under `rust/`
-- [ ] `bin/test-big`: allocate 300 MiB, write and re-read a 20 MiB
-      file, hash check; `test-fsck` green on both formats
-- [ ] Ring-3 `gxld` program: thin `main` over the Milestone 69 crate;
-      input Caps and the output Cap arrive via `give` at spawn, no path
-      opens; `bin/test-gxld` links two ramdisk objects into a running
-      program
-- [ ] KVM-only marker for Phase 11 tests in the runner
+- [x] `-m 2G` in the runner and `cargo run`; frame bitmap past 512 MiB
+      (the Milestone 6 open box; 4 GiB of frames); `Map` budget per
+      task up to 1 GiB (`USER_HEAP_PAGES = 262_144`)
+- [x] Spawn-time user stack size (the leader stays 4 pages; a spawned
+      thread defaults to 16 pages and may ask for 8 MiB,
+      `THREAD_STACK_PAGES_MAX = 2048`)
+- [x] galfs large files: 4 KiB blocks, 32-bit lengths, double
+      indirection, files of 64 MiB, behind the same file body. The
+      live volume is the RAM fallback (writes past the v12 32 KiB
+      file promote; they are not sealed into a v12 disk). Host
+      `galexy-galf` v13 is the on-disk large format: extent map, pool
+      sized to the disk, `check_image` accepts it, v12 images still
+      check. The kernel still loads and syncs v12 only
+- [x] `MAX_OPEN_FILES` 8 → 64 (heap table at spawn, before the IRQ
+      gate); `SPAWN_ARG_MAX` 256 → 4 KiB via `user_copy`.
+      `PROC_CAP_BASE` moves to `0x80` so 64 file caps do not overlap.
+      `SPAWN_WITH_CAPS` nibbles still name slots 0–14
+- [x] Sysroot `.rlib`s packed into the ramdisk tar under `rust/`
+- [x] `bin/test-big`: allocate 300 MiB, write and re-read a 20 MiB
+      file, hash check (KVM only); `test-fsck` checks the live v12
+      table and a promoted large file; host tests check a sealed v13
+      image, including a 64 MiB file
+- [x] Ring-3 `gxld` program (`gxldos`): thin `main` over the Milestone
+      69 crate; input Caps and the output Cap are installed at spawn,
+      no path opens; `bin/test-gxld` links two objects into a program
+      that exits `0x71`
+- [x] KVM-only marker for Phase 11 tests in the runner
+      (`phase11_kvm_only`; `test-big` skips without KVM)
 
 ## Milestone 72 — `rustc` cross-built for Galexy (Cranelift only)
 

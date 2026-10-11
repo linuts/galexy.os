@@ -385,11 +385,11 @@ fn read_elf_dir(bin_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
 }
 
 /// `no_std` programs built with `-Zbuild-std=core,alloc`.
-const NOSTD_PACKAGES: [&str; 5] = ["hello", "init", "shell", "util", "threadtest"];
+const NOSTD_PACKAGES: [&str; 6] = ["hello", "init", "shell", "util", "threadtest", "gxldos"];
 /// `std` programs built with `-Zbuild-std=std,panic_abort` on the Galexy
 /// PAL overlay. They share one target dir (one std build), separate from
 /// the `no_std` one.
-const STD_PACKAGES: [&str; 2] = ["stdmin", "stdtest"];
+const STD_PACKAGES: [&str; 3] = ["stdmin", "stdtest", "bigtest"];
 
 /// [`NOSTD_PACKAGES`] plus [`STD_PACKAGES`], as ramdisk entries.
 fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
@@ -456,7 +456,102 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
         assert!(bytes.starts_with(b"\x7fELF"), "{pkg} is not an ELF");
         bins.insert(pkg.into(), bytes);
     }
+    // Milestone 71: the sysroot the on-OS compiler will read, under `rust/`.
+    pack_sysroot(&std_target, profile, &mut bins);
+    let (obj_a, obj_b) = gxld::sample_objects();
+    bins.insert("a.o".into(), obj_a);
+    bins.insert("b.o".into(), obj_b);
     bins
+}
+
+/// Copies std `.rlib` files into the ramdisk map as `rust/<file>`.
+///
+/// `-Zbuild-std` with the PAL overlay writes them under
+/// `build/<crate>/<hash>/out`, not `deps/`. Only the newest file for
+/// each crate is packed. `.rmeta` stays out: a debug `libcore.rmeta`
+/// is tens of megabytes, and every BIOS/UEFI image embeds the ramdisk.
+fn pack_sysroot(
+    std_target: &Path,
+    profile: &str,
+    bins: &mut std::collections::BTreeMap<String, Vec<u8>>,
+) {
+    let profile_dir = std_target.join(galexy_target_dir_name()).join(profile);
+    let mut best: std::collections::BTreeMap<&str, (std::time::SystemTime, std::path::PathBuf)> =
+        std::collections::BTreeMap::new();
+    let mut consider = |path: &Path| {
+        if !path.is_file() {
+            return;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            return;
+        };
+        if path.extension().and_then(|e| e.to_str()) != Some("rlib") {
+            return;
+        }
+        let Some(stem) = is_sysroot_artifact(name) else {
+            return;
+        };
+        let mtime = path
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        match best.get(stem) {
+            Some((prev, _)) if *prev >= mtime => {}
+            _ => {
+                best.insert(stem, (mtime, path.to_path_buf()));
+            }
+        }
+    };
+    if let Ok(entries) = std::fs::read_dir(profile_dir.join("deps")) {
+        for entry in entries.flatten() {
+            consider(&entry.path());
+        }
+    }
+    if let Ok(crates) = std::fs::read_dir(profile_dir.join("build")) {
+        for crate_dir in crates.flatten() {
+            let Ok(hashes) = std::fs::read_dir(crate_dir.path()) else {
+                continue;
+            };
+            for hash in hashes.flatten() {
+                let Ok(files) = std::fs::read_dir(hash.path().join("out")) else {
+                    continue;
+                };
+                for file in files.flatten() {
+                    consider(&file.path());
+                }
+            }
+        }
+    }
+    for (_mtime, path) in best.values() {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap();
+        let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        bins.insert(format!("rust/{name}"), bytes);
+    }
+    if !best.contains_key("libstd-") {
+        panic!(
+            "sysroot libstd rlib missing under {}",
+            profile_dir.display()
+        );
+    }
+}
+
+fn is_sysroot_artifact(name: &str) -> Option<&'static str> {
+    const STEMS: &[&str] = &[
+        "libstd-",
+        "libcore-",
+        "liballoc-",
+        "libpanic_abort-",
+        "libpanic_unwind-",
+        "libcompiler_builtins-",
+        "libstd_detect-",
+        "librustc_std_workspace_core-",
+        "librustc_std_workspace_alloc-",
+        "librustc_std_workspace_std-",
+        "libhashbrown-",
+        "libcfg_if-",
+        "libunwind-",
+    ];
+    STEMS.iter().copied().find(|stem| name.starts_with(stem))
 }
 
 /// Shell ELF with the `crash` test seam. A separate target dir so this

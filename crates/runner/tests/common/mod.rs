@@ -108,6 +108,8 @@ fn qemu_command_opts(
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.arg("-M")
         .arg(machine)
+        .arg("-m")
+        .arg("2G")
         .arg("-drive")
         .arg(format!("format=raw,file={img_path}"))
         .arg("-snapshot")
@@ -184,6 +186,7 @@ fn qemu_command_with_galfs(
         GalfsBackend::VirtioPci | GalfsBackend::VirtioLegacy => "q35",
     };
     cmd.arg("-M").arg(machine);
+    cmd.arg("-m").arg("2G");
     cmd.arg("-drive").arg(format!(
         "format=raw,file={img_path},if=ide,index=0,snapshot=on"
     ));

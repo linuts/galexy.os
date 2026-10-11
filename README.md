@@ -14,13 +14,15 @@ programs.
 Not a Linux clone. No POSIX claim. Authority is **capabilities** (and
 galfs access cards), not global file descriptors or PIDs.
 
-**Status (October 2026):** Milestones 1–61 and 63–67 are in this tree,
-plus 69 (62 was superseded); `nano` is in the ramdisk. Milestone 67
-gives init shutdown, `svc`, and the ABI freeze (`spawn` stays
-experimental). The QEMU suite is 114 boots plus host tests. The
-Milestone 52 review checklist is complete except the `review-rc1` tag,
-which is the owner's call. The `v1.0` tag is a separate gate
-(BIOS+UEFI, TCG+KVM, q35+pc, `PERF.md`).
+**Status (October 2026):** Milestones 1–61 and 63–71 are in this tree
+(62 was superseded); `nano` is in the ramdisk. Milestone 67 gives init
+shutdown, `svc`, and the ABI freeze (`spawn` stays experimental).
+Milestone 71 raises the guest to 2 GiB, the per-task `Map` budget to
+1 GiB, open files to 64, and argv to 4 KiB, and adds ring-3 `gxld`.
+The QEMU suite is 120 runner tests plus host tests (`test-big` boots
+only under KVM). The Milestone 52 review checklist is complete except
+the `review-rc1` tag, which is the owner's call. The `v1.0` tag is a
+separate gate (BIOS+UEFI, TCG+KVM, q35+pc, `PERF.md`).
 The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md) → Where
 we stand. Known gap today: there is no network. Legacy device paths
 (PIT, 8259, PS/2, PIO IDE, legacy virtio) remain as named fallbacks.
@@ -280,8 +282,9 @@ crates/
   after `v1.0`
 - **Phase 11** — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
   static linker (LINKER.md, ✅ Milestone 69), `std` PAL (✅ Milestone
-  70), upstream `rustc` with the Cranelift backend compiling and
-  linking on-OS — RUSTC.md
+  70), compiler-sized limits and ring-3 `gxld` (✅ Milestone 71),
+  upstream `rustc` with the Cranelift backend compiling and linking
+  on-OS — RUSTC.md
 
 Host-compile the gxr hello (not rustc) and link it with `gxld`:
 

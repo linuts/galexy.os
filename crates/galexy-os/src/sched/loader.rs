@@ -492,14 +492,23 @@ fn spawn_program_placed(
         let stack_top = (stack_base + (USER_STACK_PAGES * 4096) as u64).as_u64() & !0xF;
         debug_assert!(stack_top.is_multiple_of(4096));
         let fab_vaddr = mm::frame_virt(stack_frames[USER_STACK_PAGES - 1].start_address()) + 4096;
-        let (arg_user, arg_len) = place_arg(fab_vaddr.as_u64(), stack_top, arg);
+        let (arg_user, arg_len) = place_arg(&stack_frames, stack_base.as_u64(), stack_top, arg);
+        // Empty argv keeps the historical RSP (512 bytes under the top).
+        // A blob sits between that RSP and the fabricated frame, so a 4 KiB
+        // argument lowers RSP to the first byte of the blob. Stack growth
+        // moves away from it; `_start` copies the bytes before `main`.
+        let user_rsp = if arg_len == 0 {
+            stack_top - 512
+        } else {
+            arg_user
+        };
         let (cs, ss) = context::user_cs_ss();
         // SAFETY: `fab_vaddr` is the phys-map image of the fresh top stack
         // page; `entry` is inside a validated executable segment.
         let ctx = unsafe {
             context::init_user_frame(
                 fab_vaddr.as_u64(),
-                stack_top - 512, // user RSP (user-space address!)
+                user_rsp,
                 entry.as_u64(),
                 arg_user,
                 arg_len,
@@ -551,24 +560,50 @@ fn spawn_program_placed(
 /// Copies `arg` into the gap above the child's initial stack pointer and
 /// below the fabricated context frame. Returns `(user address, length)`.
 ///
-/// Stack growth moves away from this gap, so `_start` can copy the bytes
+/// The window is [`crate::sched::ARG_MAX`] bytes and may cross a page.
+/// Each stack page is its own frame, so the copy walks `stack_frames`
+/// instead of subtracting from the top page's phys-map address. Stack
+/// growth moves away from this gap, so `_start` can copy the bytes
 /// before `main`. An empty argument returns `(0, 0)`.
-fn place_arg(fab_top: u64, stack_top: u64, arg: &[u8]) -> (u64, u64) {
+fn place_arg(
+    stack_frames: &[PhysFrame<Size4KiB>; USER_STACK_PAGES],
+    stack_base: u64,
+    stack_top: u64,
+    arg: &[u8],
+) -> (u64, u64) {
     let n = arg.len().min(crate::sched::ARG_MAX);
     if n == 0 {
         return (0, 0);
     }
-    let arg_user = stack_top - context::FABRICATED_FRAME_BYTES - crate::sched::ARG_MAX as u64;
+    let window = crate::sched::ARG_MAX as u64;
+    let arg_user = stack_top - context::FABRICATED_FRAME_BYTES - window;
     debug_assert!(
-        arg_user >= stack_top - 512,
-        "argument overlaps the user stack"
+        arg_user >= stack_base,
+        "argument falls off the mapped stack"
     );
-    let dst = (fab_top - (stack_top - arg_user)) as *mut u8;
-    // SAFETY: `dst` is the phys-map image of the fresh stack page, in the
-    // gap the fabricated frame does not occupy. The page is exclusively owned.
-    unsafe {
-        core::ptr::write_bytes(dst, 0, crate::sched::ARG_MAX);
-        core::ptr::copy_nonoverlapping(arg.as_ptr(), dst, n);
+    debug_assert!(arg_user + window + context::FABRICATED_FRAME_BYTES <= stack_top);
+    let mut off = 0u64;
+    while off < window {
+        let va = arg_user + off;
+        let page = ((va - stack_base) / 4096) as usize;
+        let page_off = ((va - stack_base) % 4096) as usize;
+        let take = (4096 - page_off).min((window - off) as usize);
+        let dst = mm::frame_virt(stack_frames[page].start_address()) + page_off as u64;
+        // SAFETY: `dst` is the phys-map image of a fresh stack page the
+        // loader just mapped. The range stays inside that page.
+        unsafe {
+            core::ptr::write_bytes(dst.as_mut_ptr::<u8>(), 0, take);
+            if (off as usize) < n {
+                let src_off = off as usize;
+                let copy = take.min(n - src_off);
+                core::ptr::copy_nonoverlapping(
+                    arg.as_ptr().add(src_off),
+                    dst.as_mut_ptr::<u8>(),
+                    copy,
+                );
+            }
+        }
+        off += take as u64;
     }
     (arg_user, n as u64)
 }
