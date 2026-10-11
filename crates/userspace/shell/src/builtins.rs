@@ -419,7 +419,13 @@ pub(crate) fn dispatch(
         };
         let mut path = [0u8; PATH_MAX];
         let program = program_name(cwd, name, &mut path);
-        launch_util(cwd, program, &arg[..n], false);
+        // Query so `read_dir` sees the sysroot. Loader so `rustc` can
+        // spawn `gxld`. Echo, ls, and the other named utilities return
+        // above and do not receive the loader.
+        let grants = galexy_abi::SPAWN_INHERIT
+            | galexy_abi::SPAWN_GRANT_QUERY
+            | galexy_abi::SPAWN_GRANT_LOADER;
+        spawn_and_prompt(cwd, program, &arg[..n], grants, true);
         return None;
     }
     write_console(line);

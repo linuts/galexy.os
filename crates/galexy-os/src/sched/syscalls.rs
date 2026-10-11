@@ -1284,6 +1284,7 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
             | galexy_abi::SPAWN_GRANT_KEYBOARD
             | galexy_abi::SPAWN_WITH_CAPS
             | galexy_abi::SPAWN_NO_FG
+            | galexy_abi::SPAWN_GRANT_LOADER
             | galexy_abi::SPAWN_RIGHTS_BITS
             | (0xFF << galexy_abi::SPAWN_CAP_SHIFT))
         != 0
@@ -1359,6 +1360,7 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
         }
     }
     let query = frame.r10 & galexy_abi::SPAWN_GRANT_QUERY != 0;
+    let loader = frame.r10 & galexy_abi::SPAWN_GRANT_LOADER != 0;
     let wait_exit = frame.r10 & galexy_abi::SPAWN_WAIT != 0;
     let inherit = frame.r10 & galexy_abi::SPAWN_INHERIT != 0;
     let keyboard = frame.r10 & galexy_abi::SPAWN_GRANT_KEYBOARD != 0;
@@ -1375,6 +1377,7 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
         rights_mask,
         [cap0, cap1],
         no_fg,
+        loader,
     ) {
         Ok(()) => SyscallResult::ok(0),
         Err(err) => SyscallResult::err(err),

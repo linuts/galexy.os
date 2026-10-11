@@ -830,16 +830,19 @@ after they finish; bare program names (`hello`, `linger`) drop the Cap
 (Cap remains installed). `r8`/`r9` are an optional argument, at most 256
 bytes, copied onto the child's stack (`rdi` is the address, `rsi` the
 length). `r10` bits are `SPAWN_GRANT_QUERY`, `SPAWN_WAIT`,
-`SPAWN_INHERIT`, and/or `SPAWN_GRANT_KEYBOARD` (bit 3). Any other bit
-outside the rights mask is `BadValue`.
+`SPAWN_INHERIT`, `SPAWN_GRANT_KEYBOARD` (bit 3), `SPAWN_WITH_CAPS`,
+`SPAWN_NO_FG`, and `SPAWN_GRANT_LOADER` (bit 6). Any other bit
+outside the rights mask and the file-slot nibbles is `BadValue`.
 User `spawn` rejects the F-key shell names (`shell`…`shell12`) and
 rejects a name that already has a live task (`NoResource`), so typing
 `shell` cannot start a second keyboard-less shell that spins. The child
 always receives the console, and it writes the console of the task that
 spawned it. `SPAWN_GRANT_KEYBOARD` also gives the child the keyboard
 so an interactive program (`nano`) can read keys while the shell
-Cap-waits. The loader stays with the shell once it is logged in. Power
-stays on init while init is alive. Boot starts one shell on each F-key, pinned to the BSP,
+Cap-waits. The loader stays with the shell except when the spawn
+sets `SPAWN_GRANT_LOADER`: a spaced command (`rustc hello.rs -o hello`)
+receives it so the compiler can start `gxld`. Named utilities (`echo`,
+`ls`) do not. Power stays on init while init is alive. Boot starts one shell on each F-key, pinned to the BSP,
 logged out (pre-login grants, no tokens, login banner with 1-based TTY).
 Password login restores loader/query. An admin login receives Power
 only when init is not running. F1's shell

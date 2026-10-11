@@ -51,6 +51,8 @@ pub(in crate::sched) struct PendingSpawn {
     pub(in crate::sched) cap1: u8,
     /// Do not publish the child as the TTY foreground (shell `cmd &`).
     pub(in crate::sched) no_fg: bool,
+    /// Child may `spawn` (`rustc` starts `gxld`). Power stays off.
+    pub(in crate::sched) loader: bool,
     /// Parent credentials used to read a path spawn. Empty for a label.
     pub(in crate::sched) load_fs: galfs::FsCred,
     pub(in crate::sched) armed: bool,
@@ -73,6 +75,7 @@ pub(in crate::sched) static PENDING_SPAWN: Mutex<PendingSpawn> = Mutex::new(Pend
     cap0: 0xFF,
     cap1: 0xFF,
     no_fg: false,
+    loader: false,
     load_fs: galfs::FsCred::none(),
     armed: false,
 });
@@ -97,6 +100,7 @@ pub(crate) fn task_spawn(
     rights_mask: u8,
     caps: [u8; 2],
     no_fg: bool,
+    loader: bool,
 ) -> Result<(), SysError> {
     if name.len() > 64 || arg.len() > ARG_MAX {
         return Err(SysError::BadValue);
@@ -186,6 +190,7 @@ pub(crate) fn task_spawn(
         pending.cap0 = caps[0];
         pending.cap1 = caps[1];
         pending.no_fg = no_fg;
+        pending.loader = loader;
         pending.load_fs = load_fs;
         // Seats start logged out (no cards). Utilities inherit the session.
         // Bare programs keep the root for path context but hold no cards.
@@ -272,6 +277,7 @@ pub fn drain_spawn() {
         let cap0 = pending.cap0;
         let cap1 = pending.cap1;
         let no_fg = pending.no_fg;
+        let loader = pending.loader;
         let load_fs = pending.load_fs;
         pending.armed = false;
         Some((
@@ -290,6 +296,7 @@ pub fn drain_spawn() {
             cap0,
             cap1,
             no_fg,
+            loader,
             load_fs,
         ))
     });
@@ -309,6 +316,7 @@ pub fn drain_spawn() {
         cap0,
         cap1,
         no_fg,
+        loader,
         load_fs,
     )) = queued
     else {
@@ -332,7 +340,7 @@ pub fn drain_spawn() {
         });
         return;
     }
-    let grants = if seat {
+    let mut grants = if seat {
         Grants::pre_login()
     } else if keyboard {
         Grants::console_keyboard(query)
@@ -341,6 +349,11 @@ pub fn drain_spawn() {
     } else {
         Grants::console()
     };
+    // A seat stays pre-login. A named program may receive the loader
+    // so it can start a helper (`rustc` → `gxld`). Power is not copied.
+    if loader && !seat {
+        grants.loader = true;
+    }
     // Seats share the `shell` ELF under twelve reserved names.
     let elf_name = if seat { "shell" } else { name };
     // Always defer the first instruction. File Caps have to land first,
