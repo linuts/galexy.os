@@ -3225,6 +3225,45 @@ fn nano_typing_e2e_on(image_name: &str) {
     );
 }
 
+/// Milestone 74: the login image carries `rustc`. No arguments, so the
+/// shell's existing bare-name launch is enough. The diagnostic is the
+/// compiler's, not `command not found`.
+#[test]
+fn rustc_image_login_typing_e2e() {
+    if env!("GALEXY_HAVE_RUSTC") != "1" {
+        eprintln!("rustc_image_login_typing_e2e: skipped (no target/galexy-rustc/rustc)");
+        return;
+    }
+    let keys = with_login(&[
+        ("r", "r"),
+        ("u", "u"),
+        ("s", "s"),
+        ("t", "t"),
+        ("c", "c"),
+        ("ret", "no input filename given"),
+    ]);
+    let serial = boot_and_type(
+        &image("galexy-os-rustc"),
+        &keys,
+        "[boot] main loop ready",
+        "no input filename given",
+        Duration::from_millis(30),
+        Duration::from_secs(360),
+    );
+    assert!(
+        serial.contains("no input filename given"),
+        "rustc did not run; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("command not found"),
+        "shell rejected rustc; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[pf] ring-3 task fault"),
+        "rustc faulted; serial:\n{serial}"
+    );
+}
+
 /// Milestone 69 differential: the `galexy-os-gxld` image carries init,
 /// shell, hello and every util re-linked by `gxld` from the exact objects
 /// and rlibs rustc hands `rust-lld`. Same keystrokes, same output.

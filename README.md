@@ -61,6 +61,7 @@ sudo pacman -S --needed qemu-desktop ovmf
 cargo run --release                 # BIOS, headless; type on this terminal
 cargo run --release -- --display    # also open the framebuffer window (F1–F12)
 cargo run --release -- --uefi       # UEFI — set OVMF_FD if the default path is missing
+cargo run --release -- --rustc      # login image with rustc (needs target/galexy-rustc/rustc)
 ```
 
 `cargo run --release` attaches a persistent `galfs.img` as **virtio-blk-pci**
@@ -204,6 +205,7 @@ OVMF image for UEFI. Nothing else.
 cargo build -p runner                       # every image under target/
 cargo run --release                         # BIOS, headless, -smp 2; KVM if a vCPU can be created, else TCG
 cargo run --release -- --display            # same, plus the framebuffer window
+cargo run --release -- --rustc              # galexy-os-rustc, when the compiler ELF was built
 OVMF_FD=/usr/share/ovmf/OVMF.fd cargo run --release -- --uefi   # UEFI; path varies per distro
 scripts/review-smoke.sh                     # focused subset: host suites + 11 boots (~10 min TCG)
 ```
