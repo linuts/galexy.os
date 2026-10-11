@@ -1420,7 +1420,7 @@ fn program_name<'a>(cwd: &Cwd, name: &'a [u8], buf: &'a mut [u8; PATH_MAX]) -> &
 
 fn absolute_spawn_path(cwd: &Cwd, name: &[u8], buf: &mut [u8; PATH_MAX]) -> Option<usize> {
     let rel = name.strip_prefix(b"./").unwrap_or(name);
-    if rel.is_empty() || rel.contains(&b" ") {
+    if rel.is_empty() || rel.contains(&b' ') {
         return None;
     }
     if rel.starts_with(b"/") {
