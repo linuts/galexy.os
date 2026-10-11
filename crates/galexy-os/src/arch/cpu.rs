@@ -296,6 +296,31 @@ pub fn kick(cpu_index: usize) {
     crate::arch::apic::send_fixed_ipi(apic_id as u8, crate::arch::apic::WAKE_VECTOR);
 }
 
+/// Clear EM/TS, mask x87 and SIMD exceptions, and turn the FPU on.
+///
+/// Called from [`init_percpu`] on the BSP and every AP. A new thread's
+/// `FXRSTOR` image matches this (`FCW = 0x037F`, `MXCSR = 0x1F80`).
+fn init_fpu() {
+    let mut cr0 = x86_64::registers::control::Cr0::read();
+    cr0.remove(x86_64::registers::control::Cr0Flags::EMULATE_COPROCESSOR);
+    cr0.remove(x86_64::registers::control::Cr0Flags::TASK_SWITCHED);
+    cr0.insert(x86_64::registers::control::Cr0Flags::MONITOR_COPROCESSOR);
+    cr0.insert(x86_64::registers::control::Cr0Flags::NUMERIC_ERROR);
+    let mxcsr: u32 = 0x1F80;
+    let mxcsr_ptr = &mxcsr as *const u32;
+    // SAFETY: CR0 bits are the standard FPU enable. `ldmxcsr` reads the
+    // 4-byte local. No user task is running on this CPU yet.
+    unsafe {
+        x86_64::registers::control::Cr0::write(cr0);
+        core::arch::asm!(
+            "fninit",
+            "ldmxcsr [{mxcsr_ptr}]",
+            mxcsr_ptr = in(reg) mxcsr_ptr,
+            options(nostack),
+        );
+    }
+}
+
 /// Brings up per-CPU access for the BSP (logical CPU 0): feature assert,
 /// fill the slot's identity fields, WRGSBASE, verify roundtrip.
 ///
@@ -328,9 +353,17 @@ pub fn init_percpu(cpu_index: usize, apic_id: u32) {
     if umip {
         cr4.insert(x86_64::registers::control::Cr4Flags::USER_MODE_INSTRUCTION_PREVENTION);
     }
-    // SAFETY: each inserted bit is gated by the CPUID feature above.
-    // No user task is running on this CPU yet (its own bring-up).
+    // SSE2 is part of long mode. The bootloader turns it on for the BSP;
+    // an AP's trampoline reloads CR4 with only PAE, so a user `movd` there
+    // is #UD and the empty gate becomes a double fault. Enable it on every
+    // CPU before any task runs.
+    cr4.insert(x86_64::registers::control::Cr4Flags::OSFXSR);
+    cr4.insert(x86_64::registers::control::Cr4Flags::OSXMMEXCPT_ENABLE);
+    // SAFETY: each inserted bit is gated by the CPUID feature above, except
+    // OSFXSR / OSXMMEXCPT, which long mode already requires. No user task
+    // is running on this CPU yet (its own bring-up).
     unsafe { x86_64::registers::control::Cr4::write(cr4) };
+    init_fpu();
     if smap {
         crate::arch::user_copy::note_smap_enabled();
     }

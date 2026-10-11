@@ -35,8 +35,16 @@ pub(in crate::sched) struct FxArea(
 );
 
 impl FxArea {
+    /// FNINIT plus `MXCSR = 0x1F80` (every SIMD exception masked). A
+    /// zeroed image loads `MXCSR = 0`, and the next scalar SSE op with
+    /// an inexact result is #XF / #UD. `FXRSTOR` accepts this image.
     pub(in crate::sched) const fn new() -> Self {
-        FxArea([0; context::FX_AREA_SIZE])
+        let mut bytes = [0u8; context::FX_AREA_SIZE];
+        bytes[0] = 0x7F;
+        bytes[1] = 0x03;
+        bytes[24] = 0x80;
+        bytes[25] = 0x1F;
+        FxArea(bytes)
     }
 }
 
