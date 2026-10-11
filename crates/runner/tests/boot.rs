@@ -3240,18 +3240,18 @@ fn rustc_image_login_typing_e2e() {
         ("s", "s"),
         ("t", "t"),
         ("c", "c"),
-        ("ret", "no input filename given"),
+        ("ret", "Usage: rustc"),
     ]);
     let serial = boot_and_type(
         &image("galexy-os-rustc"),
         &keys,
         "[boot] main loop ready",
-        "no input filename given",
+        "Usage: rustc",
         Duration::from_millis(30),
         Duration::from_secs(360),
     );
     assert!(
-        serial.contains("no input filename given"),
+        serial.contains("Usage: rustc"),
         "rustc did not run; serial:\n{serial}"
     );
     assert!(
