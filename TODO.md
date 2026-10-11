@@ -2488,12 +2488,103 @@ nightly's `library/` and teaches the `cfg_select` dispatchers about
 - [x] Stated non-goals: `cargo` on-OS, proc macros on-OS, rebuilding
       `rustc` / `std` on Galexy, LLVM / `lld` / `mrustc` / libc
 
+## Milestone 74 — A login image that carries `rustc`
+
+The compiler is a ramdisk label, and the shell already starts a
+ramdisk program whose name is the whole line (`launch`). It is not a
+login command because only `test-rustc` and `test-rustc-hello` embed
+that ramdisk. The shared ramdisk stays the ~24 MiB userspace set.
+Putting the compiler in it would add ~214 MiB of ELF plus ~90 MiB of
+sysroot to every BIOS and UEFI image the runner builds. CI does not
+run `x.py`.
+
+- [ ] `galexy-os-rustc`: the normal kernel with the Milestone 73
+      ramdisk (`rustc`, `gxld`, the target JSON, `srlib/*`). Built
+      only when `target/galexy-rustc/rustc` exists. Every other image,
+      including `cargo run`, keeps the small ramdisk
+- [ ] `cargo run --rustc` boots that image. When the ELF is absent the
+      runner says so and does not pretend the small image has a
+      compiler
+- [ ] The new boot test skips when `GALEXY_HAVE_RUSTC` is not `1`,
+      same rule as `rustc_hello_runs`. It reaches the login prompt,
+      and typing `rustc` with no arguments runs the compiler (a
+      diagnostic, not `command not found`)
+
+## Milestone 75 — Install the sysroot on that boot
+
+`rustc` reads `/x86_64-unknown-galexy.json` and
+`/lib/rustlib/x86_64-unknown-galexy-…/lib/`. The test kernels copy
+those files in `install_sysroot`. The login kernel does not, so a
+ramdisk label is not enough. `core`'s `.rmeta` is ~66 MiB and a v12
+disk file is capped at 64 MiB, so the copy goes through
+`import_promoted` into the RAM store (80 MiB per file, 128 MiB pool)
+and is repeated every boot. It is not sealed to disk. Do not bump
+`DISK_VERSION`.
+
+- [ ] On the normal kernel, when the ramdisk contains `srlib/`, import
+      the JSON and every `srlib/*` entry before init, the same paths
+      `test-rustc-hello` uses. The small ramdisk has no `srlib/`, so
+      every other image pays nothing
+- [ ] One import per file, not a userspace loop through the 1 KiB
+      `read`/`write` staging buffer
+- [ ] Serial line `rustc-sysroot: N entries`, then the login prompt.
+      The 128 MiB pool stays. The hello compile already fit beside the
+      ~90 MiB sysroot; raise the pool only if this image's compile
+      fails for lack of space
+
+## Milestone 76 — Pass arguments to a ramdisk program
+
+A line with a space that is not a builtin prints `command not found`.
+`launch` starts the program with an empty argv and returns the prompt
+without waiting. `rustc hello.rs -o hello` is that shape. Pipelines
+already split stages and pass argv; a single command does not. The
+shell line is 80 bytes (`LINE_MAX`). The gate command fits. Spawn's
+argv blob is 4096 bytes. `getcwd` on Galexy is `/`, so `-o hello`
+lands at `/hello` when the login directory is `/`.
+
+- [ ] If the first word is a ramdisk program, split the rest on spaces
+      into a NUL-separated argv, spawn with `SPAWN_INHERIT`, and wait
+      for exit the way `launch_util` does. No new quoting. A missing
+      name is still `command not found`
+- [ ] `LINE_MAX` stays 80. A longer `rustc` line is a follow-on
+- [ ] On `galexy-os-rustc`, after Milestone 75: `rustc --print cfg`
+      prints `target_os="galexy"` and returns the prompt
+
+## Milestone 77 — Run the program the compiler wrote (Phase 12 gate)
+
+`spawn` loads a ramdisk label. `file_name_ok` rejects `/`. The sample
+program `hello` is already a ramdisk label, so the file `rustc` writes
+cannot reuse that name. The login directory is `/`. `echo` redirection
+(`echo … > name`) can write the one-line source; that line fits in 80
+bytes. A longer source is `nano`.
+
+- [ ] A spawn name that is a path (`/hello`, `./hello` from the login
+      directory) loads an ELF from galfs, including a RAM-store file.
+      A label with no `/` stays a ramdisk program. `spawn` stays
+      experimental: `galexy-abi`, `docs/ABI.md`, and `DESIGN.md` record
+      the path form in the same PR
+- [ ] Session tokens apply. A path outside the caller's tokens fails
+      with the existing galfs error, not a loader panic
+- [ ] Typed E2E on `galexy-os-rustc` (skipped when the ELF was absent
+      at image build): log in, write `hello.rs` with `echo`, run
+      `rustc hello.rs -o hello`, run `/hello`, and see
+      `hello from rustc on galexy`. The prompt returns after each
+      command
+- [ ] Non-goals stay non-goals: `cargo`, proc macros, rebuilding
+      `rustc` or `std` on Galexy, `panic=unwind`, incremental
+      compilation, and the compiler on the shared ramdisk
+
 ---
 
 ## Known limitations / follow-ups
 
 Open bullets below are tracked by milestone id where planned. Waived
 items stay here with rationale.
+
+- [ ] `rustc` is not a command at the login shell. The compiler ramdisk
+      is only on `test-rustc` and `test-rustc-hello`. A line with
+      arguments is `command not found`, and `spawn` cannot load the
+      ELF `rustc` writes. Milestones **74–77**
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17
       (APIC family: LAPIC timer + I/O APIC keyboard route on every boot
