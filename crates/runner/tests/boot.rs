@@ -3445,29 +3445,36 @@ fn passwd_on_sealed_disk_typing_e2e() {
 
 /// Init's own log lines are kernel serial (`Ns: [init] …`), not the seat
 /// console. A login screen that contains `[init]` without that prefix
-/// means init wrote on the TTY it shares with F1.
+/// means init wrote on the TTY it shares with F1. The prefix may sit
+/// mid-line: the dashboard row and `[init] ready` can share one UART
+/// line when their bytes meet without a newline.
 fn console_shows_init(serial: &str) -> bool {
-    serial
-        .lines()
-        .any(|line| line.contains("[init]") && !kernel_init_line(line))
+    serial.lines().any(|line| {
+        let mut rest = line;
+        while let Some(i) = rest.find("[init]") {
+            if !kernel_stamp_before(&rest[..i]) {
+                return true;
+            }
+            rest = &rest[i + "[init]".len()..];
+        }
+        false
+    })
 }
 
-fn kernel_init_line(line: &str) -> bool {
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() && (bytes[i] == b'*' || bytes[i] == b' ' || bytes[i] == 0x0c) {
-        i += 1;
-    }
-    let rest = &line[i..];
-    let rb = rest.as_bytes();
-    let mut j = 0;
-    if j >= rb.len() || !rb[j].is_ascii_digit() {
+/// True when `head` ends in the kernel serial stamp `Ns: `.
+fn kernel_stamp_before(head: &str) -> bool {
+    let b = head.as_bytes();
+    if b.len() < 4 || &b[b.len() - 3..] != b"s: " {
         return false;
     }
-    while j < rb.len() && rb[j].is_ascii_digit() {
-        j += 1;
+    let mut j = b.len() - 3;
+    if j == 0 || !b[j - 1].is_ascii_digit() {
+        return false;
     }
-    rest[j..].starts_with("s: [init]")
+    while j > 0 && b[j - 1].is_ascii_digit() {
+        j -= 1;
+    }
+    true
 }
 
 /// True end-to-end: TYPES `hello` into the running kernel through
