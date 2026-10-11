@@ -478,10 +478,10 @@ or run the file it writes. Checkboxes: `TODO.md` Milestones **74–77**.
 3. **76 Arguments** ✅ — a ramdisk program with arguments gets a
    NUL-separated argv and the shell waits for it. A spaced line that
    is not a builtin and not a ramdisk program is still `command not found`
-4. **77 Run it** — `spawn` of `/hello` loads that galfs ELF. The
+4. **77 Run it** ✅ — `spawn` of `/hello` loads that galfs ELF. The
    **Phase 12 gate** is a typed login on `galexy-os-rustc`:
-   `rustc hello.rs -o hello`, then `/hello` prints
-   `hello from rustc on galexy`
+   `rustc hello.rs -o /hello`, then `/hello` prints
+   `hello from rustc on galexy` (`rustc_hello_typing_e2e`, TCG)
 
 Same non-goals as Phase 11. The compiler does not go on the shared
 ramdisk. `LINE_MAX` stays 80. `getcwd` stays `/`.
