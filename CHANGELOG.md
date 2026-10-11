@@ -13,7 +13,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
   spaces into a NUL-separated argv, spawned with `SPAWN_INHERIT`,
   and waited on. `LINE_MAX` stays 80. A bare name still returns
   once the load finishes. `rustc --print cfg` on `galexy-os-rustc`
-  prints `target_os="galexy"` and the prompt returns.
+  prints `target_os="galexy"` and the prompt returns. The release
+  boot suite is 123 passes under TCG.
 - [#99](https://github.com/linuts/galexy.os/pull/99) — Milestone 75 —
   the login kernel imports `srlib/*` and the target JSON into the
   RAM store before init when the ramdisk contains `srlib/`. Serial
