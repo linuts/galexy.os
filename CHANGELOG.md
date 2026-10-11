@@ -8,7 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Milestone 71 — capacity for a compiler process. QEMU `-m 2G` and a
+- [#94](https://github.com/linuts/galexy.os/pull/94) — Milestone 71 —
+  capacity for a compiler process. QEMU `-m 2G` and a
   frame bitmap covering 4 GiB. `Map` budget is 1 GiB per task. A
   spawned thread may ask for an 8 MiB stack (the default stays 16
   pages; the leader stays 4). `MAX_OPEN_FILES` is 64, allocated before
