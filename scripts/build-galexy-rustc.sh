@@ -175,17 +175,33 @@ if [[ -z "$RLIB_SRC" ]]; then
     exit 1
 fi
 # Bootstrap writes metadata beside the rlib (`-Zembed-metadata=no`).
-# A no_std hello only loads core and compiler_builtins. core's
-# metadata is about 66 MiB, which is why the RAM store is 80 MiB.
+# A std hello loads this set (rmeta for typeck, rlib for the link).
+# core's metadata is about 66 MiB; the whole set is about 90 MiB.
+STD_CRATES=(
+    adler2 alloc cfg_if compiler_builtins core dlmalloc hashbrown libc
+    miniz_oxide panic_abort rustc_demangle rustc_std_workspace_alloc
+    rustc_std_workspace_core std std_detect unwind
+)
 copied=0
-for base in "$RLIB_SRC"/libcore-*.rlib "$RLIB_SRC"/libcompiler_builtins-*.rlib; do
-    [[ -f "$base" ]] || continue
-    cp -a "$base" "${base%.rlib}.rmeta" "$OUT/sysroot/lib/rustlib/x86_64-unknown-galexy/lib/"
-    copied=$((copied + 1))
+dest="$OUT/sysroot/lib/rustlib/x86_64-unknown-galexy/lib"
+for crate in "${STD_CRATES[@]}"; do
+    found=0
+    for base in "$RLIB_SRC"/lib${crate}-*.rlib; do
+        [[ -f "$base" ]] || continue
+        cp -a "$base" "$dest/"
+        meta="${base%.rlib}.rmeta"
+        if [[ ! -f "$meta" ]]; then
+            echo "build-galexy-rustc: missing $meta" >&2
+            exit 1
+        fi
+        cp -a "$meta" "$dest/"
+        found=1
+        copied=$((copied + 1))
+    done
+    if [[ "$found" -ne 1 ]]; then
+        echo "build-galexy-rustc: expected one lib${crate} rlib in $RLIB_SRC" >&2
+        exit 1
+    fi
 done
-if [[ "$copied" -ne 2 ]]; then
-    echo "build-galexy-rustc: expected core and compiler_builtins in $RLIB_SRC" >&2
-    exit 1
-fi
 echo "build-galexy-rustc: $(wc -c < "$OUT/rustc") bytes -> $OUT/rustc"
-echo "build-galexy-rustc: core + compiler_builtins from $RLIB_SRC"
+echo "build-galexy-rustc: $copied std crates from $RLIB_SRC"

@@ -1,10 +1,10 @@
 //! Files that do not fit the v12 pool.
 //!
 //! v12 keeps 512-byte blocks and a `u16` length (32 KiB). A write past
-//! that promotes the file here: 4 KiB blocks, double indirection (a
-//! single indirect block addresses 4 MiB; 64 MiB needs the second
-//! level), length `u32`. The pool grows on the kernel heap up to one
-//! max-size file plus its indirect blocks. Callers hold the galfs table
+//! that promotes the file here: 4 KiB blocks, one indirect block per
+//! 4 MiB, length `u32`. The pool grows on the kernel heap up to
+//! [`LARGE_POOL_BYTES`] of file data, plus indirect blocks. One file
+//! is still capped at [`LARGE_FILE_MAX`]. Callers hold the galfs table
 //! lock and then [`STORE`]; this module never locks the table.
 
 use alloc::boxed::Box;
@@ -18,17 +18,22 @@ pub const LARGE_BLOCK: usize = 4096;
 /// Largest file this store will hold.
 ///
 /// Milestone 71 required 64 MiB. `libcore`'s split metadata is about
-/// 66 MiB, so the on-OS sysroot needs 80 MiB for that one file. The
-/// pool is still one file of this size; core plus `compiler_builtins`
-/// (rlib and rmeta) sum to less than that.
+/// 66 MiB, so one file needs 80 MiB. The on-disk v13 cap stays 64 MiB;
+/// this store is RAM only.
 pub const LARGE_FILE_MAX: u32 = 80 * 1024 * 1024;
+/// Bytes the pool will hold across every promoted file.
+///
+/// A `std` compile keeps `core`'s metadata (~66 MiB) plus `alloc`,
+/// `std`, and the rlibs the linker reads. That set is about 90 MiB.
+/// 128 MiB leaves room for the linked ELF and rustc's temps.
+pub const LARGE_POOL_BYTES: usize = 128 * 1024 * 1024;
 /// Object slots. Matches `galfs::OBJECT_SLOTS`.
 pub const SLOTS: usize = 128;
 
 const PTRS: usize = LARGE_BLOCK / 4;
 const NONE: u32 = u32::MAX;
-/// Data blocks for one max-size file, plus an indirect block per 4 MiB.
-const POOL_CAP: usize = (LARGE_FILE_MAX as usize / LARGE_BLOCK) + 64;
+/// Data blocks for [`LARGE_POOL_BYTES`], plus indirect blocks.
+const POOL_CAP: usize = (LARGE_POOL_BYTES / LARGE_BLOCK) + 128;
 
 struct File {
     len: u32,

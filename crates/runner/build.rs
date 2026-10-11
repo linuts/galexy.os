@@ -47,18 +47,6 @@ fn main() {
             b"galexy ramdisk plumbing works".to_vec(),
         ));
 
-        // Milestone 61: host `gxc` compiles the frozen gxr example into a
-        // distinct ramdisk name so rustc-built `hello` stays untouched.
-        {
-            let gxr = Path::new(env!("CARGO_MANIFEST_DIR")).join("../gxc/examples/hello.gxr");
-            println!("cargo:rerun-if-changed={}", gxr.display());
-            let src = std::fs::read_to_string(&gxr)
-                .unwrap_or_else(|e| panic!("ramdisk: read {}: {e}", gxr.display()));
-            let elf =
-                gxc::compile_elf(&src).unwrap_or_else(|e| panic!("gxc compile hello.gxr: {e}"));
-            entries.push(("hello-gxc".into(), elf));
-        }
-
         let mut tar = tar::Builder::new(std::fs::File::create(&ramdisk_path).unwrap());
         for (name, bytes) in &entries {
             let mut header = tar::Header::new_gnu();
@@ -146,7 +134,7 @@ fn main() {
     for (name, kernel) in &bins {
         let bios_path = out_dir.join(format!("{}-bios.img", name));
         let uefi_path = out_dir.join(format!("{}-uefi.img", name));
-        let ramdisk = if name == "test-rustc" && have_rustc {
+        let ramdisk = if have_rustc && (name == "test-rustc" || name == "test-rustc-hello") {
             &rustc_ramdisk
         } else {
             &ramdisk_path
@@ -277,6 +265,10 @@ fn write_rustc_ramdisk(dest: &Path) -> bool {
         "sysroot rlibs missing under {}",
         rustlib.display()
     );
+    let gxld = build_guest_gxld(dest.parent().unwrap());
+    entries.push(("gxld".into(), gxld));
+    let refs = link_reference_hellos(dest.parent().unwrap());
+    entries.extend(refs);
     let mut tar = tar::Builder::new(std::fs::File::create(dest).unwrap());
     for (name, bytes) in &entries {
         let mut header = tar::Header::new_gnu();
@@ -287,6 +279,139 @@ fn write_rustc_ramdisk(dest: &Path) -> bool {
     }
     tar.finish().unwrap();
     true
+}
+
+/// Ring-3 `gxld` the on-OS compiler spawns. Same std overlay as `stdmin`.
+fn build_guest_gxld(out_dir: &Path) -> Vec<u8> {
+    let sysroot = galexy_std_sysroot(out_dir);
+    let std_target = out_dir.join("std-target");
+    let manifest = repo_root().join("crates/gxld/Cargo.toml");
+    let release = is_release();
+    let mut cmd = nested_cargo();
+    cmd.arg("build")
+        .arg("--manifest-path")
+        .arg(&manifest)
+        .arg("--target-dir")
+        .arg(&std_target)
+        .arg("--bin")
+        .arg("gxld");
+    galexy_cargo_args(&mut cmd, "std,panic_abort");
+    if release {
+        cmd.arg("--release");
+    }
+    let _ = std::fs::remove_file(std_target.join(".rustc_info.json"));
+    cmd.env(
+        "RUSTC_WRAPPER",
+        repo_root().join("scripts/galexy-rustc-wrapper.py"),
+    );
+    cmd.env("GALEXY_SYSROOT", &sysroot);
+    cmd.env_remove("RUSTFLAGS");
+    let status = cmd
+        .status()
+        .unwrap_or_else(|e| panic!("spawn cargo for guest gxld: {e}"));
+    if !status.success() {
+        panic!("guest gxld build failed");
+    }
+    let profile = if release { "release" } else { "debug" };
+    let elf = std_target
+        .join(galexy_target_dir_name())
+        .join(profile)
+        .join("gxld");
+    let bytes = std::fs::read(&elf).unwrap_or_else(|e| panic!("read {}: {e}", elf.display()));
+    assert!(bytes.starts_with(b"\x7fELF"), "guest gxld is not an ELF");
+    bytes
+}
+
+/// Host cg_clif links of the same hello, one with `rust-lld` and one with
+/// `gxld`. The guest boots both before the on-OS compile.
+fn link_reference_hellos(out_dir: &Path) -> Vec<(String, Vec<u8>)> {
+    let gxld_target = out_dir.join("gxld-target");
+    let gxld_manifest = repo_root().join("crates/gxld/Cargo.toml");
+    let mut cmd = nested_cargo();
+    cmd.arg("build")
+        .arg("--release")
+        .arg("--manifest-path")
+        .arg(&gxld_manifest)
+        .arg("--target-dir")
+        .arg(&gxld_target);
+    let status = cmd.status().expect("spawn cargo for host gxld");
+    if !status.success() {
+        panic!("host gxld build failed");
+    }
+    let gxld = gxld_target.join("release").join("gxld");
+    let libs =
+        repo_root().join("target/galexy-rustc/sysroot/lib/rustlib/x86_64-unknown-galexy/lib");
+    let have_std = std::fs::read_dir(&libs).ok().is_some_and(|rd| {
+        rd.filter_map(|e| e.ok()).any(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("libstd-") && name.ends_with(".rlib")
+        })
+    });
+    assert!(
+        have_std,
+        "std rlib missing under {} (scripts/build-galexy-rustc.sh)",
+        libs.display()
+    );
+    let json = galexy_target();
+    let src_dir = out_dir.join("rustc-hello-src");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    let hello = src_dir.join("hello.rs");
+    std::fs::write(
+        &hello,
+        "fn main() {\n    println!(\"hello from rustc on galexy\");\n}\n",
+    )
+    .unwrap();
+    let lld = link_one(&hello, &src_dir.join("hello-lld"), &libs, &json, None);
+    let linked = link_one(
+        &hello,
+        &src_dir.join("hello-gxld"),
+        &libs,
+        &json,
+        Some(gxld.as_path()),
+    );
+    vec![("hello-lld".into(), lld), ("hello-gxld".into(), linked)]
+}
+
+fn link_one(src: &Path, out: &Path, libs: &Path, json: &Path, gxld: Option<&Path>) -> Vec<u8> {
+    let mut cmd = Command::new("rustc");
+    cmd.arg("-Zunstable-options")
+        .arg("-Zcodegen-backend=cranelift")
+        .arg("--target")
+        .arg(json)
+        .arg("-L")
+        .arg(libs)
+        .arg("--edition")
+        .arg("2021")
+        .arg("-C")
+        .arg(format!(
+            "link-arg=--image-base={:#x}",
+            galexy_abi::USER_IMAGE_BASE
+        ))
+        .arg("-C")
+        .arg("link-arg=--no-pie")
+        .arg("-o")
+        .arg(out)
+        .arg(src);
+    if let Some(gxld) = gxld {
+        cmd.arg("-C")
+            .arg(format!("linker={}", gxld.display()))
+            .arg("-C")
+            .arg("linker-flavor=ld");
+    }
+    let status = cmd
+        .status()
+        .unwrap_or_else(|e| panic!("spawn rustc for {}: {e}", out.display()));
+    if !status.success() {
+        panic!("reference link failed: {}", out.display());
+    }
+    let bytes = std::fs::read(out).unwrap_or_else(|e| panic!("read {}: {e}", out.display()));
+    assert!(
+        bytes.starts_with(b"\x7fELF"),
+        "{} is not an ELF",
+        out.display()
+    );
+    bytes
 }
 
 /// Re-pack `source` as `dest`, letting `swap(name, body)` replace entries.

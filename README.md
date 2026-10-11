@@ -8,8 +8,7 @@ A small **capability-based** operating system in Rust. Boots BIOS and UEFI,
 runs on two CPUs, and has a real ring-3 userland: login seats under a
 userspace init, a shell with pipelines and line editing, utilities, a
 sealed disk-backed filesystem (galfs), process Caps, sleep / block /
-wake scheduling, and a tiny Rust-subset compiler that emits runnable
-programs.
+wake scheduling, and an on-OS Cranelift `rustc`.
 
 Not a Linux clone. No POSIX claim. Authority is **capabilities** (and
 galfs access cards), not global file descriptors or PIDs.
@@ -40,7 +39,7 @@ stays experimental.
 | galfs trees, tokens, sealed disk | [`docs/GALFS.md`](docs/GALFS.md) |
 | Process Caps, init, seats | [`docs/PROCESS.md`](docs/PROCESS.md) |
 | Scheduler, time, block/wake (frozen v1) | [`docs/SCHEDULING.md`](docs/SCHEDULING.md) |
-| Mini Rust compiler / gxc | [`docs/COMPILER.md`](docs/COMPILER.md) |
+| `gxc` (removed) | [`docs/COMPILER.md`](docs/COMPILER.md) |
 | Rust target + upstream `rustc` on Galexy | [`docs/RUSTC.md`](docs/RUSTC.md) |
 | `gxld` static linker | [`docs/LINKER.md`](docs/LINKER.md) |
 | How the kernel is wired | [`docs/DESIGN.md`](docs/DESIGN.md) |
@@ -133,13 +132,13 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 - **Auth** — PBKDF2 passwords, lockout, idle logout, forced first `passwd`; every seat boots logged out; audit lines carry no secrets
 - **Init and seats** — userspace `init` is the orphan root and respawns F-key seats; Ctrl-C kills the TTY foreground job
 - **Scheduling** — RR + pin-at-spawn + idle steal; `sleep`; blocking keyboard and pipe reads park and wake (`docs/SCHEDULING.md`)
-- **gxc** — a frozen Rust-subset compiler on the host that emits a hello object the linker turns into an ELF the loader runs; a fixture, not the self-host path (`docs/COMPILER.md`)
 - **gxld** — the static ELF64 linker: `no_std` library + GNU-ld-compatible CLI; `rustc -Clinker=gxld` links every userspace program and the `galexy-os-gxld` image passes the same tests as the `rust-lld` one (`docs/LINKER.md`)
+- **rustc** — upstream Cranelift `rustc` in the `test-rustc` image. It compiles on Galexy; linking and running that output is Milestone 73 (`docs/RUSTC.md`)
 
 ## Tests
 
 ```sh
-cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxc -p gxld   # host suites
+cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxld   # host suites
 cargo test -p runner --test audit_strings   # no "password" in any serial line
 cargo test -p runner --test boot --release   # QEMU suite (114 boots, -smp 2, release profile)
 ```
@@ -160,7 +159,7 @@ pull request, on the toolchain pinned in `rust-toolchain.toml`:
 
 | Job | What it proves |
 |---|---|
-| `host` | `cargo fmt --all -- --check`; host suites (abi, core, crypto, galf, fsck, gxc, gxld); `clippy -D warnings` on the host crates (`--all-targets`), the kernel bins (`x86_64-unknown-none`), and the userspace programs (`x86_64-unknown-galexy`) |
+| `host` | `cargo fmt --all -- --check`; host suites (abi, core, crypto, galf, fsck, gxld); `clippy -D warnings` on the host crates (`--all-targets`), the kernel bins (`x86_64-unknown-none`), and the userspace programs (`x86_64-unknown-galexy`) |
 | `qemu` | builds every image, `clippy` on the runner and its tests, `audit_strings`, then the full boot suite in parallel (libtest's default, one test per CPU) under TCG on `ubuntu-latest` (`qemu-system-x86` + `ovmf`, `OVMF_FD=/usr/share/ovmf/OVMF.fd`) |
 
 The boot suite *is* the matrix — each axis is a named test rather than
@@ -252,7 +251,7 @@ crates/
   galfs-fsck/     host fsck CLI over galfs.img
   galexy-os/      kernel (lib + main + 70 test bins)
   userspace/      galexy-rt, init, shell, util, hello
-  gxc/            mini Rust-subset compiler (gxr) — COMPILER.md
+  gxld/           static ELF64 linker — LINKER.md
   runner/         image build, `cargo run`, QEMU boot tests
 ```
 
@@ -276,7 +275,7 @@ crates/
 - **Phase 6** ✅ — userspace init, seats under init, job Caps
   (shutdown through init and `svc` → Milestone 67)
 - **Phase 7** ✅ — scheduling complete (sleep / block-wake / policy) — SCHEDULING.md
-- **Phase 8** ✅ — mini Rust-subset compiler (`gxc`) for hello, now frozen — COMPILER.md
+- **Phase 8** ✅ — mini Rust-subset compiler (`gxc`) shipped hello, then was removed once `rustc` was the on-OS compiler — COMPILER.md
 - **Phase 9** — hardened (SMEP/SMAP/UMIP/KASLR, hostile ELF), fast
   (bench, KVM, LTO, IRQ completion), modern (q35, ECAM, virtio 1.x,
   MSI-X, TSC-deadline), full userland (heap, argv, clock, channels,
@@ -289,16 +288,7 @@ crates/
   upstream Cranelift `rustc` compiling on-OS (✅ Milestone 72).
   Linking that object and running it is Milestone 73 — RUSTC.md
 
-Host-compile the gxr hello (not rustc) and link it with `gxld`:
-
-```sh
-cargo run -p gxc -- build -o hello-gxc.elf crates/gxc/examples/hello.gxr   # object → gxld in-process
-cargo run -p gxc -- build -c -o hello-gxc.o crates/gxc/examples/hello.gxr  # object only
-cargo run -p gxld -- -o hello-gxc.elf hello-gxc.o                           # same bytes
-```
-
-The runner packs that ELF as ramdisk `hello-gxc` for QEMU
-(`test-hellogxc`). Any userspace program links the same way:
+`gxc` is gone. Host `gxld` still links userspace the same way `rust-lld` does:
 
 ```sh
 RUSTFLAGS="-Clinker=target/release/gxld -Clinker-flavor=ld" \
@@ -329,6 +319,5 @@ Details: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 - [Writing an OS in Rust](https://os.phil-opp.com/) — structural foundation
 - [bootloader](https://github.com/rust-osdev/bootloader) · [rust-osdev](https://github.com/rust-osdev)
-- [Cranelift](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift) ·
-  [rustc-lite](https://github.com/suhteevah/rustc-lite) — codegen / subset
-  ideas for `gxc` (see COMPILER.md)
+- [Cranelift](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift) —
+  the codegen backend in the on-OS `rustc` (`docs/RUSTC.md`)

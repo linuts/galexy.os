@@ -18,6 +18,9 @@ path = "src/lib.rs"
 default = ["std"]
 std = []
 
+[build-dependencies]
+galexy-abi = { path = "../galexy-abi" }
+
 [dependencies]
 galexy-abi = { path = "../galexy-abi" }
 object = { version = "0.40", default-features = false, features = ["read_core", "elf", "archive"] }

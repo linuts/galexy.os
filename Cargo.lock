@@ -273,14 +273,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gxc"
-version = "0.1.0"
-dependencies = [
- "galexy-abi",
- "gxld",
-]
-
-[[package]]
 name = "gxld"
 version = "0.1.0"
 dependencies = [
@@ -484,10 +476,10 @@ name = "runner"
 version = "0.1.0"
 dependencies = [
  "bootloader",
+ "galexy-abi",
  "galexy-crypto",
  "galexy-galf",
  "galexy-os",
- "gxc",
  "gxld",
  "tar",
 ]

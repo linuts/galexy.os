@@ -8,6 +8,7 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- Milestone 73 — `gxc` is removed. On-OS `rustc` links with `gxld`.
 - [#95](https://github.com/linuts/galexy.os/pull/95) — Milestone 72 —
   on-OS Cranelift `rustc`. Stage 1 is one static ELF
   (`scripts/build-galexy-rustc.sh`, `scripts/galexy-rustc.patch`) for

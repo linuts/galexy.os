@@ -2034,18 +2034,17 @@ End-to-end proof without regressing rustc-built programs.
 
 ## Milestone 62 — On-OS compile — SUPERSEDED by Phase 11
 
-`gxc` is **frozen** at gxr v0 (`docs/COMPILER.md` → Status). On-OS
-compilation is upstream `rustc` on Galexy (Milestones 68–73,
-`docs/RUSTC.md`), not a ring-3 `gxc`. The crate stays as a fixture:
-bug fixes only, `test-hellogxc` stays green, and its ELF emitter moves
-into the linker (Milestone 69).
+`gxc` is **removed** (Milestone 73). On-OS compilation is upstream
+`rustc` on Galexy (Milestones 68–73, `docs/RUSTC.md`). The ELF emitter
+moved into `gxld` (Milestone 69); the crate and `test-hellogxc` went
+with it.
 
 - [x] ~~no_std `gxc` core on Galexy~~ — dropped; `rustc` is the self-host path
 - [x] ~~Read `.gxr` from galfs; write ELF; `spawn` it~~ — dropped
 - [x] ~~Cranelift `no_std` path for `gxc`~~ — dropped; Cranelift arrives
       as `rustc`'s backend (Milestone 72)
 - [x] `gxc` emits a relocatable object and links through `gxld`
-      (Milestone 69) — the only change `gxc` receives again
+      (Milestone 69); the crate was removed in Milestone 73
 
 ---
 
@@ -2477,8 +2476,7 @@ nightly's `library/` and teaches the `cfg_select` dispatchers about
       `./hello` prints `hello from rustc on galexy`; a second on-OS
       program using `std::fs` + `std::thread` runs
 - [ ] Docs: `RUSTC.md` stages ✅; README "Rust on Galexy" section;
-      `COMPILER.md` notes `gxc` is the subset compiler, `rustc` the
-      tenant
+      `COMPILER.md` notes `gxc` was removed and `rustc` is the compiler
 - [ ] Stated non-goals: `cargo` on-OS, proc macros on-OS, rebuilding
       `rustc` / `std` on Galexy, LLVM / `lld` / `mrustc` / libc
 
@@ -2634,10 +2632,10 @@ items stay here with rationale.
 - [x] Mini Rust compiler frontend (gxr) — **Milestone 59** (Phase 8)
 - [x] gxc codegen + ELF emit — **Milestone 60**
 - [x] Hello via gxc in QEMU — **Milestone 61**
-- [x] ~~On-OS gxc~~ — **Milestone 62** superseded by Phase 11; `gxc`
-      frozen at gxr v0
-- [ ] No linker *on* Galexy yet; the host `gxld` crate is CLOSED by
-      **Milestone 69**; the ring-3 program is **Milestone 71**
+- [x] ~~On-OS gxc~~ — **Milestone 62** superseded by Phase 11; the
+      crate was removed in **Milestone 73**
+- [x] Host `gxld` — **Milestone 69**; ring-3 `gxldos` — **Milestone 71**.
+      On-OS `rustc` linking is **Milestone 73**
 - [x] Kernel hardening (SMEP/SMAP/UMIP/KASLR, hostile ELF, KDF cost) —
       **Milestone 63** (Phase 9)
 - [x] Fast path (bench, KVM, release profile, IRQ completion) —

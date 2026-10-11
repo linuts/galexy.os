@@ -18,7 +18,6 @@ members = [
     "crates/userspace/bigtest",
     "crates/userspace/gxldos",
     "crates/userspace/threadtest",
-    "crates/gxc",
     "crates/gxld",
     "crates/xtask",
 ]

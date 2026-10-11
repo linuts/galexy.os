@@ -1702,9 +1702,9 @@ pub fn add_actor_named(name: &str, password: &[u8]) -> Result<u16, SysError> {
 }
 
 fn admin_quota_limits() -> (u16, u32) {
-    // The v12 pool is 128 KiB. Promoted files live in the large store,
-    // which holds one max-size file; admin's byte quota matches that cap.
-    (OBJECT_SLOTS as u16, super::large::LARGE_FILE_MAX)
+    // The v12 pool is 128 KiB. Promoted files share the RAM store.
+    // Admin's byte quota matches that pool so a std sysroot fits.
+    (OBJECT_SLOTS as u16, super::large::LARGE_POOL_BYTES as u32)
 }
 
 fn actor_usage(table: &Table, ai: usize) -> (u32, u32) {
@@ -1932,6 +1932,31 @@ pub fn create_file_under(parent: u16, name: &str) -> Result<u16, SysError> {
     drop(table);
     mark_dirty();
     Ok(oi as u16)
+}
+
+/// Creates `name` under `parent` with `bytes` in the RAM large store.
+///
+/// Files that fit in 32 KiB normally stay in the v12 pool. The on-OS
+/// sysroot has many of those, and that pool is 128 KiB total, so the
+/// compiler image imports every rlib through here and leaves v12 for
+/// rustc's own short temps.
+pub fn import_promoted(parent: u16, name: &str, bytes: &[u8]) -> Result<u16, SysError> {
+    if bytes.len() > super::large::LARGE_FILE_MAX as usize {
+        return Err(SysError::BadValue);
+    }
+    let id = create_file_under(parent, name)?;
+    {
+        let table = TABLE.lock();
+        let actor = table.objects[id as usize].actor as usize;
+        if !can_add_bytes(&table, actor, bytes.len() as u32) {
+            return Err(SysError::NoResource);
+        }
+    }
+    if !super::large::create_from(id as usize, bytes) {
+        return Err(SysError::NoResource);
+    }
+    mark_dirty();
+    Ok(id)
 }
 
 fn free_object(table: &Table) -> Option<usize> {

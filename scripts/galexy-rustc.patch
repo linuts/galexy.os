@@ -527,6 +527,87 @@ index a30dd1c3e..0ec7e1514 100644
              }
              Arch::AArch64 => match &sess.target.os {
                  Os::None => vec![],
+diff --git a/compiler/rustc_codegen_ssa/src/back/link.rs b/compiler/rustc_codegen_ssa/src/back/link.rs
+index 45ab9b8bc..efd5ee4af 100644
+--- a/compiler/rustc_codegen_ssa/src/back/link.rs
++++ b/compiler/rustc_codegen_ssa/src/back/link.rs
+@@ -298,6 +298,20 @@ fn find_bundled_library(
+     None
+ }
+ 
++/// Directory for `rustc*` temp files. A relative `-o hello` has an empty
++/// parent; on Galexy that must be the galfs root, not `""`.
++fn linker_temp_parent(parent: &Path) -> &Path {
++    #[cfg(target_os = "galexy")]
++    if parent.as_os_str().is_empty() || parent == Path::new(".") {
++        return Path::new("/");
++    }
++    if parent.as_os_str().is_empty() {
++        Path::new(".")
++    } else {
++        parent
++    }
++}
++
+ /// Performs the linkage portion of the compilation phase. This will generate all
+ /// of the requested outputs for this compilation session.
+ pub fn link_binary(
+@@ -347,9 +361,10 @@ pub fn link_binary(
+ 
+         if outputs.outputs.should_link() {
+             let output = out_filename(sess, crate_type, outputs, crate_info.local_crate_name);
++            let tmp_parent = linker_temp_parent(output.parent().unwrap_or_else(|| Path::new(".")));
+             let tmpdir = TempDirBuilder::new()
+                 .prefix("rustc")
+-                .tempdir_in(output.parent().unwrap_or_else(|| Path::new(".")))
++                .tempdir_in(tmp_parent)
+                 .unwrap_or_else(|error| {
+                     sess.dcx().emit_fatal(diagnostics::CreateTempDir { error })
+                 });
+@@ -1271,6 +1286,18 @@ fn link_natively(
+     );
+ 
+     linker::disable_localization(&mut cmd);
++    // The JSON spec hash must stay the one the sysroot was built with, so
++    // the image base is injected here instead of in the target spec.
++    if sess.target.os.desc() == "galexy" {
++        let has_base = cmd.get_args().iter().any(|a| a.to_string_lossy().contains("image-base"));
++        let has_nopie = cmd.get_args().iter().any(|a| a == "--no-pie" || a == "-no-pie");
++        if !has_base {
++            cmd.arg("--image-base=0xc8000000000");
++        }
++        if !has_nopie {
++            cmd.arg("--no-pie");
++        }
++    }
+ 
+     for (k, v) in sess.target.link_env.as_ref() {
+         cmd.env(k.as_ref(), v.as_ref());
+@@ -1926,6 +1953,12 @@ fn adjust_flavor_to_features(
+ 
+     let features = sess.opts.cg.linker_features;
+ 
++    // Galexy has no `rust-lld`. The spec still names it so the sysroot hash
++    // matches; the spawn is `gxld` unless the user passed `-Clinker`.
++    if sess.opts.cg.linker.is_none() && sess.target.os.desc() == "galexy" {
++        return (PathBuf::from("gxld"), LinkerFlavor::Gnu(Cc::No, Lld::No));
++    }
++
+     // linker and linker flavor specified via command line have precedence over what the target
+     // specification specifies
+     let linker_flavor = match sess.opts.cg.linker_flavor {
+@@ -2118,7 +2151,10 @@ fn exec_linker(
+     // that contains all the arguments (aka 'response' files).
+     // The theory is that this is then accepted on all linkers and the linker
+     // will read all its options out of there instead of looking at the command line.
+-    if !cmd.very_likely_to_exceed_some_spawn_limit() {
++    // Galexy's spawn blob is 4096 bytes and does not report E2BIG, so the
++    // retry below would never run. Always hand `gxld` an `@` file.
++    let force_response = cfg!(target_os = "galexy");
++    if !force_response && !cmd.very_likely_to_exceed_some_spawn_limit() {
+         match cmd.command().stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+             Ok(child) => {
+                 let output = child.wait_with_output();
 diff --git a/compiler/rustc_codegen_ssa/src/back/write.rs b/compiler/rustc_codegen_ssa/src/back/write.rs
 index 04be7956e..15c3b3143 100644
 --- a/compiler/rustc_codegen_ssa/src/back/write.rs
@@ -766,6 +847,32 @@ index 8f446d265..a4fd880ca 100644
  }
  
  pub(crate) fn dlsym_proc_macros(
+diff --git a/compiler/rustc_session/src/config.rs b/compiler/rustc_session/src/config.rs
+index 64cfdfd5f..be3d41667 100644
+--- a/compiler/rustc_session/src/config.rs
++++ b/compiler/rustc_session/src/config.rs
+@@ -2522,7 +2522,20 @@ pub fn parse_target_triple(early_dcx: &EarlyDiagCtxt, matches: &getopts::Matches
+             })
+         }
+         Some(target) => TargetTuple::TargetTuple(target),
+-        _ => TargetTuple::from_tuple(host_tuple()),
++        _ => {
++            // The sysroot was built from the JSON spec, whose hash is not
++            // the builtin triple. A bare `rustc hello.rs` loads that file.
++            #[cfg(target_os = "galexy")]
++            {
++                let json = Path::new("/x86_64-unknown-galexy.json");
++                if json.is_file() {
++                    return TargetTuple::from_path(json).unwrap_or_else(|_| {
++                        early_dcx.early_fatal(format!("target file {json:?} does not exist"))
++                    });
++                }
++            }
++            TargetTuple::from_tuple(host_tuple())
++        }
+     }
+ }
+ 
 diff --git a/compiler/rustc_session/src/filesearch.rs b/compiler/rustc_session/src/filesearch.rs
 index 10c62d932..fb3023c6e 100644
 --- a/compiler/rustc_session/src/filesearch.rs
@@ -852,7 +959,7 @@ index b36e13b66..2ee9841a1 100644
          x87_target_feature,
          xcoff,
 diff --git a/compiler/rustc_target/src/spec/mod.rs b/compiler/rustc_target/src/spec/mod.rs
-index b5196599e..a474ad413 100644
+index b5196599e..9a7f0d481 100644
 --- a/compiler/rustc_target/src/spec/mod.rs
 +++ b/compiler/rustc_target/src/spec/mod.rs
 @@ -1654,6 +1654,7 @@ fn $module() {
@@ -863,6 +970,29 @@ index b5196599e..a474ad413 100644
  
      ("aarch64-unknown-teeos", aarch64_unknown_teeos),
  
+@@ -2945,7 +2946,10 @@ fn load_file(
+             path: &Path,
+             unstable_options: bool,
+         ) -> Result<(Target, TargetWarnings), String> {
+-            if !unstable_options {
++            // Galexy's sysroot was built from this JSON spec. The on-OS
++            // compiler loads it by default, so `rustc hello.rs` must not
++            // need `-Zunstable-options`.
++            if !unstable_options && !cfg!(target_os = "galexy") {
+                 return Err(
+                     "custom targets are unstable and require `-Zunstable-options`".to_string()
+                 );
+@@ -2991,7 +2995,9 @@ fn load_file(
+ 
+                 Err(format!("could not find specification for target {target_tuple:?}"))
+             }
+-            TargetTuple::TargetJson { ref contents, .. } if !unstable_options => {
++            TargetTuple::TargetJson { ref contents, .. }
++                if !unstable_options && !cfg!(target_os = "galexy") =>
++            {
+                 Err("custom targets are unstable and require `-Zunstable-options`".to_string())
+             }
+             TargetTuple::TargetJson { ref contents, .. } => Target::from_json(contents),
 diff --git a/compiler/rustc_target/src/spec/targets/x86_64_unknown_galexy.rs b/compiler/rustc_target/src/spec/targets/x86_64_unknown_galexy.rs
 new file mode 100644
 index 000000000..4e0685753

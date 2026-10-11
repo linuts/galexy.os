@@ -94,25 +94,11 @@ when tasks run, sleep, and block.
   cooldown / `MAX_THREADS` / `SPAWN_FRAME_RESERVE` needs a milestone or
   DESIGN waiver — cite `docs/SCHEDULING.md` → Frozen policy.
 
-## Compiler (gxc)
+## Compiler
 
-Rules for Phase 8 (Milestones **59–61**). Full plan: `docs/COMPILER.md`.
-Host `rustc` remains how real programs (`shell`, utils) are built.
-
-- **Subset, not rustc.** Document accepted syntax; reject the rest. Never
-  claim Rust/cargo compatibility for `gxc` output.
-- **Reuse the ABI.** Emit ELFs the existing loader accepts
-  (`USER_IMAGE_BASE`, W^X, `_start` / Write / Exit). Do not invent a
-  second userspace contract.
-- **Hello is the gate.** New language features need a milestone checkbox;
-  do not grow the subset to compile `shell` in the same breath as hello.
-- **Frozen.** `gxc` is a Linux host tool at gxr v0, bug fixes only; it
-  never grows toward Rust. On-OS compile is upstream `rustc` (Phase 11,
-  `docs/RUSTC.md`); Milestone 62 is superseded.
-- **License-aware reuse.** Prefer MIT/Apache (Cranelift, rustc-lite
-  ideas, `object` / `iced-x86`). Vendored slices get attribution;
-  evaluate before copying large trees.
-- **Keep rustc `hello` green.** gxc demos use a distinct ramdisk name.
+`gxc` (Phase 8, Milestones 59–61) is removed. On-OS compile is upstream
+`rustc` (`docs/RUSTC.md`). Host `rustc` still builds `shell` and the
+utilities.
 
 ## Linker
 
@@ -132,11 +118,13 @@ Rules for `gxld` (Milestone 69; plan: `docs/LINKER.md`).
   sections, out-of-range relocations and unknown relocation kinds are
   errors with the object and section named; no panic, no `unwrap` on
   input-derived values.
-- **`no_std + alloc`.** The crate is a library first; the host CLI and
-  the later ring-3 program are thin `main`s. Nothing in it may depend on
-  `std::fs` or paths — inputs are byte slices, the output is a `Vec`.
-- **Caps, not paths, on-OS.** The ring-3 `gxld` receives input and
-  output Caps at spawn and opens nothing itself.
+- **`no_std + alloc`.** The library takes byte slices and returns a
+  `Vec`. Path and archive I/O stay in the `std` CLI (`gxld`) and the
+  cap-based `gxldos` test program.
+- **Two ring-3 fronts.** `gxldos` still receives input and output Caps
+  and opens nothing. The `gxld` binary `rustc` spawns is the GNU-ld
+  CLI: it reads paths and `@` response files through `std::fs`, because
+  that is the linker command `rustc` emits.
 
 
 ## Process model and init
