@@ -272,7 +272,7 @@ job without making it the TTY's Ctrl-C target.
 
 A process is still one address space and one Cap table. `ThreadSpawn`
 adds a thread inside it: a new kernel slot, the same CR3, a fresh user
-stack (default 16 pages, at most 2048 / 8 MiB as of Milestone 71) and a fresh kernel stack, `FS`
+stack (default 16 pages, at most 4352 / 17 MiB as of Milestone 72) and a fresh kernel stack, `FS`
 base 0. The return value is a process Cap with `PROC_PARENT` on the
 shared table; `Wait` on it is join and yields the thread's exit code.
 The caller parks until the thread is registered — the kernel allocates

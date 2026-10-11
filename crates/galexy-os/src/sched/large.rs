@@ -4,7 +4,7 @@
 //! that promotes the file here: 4 KiB blocks, double indirection (a
 //! single indirect block addresses 4 MiB; 64 MiB needs the second
 //! level), length `u32`. The pool grows on the kernel heap up to one
-//! 64 MiB file plus its indirect blocks. Callers hold the galfs table
+//! max-size file plus its indirect blocks. Callers hold the galfs table
 //! lock and then [`STORE`]; this module never locks the table.
 
 use alloc::boxed::Box;
@@ -15,8 +15,13 @@ use crate::sync::Mutex;
 
 /// Block size for a promoted file.
 pub const LARGE_BLOCK: usize = 4096;
-/// Largest file this store will hold (Milestone 71: at least 64 MiB).
-pub const LARGE_FILE_MAX: u32 = 64 * 1024 * 1024;
+/// Largest file this store will hold.
+///
+/// Milestone 71 required 64 MiB. `libcore`'s split metadata is about
+/// 66 MiB, so the on-OS sysroot needs 80 MiB for that one file. The
+/// pool is still one file of this size; core plus `compiler_builtins`
+/// (rlib and rmeta) sum to less than that.
+pub const LARGE_FILE_MAX: u32 = 80 * 1024 * 1024;
 /// Object slots. Matches `galfs::OBJECT_SLOTS`.
 pub const SLOTS: usize = 128;
 

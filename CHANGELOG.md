@@ -8,6 +8,19 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#95](https://github.com/linuts/galexy.os/pull/95) — Milestone 72 —
+  on-OS Cranelift `rustc`. Stage 1 is one static ELF
+  (`scripts/build-galexy-rustc.sh`, `scripts/galexy-rustc.patch`) for
+  nightly-2026-10-08. `channel = "nightly"` matches stage 0's `core`
+  metadata. `--print cfg` reports `target_os="galexy"` and
+  `panic="abort"`. A type error prints `mismatched types` and exits 1
+  (`FatalError` calls `process::exit` because this compiler is
+  `panic=abort`). `--emit=obj` of a `no_std` hello matches the host
+  Cranelift object. The test image carries `libcore` and
+  `compiler_builtins` (rlib and rmeta). Compiler threads may ask for
+  17 MiB. The RAM store is 80 MiB. SSE is enabled on every CPU.
+  `rustc_obj_matches_host` runs under TCG when KVM cannot create a
+  vCPU. Linking the object is Milestone 73.
 - [#94](https://github.com/linuts/galexy.os/pull/94) — Milestone 71 —
   capacity for a compiler process. QEMU `-m 2G` and a
   frame bitmap covering 4 GiB. `Map` budget is 1 GiB per task. A

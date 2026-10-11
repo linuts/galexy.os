@@ -13,11 +13,22 @@
 //!
 //! Every capability-taking call validates the handle kernel-side.
 
+use core::cell::UnsafeCell;
+
 use galexy_abi::{Cap, CapRights, SysError, Syscall, SyscallResult, MAX_SYSCALL};
 
 use crate::sched::context::Context;
 use x86_64::structures::paging::PageTableFlags;
 use x86_64::VirtAddr;
+
+/// Per-CPU scratch for the files snapshot. Syscall entry clears IF, so
+/// a CPU cannot re-enter its own slot; other CPUs use other slots.
+struct FilesSnap(UnsafeCell<[u8; galexy_abi::FILES_SNAPSHOT_MAX]>);
+unsafe impl Sync for FilesSnap {}
+
+static FILES_SNAP: [FilesSnap; crate::arch::cpu::MAX_CPUS] =
+    [const { FilesSnap(UnsafeCell::new([0; galexy_abi::FILES_SNAPSHOT_MAX])) };
+        crate::arch::cpu::MAX_CPUS];
 
 /// What the dispatcher wants done with the (already result-stamped) frame.
 pub enum Outcome {
@@ -1002,6 +1013,12 @@ fn syscall_read_query(cap: Cap, kind: Query, addr: u64, len: u64) -> SyscallResu
     if !cap.rights().contains(CapRights::READ) {
         return SyscallResult::err(SysError::AccessDenied);
     }
+    // The files listing is one shot and rustc `read_dir`s a sysroot, so
+    // it is not capped at the 1 KiB short read. The buffer is per-CPU,
+    // not on the 32 KiB kernel stack.
+    if matches!(kind, Query::Files) {
+        return syscall_read_files(addr, len);
+    }
     let len = len.min(MAX_READ);
     if len == 0 {
         return SyscallResult::ok(0);
@@ -1020,10 +1037,11 @@ fn syscall_read_query(cap: Cap, kind: Query, addr: u64, len: u64) -> SyscallResu
         Query::Stats => render_stats(&mut out),
         Query::Tasks => render_tasks(&mut out),
         Query::Threads => render_threads(&mut out),
-        Query::Files => render_files(&mut out),
         Query::Dmesg => {
             out.n = crate::drivers::dmesg::snapshot(out.dst);
         }
+        // Returned above, before the 1 KiB cap.
+        Query::Files => unreachable!("files snapshot"),
     }
     let n = out.n;
     if n > 0 {
@@ -1035,8 +1053,40 @@ fn syscall_read_query(cap: Cap, kind: Query, addr: u64, len: u64) -> SyscallResu
     SyscallResult::ok(n as u64)
 }
 
+fn syscall_read_files(addr: u64, len: u64) -> SyscallResult {
+    let len = len.min(galexy_abi::FILES_SNAPSHOT_MAX as u64);
+    if len == 0 {
+        return SyscallResult::ok(0);
+    }
+    if user_buffer(addr, len, true).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let cpu = crate::arch::cpu::current_index();
+    // SAFETY: syscall entry clears IF, so this CPU cannot re-enter its
+    // slot. `current_index()` is this CPU. The copy below runs only
+    // after `TextBuf` has released the mutable borrow.
+    let buf = unsafe { &mut *FILES_SNAP[cpu].0.get() };
+    let n = {
+        let mut out = TextBuf {
+            dst: &mut buf[..len as usize],
+            n: 0,
+        };
+        render_files(&mut out);
+        out.n
+    };
+    if n > 0 {
+        // SAFETY: `user_buffer` accepted `[addr, addr+len)` as present,
+        // user, and writable, and `n <= len`.
+        unsafe {
+            crate::arch::user_copy::copy_to_user(buf.as_ptr(), addr, n);
+        }
+    }
+    SyscallResult::ok(n as u64)
+}
+
 /// Stack-only sink for query text (no heap). Regression: never replace with
-/// `String` / `Vec` — `read` on stats/tasks/threads/files runs with IF=0.
+/// `String` / `Vec` — `read` on stats/tasks/threads runs with IF=0. The
+/// files snapshot uses [`syscall_read_files`] (per-CPU buffer, still no heap).
 struct TextBuf<'a> {
     dst: &'a mut [u8],
     n: usize,
@@ -1411,8 +1461,10 @@ const MAX_WRITE: u64 = 1024;
 /// `read` staging cap. Longer user requests short-read to this size.
 const MAX_READ: u64 = 1024;
 
-/// `open` name cap. Ramdisk entries are short (`hello`, `banner.txt`).
-const MAX_NAME: u64 = 64;
+/// `open` / `create` path cap. A sysroot path
+/// (`lib/rustlib/x86_64-unknown-galexy/lib/libcore-….rlib`) is longer
+/// than a ramdisk label. Each component is still at most `NAME_CAP`.
+const MAX_NAME: u64 = 256;
 
 /// Rights a `write` call must see on the capability (kernel-side authority;
 /// the opaque model means userspace never "sets" them).

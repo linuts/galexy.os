@@ -132,7 +132,8 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(FUTEX_WAIT, 0);
     assert_eq!(FUTEX_WAKE, 1);
     assert_eq!(THREAD_STACK_PAGES_DEFAULT, 16);
-    assert_eq!(THREAD_STACK_PAGES_MAX, 2048);
+    assert_eq!(THREAD_STACK_PAGES_MAX, 17 * 1024 * 1024 / 4096);
+    assert_eq!(FILES_SNAPSHOT_MAX, 8192);
     assert_eq!(THREADS_PER_PROCESS, 16);
     assert_eq!(SysError::TimedOut as u64, 10);
     assert_eq!(SPAWN_NO_FG, 32);

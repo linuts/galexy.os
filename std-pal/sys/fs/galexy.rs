@@ -414,8 +414,16 @@ impl fmt::Debug for File {
 /// One `files` snapshot: every path the task may list, one per line,
 /// directories with a trailing `/`.
 fn files_snapshot() -> io::Result<Vec<u8>> {
-    let mut buf = vec![0u8; 1024];
-    let n = syscall::read(syscall::files_cap(), &mut buf).map_err(err)?;
+    // One shot, no cursor. The kernel cap is `FILES_SNAPSHOT_MAX`, which
+    // is larger than the short `read` used for file bodies.
+    let mut buf = vec![0u8; abi::FILES_SNAPSHOT_MAX];
+    let n = syscall::syscall(
+        abi::Syscall::Read,
+        syscall::files_cap().bits(),
+        buf.as_mut_ptr().addr() as u64,
+        buf.len() as u64,
+    )
+    .map_err(err)? as usize;
     buf.truncate(n);
     Ok(buf)
 }

@@ -742,10 +742,13 @@ pub const FUTEX_WAKE: u64 = 1;
 
 /// `thread_spawn` stack size when `RDX` is `0` (64 KiB).
 pub const THREAD_STACK_PAGES_DEFAULT: u64 = 16;
-/// Largest `thread_spawn` stack (8 MiB). `0` in `RDX` still means
+/// Largest `thread_spawn` stack (17 MiB). `0` in `RDX` still means
 /// [`THREAD_STACK_PAGES_DEFAULT`] (64 KiB). The main task stack stays
 /// four pages; this cap is the stack a thread asks for itself.
-pub const THREAD_STACK_PAGES_MAX: u64 = 2048;
+///
+/// Milestone 72: `rustc`'s compile thread requests
+/// `DEFAULT_STACK_SIZE` (`17 * 1024 * 1024` on nightly-2026-10-08).
+pub const THREAD_STACK_PAGES_MAX: u64 = 17 * 1024 * 1024 / 4096;
 /// Running-or-parked records one address space may hold, leader included.
 /// Exited threads awaiting a join do not count.
 pub const THREADS_PER_PROCESS: u64 = 16;
@@ -761,6 +764,12 @@ pub const SPAWN_NAME_MAX: usize = 64;
 pub const SPAWN_ARG_MAX: usize = 4096;
 /// Pages one task may `map` for its heap (1 GiB).
 pub const USER_HEAP_PAGES: u64 = 262_144;
+/// Bytes one `read` of the files snapshot may return.
+///
+/// The snapshot has no cursor: each `read` is a fresh listing, so this
+/// is the whole listing. Milestone 72 raised it from the 1 KiB short
+/// read so `rustc` can `read_dir` a sysroot.
+pub const FILES_SNAPSHOT_MAX: usize = 8192;
 /// Bytes one channel message may carry, not counting Caps.
 pub const CHAN_MSG_MAX: usize = 256;
 

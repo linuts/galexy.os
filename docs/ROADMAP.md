@@ -446,10 +446,12 @@ first.
    `gxldos`. Large files live in a RAM store (64 MiB, 4 KiB blocks);
    host v13 is the sealed large-volume image the kernel does not load
    yet. `test-big` (KVM) and `test-gxld`
-5. **72 `rustc` for Galexy** — cross-built from the host with
-   `codegen-backends = ["cranelift"]` (LLVM never ported); the small
-   cfg-gated patch set (`memmap`, `jobserver`, `getrandom`, `stacker`,
-   target spec); `rustc --emit=obj hello.rs` on-OS matches the host
+5. **72 `rustc` for Galexy** ✅ — one static Cranelift `rustc` for the
+   Galexy host (nightly-2026-10-08). On-OS `--print cfg`, a
+   `mismatched types` diagnostic, and `--emit=obj` match the host
+   Cranelift object (`rustc_obj_matches_host`, TCG when KVM cannot
+   create a vCPU). Compiler stacks are 17 MiB. The RAM store is 80 MiB
+   so `core`'s metadata fits. The on-disk v13 cap stays 64 MiB
 6. **73 Link and run** — `gxld` links cg_clif output (fallback: port
    `wild`); `rustc hello.rs -o hello` in ring 3, the shell runs it. The
    **Phase 11 gate**

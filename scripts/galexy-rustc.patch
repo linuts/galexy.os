@@ -1,0 +1,4658 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 71086e720..c96098fa1 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -171,9 +171,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "anyhow"
+-version = "1.0.102"
++version = "1.0.104"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
++checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+ 
+ [[package]]
+ name = "ar_archive_writer"
+@@ -184,6 +184,12 @@ dependencies = [
+  "object 0.39.1",
+ ]
+ 
++[[package]]
++name = "arbitrary"
++version = "1.5.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed"
++
+ [[package]]
+ name = "arrayref"
+ version = "0.3.9"
+@@ -391,6 +397,9 @@ name = "bumpalo"
+ version = "3.20.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
++dependencies = [
++ "allocator-api2",
++]
+ 
+ [[package]]
+ name = "bytecheck"
+@@ -940,6 +949,169 @@ dependencies = [
+  "libc",
+ ]
+ 
++[[package]]
++name = "cranelift-assembler-x64"
++version = "0.135.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3bfbb8f30b72ef5cedf2dbd85ee2f167a33c888d492a40e999250187138663c9"
++dependencies = [
++ "cranelift-assembler-x64-meta",
++]
++
++[[package]]
++name = "cranelift-assembler-x64-meta"
++version = "0.135.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "5715fdd9d897798ba2bb834df5d6c1129319d51e82ddcf81812c23231e9b852b"
++dependencies = [
++ "cranelift-srcgen",
++]
++
++[[package]]
++name = "cranelift-bforest"
++version = "0.135.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "1a266da98b248dd98dfc8a46d45d57810db04a55b81a6d8c7a9c6cf0bd2db7c3"
++dependencies = [
++ "cranelift-entity",
++ "wasmtime-internal-core",
++]
++
++[[package]]
++name = "cranelift-bitset"
++version = "0.135.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c67c1887ed2194ef3ecc283a9add4fe8a79d249a293063046f2adedc31ae7200"
++dependencies = [
++ "wasmtime-internal-core",
++]
++
++[[package]]
++name = "cranelift-codegen"
++version = "0.135.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "90103abeafa22cc578c577999bdf1b51c32b8a59e15a09789841b4e9a854588d"
++dependencies = [
++ "bumpalo",
++ "cranelift-assembler-x64",
++ "cranelift-bforest",
++ "cranelift-bitset",
++ "cranelift-codegen-meta",
++ "cranelift-codegen-shared",
++ "cranelift-control",
++ "cranelift-entity",
++ "cranelift-isle",
++ "gimli 0.33.0",
++ "hashbrown 0.17.1",
++ "libm",
++ "log",
++ "regalloc2",
++ "rustc-hash 2.1.1",
++ "serde",
++ "smallvec",
++ "target-lexicon",
++ "wasmtime-internal-core",
++]
++
++[[package]]
++name = "cranelift-codegen-meta"
++version = "0.135.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d73eaff808bc302e2899e42d822c0e64df23f38facb98ecdf695d1817d2063a3"
++dependencies = [
++ "cranelift-assembler-x64-meta",
++ "cranelift-codegen-shared",
++ "cranelift-srcgen",
++ "heck",
++]
++
++[[package]]
++name = "cranelift-codegen-shared"
++version = "0.135.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "de19c4fc55ac3cdeb8e153f35ef9f51db197da91a64c9811d0ddd21ed1b9d18d"
++
++[[package]]
++name = "cranelift-control"
++version = "0.135.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "9bbd919579d74a7212e6e849dc24ff015cb823e70051d01559eea828efaf773f"
++dependencies = [
++ "arbitrary",
++]
++
++[[package]]
++name = "cranelift-entity"
++version = "0.135.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "af201af93fa8a576ac4b04b901ac3f252545d7b703053c922526fce28f65a7be"
++dependencies = [
++ "cranelift-bitset",
++ "wasmtime-internal-core",
++]
++
++[[package]]
++name = "cranelift-frontend"
++version = "0.135.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "69395ceee43706b93bf869b3a6631ab8d9dcb2bf19f9af4d1d2db0cb9e18af18"
++dependencies = [
++ "cranelift-codegen",
++ "hashbrown 0.17.1",
++ "log",
++ "smallvec",
++ "target-lexicon",
++]
++
++[[package]]
++name = "cranelift-isle"
++version = "0.135.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "8e8d98a81f71e2ddc61849ca1454ff424fbf42a3ee5529365be8c0859ddf5b9a"
++
++[[package]]
++name = "cranelift-module"
++version = "0.135.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "1180199bfd3a02dd5758e2cfb49a218e55732a61ef0cc1ebd1756866b0a297a0"
++dependencies = [
++ "anyhow",
++ "cranelift-codegen",
++ "cranelift-control",
++]
++
++[[package]]
++name = "cranelift-native"
++version = "0.135.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "273c79e0265b754f67ff76c42d6db4856dabf9101e3bb1b23c83255e2438dd02"
++dependencies = [
++ "cranelift-codegen",
++ "libc",
++ "target-lexicon",
++]
++
++[[package]]
++name = "cranelift-object"
++version = "0.135.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "fe22a1c6c8944926419f91fa4e21a548a9dfc509ac089ff9d61d26beaea8611a"
++dependencies = [
++ "anyhow",
++ "cranelift-codegen",
++ "cranelift-control",
++ "cranelift-module",
++ "log",
++ "object 0.39.1",
++ "target-lexicon",
++]
++
++[[package]]
++name = "cranelift-srcgen"
++version = "0.135.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "2b73d7e686f3518831f88ffe88be02c6c92be09930fc5ab90a3dfd9a4de3815e"
++
+ [[package]]
+ name = "crc32fast"
+ version = "1.5.0"
+@@ -1616,6 +1788,18 @@ version = "0.31.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
+ 
++[[package]]
++name = "gimli"
++version = "0.33.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0bf7f043f89559805f8c7cacc432749b2fa0d0a0a9ee46ce47164ed5ba7f126c"
++dependencies = [
++ "fnv",
++ "hashbrown 0.16.1",
++ "indexmap",
++ "stable_deref_trait",
++]
++
+ [[package]]
+ name = "gimli"
+ version = "0.34.0"
+@@ -1623,7 +1807,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "1033caf0b349c518623b5396bfb2cf0bddf44f0306d543a250e5743297aafd10"
+ dependencies = [
+  "fnv",
+- "hashbrown",
++ "hashbrown 0.17.1",
+  "indexmap",
+  "stable_deref_trait",
+ ]
+@@ -1671,6 +1855,12 @@ dependencies = [
+  "serde",
+ ]
+ 
++[[package]]
++name = "hashbrown"
++version = "0.16.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
++
+ [[package]]
+ name = "hashbrown"
+ version = "0.17.1"
+@@ -1972,7 +2162,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
+ dependencies = [
+  "equivalent",
+- "hashbrown",
++ "hashbrown 0.17.1",
+  "serde",
+  "serde_core",
+ ]
+@@ -2321,9 +2511,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "libm"
+-version = "0.2.15"
++version = "0.2.16"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
++checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+ 
+ [[package]]
+ name = "libredox"
+@@ -2780,7 +2970,7 @@ checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
+ dependencies = [
+  "crc32fast",
+  "flate2",
+- "hashbrown",
++ "hashbrown 0.17.1",
+  "indexmap",
+  "memchr",
+  "ruzstd",
+@@ -3376,6 +3566,20 @@ dependencies = [
+  "syn 2.0.117",
+ ]
+ 
++[[package]]
++name = "regalloc2"
++version = "0.15.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "757712e8e61590d6d4f5d563483755538b5aa13467837a3b41cd9832509a7f85"
++dependencies = [
++ "allocator-api2",
++ "bumpalo",
++ "hashbrown 0.17.1",
++ "log",
++ "rustc-hash 2.1.1",
++ "smallvec",
++]
++
+ [[package]]
+ name = "regex"
+ version = "1.12.2"
+@@ -3452,7 +3656,7 @@ checksum = "d9776093b7ca170454ab1406954f7b7d97a57c51dc6c0642957fb2ef25c2d399"
+ dependencies = [
+  "bytecheck",
+  "bytes",
+- "hashbrown",
++ "hashbrown 0.17.1",
+  "indexmap",
+  "munge",
+  "ptr_meta",
+@@ -3783,6 +3987,37 @@ dependencies = [
+  "tracing",
+ ]
+ 
++[[package]]
++name = "rustc_codegen_cranelift"
++version = "0.1.0"
++dependencies = [
++ "cranelift-codegen",
++ "cranelift-frontend",
++ "cranelift-module",
++ "cranelift-native",
++ "cranelift-object",
++ "gimli 0.33.0",
++ "indexmap",
++ "object 0.39.1",
++ "rustc_abi",
++ "rustc_ast",
++ "rustc_attr_ir",
++ "rustc_codegen_ssa",
++ "rustc_const_eval",
++ "rustc_data_structures",
++ "rustc_errors",
++ "rustc_hir",
++ "rustc_index",
++ "rustc_log",
++ "rustc_middle",
++ "rustc_session",
++ "rustc_span",
++ "rustc_symbol_mangling",
++ "rustc_target",
++ "smallvec",
++ "target-lexicon",
++]
++
+ [[package]]
+ name = "rustc_codegen_llvm"
+ version = "0.0.0"
+@@ -3916,7 +4151,7 @@ dependencies = [
+  "either",
+  "elsa",
+  "ena",
+- "hashbrown",
++ "hashbrown 0.17.1",
+  "indexmap",
+  "jobserver",
+  "libc",
+@@ -4275,6 +4510,7 @@ dependencies = [
+  "rustc_attr_parsing",
+  "rustc_borrowck",
+  "rustc_builtin_macros",
++ "rustc_codegen_cranelift",
+  "rustc_codegen_llvm",
+  "rustc_codegen_ssa",
+  "rustc_const_eval",
+@@ -5633,6 +5869,10 @@ dependencies = [
+  "xattr",
+ ]
+ 
++[[package]]
++name = "target-lexicon"
++version = "0.13.5"
++
+ [[package]]
+ name = "tempfile"
+ version = "3.23.0"
+@@ -5754,7 +5994,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "b5938a79ecf9cb8198d525ddb37cd8841f66ab98073f6a123af7ed7cdcbb73ae"
+ dependencies = [
+  "gimli 0.34.0",
+- "hashbrown",
++ "hashbrown 0.17.1",
+  "itertools",
+  "object 0.39.1",
+  "tracing",
+@@ -6500,12 +6740,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "d92fc335fb6d48f46bda1d8b26b69e28320c15ac3272208333833d6e217e2b4a"
+ dependencies = [
+  "bitflags",
+- "hashbrown",
++ "hashbrown 0.17.1",
+  "indexmap",
+  "semver",
+  "serde",
+ ]
+ 
++[[package]]
++name = "wasmtime-internal-core"
++version = "48.0.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ecc0a0310fc4a3f545427c7880362657f72f838ffcfe4d3b8c864021df3b3488"
++dependencies = [
++ "hashbrown 0.17.1",
++ "libm",
++]
++
+ [[package]]
+ name = "wast"
+ version = "257.0.1"
+@@ -6932,7 +7182,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "6f815340f0bb65d9775ae21e56b503b496683557b9b627b195d2766c25fb24ae"
+ dependencies = [
+  "anyhow",
+- "hashbrown",
++ "hashbrown 0.17.1",
+  "id-arena",
+  "indexmap",
+  "log",
+diff --git a/Cargo.toml b/Cargo.toml
+index 63d96ff2a..a1bda5ae9 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -85,5 +85,8 @@ codegen-units = 1
+ 
+ # If you want to use a crate with local modifications, you can set a path or git dependency here.
+ # For git dependencies, also add your source to ALLOWED_SOURCES in src/tools/tidy/src/extdeps.rs.
+-#[patch.crates-io]
++[patch.crates-io]
++# Cranelift's target-lexicon 0.13.5 rejects x86_64-unknown-galexy.
++# compiler/target-lexicon is that crate plus one special-case triple.
++target-lexicon = { path = "compiler/target-lexicon" }
+ 
+diff --git a/compiler/rustc/src/main.rs b/compiler/rustc/src/main.rs
+index 6609a19fa..3e09a2d18 100644
+--- a/compiler/rustc/src/main.rs
++++ b/compiler/rustc/src/main.rs
+@@ -34,5 +34,18 @@
+ rustc_driver::override_c_allocator_in_binary!();
+ 
+ fn main() -> ExitCode {
++    #[cfg(target_os = "galexy")]
++    {
++        // The process stack is four pages. Parsing and the compile thread
++        // need the 17 MiB `DEFAULT_STACK_SIZE`; move there before any work.
++        return std::thread::Builder::new()
++            .name("rustc-main".to_string())
++            .stack_size(17 * 1024 * 1024)
++            .spawn(rustc_driver::main)
++            .expect("rustc thread")
++            .join()
++            .unwrap_or_else(|_| ExitCode::from(101));
++    }
++    #[cfg(not(target_os = "galexy"))]
+     rustc_driver::main()
+ }
+diff --git a/compiler/rustc_codegen_cranelift/Cargo.toml b/compiler/rustc_codegen_cranelift/Cargo.toml
+index ca03be20c..d4dc11fc1 100644
+--- a/compiler/rustc_codegen_cranelift/Cargo.toml
++++ b/compiler/rustc_codegen_cranelift/Cargo.toml
+@@ -4,7 +4,8 @@ version = "0.1.0"
+ edition = "2024"
+ 
+ [lib]
+-crate-type = ["dylib"]
++# rlib so Galexy can link Cranelift into rustc. There is no dynamic loader.
++crate-type = ["rlib"]
+ 
+ [dependencies]
+ # These have to be in sync with each other
+@@ -41,6 +42,28 @@ smallvec = "1.8.1"
+ 
+ #gimli = { path = "../" }
+ 
++# Galexy links this crate into rustc. The extern crates above are
++# rustc_private and are not in the stage0 sysroot for this target, so
++# they have to be real path dependencies. The host dylib build still
++# loads them from the sysroot and must not take this edge (it would
++# cycle through rustc_interface on a normal bootstrap).
++[target.'cfg(target_os = "galexy")'.dependencies]
++rustc_abi = { path = "../rustc_abi" }
++rustc_ast = { path = "../rustc_ast" }
++rustc_attr_ir = { path = "../rustc_attr_ir" }
++rustc_codegen_ssa = { path = "../rustc_codegen_ssa" }
++rustc_const_eval = { path = "../rustc_const_eval" }
++rustc_data_structures = { path = "../rustc_data_structures" }
++rustc_errors = { path = "../rustc_errors" }
++rustc_hir = { path = "../rustc_hir" }
++rustc_index = { path = "../rustc_index" }
++rustc_log = { path = "../rustc_log" }
++rustc_middle = { path = "../rustc_middle" }
++rustc_session = { path = "../rustc_session" }
++rustc_span = { path = "../rustc_span" }
++rustc_symbol_mangling = { path = "../rustc_symbol_mangling" }
++rustc_target = { path = "../rustc_target" }
++
+ [features]
+ # Enable features not ready to be enabled when compiling as part of rustc
+ unstable-features = ["jit", "inline_asm_sym"]
+diff --git a/compiler/rustc_codegen_cranelift/src/lib.rs b/compiler/rustc_codegen_cranelift/src/lib.rs
+index a30dd1c3e..0ec7e1514 100644
+--- a/compiler/rustc_codegen_cranelift/src/lib.rs
++++ b/compiler/rustc_codegen_cranelift/src/lib.rs
+@@ -29,6 +29,8 @@
+ extern crate rustc_target;
+ 
+ // This prevents duplicating functions and statics that are already part of the host rustc process.
++// Galexy links this crate into rustc statically, so rustc_driver is the same binary.
++#[cfg(not(target_os = "galexy"))]
+ #[allow(unused_extern_crates)]
+ extern crate rustc_driver;
+ 
+@@ -45,7 +47,7 @@
+ use rustc_middle::dep_graph::WorkProductMap;
+ use rustc_session::config::{NATIVE_CPU, OutputFilenames};
+ use rustc_session::{CodegenBackendInit, EarlySession, IncrCompSession, Session};
+-use rustc_span::{Symbol, sym};
++use rustc_span::sym;
+ use rustc_target::spec::{Arch, CfgAbi, Env, Os};
+ 
+ pub use crate::config::*;
+@@ -166,7 +168,7 @@ fn target_config(&self, sess: &EarlySession) -> TargetConfig {
+         let target_features = match sess.target.arch {
+             Arch::X86_64 if sess.target.os != Os::None => {
+                 // x86_64 mandates SSE2 support and rustc requires the x87 feature to be enabled
+-                vec![sym::fxsr, sym::sse, sym::sse2, Symbol::intern("x87")]
++                vec![sym::fxsr, sym::sse, sym::sse2, sym::x87]
+             }
+             Arch::AArch64 => match &sess.target.os {
+                 Os::None => vec![],
+diff --git a/compiler/rustc_codegen_ssa/src/back/write.rs b/compiler/rustc_codegen_ssa/src/back/write.rs
+index 04be7956e..15c3b3143 100644
+--- a/compiler/rustc_codegen_ssa/src/back/write.rs
++++ b/compiler/rustc_codegen_ssa/src/back/write.rs
+@@ -1777,8 +1777,12 @@ enum CodegenState {
+             }),
+         }))
+     };
++    // The coordinator runs the codegen message loop. On a host whose
++    // default thread stack is 64 KiB (Galexy), that loop overflows.
++    // Give it the same stack rustc uses for its other compile threads.
+     return std::thread::Builder::new()
+         .name("coordinator".to_owned())
++        .stack_size(stack_size)
+         .spawn(f)
+         .expect("failed to spawn coordinator thread");
+ 
+diff --git a/compiler/rustc_data_structures/Cargo.toml b/compiler/rustc_data_structures/Cargo.toml
+index daae72a9b..ebec03e99 100644
+--- a/compiler/rustc_data_structures/Cargo.toml
++++ b/compiler/rustc_data_structures/Cargo.toml
+@@ -53,7 +53,7 @@ features = [
+ libc = "0.2"
+ # tidy-alphabetical-end
+ 
+-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
++[target.'cfg(not(any(target_arch = "wasm32", target_os = "galexy")))'.dependencies]
+ # tidy-alphabetical-start
+ memmap2 = "0.2.1"
+ # tidy-alphabetical-end
+diff --git a/compiler/rustc_data_structures/src/memmap.rs b/compiler/rustc_data_structures/src/memmap.rs
+index d64a5862f..1ba131eed 100644
+--- a/compiler/rustc_data_structures/src/memmap.rs
++++ b/compiler/rustc_data_structures/src/memmap.rs
+@@ -3,13 +3,13 @@
+ use std::ops::{Deref, DerefMut};
+ 
+ /// A trivial wrapper for [`memmap2::Mmap`] (or `Vec<u8>` on WASM).
+-#[cfg(not(any(miri, target_arch = "wasm32")))]
++#[cfg(not(any(miri, target_arch = "wasm32", target_os = "galexy")))]
+ pub struct Mmap(memmap2::Mmap);
+ 
+-#[cfg(any(miri, target_arch = "wasm32"))]
++#[cfg(any(miri, target_arch = "wasm32", target_os = "galexy"))]
+ pub struct Mmap(Vec<u8>);
+ 
+-#[cfg(not(any(miri, target_arch = "wasm32")))]
++#[cfg(not(any(miri, target_arch = "wasm32", target_os = "galexy")))]
+ impl Mmap {
+     /// # Safety
+     ///
+@@ -29,7 +29,7 @@ pub unsafe fn map(file: File) -> io::Result<Self> {
+     }
+ }
+ 
+-#[cfg(any(miri, target_arch = "wasm32"))]
++#[cfg(any(miri, target_arch = "wasm32", target_os = "galexy"))]
+ impl Mmap {
+     #[inline]
+     pub unsafe fn map(mut file: File) -> io::Result<Self> {
+@@ -56,13 +56,13 @@ fn as_ref(&self) -> &[u8] {
+     }
+ }
+ 
+-#[cfg(not(any(miri, target_arch = "wasm32")))]
++#[cfg(not(any(miri, target_arch = "wasm32", target_os = "galexy")))]
+ pub struct MmapMut(memmap2::MmapMut);
+ 
+-#[cfg(any(miri, target_arch = "wasm32"))]
++#[cfg(any(miri, target_arch = "wasm32", target_os = "galexy"))]
+ pub struct MmapMut(Vec<u8>);
+ 
+-#[cfg(not(any(miri, target_arch = "wasm32")))]
++#[cfg(not(any(miri, target_arch = "wasm32", target_os = "galexy")))]
+ impl MmapMut {
+     #[inline]
+     pub fn map_anon(len: usize) -> io::Result<Self> {
+@@ -82,7 +82,7 @@ pub fn make_read_only(self) -> std::io::Result<Mmap> {
+     }
+ }
+ 
+-#[cfg(any(miri, target_arch = "wasm32"))]
++#[cfg(any(miri, target_arch = "wasm32", target_os = "galexy"))]
+ impl MmapMut {
+     #[inline]
+     pub fn map_anon(len: usize) -> io::Result<Self> {
+diff --git a/compiler/rustc_driver/Cargo.toml b/compiler/rustc_driver/Cargo.toml
+index 519097198..cc2a20722 100644
+--- a/compiler/rustc_driver/Cargo.toml
++++ b/compiler/rustc_driver/Cargo.toml
+@@ -4,7 +4,8 @@ version = "0.0.0"
+ edition = "2024"
+ 
+ [lib]
+-crate-type = ["dylib"]
++# Galexy has no dynamic loader. The driver is linked into the rustc ELF.
++crate-type = ["rlib"]
+ 
+ [dependencies]
+ # tidy-alphabetical-start
+diff --git a/compiler/rustc_driver_impl/Cargo.toml b/compiler/rustc_driver_impl/Cargo.toml
+index 6dba3dff4..1a526847a 100644
+--- a/compiler/rustc_driver_impl/Cargo.toml
++++ b/compiler/rustc_driver_impl/Cargo.toml
+@@ -52,7 +52,7 @@ features = [
+     "Win32_System_Diagnostics_Debug",
+ ]
+ 
+-[target.'cfg(not(target_family = "wasm"))'.dependencies]
++[target.'cfg(all(not(target_family = "wasm"), not(target_os = "galexy")))'.dependencies]
+ # tidy-alphabetical-start
+ ctrlc = "3.4.4"
+ # tidy-alphabetical-end
+diff --git a/compiler/rustc_driver_impl/src/lib.rs b/compiler/rustc_driver_impl/src/lib.rs
+index 1ba7ce953..a447445dd 100644
+--- a/compiler/rustc_driver_impl/src/lib.rs
++++ b/compiler/rustc_driver_impl/src/lib.rs
+@@ -1658,7 +1658,8 @@ pub fn init_logger_with_additional_layer<F, T>(
+ /// Install our usual `ctrlc` handler, which sets [`rustc_const_eval::CTRL_C_RECEIVED`].
+ /// Making this handler optional lets tools can install a different handler, if they wish.
+ pub fn install_ctrlc_handler() {
+-    #[cfg(all(not(miri), not(target_family = "wasm")))]
++    // Galexy has no signals. `ctrlc` is not a dependency there.
++    #[cfg(all(not(miri), not(target_family = "wasm"), not(target_os = "galexy")))]
+     ctrlc::set_handler(move || {
+         // Indicate that we have been signaled to stop, then give the rest of the compiler a bit of
+         // time to check CTRL_C_RECEIVED and run its own shutdown logic, but after a short amount
+diff --git a/compiler/rustc_interface/Cargo.toml b/compiler/rustc_interface/Cargo.toml
+index aea445679..31506b0f0 100644
+--- a/compiler/rustc_interface/Cargo.toml
++++ b/compiler/rustc_interface/Cargo.toml
+@@ -59,6 +59,10 @@ tracing = "0.1"
+ rustc_abi = { path = "../rustc_abi" }
+ # tidy-alphabetical-end
+ 
++[target.'cfg(target_os = "galexy")'.dependencies]
++# Statically linked. Galexy cannot dlopen a codegen backend.
++rustc_codegen_cranelift = { path = "../rustc_codegen_cranelift" }
++
+ [features]
+ # tidy-alphabetical-start
+ check_only = ['rustc_codegen_llvm?/check_only']
+diff --git a/compiler/rustc_interface/src/util.rs b/compiler/rustc_interface/src/util.rs
+index d58b7bfdd..bd0b2f982 100644
+--- a/compiler/rustc_interface/src/util.rs
++++ b/compiler/rustc_interface/src/util.rs
+@@ -387,6 +387,11 @@ pub fn get_codegen_backend(
+             "dummy" => || Box::new(DummyCodegenBackend),
+             #[cfg(feature = "llvm")]
+             "llvm" => rustc_codegen_llvm::LlvmCodegenBackend::new,
++            // Galexy has no dynamic linker. Cranelift is linked into this crate.
++            #[cfg(target_os = "galexy")]
++            "cranelift" => || {
++                Box::new(rustc_codegen_cranelift::CraneliftCodegenBackend { config: None })
++            },
+             backend_name => get_codegen_sysroot(early_dcx, sysroot, backend_name),
+         }
+     });
+diff --git a/compiler/rustc_metadata/src/host_dylib.rs b/compiler/rustc_metadata/src/host_dylib.rs
+index 8f446d265..a4fd880ca 100644
+--- a/compiler/rustc_metadata/src/host_dylib.rs
++++ b/compiler/rustc_metadata/src/host_dylib.rs
+@@ -1,7 +1,10 @@
++#[cfg(not(target_os = "galexy"))]
+ use std::error::Error;
+ use std::path::Path;
++#[cfg(not(target_os = "galexy"))]
+ use std::time::Duration;
+ 
++#[cfg(not(target_os = "galexy"))]
+ use rustc_fs_util::try_canonicalize;
+ use rustc_proc_macro::bridge::client::Client as ProcMacroClient;
+ use rustc_session::StableCrateId;
+@@ -9,10 +12,12 @@
+ 
+ use crate::locator::CrateError;
+ 
++#[cfg(not(target_os = "galexy"))]
+ fn format_dlopen_err(e: &(dyn std::error::Error + 'static)) -> String {
+     e.sources().map(|e| format!(": {e}")).collect()
+ }
+ 
++#[cfg(not(target_os = "galexy"))]
+ fn attempt_load_dylib(path: &Path) -> Result<libloading::Library, libloading::Error> {
+     #[cfg(target_os = "aix")]
+     if let Some(ext) = path.extension()
+@@ -40,6 +45,7 @@ fn attempt_load_dylib(path: &Path) -> Result<libloading::Library, libloading::Er
+ // proc-macro DLL with `Error::LoadLibraryExW`. It is suspected that something in the
+ // system still holds a lock on the file, so we retry a few times before calling it
+ // an error.
++#[cfg(not(target_os = "galexy"))]
+ fn load_dylib(path: &Path, max_attempts: usize) -> Result<libloading::Library, String> {
+     assert!(max_attempts > 0);
+ 
+@@ -107,20 +113,33 @@ pub unsafe fn load_symbol_from_dylib<T: Copy>(
+     path: &Path,
+     sym_name: &str,
+ ) -> Result<T, DylibError> {
+-    // Make sure the path contains a / or the linker will search for it.
+-    let path = try_canonicalize(path).unwrap();
+-    let lib =
+-        load_dylib(&path, 5).map_err(|err| DylibError::DlOpen(path.display().to_string(), err))?;
++    // Galexy links Cranelift statically. There is no dlopen for proc macros.
++    #[cfg(target_os = "galexy")]
++    {
++        let _ = sym_name;
++        return Err(DylibError::DlOpen(
++            path.display().to_string(),
++            "no dynamic loader".to_string(),
++        ));
++    }
++    #[cfg(not(target_os = "galexy"))]
++    {
++        // Make sure the path contains a / or the linker will search for it.
++        let path = try_canonicalize(path).unwrap();
++        let lib = load_dylib(&path, 5)
++            .map_err(|err| DylibError::DlOpen(path.display().to_string(), err))?;
+ 
+-    let sym = unsafe { lib.get::<T>(sym_name.as_bytes()) }
+-        .map_err(|err| DylibError::DlSym(path.display().to_string(), format_dlopen_err(&err)))?;
++        let sym = unsafe { lib.get::<T>(sym_name.as_bytes()) }.map_err(|err| {
++            DylibError::DlSym(path.display().to_string(), format_dlopen_err(&err))
++        })?;
+ 
+-    // Intentionally leak the dynamic library. We can't ever unload it
+-    // since the library can make things that will live arbitrarily long.
+-    let sym = unsafe { sym.into_raw() };
+-    std::mem::forget(lib);
++        // Intentionally leak the dynamic library. We can't ever unload it
++        // since the library can make things that will live arbitrarily long.
++        let sym = unsafe { sym.into_raw() };
++        std::mem::forget(lib);
+ 
+-    Ok(*sym)
++        Ok(*sym)
++    }
+ }
+ 
+ pub(crate) fn dlsym_proc_macros(
+diff --git a/compiler/rustc_session/src/filesearch.rs b/compiler/rustc_session/src/filesearch.rs
+index 10c62d932..fb3023c6e 100644
+--- a/compiler/rustc_session/src/filesearch.rs
++++ b/compiler/rustc_session/src/filesearch.rs
+@@ -257,9 +257,9 @@ pub unsafe fn dll_path(function: *mut std::ffi::c_void) -> Result<PathBuf, Strin
+     Ok(rustc_fs_util::fix_windows_verbatim_for_gcc(&path))
+ }
+ 
+-#[cfg(target_os = "wasi")]
++#[cfg(any(target_os = "wasi", target_os = "galexy"))]
+ pub unsafe fn dll_path(_function: *mut std::ffi::c_void) -> Result<PathBuf, String> {
+-    Err("dll_path is not supported on WASI".to_string())
++    Err("dll_path is not supported on this target".to_string())
+ }
+ 
+ fn current_dll_path() -> Result<PathBuf, String> {
+@@ -277,6 +277,20 @@ fn current_dll_path() -> Result<PathBuf, String> {
+ /// This function checks if sysroot is found using env::args().next(), and if it
+ /// is not found, finds sysroot from current rustc_driver dll.
+ pub(crate) fn default_sysroot() -> PathBuf {
++    #[cfg(target_os = "galexy")]
++    {
++        // Static ELF, no dll path. rlibs live at
++        // `/lib/rustlib/<triple>/lib` under the task root.
++        return PathBuf::from("/");
++    }
++    #[cfg(not(target_os = "galexy"))]
++    {
++        default_sysroot_from_dll()
++    }
++}
++
++#[cfg(not(target_os = "galexy"))]
++fn default_sysroot_from_dll() -> PathBuf {
+     fn default_from_rustc_driver_dll() -> Result<PathBuf, String> {
+         let dll = current_dll_path()?;
+ 
+diff --git a/compiler/rustc_span/src/analyze_source_file.rs b/compiler/rustc_span/src/analyze_source_file.rs
+index 59cda1238..e2ad71710 100644
+--- a/compiler/rustc_span/src/analyze_source_file.rs
++++ b/compiler/rustc_span/src/analyze_source_file.rs
+@@ -30,7 +30,7 @@ pub(crate) fn analyze_source_file(src: &str) -> (Vec<RelativeBytePos>, Vec<Multi
+ }
+ 
+ cfg_select! {
+-    any(target_arch = "x86", target_arch = "x86_64") => {
++    all(any(target_arch = "x86", target_arch = "x86_64"), not(target_os = "galexy")) => {
+         fn analyze_source_file_dispatch(
+             src: &str,
+             lines: &mut Vec<RelativeBytePos>,
+diff --git a/compiler/rustc_span/src/fatal_error.rs b/compiler/rustc_span/src/fatal_error.rs
+index 5e2d82681..13cd955e2 100644
+--- a/compiler/rustc_span/src/fatal_error.rs
++++ b/compiler/rustc_span/src/fatal_error.rs
+@@ -13,7 +13,17 @@ impl !Send for FatalError {}
+ 
+ impl FatalError {
+     pub fn raise(self) -> ! {
+-        std::panic::resume_unwind(Box::new(FatalErrorMarker))
++        // Galexy rustc is panic=abort, so this sentinel cannot unwind into
++        // catch_fatal_errors. The diagnostic is already out; leave with the
++        // compiler's failure status instead of aborting the process.
++        #[cfg(target_os = "galexy")]
++        {
++            std::process::exit(1);
++        }
++        #[cfg(not(target_os = "galexy"))]
++        {
++            std::panic::resume_unwind(Box::new(FatalErrorMarker))
++        }
+     }
+ }
+ 
+diff --git a/compiler/rustc_span/src/symbol.rs b/compiler/rustc_span/src/symbol.rs
+index b36e13b66..2ee9841a1 100644
+--- a/compiler/rustc_span/src/symbol.rs
++++ b/compiler/rustc_span/src/symbol.rs
+@@ -2448,6 +2448,7 @@
+         x86,
+         x86_64,
+         x86_amx_intrinsics,
++        x87,
+         x87_reg,
+         x87_target_feature,
+         xcoff,
+diff --git a/compiler/rustc_target/src/spec/mod.rs b/compiler/rustc_target/src/spec/mod.rs
+index b5196599e..a474ad413 100644
+--- a/compiler/rustc_target/src/spec/mod.rs
++++ b/compiler/rustc_target/src/spec/mod.rs
+@@ -1654,6 +1654,7 @@ fn $module() {
+     ("armv7-unknown-linux-uclibceabihf", armv7_unknown_linux_uclibceabihf),
+ 
+     ("x86_64-unknown-none", x86_64_unknown_none),
++    ("x86_64-unknown-galexy", x86_64_unknown_galexy),
+ 
+     ("aarch64-unknown-teeos", aarch64_unknown_teeos),
+ 
+diff --git a/compiler/rustc_target/src/spec/targets/x86_64_unknown_galexy.rs b/compiler/rustc_target/src/spec/targets/x86_64_unknown_galexy.rs
+new file mode 100644
+index 000000000..4e0685753
+--- /dev/null
++++ b/compiler/rustc_target/src/spec/targets/x86_64_unknown_galexy.rs
+@@ -0,0 +1,37 @@
++//! Galexy.OS. Mirrors `targets/x86_64-unknown-galexy.json` in the Galexy
++//! tree: static, large code model, soft-float, no TLS, no dynamic linking.
++//! The image base is still a link argument (`--image-base`), not a spec field.
++
++use crate::spec::{
++    Arch, Cc, CodeModel, LinkerFlavor, Lld, Os, PanicStrategy, RelocModel, RustcAbi, Target,
++    TargetMetadata, TargetOptions,
++};
++
++pub(crate) fn target() -> Target {
++    Target {
++        llvm_target: "x86_64-unknown-none-elf".into(),
++        metadata: TargetMetadata {
++            description: Some("Galexy.OS".into()),
++            tier: Some(3),
++            host_tools: Some(true),
++            std: Some(true),
++        },
++        pointer_width: 64,
++        arch: Arch::X86_64,
++        data_layout:
++            "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128".into(),
++        options: TargetOptions {
++            os: Os::Other("galexy".into()),
++            cpu: "x86-64".into(),
++            features: "-mmx,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2,+soft-float".into(),
++            max_atomic_width: Some(64),
++            linker: Some("rust-lld".into()),
++            linker_flavor: LinkerFlavor::Gnu(Cc::No, Lld::Yes),
++            panic_strategy: PanicStrategy::Abort,
++            relocation_model: RelocModel::Static,
++            code_model: Some(CodeModel::Large),
++            rustc_abi: Some(RustcAbi::Softfloat),
++            ..Default::default()
++        },
++    }
++}
+diff --git a/compiler/target-lexicon/Cargo.toml b/compiler/target-lexicon/Cargo.toml
+new file mode 100644
+index 000000000..3223d5f04
+--- /dev/null
++++ b/compiler/target-lexicon/Cargo.toml
+@@ -0,0 +1,71 @@
++# THIS FILE IS AUTOMATICALLY GENERATED BY CARGO
++#
++# When uploading crates to the registry Cargo will automatically
++# "normalize" Cargo.toml files for maximal compatibility
++# with all versions of Cargo and also rewrite `path` dependencies
++# to registry (e.g., crates.io) dependencies.
++#
++# If you are reading this file be aware that the original Cargo.toml
++# will likely look very different (and much more reasonable).
++# See Cargo.toml.orig for the original contents.
++
++[package]
++edition = "2018"
++name = "target-lexicon"
++version = "0.13.5"
++authors = ["Dan Gohman <sunfish@mozilla.com>"]
++build = "build.rs"
++include = [
++    "Cargo.toml",
++    "README.md",
++    "LICENSE",
++    "build.rs",
++    "src/**/*.rs",
++]
++autolib = false
++autobins = false
++autoexamples = false
++autotests = false
++autobenches = false
++description = "LLVM target triple types"
++documentation = "https://docs.rs/target-lexicon/"
++readme = "README.md"
++keywords = [
++    "target",
++    "host",
++    "triple",
++    "compiler",
++    "jit",
++]
++categories = ["no-std"]
++license = "Apache-2.0 WITH LLVM-exception"
++repository = "https://github.com/bytecodealliance/target-lexicon"
++
++[badges.maintenance]
++status = "passively-maintained"
++
++[features]
++arch_z80 = []
++arch_zkasm = []
++default = []
++serde_support = [
++    "serde",
++    "std",
++]
++std = []
++
++[lib]
++name = "target_lexicon"
++path = "src/lib.rs"
++
++[dependencies.serde]
++version = "1.0"
++optional = true
++
++[dev-dependencies.serde_json]
++version = "1.0"
++
++[lints.rust.unexpected_cfgs]
++level = "warn"
++priority = 0
++check-cfg = ['cfg(feature, values("rust_1_40", "cargo-clippy"))']
+diff --git a/compiler/target-lexicon/LICENSE b/compiler/target-lexicon/LICENSE
+new file mode 100644
+index 000000000..f9d81955f
+--- /dev/null
++++ b/compiler/target-lexicon/LICENSE
+@@ -0,0 +1,220 @@
++
++                                 Apache License
++                           Version 2.0, January 2004
++                        http://www.apache.org/licenses/
++
++   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
++
++   1. Definitions.
++
++      "License" shall mean the terms and conditions for use, reproduction,
++      and distribution as defined by Sections 1 through 9 of this document.
++
++      "Licensor" shall mean the copyright owner or entity authorized by
++      the copyright owner that is granting the License.
++
++      "Legal Entity" shall mean the union of the acting entity and all
++      other entities that control, are controlled by, or are under common
++      control with that entity. For the purposes of this definition,
++      "control" means (i) the power, direct or indirect, to cause the
++      direction or management of such entity, whether by contract or
++      otherwise, or (ii) ownership of fifty percent (50%) or more of the
++      outstanding shares, or (iii) beneficial ownership of such entity.
++
++      "You" (or "Your") shall mean an individual or Legal Entity
++      exercising permissions granted by this License.
++
++      "Source" form shall mean the preferred form for making modifications,
++      including but not limited to software source code, documentation
++      source, and configuration files.
++
++      "Object" form shall mean any form resulting from mechanical
++      transformation or translation of a Source form, including but
++      not limited to compiled object code, generated documentation,
++      and conversions to other media types.
++
++      "Work" shall mean the work of authorship, whether in Source or
++      Object form, made available under the License, as indicated by a
++      copyright notice that is included in or attached to the work
++      (an example is provided in the Appendix below).
++
++      "Derivative Works" shall mean any work, whether in Source or Object
++      form, that is based on (or derived from) the Work and for which the
++      editorial revisions, annotations, elaborations, or other modifications
++      represent, as a whole, an original work of authorship. For the purposes
++      of this License, Derivative Works shall not include works that remain
++      separable from, or merely link (or bind by name) to the interfaces of,
++      the Work and Derivative Works thereof.
++
++      "Contribution" shall mean any work of authorship, including
++      the original version of the Work and any modifications or additions
++      to that Work or Derivative Works thereof, that is intentionally
++      submitted to Licensor for inclusion in the Work by the copyright owner
++      or by an individual or Legal Entity authorized to submit on behalf of
++      the copyright owner. For the purposes of this definition, "submitted"
++      means any form of electronic, verbal, or written communication sent
++      to the Licensor or its representatives, including but not limited to
++      communication on electronic mailing lists, source code control systems,
++      and issue tracking systems that are managed by, or on behalf of, the
++      Licensor for the purpose of discussing and improving the Work, but
++      excluding communication that is conspicuously marked or otherwise
++      designated in writing by the copyright owner as "Not a Contribution."
++
++      "Contributor" shall mean Licensor and any individual or Legal Entity
++      on behalf of whom a Contribution has been received by Licensor and
++      subsequently incorporated within the Work.
++
++   2. Grant of Copyright License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      copyright license to reproduce, prepare Derivative Works of,
++      publicly display, publicly perform, sublicense, and distribute the
++      Work and such Derivative Works in Source or Object form.
++
++   3. Grant of Patent License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      (except as stated in this section) patent license to make, have made,
++      use, offer to sell, sell, import, and otherwise transfer the Work,
++      where such license applies only to those patent claims licensable
++      by such Contributor that are necessarily infringed by their
++      Contribution(s) alone or by combination of their Contribution(s)
++      with the Work to which such Contribution(s) was submitted. If You
++      institute patent litigation against any entity (including a
++      cross-claim or counterclaim in a lawsuit) alleging that the Work
++      or a Contribution incorporated within the Work constitutes direct
++      or contributory patent infringement, then any patent licenses
++      granted to You under this License for that Work shall terminate
++      as of the date such litigation is filed.
++
++   4. Redistribution. You may reproduce and distribute copies of the
++      Work or Derivative Works thereof in any medium, with or without
++      modifications, and in Source or Object form, provided that You
++      meet the following conditions:
++
++      (a) You must give any other recipients of the Work or
++          Derivative Works a copy of this License; and
++
++      (b) You must cause any modified files to carry prominent notices
++          stating that You changed the files; and
++
++      (c) You must retain, in the Source form of any Derivative Works
++          that You distribute, all copyright, patent, trademark, and
++          attribution notices from the Source form of the Work,
++          excluding those notices that do not pertain to any part of
++          the Derivative Works; and
++
++      (d) If the Work includes a "NOTICE" text file as part of its
++          distribution, then any Derivative Works that You distribute must
++          include a readable copy of the attribution notices contained
++          within such NOTICE file, excluding those notices that do not
++          pertain to any part of the Derivative Works, in at least one
++          of the following places: within a NOTICE text file distributed
++          as part of the Derivative Works; within the Source form or
++          documentation, if provided along with the Derivative Works; or,
++          within a display generated by the Derivative Works, if and
++          wherever such third-party notices normally appear. The contents
++          of the NOTICE file are for informational purposes only and
++          do not modify the License. You may add Your own attribution
++          notices within Derivative Works that You distribute, alongside
++          or as an addendum to the NOTICE text from the Work, provided
++          that such additional attribution notices cannot be construed
++          as modifying the License.
++
++      You may add Your own copyright statement to Your modifications and
++      may provide additional or different license terms and conditions
++      for use, reproduction, or distribution of Your modifications, or
++      for any such Derivative Works as a whole, provided Your use,
++      reproduction, and distribution of the Work otherwise complies with
++      the conditions stated in this License.
++
++   5. Submission of Contributions. Unless You explicitly state otherwise,
++      any Contribution intentionally submitted for inclusion in the Work
++      by You to the Licensor shall be under the terms and conditions of
++      this License, without any additional terms or conditions.
++      Notwithstanding the above, nothing herein shall supersede or modify
++      the terms of any separate license agreement you may have executed
++      with Licensor regarding such Contributions.
++
++   6. Trademarks. This License does not grant permission to use the trade
++      names, trademarks, service marks, or product names of the Licensor,
++      except as required for reasonable and customary use in describing the
++      origin of the Work and reproducing the content of the NOTICE file.
++
++   7. Disclaimer of Warranty. Unless required by applicable law or
++      agreed to in writing, Licensor provides the Work (and each
++      Contributor provides its Contributions) on an "AS IS" BASIS,
++      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++      implied, including, without limitation, any warranties or conditions
++      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
++      PARTICULAR PURPOSE. You are solely responsible for determining the
++      appropriateness of using or redistributing the Work and assume any
++      risks associated with Your exercise of permissions under this License.
++
++   8. Limitation of Liability. In no event and under no legal theory,
++      whether in tort (including negligence), contract, or otherwise,
++      unless required by applicable law (such as deliberate and grossly
++      negligent acts) or agreed to in writing, shall any Contributor be
++      liable to You for damages, including any direct, indirect, special,
++      incidental, or consequential damages of any character arising as a
++      result of this License or out of the use or inability to use the
++      Work (including but not limited to damages for loss of goodwill,
++      work stoppage, computer failure or malfunction, or any and all
++      other commercial damages or losses), even if such Contributor
++      has been advised of the possibility of such damages.
++
++   9. Accepting Warranty or Additional Liability. While redistributing
++      the Work or Derivative Works thereof, You may choose to offer,
++      and charge a fee for, acceptance of support, warranty, indemnity,
++      or other liability obligations and/or rights consistent with this
++      License. However, in accepting such obligations, You may act only
++      on Your own behalf and on Your sole responsibility, not on behalf
++      of any other Contributor, and only if You agree to indemnify,
++      defend, and hold each Contributor harmless for any liability
++      incurred by, or claims asserted against, such Contributor by reason
++      of your accepting any such warranty or additional liability.
++
++   END OF TERMS AND CONDITIONS
++
++   APPENDIX: How to apply the Apache License to your work.
++
++      To apply the Apache License to your work, attach the following
++      boilerplate notice, with the fields enclosed by brackets "[]"
++      replaced with your own identifying information. (Don't include
++      the brackets!)  The text should be enclosed in the appropriate
++      comment syntax for the file format. We also recommend that a
++      file or class name and description of purpose be included on the
++      same "printed page" as the copyright notice for easier
++      identification within third-party archives.
++
++   Copyright [yyyy] [name of copyright owner]
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++
++
++--- LLVM Exceptions to the Apache 2.0 License ----
++
++As an exception, if, as a result of your compiling your source code, portions
++of this Software are embedded into an Object form of such source code, you
++may redistribute such embedded portions in such Object form without complying
++with the conditions of Sections 4(a), 4(b) and 4(d) of the License.
++
++In addition, if you combine or link compiled forms of this Software with
++software that is licensed under the GPLv2 ("Combined Software") and if a
++court of competent jurisdiction determines that the patent provision (Section
++3), the indemnity provision (Section 9) or other Section of the License
++conflicts with the conditions of the GPLv2, you may retroactively and
++prospectively choose to deem waived or otherwise exclude such Section(s) of
++the License, but only in their entirety and only with respect to the Combined
++Software.
++
+diff --git a/compiler/target-lexicon/README.md b/compiler/target-lexicon/README.md
+new file mode 100644
+index 000000000..0ecdb597a
+--- /dev/null
++++ b/compiler/target-lexicon/README.md
+@@ -0,0 +1,24 @@
++This is a library for managing targets for compilers and related tools.
++
++Currently, the main feature is support for decoding [LLVM "triples"], which
++are strings that identify a particular target configuration. They're named
++"triples" because historically they contained three fields, though over time
++they've added additional fields. This library provides a `Triple` struct
++containing enums for each of fields of a triple. `Triple` implements
++`FromStr` and `fmt::Display` so it can be converted to and from the
++conventional string representation of a triple.
++
++`Triple` also has functions for querying a triple's endianness,
++pointer bit width, and binary format.
++
++And, `Triple` and the enum types have `host()` constructors, for targeting
++the host.
++
++It somewhat supports reading triples currently used by `rustc` and rustup,
++though beware that the mapping between `rustc` and LLVM triples is not
++one-to-one.
++
++It does not support reading JSON target files itself. To use it with a JSON
++target file, construct a `Triple` using the value of the "llvm-target" field.
++
++[LLVM "triples"]: https://clang.llvm.org/docs/CrossCompilation.html#target-triple
+diff --git a/compiler/target-lexicon/build.rs b/compiler/target-lexicon/build.rs
+new file mode 100644
+index 000000000..3375d89af
+--- /dev/null
++++ b/compiler/target-lexicon/build.rs
+@@ -0,0 +1,179 @@
++//! build.rs file to obtain the host information.
++
++// Allow dead code in triple.rs and targets.rs for our purposes here.
++#![allow(dead_code)]
++
++use std::env;
++use std::fs::File;
++use std::io::{self, Write};
++use std::path::PathBuf;
++use std::process::Command;
++use std::str::FromStr;
++
++#[cfg(not(feature = "std"))]
++extern crate alloc;
++#[cfg(feature = "std")]
++extern crate std as alloc;
++
++// Include triple.rs and targets.rs so we can parse the TARGET environment variable.
++// targets.rs depends on data_model
++mod data_model {
++    include!("src/data_model.rs");
++}
++mod triple {
++    include!("src/triple.rs");
++}
++mod targets {
++    include!("src/targets.rs");
++}
++
++// Stub out `ParseError` to minimally support triple.rs and targets.rs.
++mod parse_error {
++    #[derive(Debug)]
++    pub enum ParseError {
++        UnrecognizedArchitecture(String),
++        UnrecognizedVendor(String),
++        UnrecognizedOperatingSystem(String),
++        UnrecognizedEnvironment(String),
++        UnrecognizedBinaryFormat(String),
++        UnrecognizedField(String),
++    }
++}
++
++use self::targets::Vendor;
++use self::triple::Triple;
++
++fn main() {
++    let out_dir = PathBuf::from(
++        env::var_os("OUT_DIR").expect("The OUT_DIR environment variable must be set"),
++    );
++    let target = env::var("TARGET").expect("The TARGET environment variable must be set");
++    let triple =
++        Triple::from_str(&target).unwrap_or_else(|_| panic!("Invalid target name: '{}'", target));
++    let out = File::create(out_dir.join("host.rs")).expect("error creating host.rs");
++    write_host_rs(out, triple).expect("error writing host.rs");
++    if using_1_40() {
++        println!("cargo:rustc-cfg=feature=\"rust_1_40\"");
++    }
++}
++
++fn using_1_40() -> bool {
++    match (|| {
++        let rustc = env::var_os("RUSTC").unwrap();
++        let output = Command::new(rustc).arg("--version").output().ok()?;
++        let stdout = if output.status.success() {
++            output.stdout
++        } else {
++            return None;
++        };
++        std::str::from_utf8(&stdout)
++            .ok()?
++            .split(' ')
++            .nth(1)?
++            .split('.')
++            .nth(1)?
++            .parse::<i32>()
++            .ok()
++    })() {
++        Some(version) => version >= 40,
++        None => true, // assume we're using an up-to-date compiler
++    }
++}
++
++fn write_host_rs(mut out: File, triple: Triple) -> io::Result<()> {
++    // The generated Debug implementation for the inner architecture variants
++    // doesn't print the enum name qualifier, so import them here. There
++    // shouldn't be any conflicts because these enums all share a namespace
++    // in the triple string format.
++    writeln!(
++        out,
++        r#"
++#[allow(unused_imports)]
++use crate::Aarch64Architecture::*;
++#[allow(unused_imports)]
++use crate::ArmArchitecture::*;
++#[allow(unused_imports)]
++use crate::CustomVendor;
++#[allow(unused_imports)]
++use crate::Mips32Architecture::*;
++#[allow(unused_imports)]
++use crate::Mips64Architecture::*;
++#[allow(unused_imports)]
++use crate::Riscv32Architecture::*;
++#[allow(unused_imports)]
++use crate::Riscv64Architecture::*;
++#[allow(unused_imports)]
++use crate::X86_32Architecture::*;
++
++/// The `Triple` of the current host.
++pub const HOST: Triple = Triple {{
++    architecture: Architecture::{architecture:?},
++    vendor: Vendor::{vendor},
++    operating_system: OperatingSystem::{operating_system:?},
++    environment: Environment::{environment:?},
++    binary_format: BinaryFormat::{binary_format:?},
++}};
++
++impl Architecture {{
++    /// Return the architecture for the current host.
++    pub const fn host() -> Self {{
++        Architecture::{architecture:?}
++    }}
++}}
++
++impl Vendor {{
++    /// Return the vendor for the current host.
++    pub const fn host() -> Self {{
++        Vendor::{vendor}
++    }}
++}}
++
++impl OperatingSystem {{
++    /// Return the operating system for the current host.
++    pub const fn host() -> Self {{
++        OperatingSystem::{operating_system:?}
++    }}
++}}
++
++impl Environment {{
++    /// Return the environment for the current host.
++    pub const fn host() -> Self {{
++        Environment::{environment:?}
++    }}
++}}
++
++impl BinaryFormat {{
++    /// Return the binary format for the current host.
++    pub const fn host() -> Self {{
++        BinaryFormat::{binary_format:?}
++    }}
++}}
++
++impl Triple {{
++    /// Return the triple for the current host.
++    pub const fn host() -> Self {{
++        Self {{
++            architecture: Architecture::{architecture:?},
++            vendor: Vendor::{vendor},
++            operating_system: OperatingSystem::{operating_system:?},
++            environment: Environment::{environment:?},
++            binary_format: BinaryFormat::{binary_format:?},
++        }}
++    }}
++}}"#,
++        architecture = triple.architecture,
++        vendor = vendor_display(&triple.vendor),
++        operating_system = triple.operating_system,
++        environment = triple.environment,
++        binary_format = triple.binary_format,
++    )?;
++
++    Ok(())
++}
++
++fn vendor_display(vendor: &Vendor) -> String {
++    match vendor {
++        Vendor::Custom(custom) => format!("Custom(CustomVendor::Static({:?}))", custom.as_str()),
++        known => format!("{:?}", known),
++    }
++}
+diff --git a/compiler/target-lexicon/src/data_model.rs b/compiler/target-lexicon/src/data_model.rs
+new file mode 100644
+index 000000000..0954add85
+--- /dev/null
++++ b/compiler/target-lexicon/src/data_model.rs
+@@ -0,0 +1,120 @@
++/// The size of a type.
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum Size {
++    U8,
++    U16,
++    U32,
++    U64,
++}
++
++impl Size {
++    /// Return the number of bits this `Size` represents.
++    pub fn bits(self) -> u8 {
++        use Size::*;
++
++        match self {
++            U8 => 8,
++            U16 => 16,
++            U32 => 32,
++            U64 => 64,
++        }
++    }
++
++    /// Return the number of bytes in a size.
++    ///
++    /// A byte is assumed to be 8 bits.
++    pub fn bytes(self) -> u8 {
++        use Size::*;
++
++        match self {
++            U8 => 1,
++            U16 => 2,
++            U32 => 4,
++            U64 => 8,
++        }
++    }
++}
++
++/// The C data model used on a target.
++///
++/// See also https://en.cppreference.com/w/c/language/arithmetic_types
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++pub enum CDataModel {
++    /// The data model used most commonly on Win16. `long` and `pointer` are 32 bits.
++    LP32,
++    /// The data model used most commonly on Win32 and 32-bit Unix systems.
++    ///
++    /// `int`, `long`, and `pointer` are all 32 bits.
++    ILP32,
++    /// The data model used most commonly on Win64
++    ///
++    /// `long long`, and `pointer` are 64 bits.
++    LLP64,
++    /// The data model used most commonly on 64-bit Unix systems
++    ///
++    /// `long`, and `pointer` are 64 bits.
++    LP64,
++    /// A rare data model used on early 64-bit Unix systems
++    ///
++    /// `int`, `long`, and `pointer` are all 64 bits.
++    ILP64,
++}
++
++impl CDataModel {
++    /// The width of a pointer (in the default address space).
++    pub fn pointer_width(self) -> Size {
++        use CDataModel::*;
++
++        match self {
++            LP32 | ILP32 => Size::U32,
++            LLP64 | LP64 | ILP64 => Size::U64,
++        }
++    }
++    /// The size of a C `short`. This is required to be at least 16 bits.
++    pub fn short_size(self) -> Size {
++        use CDataModel::*;
++
++        match self {
++            LP32 | ILP32 | LLP64 | LP64 | ILP64 => Size::U16,
++        }
++    }
++    /// The size of a C `int`. This is required to be at least 16 bits.
++    pub fn int_size(self) -> Size {
++        use CDataModel::*;
++
++        match self {
++            LP32 => Size::U16,
++            ILP32 | LLP64 | LP64 => Size::U32,
++            ILP64 => Size::U64,
++        }
++    }
++    /// The size of a C `long`. This is required to be at least 32 bits.
++    pub fn long_size(self) -> Size {
++        use CDataModel::*;
++
++        match self {
++            LP32 | ILP32 | LLP64 => Size::U32,
++            LP64 | ILP64 => Size::U64,
++        }
++    }
++    /// The size of a C `long long`. This is required (in C99+) to be at least 64 bits.
++    pub fn long_long_size(self) -> Size {
++        use CDataModel::*;
++
++        match self {
++            LP32 | ILP32 | LLP64 | ILP64 | LP64 => Size::U64,
++        }
++    }
++    /// The size of a C `float`.
++    pub fn float_size(self) -> Size {
++        // TODO: this is probably wrong on at least one architecture
++        Size::U32
++    }
++    /// The size of a C `double`.
++    pub fn double_size(self) -> Size {
++        // TODO: this is probably wrong on at least one architecture
++        Size::U64
++    }
++}
+diff --git a/compiler/target-lexicon/src/host.rs b/compiler/target-lexicon/src/host.rs
+new file mode 100644
+index 000000000..976ef1d75
+--- /dev/null
++++ b/compiler/target-lexicon/src/host.rs
+@@ -0,0 +1,70 @@
++use crate::{Architecture, BinaryFormat, Environment, OperatingSystem, Triple, Vendor};
++
++// Include the implementations of the `HOST` object containing information
++// about the current host.
++include!(concat!(env!("OUT_DIR"), "/host.rs"));
++
++#[cfg(test)]
++mod tests {
++    #[cfg(target_os = "aix")]
++    #[test]
++    fn test_aix() {
++        use super::*;
++        assert_eq!(OperatingSystem::host(), OperatingSystem::Aix);
++    }
++
++    #[cfg(target_os = "cygwin")]
++    #[test]
++    fn test_cygwin() {
++        use super::*;
++        assert_eq!(OperatingSystem::host(), OperatingSystem::Cygwin);
++    }
++
++    #[cfg(target_os = "linux")]
++    #[test]
++    fn test_linux() {
++        use super::*;
++        assert_eq!(OperatingSystem::host(), OperatingSystem::Linux);
++    }
++
++    #[cfg(target_os = "macos")]
++    #[test]
++    fn test_macos() {
++        use super::*;
++        assert_eq!(OperatingSystem::host(), OperatingSystem::Darwin(None));
++    }
++
++    #[cfg(windows)]
++    #[test]
++    fn test_windows() {
++        use super::*;
++        assert_eq!(OperatingSystem::host(), OperatingSystem::Windows);
++    }
++
++    #[cfg(target_pointer_width = "16")]
++    #[test]
++    fn test_ptr16() {
++        use super::*;
++        assert_eq!(Architecture::host().pointer_width().unwrap().bits(), 16);
++    }
++
++    #[cfg(target_pointer_width = "32")]
++    #[test]
++    fn test_ptr32() {
++        use super::*;
++        assert_eq!(Architecture::host().pointer_width().unwrap().bits(), 32);
++    }
++
++    #[cfg(target_pointer_width = "64")]
++    #[test]
++    fn test_ptr64() {
++        use super::*;
++        assert_eq!(Architecture::host().pointer_width().unwrap().bits(), 64);
++    }
++
++    #[test]
++    fn host_object() {
++        use super::*;
++        assert_eq!(HOST, Triple::host());
++    }
++}
+diff --git a/compiler/target-lexicon/src/lib.rs b/compiler/target-lexicon/src/lib.rs
+new file mode 100644
+index 000000000..2cb1c58d6
+--- /dev/null
++++ b/compiler/target-lexicon/src/lib.rs
+@@ -0,0 +1,109 @@
++//! LLVM target triple types.
++
++#![deny(missing_docs, trivial_numeric_casts, unused_extern_crates)]
++#![warn(unused_import_braces)]
++#![cfg_attr(
++    feature = "cargo-clippy",
++    warn(
++        clippy::float_arithmetic,
++        clippy::mut_mut,
++        clippy::nonminimal_bool,
++        clippy::option_map_unwrap_or,
++        clippy::option_map_unwrap_or_else,
++        clippy::print_stdout,
++        clippy::unicode_not_nfc,
++        clippy::use_self,
++    )
++)]
++#![cfg_attr(not(feature = "std"), no_std)]
++
++#[cfg(not(feature = "std"))]
++extern crate alloc;
++#[cfg(feature = "std")]
++extern crate std as alloc;
++
++mod data_model;
++mod host;
++mod parse_error;
++mod targets;
++#[macro_use]
++mod triple;
++
++pub use self::data_model::{CDataModel, Size};
++pub use self::host::HOST;
++pub use self::parse_error::ParseError;
++pub use self::targets::{
++    Aarch64Architecture, Architecture, ArmArchitecture, BinaryFormat, CleverArchitecture,
++    CustomVendor, DeploymentTarget, Environment, Mips32Architecture, Mips64Architecture,
++    OperatingSystem, Riscv32Architecture, Riscv64Architecture, Vendor, X86_32Architecture,
++};
++pub use self::triple::{CallingConvention, Endianness, PointerWidth, Triple};
++
++/// A simple wrapper around `Triple` that provides an implementation of
++/// `Default` which defaults to `Triple::host()`.
++#[derive(Clone, Debug, PartialEq, Eq, Hash)]
++pub struct DefaultToHost(pub Triple);
++
++impl Default for DefaultToHost {
++    fn default() -> Self {
++        Self(Triple::host())
++    }
++}
++
++/// A simple wrapper around `Triple` that provides an implementation of
++/// `Default` which defaults to `Triple::unknown()`.
++#[derive(Clone, Debug, PartialEq, Eq, Hash)]
++pub struct DefaultToUnknown(pub Triple);
++
++impl Default for DefaultToUnknown {
++    fn default() -> Self {
++        Self(Triple::unknown())
++    }
++}
++
++// For some reason, the below `serde` impls don't work when they're in the
++// `triple` module.
++
++#[cfg(feature = "serde_support")]
++impl serde::Serialize for Triple {
++    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
++        serializer.serialize_str(&self.to_string())
++    }
++}
++
++#[cfg(feature = "serde_support")]
++impl<'de> serde::de::Deserialize<'de> for Triple {
++    fn deserialize<D: serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
++        let s = String::deserialize(deserializer)?;
++        s.parse().map_err(serde::de::Error::custom)
++    }
++}
++
++#[cfg(feature = "serde_support")]
++#[test]
++fn test_serialize() {
++    let triples: Vec<Triple> = vec![
++        "x86_64-unknown-linux-gnu".parse().unwrap(),
++        "i686-pc-windows-gnu".parse().unwrap(),
++    ];
++
++    let json = serde_json::to_string(&triples).unwrap();
++    assert_eq!(
++        json,
++        r#"["x86_64-unknown-linux-gnu","i686-pc-windows-gnu"]"#
++    );
++}
++
++#[cfg(feature = "serde_support")]
++#[test]
++fn test_deserialize() {
++    let triples: Vec<Triple> = vec![
++        "x86_64-unknown-linux-gnu".parse().unwrap(),
++        "i686-pc-windows-gnu".parse().unwrap(),
++    ];
++
++    let vals: Vec<Triple> =
++        serde_json::from_str(r#"["x86_64-unknown-linux-gnu","i686-pc-windows-gnu"]"#).unwrap();
++
++    assert_eq!(vals, triples);
++}
+diff --git a/compiler/target-lexicon/src/parse_error.rs b/compiler/target-lexicon/src/parse_error.rs
+new file mode 100644
+index 000000000..03ca4aedb
+--- /dev/null
++++ b/compiler/target-lexicon/src/parse_error.rs
+@@ -0,0 +1,34 @@
++use alloc::string::String;
++
++use core::fmt;
++
++/// An error returned from parsing a triple.
++#[derive(Clone, Debug, PartialEq, Eq)]
++#[allow(missing_docs)]
++pub enum ParseError {
++    UnrecognizedArchitecture(String),
++    UnrecognizedVendor(String),
++    UnrecognizedOperatingSystem(String),
++    UnrecognizedEnvironment(String),
++    UnrecognizedBinaryFormat(String),
++    UnrecognizedField(String),
++}
++
++impl fmt::Display for ParseError {
++    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
++        use ParseError::*;
++        match self {
++            UnrecognizedArchitecture(msg) => write!(fmt, "Unrecognized architecture: {}", msg),
++            UnrecognizedVendor(msg) => write!(fmt, "Unrecognized vendor: {}", msg),
++            UnrecognizedOperatingSystem(msg) => {
++                write!(fmt, "Unrecognized operating system: {}", msg)
++            }
++            UnrecognizedEnvironment(msg) => write!(fmt, "Unrecognized environment: {}", msg),
++            UnrecognizedBinaryFormat(msg) => write!(fmt, "Unrecognized binary format: {}", msg),
++            UnrecognizedField(msg) => write!(fmt, "Unrecognized field: {}", msg),
++        }
++    }
++}
++
++#[cfg(feature = "std")]
++impl std::error::Error for ParseError {}
+diff --git a/compiler/target-lexicon/src/targets.rs b/compiler/target-lexicon/src/targets.rs
+new file mode 100644
+index 000000000..c908269c3
+--- /dev/null
++++ b/compiler/target-lexicon/src/targets.rs
+@@ -0,0 +1,2215 @@
++// This file defines all the identifier enums and target-aware logic.
++
++use crate::triple::{Endianness, PointerWidth, Triple};
++use alloc::borrow::Cow;
++use alloc::boxed::Box;
++use alloc::format;
++use alloc::string::String;
++use core::fmt;
++use core::hash::{Hash, Hasher};
++use core::str::FromStr;
++
++/// The "architecture" field, which in some cases also specifies a specific
++/// subarchitecture.
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum Architecture {
++    Unknown,
++    Arm(ArmArchitecture),
++    AmdGcn,
++    Aarch64(Aarch64Architecture),
++    Asmjs,
++    Avr,
++    Bpfeb,
++    Bpfel,
++    Hexagon,
++    X86_32(X86_32Architecture),
++    M68k,
++    LoongArch64,
++    Mips32(Mips32Architecture),
++    Mips64(Mips64Architecture),
++    Msp430,
++    Nvptx64,
++    Pulley32,
++    Pulley64,
++    Pulley32be,
++    Pulley64be,
++    Powerpc,
++    Powerpc64,
++    Powerpc64le,
++    Riscv32(Riscv32Architecture),
++    Riscv64(Riscv64Architecture),
++    S390x,
++    Sparc,
++    Sparc64,
++    Sparcv9,
++    Wasm32,
++    Wasm64,
++    X86_64,
++    /// x86_64 target that only supports Haswell-compatible Intel chips.
++    X86_64h,
++    XTensa,
++    Clever(CleverArchitecture),
++    /// A software machine that produces zero-knowledge proofs of the execution.
++    ///
++    /// See https://wiki.polygon.technology/docs/category/zk-assembly/
++    #[cfg(feature = "arch_zkasm")]
++    ZkAsm,
++    #[cfg(feature = "arch_z80")]
++    Z80(Z80Architecture),
++}
++
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum ArmArchitecture {
++    Arm, // Generic arm
++    Armeb,
++    Armv4,
++    Armv4t,
++    Armv5t,
++    Armv5te,
++    Armv5tej,
++    Armv6,
++    Armv6j,
++    Armv6k,
++    Armv6z,
++    Armv6kz,
++    Armv6t2,
++    Armv6m,
++    Armv7,
++    Armv7a,
++    Armv7k,
++    Armv7ve,
++    Armv7m,
++    Armv7r,
++    Armv7s,
++    Armv8,
++    Armv8a,
++    Armv8_1a,
++    Armv8_2a,
++    Armv8_3a,
++    Armv8_4a,
++    Armv8_5a,
++    Armv8mBase,
++    Armv8mMain,
++    Armv8r,
++
++    Armebv7r,
++
++    Thumbeb,
++    Thumbv4t,
++    Thumbv5te,
++    Thumbv6m,
++    Thumbv7a,
++    Thumbv7em,
++    Thumbv7m,
++    Thumbv7neon,
++    Thumbv8mBase,
++    Thumbv8mMain,
++}
++
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum Aarch64Architecture {
++    Aarch64,
++    Aarch64be,
++}
++
++// #[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++// #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++// #[allow(missing_docs)]
++// pub enum ArmFpu {
++//     Vfp,
++//     Vfpv2,
++//     Vfpv3,
++//     Vfpv3Fp16,
++//     Vfpv3Xd,
++//     Vfpv3XdFp16,
++//     Neon,
++//     NeonVfpv3,
++//     NeonVfpv4,
++//     Vfpv4,
++//     Vfpv4D16,
++//     Fpv4SpD16,
++//     Fpv5SpD16,
++//     Fpv5D16,
++//     FpArmv8,
++//     NeonFpArmv8,
++//     CryptoNeonFpArmv8,
++// }
++
++impl ArmArchitecture {
++    /// Test if this architecture uses the Thumb instruction set.
++    #[rustfmt::skip]
++    pub fn is_thumb(self) -> bool {
++        use ArmArchitecture::*;
++
++        match self {
++            Arm
++            | Armeb
++            | Armv4
++            | Armv4t
++            | Armv5t
++            | Armv5te
++            | Armv5tej
++            | Armv6
++            | Armv6j
++            | Armv6k
++            | Armv6z
++            | Armv6kz
++            | Armv6t2
++            | Armv6m
++            | Armv7
++            | Armv7a
++            | Armv7k
++            | Armv7ve
++            | Armv7m
++            | Armv7r
++            | Armv7s
++            | Armv8
++            | Armv8a
++            | Armv8_1a
++            | Armv8_2a
++            | Armv8_3a
++            | Armv8_4a
++            | Armv8_5a
++            | Armv8mBase
++            | Armv8mMain
++            | Armv8r
++            | Armebv7r => false,
++            Thumbeb
++            | Thumbv4t
++            | Thumbv5te
++            | Thumbv6m
++            | Thumbv7a
++            | Thumbv7em
++            | Thumbv7m
++            | Thumbv7neon
++            | Thumbv8mBase
++            | Thumbv8mMain => true,
++        }
++    }
++
++    // pub fn has_fpu(self) -> Result<&'static [ArmFpu], ()> {
++
++    // }
++
++    /// Return the pointer bit width of this target's architecture.
++    #[rustfmt::skip]
++    pub fn pointer_width(self) -> PointerWidth {
++        use ArmArchitecture::*;
++
++        match self {
++            Arm
++            | Armeb
++            | Armv4
++            | Armv4t
++            | Armv5t
++            | Armv5te
++            | Armv5tej
++            | Armv6
++            | Armv6j
++            | Armv6k
++            | Armv6z
++            | Armv6kz
++            | Armv6t2
++            | Armv6m
++            | Armv7
++            | Armv7a
++            | Armv7k
++            | Armv7ve
++            | Armv7m
++            | Armv7r
++            | Armv7s
++            | Armv8
++            | Armv8a
++            | Armv8_1a
++            | Armv8_2a
++            | Armv8_3a
++            | Armv8_4a
++            | Armv8_5a
++            | Armv8mBase
++            | Armv8mMain
++            | Armv8r
++            | Armebv7r
++            | Thumbeb
++            | Thumbv4t
++            | Thumbv5te
++            | Thumbv6m
++            | Thumbv7a
++            | Thumbv7em
++            | Thumbv7m
++            | Thumbv7neon
++            | Thumbv8mBase
++            | Thumbv8mMain => PointerWidth::U32,
++        }
++    }
++
++    /// Return the endianness of this architecture.
++    #[rustfmt::skip]
++    pub fn endianness(self) -> Endianness {
++        use ArmArchitecture::*;
++
++        match self {
++            Arm
++            | Armv4
++            | Armv4t
++            | Armv5t
++            | Armv5te
++            | Armv5tej
++            | Armv6
++            | Armv6j
++            | Armv6k
++            | Armv6z
++            | Armv6kz
++            | Armv6t2
++            | Armv6m
++            | Armv7
++            | Armv7a
++            | Armv7k
++            | Armv7ve
++            | Armv7m
++            | Armv7r
++            | Armv7s
++            | Armv8
++            | Armv8a
++            | Armv8_1a
++            | Armv8_2a
++            | Armv8_3a
++            | Armv8_4a
++            | Armv8_5a
++            | Armv8mBase
++            | Armv8mMain
++            | Armv8r
++            | Thumbv4t
++            | Thumbv5te
++            | Thumbv6m
++            | Thumbv7a
++            | Thumbv7em
++            | Thumbv7m
++            | Thumbv7neon
++            | Thumbv8mBase
++            | Thumbv8mMain => Endianness::Little,
++            Armeb | Armebv7r | Thumbeb => Endianness::Big,
++        }
++    }
++
++    /// Convert into a string
++    pub fn into_str(self) -> Cow<'static, str> {
++        use ArmArchitecture::*;
++
++        match self {
++            Arm => Cow::Borrowed("arm"),
++            Armeb => Cow::Borrowed("armeb"),
++            Armv4 => Cow::Borrowed("armv4"),
++            Armv4t => Cow::Borrowed("armv4t"),
++            Armv5t => Cow::Borrowed("armv5t"),
++            Armv5te => Cow::Borrowed("armv5te"),
++            Armv5tej => Cow::Borrowed("armv5tej"),
++            Armv6 => Cow::Borrowed("armv6"),
++            Armv6j => Cow::Borrowed("armv6j"),
++            Armv6k => Cow::Borrowed("armv6k"),
++            Armv6z => Cow::Borrowed("armv6z"),
++            Armv6kz => Cow::Borrowed("armv6kz"),
++            Armv6t2 => Cow::Borrowed("armv6t2"),
++            Armv6m => Cow::Borrowed("armv6m"),
++            Armv7 => Cow::Borrowed("armv7"),
++            Armv7a => Cow::Borrowed("armv7a"),
++            Armv7k => Cow::Borrowed("armv7k"),
++            Armv7ve => Cow::Borrowed("armv7ve"),
++            Armv7m => Cow::Borrowed("armv7m"),
++            Armv7r => Cow::Borrowed("armv7r"),
++            Armv7s => Cow::Borrowed("armv7s"),
++            Armv8 => Cow::Borrowed("armv8"),
++            Armv8a => Cow::Borrowed("armv8a"),
++            Armv8_1a => Cow::Borrowed("armv8.1a"),
++            Armv8_2a => Cow::Borrowed("armv8.2a"),
++            Armv8_3a => Cow::Borrowed("armv8.3a"),
++            Armv8_4a => Cow::Borrowed("armv8.4a"),
++            Armv8_5a => Cow::Borrowed("armv8.5a"),
++            Armv8mBase => Cow::Borrowed("armv8m.base"),
++            Armv8mMain => Cow::Borrowed("armv8m.main"),
++            Armv8r => Cow::Borrowed("armv8r"),
++            Thumbeb => Cow::Borrowed("thumbeb"),
++            Thumbv4t => Cow::Borrowed("thumbv4t"),
++            Thumbv5te => Cow::Borrowed("thumbv5te"),
++            Thumbv6m => Cow::Borrowed("thumbv6m"),
++            Thumbv7a => Cow::Borrowed("thumbv7a"),
++            Thumbv7em => Cow::Borrowed("thumbv7em"),
++            Thumbv7m => Cow::Borrowed("thumbv7m"),
++            Thumbv7neon => Cow::Borrowed("thumbv7neon"),
++            Thumbv8mBase => Cow::Borrowed("thumbv8m.base"),
++            Thumbv8mMain => Cow::Borrowed("thumbv8m.main"),
++            Armebv7r => Cow::Borrowed("armebv7r"),
++        }
++    }
++}
++
++impl Aarch64Architecture {
++    /// Test if this architecture uses the Thumb instruction set.
++    pub fn is_thumb(self) -> bool {
++        match self {
++            Aarch64Architecture::Aarch64 | Aarch64Architecture::Aarch64be => false,
++        }
++    }
++
++    // pub fn has_fpu(self) -> Result<&'static [ArmFpu], ()> {
++
++    // }
++
++    /// Return the pointer bit width of this target's architecture.
++    ///
++    /// This function is only aware of the CPU architecture so it is not aware
++    /// of ilp32 ABIs.
++    pub fn pointer_width(self) -> PointerWidth {
++        match self {
++            Aarch64Architecture::Aarch64 | Aarch64Architecture::Aarch64be => PointerWidth::U64,
++        }
++    }
++
++    /// Return the endianness of this architecture.
++    pub fn endianness(self) -> Endianness {
++        match self {
++            Aarch64Architecture::Aarch64 => Endianness::Little,
++            Aarch64Architecture::Aarch64be => Endianness::Big,
++        }
++    }
++
++    /// Convert into a string
++    pub fn into_str(self) -> Cow<'static, str> {
++        use Aarch64Architecture::*;
++
++        match self {
++            Aarch64 => Cow::Borrowed("aarch64"),
++            Aarch64be => Cow::Borrowed("aarch64_be"),
++        }
++    }
++}
++
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum CleverArchitecture {
++    Clever,
++    Clever1_0,
++}
++
++impl CleverArchitecture {
++    /// Convert into a string
++    pub fn into_str(self) -> Cow<'static, str> {
++        use CleverArchitecture::*;
++
++        match self {
++            Clever => Cow::Borrowed("clever"),
++            Clever1_0 => Cow::Borrowed("clever1.0"),
++        }
++    }
++}
++
++/// An enum for all 32-bit RISC-V architectures.
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum Riscv32Architecture {
++    Riscv32,
++    Riscv32gc,
++    Riscv32i,
++    Riscv32im,
++    Riscv32ima,
++    Riscv32imac,
++    Riscv32imafc,
++    Riscv32imc,
++}
++
++impl Riscv32Architecture {
++    /// Convert into a string
++    pub fn into_str(self) -> Cow<'static, str> {
++        use Riscv32Architecture::*;
++
++        match self {
++            Riscv32 => Cow::Borrowed("riscv32"),
++            Riscv32gc => Cow::Borrowed("riscv32gc"),
++            Riscv32i => Cow::Borrowed("riscv32i"),
++            Riscv32im => Cow::Borrowed("riscv32im"),
++            Riscv32ima => Cow::Borrowed("riscv32ima"),
++            Riscv32imac => Cow::Borrowed("riscv32imac"),
++            Riscv32imafc => Cow::Borrowed("riscv32imafc"),
++            Riscv32imc => Cow::Borrowed("riscv32imc"),
++        }
++    }
++}
++
++/// An enum for all 64-bit RISC-V architectures.
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum Riscv64Architecture {
++    Riscv64,
++    Riscv64gc,
++    Riscv64imac,
++    Riscv64a23,
++}
++
++impl Riscv64Architecture {
++    /// Convert into a string
++    pub fn into_str(self) -> Cow<'static, str> {
++        use Riscv64Architecture::*;
++
++        match self {
++            Riscv64 => Cow::Borrowed("riscv64"),
++            Riscv64gc => Cow::Borrowed("riscv64gc"),
++            Riscv64imac => Cow::Borrowed("riscv64imac"),
++            Riscv64a23 => Cow::Borrowed("riscv64a23"),
++        }
++    }
++}
++
++/// An enum for all 32-bit x86 architectures.
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum X86_32Architecture {
++    I386,
++    I586,
++    I686,
++}
++
++impl X86_32Architecture {
++    /// Convert into a string
++    pub fn into_str(self) -> Cow<'static, str> {
++        use X86_32Architecture::*;
++
++        match self {
++            I386 => Cow::Borrowed("i386"),
++            I586 => Cow::Borrowed("i586"),
++            I686 => Cow::Borrowed("i686"),
++        }
++    }
++}
++
++/// An enum for all 32-bit MIPS architectures (not just "MIPS32").
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum Mips32Architecture {
++    Mips,
++    Mipsel,
++    Mipsisa32r6,
++    Mipsisa32r6el,
++}
++
++impl Mips32Architecture {
++    /// Convert into a string
++    pub fn into_str(self) -> Cow<'static, str> {
++        use Mips32Architecture::*;
++
++        match self {
++            Mips => Cow::Borrowed("mips"),
++            Mipsel => Cow::Borrowed("mipsel"),
++            Mipsisa32r6 => Cow::Borrowed("mipsisa32r6"),
++            Mipsisa32r6el => Cow::Borrowed("mipsisa32r6el"),
++        }
++    }
++}
++
++/// An enum for all 64-bit MIPS architectures (not just "MIPS64").
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum Mips64Architecture {
++    Mips64,
++    Mips64el,
++    Mipsisa64r6,
++    Mipsisa64r6el,
++}
++
++impl Mips64Architecture {
++    /// Convert into a string
++    pub fn into_str(self) -> Cow<'static, str> {
++        use Mips64Architecture::*;
++
++        match self {
++            Mips64 => Cow::Borrowed("mips64"),
++            Mips64el => Cow::Borrowed("mips64el"),
++            Mipsisa64r6 => Cow::Borrowed("mipsisa64r6"),
++            Mipsisa64r6el => Cow::Borrowed("mipsisa64r6el"),
++        }
++    }
++}
++
++#[cfg(feature = "arch_z80")]
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum Z80Architecture {
++    Z80,
++    Z180,
++    Ez80,
++    Sm83,
++    Rabbit2000,
++    Rabbit2000A,
++    Rabbit3000,
++    Rabbit3000A,
++    Tlcs90,
++    R800,
++}
++
++#[cfg(feature = "arch_z80")]
++impl Z80Architecture {
++    pub fn into_str(self) -> Cow<'static, str> {
++        use Z80Architecture::*;
++
++        match self {
++            Z80 => Cow::Borrowed("z80"),
++            Z180 => Cow::Borrowed("z180"),
++            Ez80 => Cow::Borrowed("ez80"),
++            Sm83 => Cow::Borrowed("sm83"),
++            Rabbit2000 => Cow::Borrowed("rabbit2000"),
++            Rabbit2000A => Cow::Borrowed("rabbit2000a"),
++            Rabbit3000 => Cow::Borrowed("rabbit3000"),
++            Rabbit3000A => Cow::Borrowed("rabbit3000a"),
++            Tlcs90 => Cow::Borrowed("tlcs90"),
++            R800 => Cow::Borrowed("r800"),
++        }
++    }
++}
++
++/// A string for a `Vendor::Custom` that can either be used in `const`
++/// contexts or hold dynamic strings.
++#[derive(Clone, Debug, Eq)]
++pub enum CustomVendor {
++    /// An owned `String`. This supports the general case.
++    Owned(Box<String>),
++    /// A static `str`, so that `CustomVendor` can be constructed in `const`
++    /// contexts.
++    Static(&'static str),
++}
++
++impl CustomVendor {
++    /// Extracts a string slice.
++    pub fn as_str(&self) -> &str {
++        match self {
++            CustomVendor::Owned(s) => s,
++            CustomVendor::Static(s) => s,
++        }
++    }
++}
++
++impl PartialEq for CustomVendor {
++    fn eq(&self, other: &Self) -> bool {
++        self.as_str() == other.as_str()
++    }
++}
++
++impl Hash for CustomVendor {
++    fn hash<H: Hasher>(&self, state: &mut H) {
++        self.as_str().hash(state)
++    }
++}
++
++/// The "vendor" field, which in practice is little more than an arbitrary
++/// modifier.
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++#[derive(Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum Vendor {
++    Unknown,
++    Amd,
++    Apple,
++    Espressif,
++    Experimental,
++    Fortanix,
++    Ibm,
++    Kmc,
++    Nintendo,
++    Nvidia,
++    Pc,
++    Rumprun,
++    Sun,
++    Uwp,
++    Wrs,
++
++    /// A custom vendor. "Custom" in this context means that the vendor is
++    /// not specifically recognized by upstream Autotools, LLVM, Rust, or other
++    /// relevant authorities on triple naming. It's useful for people building
++    /// and using locally patched toolchains.
++    ///
++    /// Outside of such patched environments, users of `target-lexicon` should
++    /// treat `Custom` the same as `Unknown` and ignore the string.
++    Custom(CustomVendor),
++}
++
++impl Vendor {
++    /// Extracts a string slice.
++    pub fn as_str(&self) -> &str {
++        use Vendor::*;
++
++        match self {
++            Unknown => "unknown",
++            Amd => "amd",
++            Apple => "apple",
++            Espressif => "espressif",
++            Experimental => "experimental",
++            Fortanix => "fortanix",
++            Ibm => "ibm",
++            Kmc => "kmc",
++            Nintendo => "nintendo",
++            Nvidia => "nvidia",
++            Pc => "pc",
++            Rumprun => "rumprun",
++            Sun => "sun",
++            Uwp => "uwp",
++            Wrs => "wrs",
++            Custom(name) => name.as_str(),
++        }
++    }
++}
++
++/// The minimum OS version that we're compiling for.
++///
++/// This is formatted as `"major.minor.patch"`.
++///
++/// The size of the parts here are limited by Mach-O's `LC_BUILD_VERSION`.
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
++#[allow(missing_docs)]
++pub struct DeploymentTarget {
++    pub major: u16,
++    pub minor: u8,
++    pub patch: u8,
++}
++
++/// The "operating system" field, which sometimes implies an environment, and
++/// sometimes isn't an actual operating system.
++///
++/// LLVM's Apple triples may optionally include the [deployment target].
++///
++/// [deployment target]: DeploymentTarget
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum OperatingSystem {
++    Unknown,
++    Aix,
++    AmdHsa,
++    Bitrig,
++    Cloudabi,
++    Cuda,
++    Cygwin,
++    /// The general [Darwin][darwin-wiki] core OS.
++    ///
++    /// Generally, `-mmacosx-version-min=...` or similar flags are required by
++    /// Clang to determine the actual OS (either macOS, iOS, tvOS, watchOS or
++    /// visionOS).
++    ///
++    /// WARNING: When parsing `rustc` target triples, this matches the macOS
++    /// target triples as well.
++    ///
++    /// [darwin-wiki]: https://en.wikipedia.org/wiki/Darwin_(operating_system)
++    Darwin(Option<DeploymentTarget>),
++    Dragonfly,
++    Emscripten,
++    Espidf,
++    Freebsd,
++    Fuchsia,
++    Haiku,
++    Hermit,
++    Horizon,
++    Hurd,
++    Illumos,
++    IOS(Option<DeploymentTarget>),
++    L4re,
++    Linux,
++    /// macOS.
++    ///
++    /// WARNING: This does _not_ match the macOS triples when parsing `rustc`
++    /// target triples, for that see the [`darwin`](Self::Darwin) OS name.
++    MacOSX(Option<DeploymentTarget>),
++    Nebulet,
++    Netbsd,
++    None_,
++    Openbsd,
++    Psp,
++    Redox,
++    Solaris,
++    SolidAsp3,
++    TvOS(Option<DeploymentTarget>),
++    Uefi,
++    VisionOS(Option<DeploymentTarget>),
++    VxWorks,
++    Wasi,
++    WasiP1,
++    WasiP2,
++    WatchOS(Option<DeploymentTarget>),
++    Windows,
++    /// An alternate name for [visionOS][Self::VisionOS].
++    XROS(Option<DeploymentTarget>),
++}
++
++impl OperatingSystem {
++    /// Convert into a string
++    pub fn into_str(self) -> Cow<'static, str> {
++        use OperatingSystem::*;
++
++        let darwin_version = |name, deployment_target| {
++            if let Some(DeploymentTarget {
++                major,
++                minor,
++                patch,
++            }) = deployment_target
++            {
++                Cow::Owned(format!("{}{}.{}.{}", name, major, minor, patch))
++            } else {
++                Cow::Borrowed(name)
++            }
++        };
++
++        match self {
++            Unknown => Cow::Borrowed("unknown"),
++            Aix => Cow::Borrowed("aix"),
++            AmdHsa => Cow::Borrowed("amdhsa"),
++            Bitrig => Cow::Borrowed("bitrig"),
++            Cloudabi => Cow::Borrowed("cloudabi"),
++            Cuda => Cow::Borrowed("cuda"),
++            Cygwin => Cow::Borrowed("cygwin"),
++            Darwin(deployment_target) => darwin_version("darwin", deployment_target),
++            Dragonfly => Cow::Borrowed("dragonfly"),
++            Emscripten => Cow::Borrowed("emscripten"),
++            Espidf => Cow::Borrowed("espidf"),
++            Freebsd => Cow::Borrowed("freebsd"),
++            Fuchsia => Cow::Borrowed("fuchsia"),
++            Haiku => Cow::Borrowed("haiku"),
++            Hermit => Cow::Borrowed("hermit"),
++            Horizon => Cow::Borrowed("horizon"),
++            Hurd => Cow::Borrowed("hurd"),
++            Illumos => Cow::Borrowed("illumos"),
++            IOS(deployment_target) => darwin_version("ios", deployment_target),
++            L4re => Cow::Borrowed("l4re"),
++            Linux => Cow::Borrowed("linux"),
++            MacOSX(deployment_target) => darwin_version("macosx", deployment_target),
++            Nebulet => Cow::Borrowed("nebulet"),
++            Netbsd => Cow::Borrowed("netbsd"),
++            None_ => Cow::Borrowed("none"),
++            Openbsd => Cow::Borrowed("openbsd"),
++            Psp => Cow::Borrowed("psp"),
++            Redox => Cow::Borrowed("redox"),
++            Solaris => Cow::Borrowed("solaris"),
++            SolidAsp3 => Cow::Borrowed("solid_asp3"),
++            TvOS(deployment_target) => darwin_version("tvos", deployment_target),
++            Uefi => Cow::Borrowed("uefi"),
++            VxWorks => Cow::Borrowed("vxworks"),
++            VisionOS(deployment_target) => darwin_version("visionos", deployment_target),
++            Wasi => Cow::Borrowed("wasi"),
++            WasiP1 => Cow::Borrowed("wasip1"),
++            WasiP2 => Cow::Borrowed("wasip2"),
++            WatchOS(deployment_target) => darwin_version("watchos", deployment_target),
++            Windows => Cow::Borrowed("windows"),
++            XROS(deployment_target) => darwin_version("xros", deployment_target),
++        }
++    }
++
++    /// Whether the OS is similar to Darwin.
++    ///
++    /// This matches on any of:
++    /// - [Darwin](Self::Darwin)
++    /// - [iOS](Self::IOS)
++    /// - [macOS](Self::MacOSX)
++    /// - [tvOS](Self::TvOS)
++    /// - [visionOS](Self::VisionOS)
++    /// - [watchOS](Self::WatchOS)
++    /// - [xrOS](Self::XROS)
++    pub fn is_like_darwin(&self) -> bool {
++        use OperatingSystem::*;
++
++        match self {
++            Darwin(_) | IOS(_) | MacOSX(_) | TvOS(_) | VisionOS(_) | WatchOS(_) | XROS(_) => true,
++            _ => false,
++        }
++    }
++}
++
++/// The "environment" field, which specifies an ABI environment on top of the
++/// operating system. In many configurations, this field is omitted, and the
++/// environment is implied by the operating system.
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum Environment {
++    Unknown,
++    AmdGiz,
++    Android,
++    Androideabi,
++    Eabi,
++    Eabihf,
++    Gnu,
++    Gnuabi64,
++    Gnueabi,
++    Gnueabihf,
++    Gnuspe,
++    Gnux32,
++    GnuIlp32,
++    GnuLlvm,
++    HermitKernel,
++    HurdKernel,
++    LinuxKernel,
++    Macabi,
++    Musl,
++    Musleabi,
++    Musleabihf,
++    Muslabi64,
++    Msvc,
++    Newlib,
++    None,
++    Kernel,
++    Uclibc,
++    Uclibceabi,
++    Uclibceabihf,
++    Sgx,
++    Sim,
++    Softfloat,
++    Spe,
++    Threads,
++    Ohos,
++}
++
++impl Environment {
++    /// Convert into a string
++    pub fn into_str(self) -> Cow<'static, str> {
++        use Environment::*;
++
++        match self {
++            Unknown => Cow::Borrowed("unknown"),
++            AmdGiz => Cow::Borrowed("amdgiz"),
++            Android => Cow::Borrowed("android"),
++            Androideabi => Cow::Borrowed("androideabi"),
++            Eabi => Cow::Borrowed("eabi"),
++            Eabihf => Cow::Borrowed("eabihf"),
++            Gnu => Cow::Borrowed("gnu"),
++            Gnuabi64 => Cow::Borrowed("gnuabi64"),
++            Gnueabi => Cow::Borrowed("gnueabi"),
++            Gnueabihf => Cow::Borrowed("gnueabihf"),
++            Gnuspe => Cow::Borrowed("gnuspe"),
++            Gnux32 => Cow::Borrowed("gnux32"),
++            GnuIlp32 => Cow::Borrowed("gnu_ilp32"),
++            GnuLlvm => Cow::Borrowed("gnullvm"),
++            HermitKernel => Cow::Borrowed("hermitkernel"),
++            HurdKernel => Cow::Borrowed("hurdkernel"),
++            LinuxKernel => Cow::Borrowed("linuxkernel"),
++            Macabi => Cow::Borrowed("macabi"),
++            Musl => Cow::Borrowed("musl"),
++            Musleabi => Cow::Borrowed("musleabi"),
++            Musleabihf => Cow::Borrowed("musleabihf"),
++            Muslabi64 => Cow::Borrowed("muslabi64"),
++            Msvc => Cow::Borrowed("msvc"),
++            Newlib => Cow::Borrowed("newlib"),
++            None => Cow::Borrowed("none"),
++            Kernel => Cow::Borrowed("kernel"),
++            Uclibc => Cow::Borrowed("uclibc"),
++            Uclibceabi => Cow::Borrowed("uclibceabi"),
++            Uclibceabihf => Cow::Borrowed("uclibceabihf"),
++            Sgx => Cow::Borrowed("sgx"),
++            Sim => Cow::Borrowed("sim"),
++            Softfloat => Cow::Borrowed("softfloat"),
++            Spe => Cow::Borrowed("spe"),
++            Threads => Cow::Borrowed("threads"),
++            Ohos => Cow::Borrowed("ohos"),
++        }
++    }
++}
++
++/// The "binary format" field, which is usually omitted, and the binary format
++/// is implied by the other fields.
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum BinaryFormat {
++    Unknown,
++    Elf,
++    Coff,
++    Macho,
++    Wasm,
++    Xcoff,
++}
++
++impl BinaryFormat {
++    /// Convert into a string
++    pub fn into_str(self) -> Cow<'static, str> {
++        use BinaryFormat::*;
++
++        match self {
++            Unknown => Cow::Borrowed("unknown"),
++            Elf => Cow::Borrowed("elf"),
++            Coff => Cow::Borrowed("coff"),
++            Macho => Cow::Borrowed("macho"),
++            Wasm => Cow::Borrowed("wasm"),
++            Xcoff => Cow::Borrowed("xcoff"),
++        }
++    }
++}
++
++impl Architecture {
++    /// Return the endianness of this architecture.
++    #[rustfmt::skip]
++    pub fn endianness(self) -> Result<Endianness, ()> {
++        use Architecture::*;
++
++        match self {
++            Unknown => Err(()),
++            Arm(arm) => Ok(arm.endianness()),
++            Aarch64(aarch) => Ok(aarch.endianness()),
++            AmdGcn
++            | Asmjs
++            | Avr
++            | Bpfel
++            | Hexagon
++            | X86_32(_)
++            | LoongArch64
++            | Mips64(Mips64Architecture::Mips64el)
++            | Mips32(Mips32Architecture::Mipsel)
++            | Mips32(Mips32Architecture::Mipsisa32r6el)
++            | Mips64(Mips64Architecture::Mipsisa64r6el)
++            | Msp430
++            | Nvptx64
++            | Pulley32
++            | Pulley64
++            | Powerpc64le
++            | Riscv32(_)
++            | Riscv64(_)
++            | Wasm32
++            | Wasm64
++            | X86_64
++            | X86_64h
++            | XTensa
++            | Clever(_) => Ok(Endianness::Little),
++            Bpfeb
++            | M68k
++            | Mips32(Mips32Architecture::Mips)
++            | Mips64(Mips64Architecture::Mips64)
++            | Mips32(Mips32Architecture::Mipsisa32r6)
++            | Mips64(Mips64Architecture::Mipsisa64r6)
++            | Powerpc
++            | Powerpc64
++            | Pulley32be
++            | Pulley64be
++            | S390x
++            | Sparc
++            | Sparc64
++            | Sparcv9 => Ok(Endianness::Big),
++            #[cfg(feature="arch_zkasm")]
++            ZkAsm => Ok(Endianness::Big),
++            #[cfg(feature = "arch_z80")]
++            Z80(_) => Ok(Endianness::Little),
++        }
++    }
++
++    /// Return the pointer bit width of this target's architecture.
++    ///
++    /// This function is only aware of the CPU architecture so it is not aware
++    /// of ilp32 and x32 ABIs.
++    #[rustfmt::skip]
++    pub fn pointer_width(self) -> Result<PointerWidth, ()> {
++        use Architecture::*;
++
++        match self {
++            Unknown => Err(()),
++            Avr | Msp430 => Ok(PointerWidth::U16),
++            Arm(arm) => Ok(arm.pointer_width()),
++            Aarch64(aarch) => Ok(aarch.pointer_width()),
++            Asmjs
++            | Hexagon
++            | X86_32(_)
++            | Riscv32(_)
++            | Sparc
++            | Wasm32
++            | M68k
++            | Mips32(_)
++            | Pulley32
++            | Pulley32be
++            | Powerpc
++            | XTensa => Ok(PointerWidth::U32),
++            AmdGcn
++            | Bpfeb
++            | Bpfel
++            | Powerpc64le
++            | Riscv64(_)
++            | X86_64
++            | X86_64h
++            | Mips64(_)
++            | Nvptx64
++            | Pulley64
++            | Pulley64be
++            | Powerpc64
++            | S390x
++            | Sparc64
++            | Sparcv9
++            | LoongArch64
++            | Wasm64
++            | Clever(_) => Ok(PointerWidth::U64),
++            #[cfg(feature="arch_zkasm")]
++            ZkAsm => Ok(PointerWidth::U64),
++            #[cfg(feature = "arch_z80")]
++            Z80(_) => Ok(PointerWidth::U16),
++        }
++    }
++
++    /// Checks if this Architecture is some variant of Clever-ISA
++    pub fn is_clever(&self) -> bool {
++        match self {
++            Architecture::Clever(_) => true,
++            _ => false,
++        }
++    }
++
++    /// Convert into a string
++    pub fn into_str(self) -> Cow<'static, str> {
++        use Architecture::*;
++
++        match self {
++            Arm(arm) => arm.into_str(),
++            Aarch64(aarch) => aarch.into_str(),
++            Unknown => Cow::Borrowed("unknown"),
++            AmdGcn => Cow::Borrowed("amdgcn"),
++            Asmjs => Cow::Borrowed("asmjs"),
++            Avr => Cow::Borrowed("avr"),
++            Bpfeb => Cow::Borrowed("bpfeb"),
++            Bpfel => Cow::Borrowed("bpfel"),
++            Hexagon => Cow::Borrowed("hexagon"),
++            X86_32(x86_32) => x86_32.into_str(),
++            LoongArch64 => Cow::Borrowed("loongarch64"),
++            M68k => Cow::Borrowed("m68k"),
++            Mips32(mips32) => mips32.into_str(),
++            Mips64(mips64) => mips64.into_str(),
++            Msp430 => Cow::Borrowed("msp430"),
++            Nvptx64 => Cow::Borrowed("nvptx64"),
++            Pulley32 => Cow::Borrowed("pulley32"),
++            Pulley64 => Cow::Borrowed("pulley64"),
++            Pulley32be => Cow::Borrowed("pulley32be"),
++            Pulley64be => Cow::Borrowed("pulley64be"),
++            Powerpc => Cow::Borrowed("powerpc"),
++            Powerpc64 => Cow::Borrowed("powerpc64"),
++            Powerpc64le => Cow::Borrowed("powerpc64le"),
++            Riscv32(riscv32) => riscv32.into_str(),
++            Riscv64(riscv64) => riscv64.into_str(),
++            S390x => Cow::Borrowed("s390x"),
++            Sparc => Cow::Borrowed("sparc"),
++            Sparc64 => Cow::Borrowed("sparc64"),
++            Sparcv9 => Cow::Borrowed("sparcv9"),
++            Wasm32 => Cow::Borrowed("wasm32"),
++            Wasm64 => Cow::Borrowed("wasm64"),
++            X86_64 => Cow::Borrowed("x86_64"),
++            X86_64h => Cow::Borrowed("x86_64h"),
++            XTensa => Cow::Borrowed("xtensa"),
++            Clever(ver) => ver.into_str(),
++            #[cfg(feature = "arch_zkasm")]
++            ZkAsm => Cow::Borrowed("zkasm"),
++            #[cfg(feature = "arch_z80")]
++            Z80(z80) => z80.into_str(),
++        }
++    }
++}
++
++/// Return the binary format implied by this target triple, ignoring its
++/// `binary_format` field.
++pub(crate) fn default_binary_format(triple: &Triple) -> BinaryFormat {
++    match triple.operating_system {
++        OperatingSystem::None_ => match triple.environment {
++            Environment::Eabi | Environment::Eabihf => BinaryFormat::Elf,
++            _ => BinaryFormat::Unknown,
++        },
++        OperatingSystem::Aix => BinaryFormat::Xcoff,
++        os if os.is_like_darwin() => BinaryFormat::Macho,
++        OperatingSystem::Windows => BinaryFormat::Coff,
++        OperatingSystem::Nebulet
++        | OperatingSystem::Emscripten
++        | OperatingSystem::VxWorks
++        | OperatingSystem::Wasi
++        | OperatingSystem::Unknown => match triple.architecture {
++            Architecture::Wasm32 | Architecture::Wasm64 => BinaryFormat::Wasm,
++            Architecture::Unknown => BinaryFormat::Unknown,
++            // Default to ELF, following `getDefaultFormat` in LLVM.
++            _ => BinaryFormat::Elf,
++        },
++        _ => BinaryFormat::Elf,
++    }
++}
++
++impl fmt::Display for ArmArchitecture {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        f.write_str(&self.into_str())
++    }
++}
++
++impl fmt::Display for Aarch64Architecture {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        f.write_str(&self.into_str())
++    }
++}
++
++impl fmt::Display for CleverArchitecture {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        f.write_str(&self.into_str())
++    }
++}
++
++impl fmt::Display for Riscv32Architecture {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        f.write_str(&self.into_str())
++    }
++}
++
++impl fmt::Display for Riscv64Architecture {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        f.write_str(&self.into_str())
++    }
++}
++
++impl fmt::Display for X86_32Architecture {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        f.write_str(&self.into_str())
++    }
++}
++
++impl fmt::Display for Mips32Architecture {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        f.write_str(&self.into_str())
++    }
++}
++
++impl fmt::Display for Mips64Architecture {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        f.write_str(&self.into_str())
++    }
++}
++
++#[cfg(feature = "arch_z80")]
++impl fmt::Display for Z80Architecture {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        f.write_str(&self.into_str())
++    }
++}
++
++impl fmt::Display for Architecture {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        f.write_str(&self.into_str())
++    }
++}
++
++impl FromStr for ArmArchitecture {
++    type Err = ();
++
++    fn from_str(s: &str) -> Result<Self, ()> {
++        use ArmArchitecture::*;
++
++        Ok(match s {
++            "arm" => Arm,
++            "armeb" => Armeb,
++            "armv4" => Armv4,
++            "armv4t" => Armv4t,
++            "armv5t" => Armv5t,
++            "armv5te" => Armv5te,
++            "armv5tej" => Armv5tej,
++            "armv6" => Armv6,
++            "armv6j" => Armv6j,
++            "armv6k" => Armv6k,
++            "armv6z" => Armv6z,
++            "armv6kz" => Armv6kz,
++            "armv6t2" => Armv6t2,
++            "armv6m" => Armv6m,
++            "armv7" => Armv7,
++            "armv7a" => Armv7a,
++            "armv7k" => Armv7k,
++            "armv7ve" => Armv7ve,
++            "armv7m" => Armv7m,
++            "armv7r" => Armv7r,
++            "armv7s" => Armv7s,
++            "armv8" => Armv8,
++            "armv8a" => Armv8a,
++            "armv8.1a" => Armv8_1a,
++            "armv8.2a" => Armv8_2a,
++            "armv8.3a" => Armv8_3a,
++            "armv8.4a" => Armv8_4a,
++            "armv8.5a" => Armv8_5a,
++            "armv8m.base" => Armv8mBase,
++            "armv8m.main" => Armv8mMain,
++            "armv8r" => Armv8r,
++            "thumbeb" => Thumbeb,
++            "thumbv4t" => Thumbv4t,
++            "thumbv5te" => Thumbv5te,
++            "thumbv6m" => Thumbv6m,
++            "thumbv7a" => Thumbv7a,
++            "thumbv7em" => Thumbv7em,
++            "thumbv7m" => Thumbv7m,
++            "thumbv7neon" => Thumbv7neon,
++            "thumbv8m.base" => Thumbv8mBase,
++            "thumbv8m.main" => Thumbv8mMain,
++            "armebv7r" => Armebv7r,
++            _ => return Err(()),
++        })
++    }
++}
++
++impl FromStr for Aarch64Architecture {
++    type Err = ();
++
++    fn from_str(s: &str) -> Result<Self, ()> {
++        use Aarch64Architecture::*;
++
++        Ok(match s {
++            "aarch64" => Aarch64,
++            "arm64" => Aarch64,
++            "aarch64_be" => Aarch64be,
++            _ => return Err(()),
++        })
++    }
++}
++
++impl FromStr for CleverArchitecture {
++    type Err = ();
++    fn from_str(s: &str) -> Result<Self, ()> {
++        match s {
++            "clever" => Ok(CleverArchitecture::Clever),
++            "clever1.0" => Ok(CleverArchitecture::Clever1_0),
++            _ => Err(()),
++        }
++    }
++}
++
++impl FromStr for Riscv32Architecture {
++    type Err = ();
++
++    fn from_str(s: &str) -> Result<Self, ()> {
++        use Riscv32Architecture::*;
++
++        Ok(match s {
++            "riscv32" => Riscv32,
++            "riscv32gc" => Riscv32gc,
++            "riscv32i" => Riscv32i,
++            "riscv32im" => Riscv32im,
++            "riscv32ima" => Riscv32ima,
++            "riscv32imac" => Riscv32imac,
++            "riscv32imafc" => Riscv32imafc,
++            "riscv32imc" => Riscv32imc,
++            _ => return Err(()),
++        })
++    }
++}
++
++impl FromStr for Riscv64Architecture {
++    type Err = ();
++
++    fn from_str(s: &str) -> Result<Self, ()> {
++        use Riscv64Architecture::*;
++
++        Ok(match s {
++            "riscv64" => Riscv64,
++            "riscv64gc" => Riscv64gc,
++            "riscv64imac" => Riscv64imac,
++            "riscv64a23" => Riscv64a23,
++            _ => return Err(()),
++        })
++    }
++}
++
++impl FromStr for X86_32Architecture {
++    type Err = ();
++
++    fn from_str(s: &str) -> Result<Self, ()> {
++        use X86_32Architecture::*;
++
++        Ok(match s {
++            "i386" => I386,
++            "i586" => I586,
++            "i686" => I686,
++            _ => return Err(()),
++        })
++    }
++}
++
++impl FromStr for Mips32Architecture {
++    type Err = ();
++
++    fn from_str(s: &str) -> Result<Self, ()> {
++        use Mips32Architecture::*;
++
++        Ok(match s {
++            "mips" => Mips,
++            "mipsel" => Mipsel,
++            "mipsisa32r6" => Mipsisa32r6,
++            "mipsisa32r6el" => Mipsisa32r6el,
++            _ => return Err(()),
++        })
++    }
++}
++
++impl FromStr for Mips64Architecture {
++    type Err = ();
++
++    fn from_str(s: &str) -> Result<Self, ()> {
++        use Mips64Architecture::*;
++
++        Ok(match s {
++            "mips64" => Mips64,
++            "mips64el" => Mips64el,
++            "mipsisa64r6" => Mipsisa64r6,
++            "mipsisa64r6el" => Mipsisa64r6el,
++            _ => return Err(()),
++        })
++    }
++}
++
++#[cfg(feature = "arch_z80")]
++impl FromStr for Z80Architecture {
++    type Err = ();
++
++    fn from_str(s: &str) -> Result<Self, ()> {
++        use Z80Architecture::*;
++
++        Ok(match s {
++            "z80" => Z80,
++            "z180" => Z180,
++            "ez80" => Ez80,
++            "sm83" => Sm83,
++            "rabbit2000" => Rabbit2000,
++            "rabbit2000a" => Rabbit2000A,
++            "rabbit3000" => Rabbit3000,
++            "rabbit3000a" => Rabbit3000A,
++            "tlcs90" => Tlcs90,
++            "r800" => R800,
++            _ => return Err(()),
++        })
++    }
++}
++
++impl FromStr for Architecture {
++    type Err = ();
++
++    fn from_str(s: &str) -> Result<Self, ()> {
++        use Architecture::*;
++
++        Ok(match s {
++            "unknown" => Unknown,
++            "amdgcn" => AmdGcn,
++            "asmjs" => Asmjs,
++            "avr" => Avr,
++            "bpfeb" => Bpfeb,
++            "bpfel" => Bpfel,
++            "hexagon" => Hexagon,
++            "loongarch64" => LoongArch64,
++            "m68k" => M68k,
++            "msp430" => Msp430,
++            "nvptx64" => Nvptx64,
++            "pulley32" => Pulley32,
++            "pulley64" => Pulley64,
++            "pulley32be" => Pulley32be,
++            "pulley64be" => Pulley64be,
++            "powerpc" => Powerpc,
++            "powerpc64" => Powerpc64,
++            "powerpc64le" => Powerpc64le,
++            "s390x" => S390x,
++            "sparc" => Sparc,
++            "sparc64" => Sparc64,
++            "sparcv9" => Sparcv9,
++            "wasm32" => Wasm32,
++            "wasm64" => Wasm64,
++            "x86_64" => X86_64,
++            "x86_64h" => X86_64h,
++            "xtensa" => XTensa,
++            #[cfg(feature = "arch_zkasm")]
++            "zkasm" => ZkAsm,
++            _ => {
++                if let Ok(arm) = ArmArchitecture::from_str(s) {
++                    Arm(arm)
++                } else if let Ok(aarch64) = Aarch64Architecture::from_str(s) {
++                    Aarch64(aarch64)
++                } else if let Ok(riscv32) = Riscv32Architecture::from_str(s) {
++                    Riscv32(riscv32)
++                } else if let Ok(riscv64) = Riscv64Architecture::from_str(s) {
++                    Riscv64(riscv64)
++                } else if let Ok(x86_32) = X86_32Architecture::from_str(s) {
++                    X86_32(x86_32)
++                } else if let Ok(mips32) = Mips32Architecture::from_str(s) {
++                    Mips32(mips32)
++                } else if let Ok(mips64) = Mips64Architecture::from_str(s) {
++                    Mips64(mips64)
++                } else if let Ok(clever) = CleverArchitecture::from_str(s) {
++                    Clever(clever)
++                } else {
++                    #[cfg(feature = "arch_z80")]
++                    {
++                        if let Ok(z80) = Z80Architecture::from_str(s) {
++                            return Ok(Architecture::Z80(z80));
++                        }
++                    }
++                    return Err(());
++                }
++            }
++        })
++    }
++}
++
++impl fmt::Display for Vendor {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        f.write_str(self.as_str())
++    }
++}
++
++impl FromStr for Vendor {
++    type Err = ();
++
++    fn from_str(s: &str) -> Result<Self, ()> {
++        use Vendor::*;
++
++        Ok(match s {
++            "unknown" => Unknown,
++            "amd" => Amd,
++            "apple" => Apple,
++            "espressif" => Espressif,
++            "experimental" => Experimental,
++            "fortanix" => Fortanix,
++            "ibm" => Ibm,
++            "kmc" => Kmc,
++            "nintendo" => Nintendo,
++            "nvidia" => Nvidia,
++            "pc" => Pc,
++            "rumprun" => Rumprun,
++            "sun" => Sun,
++            "uwp" => Uwp,
++            "wrs" => Wrs,
++            custom => {
++                #[cfg(not(feature = "std"))]
++                use alloc::borrow::ToOwned;
++
++                // A custom vendor. Since triple syntax is so loosely defined,
++                // be as conservative as we can to avoid potential ambiguities.
++                // We err on the side of being too strict here, as we can
++                // always relax it if needed.
++
++                // Don't allow empty string names.
++                if custom.is_empty() {
++                    return Err(());
++                }
++
++                // Don't allow any other recognized name as a custom vendor,
++                // since vendors can be omitted in some contexts.
++                if Architecture::from_str(custom).is_ok()
++                    || OperatingSystem::from_str(custom).is_ok()
++                    || Environment::from_str(custom).is_ok()
++                    || BinaryFormat::from_str(custom).is_ok()
++                {
++                    return Err(());
++                }
++
++                // Require the first character to be an ascii lowercase.
++                if !custom.chars().next().unwrap().is_ascii_lowercase() {
++                    return Err(());
++                }
++
++                // Restrict the set of characters permitted in a custom vendor.
++                let has_restricted = custom.chars().any(|c: char| {
++                    !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '.')
++                });
++
++                if has_restricted {
++                    return Err(());
++                }
++
++                Custom(CustomVendor::Owned(Box::new(custom.to_owned())))
++            }
++        })
++    }
++}
++
++impl fmt::Display for OperatingSystem {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        use OperatingSystem::*;
++
++        let mut with_version = |name, deployment_target| {
++            if let Some(DeploymentTarget {
++                major,
++                minor,
++                patch,
++            }) = deployment_target
++            {
++                write!(f, "{}{}.{}.{}", name, major, minor, patch)
++            } else {
++                write!(f, "{}", name)
++            }
++        };
++
++        match *self {
++            Darwin(deployment_target) => with_version("darwin", deployment_target),
++            IOS(deployment_target) => with_version("ios", deployment_target),
++            MacOSX(deployment_target) => with_version("macosx", deployment_target),
++            TvOS(deployment_target) => with_version("tvos", deployment_target),
++            VisionOS(deployment_target) => with_version("visionos", deployment_target),
++            WatchOS(deployment_target) => with_version("watchos", deployment_target),
++            XROS(deployment_target) => with_version("xros", deployment_target),
++            os => f.write_str(&os.into_str()),
++        }
++    }
++}
++
++impl FromStr for OperatingSystem {
++    type Err = ();
++
++    fn from_str(s: &str) -> Result<Self, ()> {
++        use OperatingSystem::*;
++
++        let parse_darwin = |name: &str| {
++            let s = &s[name.len()..];
++            let mut parts = s.split('.');
++
++            if s.is_empty() {
++                // Not specifying a version is allowed!
++                return Ok(None);
++            }
++
++            let major = if let Some(part) = parts.next() {
++                part.parse().map_err(|_| ())?
++            } else {
++                // If the string was just `.`, with no major version, that's
++                // clearly an error.
++                return Err(());
++            };
++            let minor = if let Some(part) = parts.next() {
++                part.parse().map_err(|_| ())?
++            } else {
++                // Fall back to 0 if no minor version was set
++                0
++            };
++            let patch = if let Some(part) = parts.next() {
++                part.parse().map_err(|_| ())?
++            } else {
++                // Fall back to 0 if no patch version was set
++                0
++            };
++
++            if parts.next().is_some() {
++                // Too many parts
++                return Err(());
++            }
++
++            Ok(Some(DeploymentTarget {
++                major,
++                minor,
++                patch,
++            }))
++        };
++
++        // Parse operating system names that contain a version, like `macosx10.7.0`.
++        if s.starts_with("darwin") {
++            return Ok(Darwin(parse_darwin("darwin")?));
++        }
++        if s.starts_with("ios") {
++            return Ok(IOS(parse_darwin("ios")?));
++        }
++        if s.starts_with("macosx") {
++            return Ok(MacOSX(parse_darwin("macosx")?));
++        }
++        if s.starts_with("tvos") {
++            return Ok(TvOS(parse_darwin("tvos")?));
++        }
++        if s.starts_with("visionos") {
++            return Ok(VisionOS(parse_darwin("visionos")?));
++        }
++        if s.starts_with("watchos") {
++            return Ok(WatchOS(parse_darwin("watchos")?));
++        }
++        if s.starts_with("xros") {
++            return Ok(XROS(parse_darwin("xros")?));
++        }
++
++        Ok(match s {
++            "unknown" => Unknown,
++            "aix" => Aix,
++            "amdhsa" => AmdHsa,
++            "bitrig" => Bitrig,
++            "cloudabi" => Cloudabi,
++            "cuda" => Cuda,
++            "cygwin" => Cygwin,
++            "dragonfly" => Dragonfly,
++            "emscripten" => Emscripten,
++            "freebsd" => Freebsd,
++            "fuchsia" => Fuchsia,
++            "haiku" => Haiku,
++            "hermit" => Hermit,
++            "horizon" => Horizon,
++            "hurd" => Hurd,
++            "illumos" => Illumos,
++            "l4re" => L4re,
++            "linux" => Linux,
++            "nebulet" => Nebulet,
++            "netbsd" => Netbsd,
++            "none" => None_,
++            "openbsd" => Openbsd,
++            "psp" => Psp,
++            "redox" => Redox,
++            "solaris" => Solaris,
++            "solid_asp3" => SolidAsp3,
++            "uefi" => Uefi,
++            "vxworks" => VxWorks,
++            "wasi" => Wasi,
++            "wasip1" => WasiP1,
++            "wasip2" => WasiP2,
++            "windows" => Windows,
++            "espidf" => Espidf,
++            _ => return Err(()),
++        })
++    }
++}
++
++impl fmt::Display for Environment {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        f.write_str(&self.into_str())
++    }
++}
++
++impl FromStr for Environment {
++    type Err = ();
++
++    fn from_str(s: &str) -> Result<Self, ()> {
++        use Environment::*;
++
++        Ok(match s {
++            "unknown" => Unknown,
++            "amdgiz" => AmdGiz,
++            "android" => Android,
++            "androideabi" => Androideabi,
++            "eabi" => Eabi,
++            "eabihf" => Eabihf,
++            "gnu" => Gnu,
++            "gnuabi64" => Gnuabi64,
++            "gnueabi" => Gnueabi,
++            "gnueabihf" => Gnueabihf,
++            "gnuspe" => Gnuspe,
++            "gnux32" => Gnux32,
++            "gnu_ilp32" => GnuIlp32,
++            "gnullvm" => GnuLlvm,
++            "hermitkernel" => HermitKernel,
++            "hurdkernel" => HurdKernel,
++            "linuxkernel" => LinuxKernel,
++            "macabi" => Macabi,
++            "musl" => Musl,
++            "musleabi" => Musleabi,
++            "musleabihf" => Musleabihf,
++            "muslabi64" => Muslabi64,
++            "msvc" => Msvc,
++            "newlib" => Newlib,
++            "none" => None,
++            "kernel" => Kernel,
++            "uclibc" => Uclibc,
++            "uclibceabi" => Uclibceabi,
++            "uclibceabihf" => Uclibceabihf,
++            "sgx" => Sgx,
++            "sim" => Sim,
++            "softfloat" => Softfloat,
++            "spe" => Spe,
++            "threads" => Threads,
++            "ohos" => Ohos,
++            _ => return Err(()),
++        })
++    }
++}
++
++impl fmt::Display for BinaryFormat {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        f.write_str(&self.into_str())
++    }
++}
++
++impl FromStr for BinaryFormat {
++    type Err = ();
++
++    fn from_str(s: &str) -> Result<Self, ()> {
++        use BinaryFormat::*;
++
++        Ok(match s {
++            "unknown" => Unknown,
++            "elf" => Elf,
++            "coff" => Coff,
++            "macho" => Macho,
++            "wasm" => Wasm,
++            "xcoff" => Xcoff,
++            _ => return Err(()),
++        })
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use alloc::string::ToString;
++
++    #[test]
++    fn roundtrip_known_triples() {
++        // This list is constructed from:
++        //  - targets emitted by "rustup target list"
++        //  - targets emitted by "rustc +nightly --print target-list"
++        //  - targets contributors have added
++        let targets = [
++            "aarch64-apple-darwin",
++            "aarch64-apple-ios",
++            "aarch64-apple-ios-macabi",
++            "aarch64-apple-ios-sim",
++            "aarch64-apple-tvos",
++            "aarch64-apple-tvos-sim",
++            "aarch64-apple-visionos",
++            "aarch64-apple-visionos-sim",
++            "aarch64-apple-watchos",
++            "aarch64-apple-watchos-sim",
++            "aarch64_be-unknown-linux-gnu",
++            "aarch64_be-unknown-linux-gnu_ilp32",
++            "aarch64_be-unknown-netbsd",
++            "aarch64-kmc-solid_asp3",
++            "aarch64-linux-android",
++            //"aarch64-nintendo-switch-freestanding", // TODO
++            "aarch64-pc-windows-gnullvm",
++            "aarch64-pc-windows-msvc",
++            "aarch64-unknown-cloudabi",
++            "aarch64-unknown-freebsd",
++            "aarch64-unknown-fuchsia",
++            "aarch64-unknown-hermit",
++            "aarch64-unknown-illumos",
++            "aarch64-unknown-linux-gnu",
++            "aarch64-unknown-linux-gnu_ilp32",
++            "aarch64-unknown-linux-musl",
++            "aarch64-unknown-linux-ohos",
++            "aarch64-unknown-netbsd",
++            "aarch64-unknown-none",
++            "aarch64-unknown-none-softfloat",
++            //"aarch64-unknown-nto-qnx710", // TODO
++            "aarch64-unknown-openbsd",
++            "aarch64-unknown-redox",
++            //"aarch64-unknown-teeos", // TODO
++            "aarch64-unknown-uefi",
++            "aarch64-uwp-windows-msvc",
++            "aarch64-wrs-vxworks",
++            //"arm64_32-apple-watchos", // TODO
++            //"arm64e-apple-darwin", // TODO
++            "amdgcn-amd-amdhsa",
++            "amdgcn-amd-amdhsa-amdgiz",
++            //"arm64e-apple-ios", // TODO
++            //"arm64ec-pc-windows-msvc", // TODO
++            "armeb-unknown-linux-gnueabi",
++            "armebv7r-none-eabi",
++            "armebv7r-none-eabihf",
++            "arm-linux-androideabi",
++            "arm-unknown-linux-gnueabi",
++            "arm-unknown-linux-gnueabihf",
++            "arm-unknown-linux-musleabi",
++            "arm-unknown-linux-musleabihf",
++            "armv4t-none-eabi",
++            "armv4t-unknown-linux-gnueabi",
++            "armv5te-none-eabi",
++            "armv5te-unknown-linux-gnueabi",
++            "armv5te-unknown-linux-musleabi",
++            "armv5te-unknown-linux-uclibceabi",
++            "armv6k-nintendo-3ds",
++            "armv6-unknown-freebsd",
++            "armv6-unknown-netbsd-eabihf",
++            "armv7a-kmc-solid_asp3-eabi",
++            "armv7a-kmc-solid_asp3-eabihf",
++            "armv7a-none-eabi",
++            "armv7a-none-eabihf",
++            "armv7-apple-ios",
++            "armv7k-apple-watchos",
++            "armv7-linux-androideabi",
++            "armv7r-none-eabi",
++            "armv7r-none-eabihf",
++            "armv7s-apple-ios",
++            "armv7-unknown-cloudabi-eabihf",
++            //"armv7-sony-vita-newlibeabihf", // TODO
++            "armv7-unknown-freebsd",
++            "armv7-unknown-linux-gnueabi",
++            "armv7-unknown-linux-gnueabihf",
++            "armv7-unknown-linux-musleabi",
++            "armv7-unknown-linux-musleabihf",
++            "armv7-unknown-linux-ohos",
++            "armv7-unknown-linux-uclibceabi",
++            "armv7-unknown-linux-uclibceabihf",
++            "armv7-unknown-netbsd-eabihf",
++            "armv7-wrs-vxworks-eabihf",
++            "asmjs-unknown-emscripten",
++            "armv8r-none-eabihf",
++            //"avr-unknown-gnu-atmega328", // TODO
++            "avr-unknown-unknown",
++            "bpfeb-unknown-none",
++            "bpfel-unknown-none",
++            //"csky-unknown-linux-gnuabiv2", // TODO
++            //"csky-unknown-linux-gnuabiv2hf", // TODO
++            "hexagon-unknown-linux-musl",
++            "hexagon-unknown-none-elf",
++            "i386-apple-ios",
++            //"i586-pc-nto-qnx700", // TODO
++            "i586-pc-windows-msvc",
++            "i586-unknown-linux-gnu",
++            "i586-unknown-linux-musl",
++            "i586-unknown-netbsd",
++            "i686-apple-darwin",
++            "i686-linux-android",
++            "i686-apple-macosx10.7.0",
++            "i686-pc-windows-gnu",
++            "i686-pc-windows-gnullvm",
++            "i686-pc-windows-msvc",
++            "i686-unknown-cloudabi",
++            "i686-unknown-dragonfly",
++            "i686-unknown-freebsd",
++            "i686-unknown-haiku",
++            "i686-unknown-hurd-gnu",
++            "i686-unknown-linux-gnu",
++            "i686-unknown-linux-musl",
++            "i686-unknown-netbsd",
++            "i686-unknown-openbsd",
++            "i686-unknown-redox",
++            "i686-unknown-uefi",
++            "i686-uwp-windows-gnu",
++            "i686-uwp-windows-msvc",
++            "i686-win7-windows-msvc",
++            "i686-wrs-vxworks",
++            "loongarch64-unknown-linux-gnu",
++            "loongarch64-unknown-linux-musl",
++            "loongarch64-unknown-none",
++            "loongarch64-unknown-none-softfloat",
++            "m68k-unknown-linux-gnu",
++            "mips64el-unknown-linux-gnuabi64",
++            "mips64el-unknown-linux-muslabi64",
++            "mips64-openwrt-linux-musl",
++            "mips64-unknown-linux-gnuabi64",
++            "mips64-unknown-linux-muslabi64",
++            "mipsel-sony-psp",
++            //"mipsel-sony-psx", // TODO
++            "mipsel-unknown-linux-gnu",
++            "mipsel-unknown-linux-musl",
++            "mipsel-unknown-linux-uclibc",
++            "mipsel-unknown-netbsd",
++            "mipsel-unknown-none",
++            "mipsisa32r6el-unknown-linux-gnu",
++            "mipsisa32r6-unknown-linux-gnu",
++            "mipsisa64r6el-unknown-linux-gnuabi64",
++            "mipsisa64r6-unknown-linux-gnuabi64",
++            "mips-unknown-linux-gnu",
++            "mips-unknown-linux-musl",
++            "mips-unknown-linux-uclibc",
++            "msp430-none-elf",
++            "nvptx64-nvidia-cuda",
++            "powerpc64-ibm-aix",
++            "powerpc64le-unknown-freebsd",
++            "powerpc64le-unknown-linux-gnu",
++            "powerpc64le-unknown-linux-musl",
++            "powerpc64-unknown-freebsd",
++            "powerpc64-unknown-linux-gnu",
++            "powerpc64-unknown-linux-musl",
++            "powerpc64-unknown-openbsd",
++            "powerpc64-wrs-vxworks",
++            "powerpc-ibm-aix",
++            "powerpc-unknown-freebsd",
++            "powerpc-unknown-linux-gnu",
++            "powerpc-unknown-linux-gnuspe",
++            "powerpc-unknown-linux-musl",
++            "powerpc-unknown-netbsd",
++            "powerpc-unknown-openbsd",
++            "powerpc-wrs-vxworks",
++            "powerpc-wrs-vxworks-spe",
++            "riscv32gc-unknown-linux-gnu",
++            "riscv32gc-unknown-linux-musl",
++            "riscv32imac-esp-espidf",
++            "riscv32imac-unknown-none-elf",
++            //"riscv32imac-unknown-xous-elf", // TODO
++            "riscv32imafc-esp-espidf",
++            "riscv32imafc-unknown-none-elf",
++            "riscv32ima-unknown-none-elf",
++            "riscv32imc-esp-espidf",
++            "riscv32imc-unknown-none-elf",
++            //"riscv32im-risc0-zkvm-elf", // TODO
++            "riscv32im-unknown-none-elf",
++            "riscv32i-unknown-none-elf",
++            "riscv64gc-unknown-freebsd",
++            "riscv64gc-unknown-fuchsia",
++            "riscv64gc-unknown-hermit",
++            "riscv64gc-unknown-linux-gnu",
++            "riscv64a23-unknown-linux-gnu",
++            "riscv64gc-unknown-linux-musl",
++            "riscv64gc-unknown-netbsd",
++            "riscv64gc-unknown-none-elf",
++            "riscv64gc-unknown-openbsd",
++            "riscv64imac-unknown-none-elf",
++            "riscv64-linux-android",
++            "s390x-unknown-linux-gnu",
++            "s390x-unknown-linux-musl",
++            "sparc64-unknown-linux-gnu",
++            "sparc64-unknown-netbsd",
++            "sparc64-unknown-openbsd",
++            "sparc-unknown-linux-gnu",
++            "sparc-unknown-none-elf",
++            "sparcv9-sun-solaris",
++            "thumbv4t-none-eabi",
++            "thumbv5te-none-eabi",
++            "thumbv6m-none-eabi",
++            "thumbv7a-pc-windows-msvc",
++            "thumbv7a-uwp-windows-msvc",
++            "thumbv7em-none-eabi",
++            "thumbv7em-none-eabihf",
++            "thumbv7m-none-eabi",
++            "thumbv7neon-linux-androideabi",
++            "thumbv7neon-unknown-linux-gnueabihf",
++            "thumbv7neon-unknown-linux-musleabihf",
++            "thumbv8m.base-none-eabi",
++            "thumbv8m.main-none-eabi",
++            "thumbv8m.main-none-eabihf",
++            "wasm32-experimental-emscripten",
++            "wasm32-unknown-emscripten",
++            "wasm32-unknown-unknown",
++            "wasm32-wasi",
++            "wasm32-wasip1",
++            "wasm32-wasip1-threads",
++            "wasm32-wasip2",
++            "wasm64-unknown-unknown",
++            "wasm64-wasi",
++            "x86_64-apple-darwin",
++            "x86_64-apple-darwin23.6.0",
++            "x86_64-apple-ios",
++            "x86_64-apple-ios-macabi",
++            "x86_64-apple-tvos",
++            "x86_64-apple-watchos-sim",
++            "x86_64-fortanix-unknown-sgx",
++            "x86_64h-apple-darwin",
++            "x86_64-linux-android",
++            //"x86_64-pc-nto-qnx710", // TODO
++            "x86_64-linux-kernel", // Changed to x86_64-unknown-none-linuxkernel in 1.53.0
++            "x86_64-apple-macosx",
++            "x86_64-apple-macosx10.7.0",
++            "x86_64-pc-cygwin",
++            "x86_64-pc-solaris",
++            "x86_64-pc-windows-gnu",
++            "x86_64-pc-windows-gnullvm",
++            "x86_64-pc-windows-msvc",
++            "x86_64-rumprun-netbsd", // Removed in 1.53.0
++            "x86_64-sun-solaris",
++            "x86_64-unknown-bitrig",
++            "x86_64-unknown-cloudabi",
++            "x86_64-unikraft-linux-musl",
++            "x86_64-unknown-dragonfly",
++            "x86_64-unknown-freebsd",
++            "x86_64-unknown-fuchsia",
++            "x86_64-unknown-haiku",
++            "x86_64-unknown-hermit-kernel", // Changed to x86_64-unknown-none-hermitkernel in 1.53.0
++            "x86_64-unknown-hermit",
++            "x86_64-unknown-illumos",
++            "x86_64-unknown-l4re-uclibc",
++            "x86_64-unknown-linux-gnu",
++            "x86_64-unknown-linux-gnux32",
++            "x86_64-unknown-linux-musl",
++            "x86_64-unknown-linux-none",
++            "x86_64-unknown-linux-ohos",
++            "x86_64-unknown-netbsd",
++            "x86_64-unknown-none",
++            "x86_64-unknown-none-hermitkernel",
++            "x86_64-unknown-none-linuxkernel",
++            "x86_64-unknown-openbsd",
++            "x86_64-unknown-redox",
++            "x86_64-unknown-uefi",
++            "x86_64-uwp-windows-gnu",
++            "x86_64-uwp-windows-msvc",
++            "x86_64-win7-windows-msvc",
++            "x86_64-wrs-vxworks",
++            "xtensa-esp32-espidf",
++            "clever-unknown-elf",
++            "xtensa-esp32-none-elf",
++            "xtensa-esp32s2-espidf",
++            "xtensa-esp32s2-none-elf",
++            "xtensa-esp32s3-espidf",
++            "xtensa-esp32s3-none-elf",
++            #[cfg(feature = "arch_zkasm")]
++            "zkasm-unknown-unknown",
++            #[cfg(feature = "arch_z80")]
++            "z80-zilog-none",
++            #[cfg(feature = "arch_z80")]
++            "sm83-nintendo-none",
++            #[cfg(feature = "arch_z80")]
++            "tlcs90-toshiba-none",
++        ];
++
++        for target in targets.iter() {
++            let t = Triple::from_str(target).expect("can't parse target");
++            assert_ne!(t.architecture, Architecture::Unknown);
++            assert_eq!(t.to_string(), *target, "{:#?}", t);
++        }
++    }
++
++    #[test]
++    fn default_format_to_elf() {
++        let t = Triple::from_str("riscv64").expect("can't parse target");
++        assert_eq!(
++            t.architecture,
++            Architecture::Riscv64(Riscv64Architecture::Riscv64),
++        );
++        assert_eq!(t.vendor, Vendor::Unknown);
++        assert_eq!(t.operating_system, OperatingSystem::Unknown);
++        assert_eq!(t.environment, Environment::Unknown);
++        assert_eq!(t.binary_format, BinaryFormat::Elf);
++    }
++
++    #[test]
++    fn thumbv7em_none_eabihf() {
++        let t = Triple::from_str("thumbv7em-none-eabihf").expect("can't parse target");
++        assert_eq!(
++            t.architecture,
++            Architecture::Arm(ArmArchitecture::Thumbv7em)
++        );
++        assert_eq!(t.vendor, Vendor::Unknown);
++        assert_eq!(t.operating_system, OperatingSystem::None_);
++        assert_eq!(t.environment, Environment::Eabihf);
++        assert_eq!(t.binary_format, BinaryFormat::Elf);
++    }
++
++    #[test]
++    fn fuchsia_rename() {
++        // Fuchsia targets were renamed to add the `unknown`.
++        assert_eq!(
++            Triple::from_str("aarch64-fuchsia"),
++            Triple::from_str("aarch64-unknown-fuchsia")
++        );
++        assert_eq!(
++            Triple::from_str("x86_64-fuchsia"),
++            Triple::from_str("x86_64-unknown-fuchsia")
++        );
++    }
++
++    #[test]
++    fn custom_vendors() {
++        // Test various invalid cases.
++        assert!(Triple::from_str("x86_64--linux").is_err());
++        assert!(Triple::from_str("x86_64-42-linux").is_err());
++        assert!(Triple::from_str("x86_64-__customvendor__-linux").is_err());
++        assert!(Triple::from_str("x86_64-^-linux").is_err());
++        assert!(Triple::from_str("x86_64- -linux").is_err());
++        assert!(Triple::from_str("x86_64-CustomVendor-linux").is_err());
++        assert!(Triple::from_str("x86_64-linux-linux").is_err());
++        assert!(Triple::from_str("x86_64-x86_64-linux").is_err());
++        assert!(Triple::from_str("x86_64-elf-linux").is_err());
++        assert!(Triple::from_str("x86_64-gnu-linux").is_err());
++        assert!(Triple::from_str("x86_64-linux-customvendor").is_err());
++        assert!(Triple::from_str("customvendor").is_err());
++        assert!(Triple::from_str("customvendor-x86_64").is_err());
++        assert!(Triple::from_str("x86_64-").is_err());
++        assert!(Triple::from_str("x86_64--").is_err());
++
++        // Test various Unicode things.
++        assert!(
++            Triple::from_str("x86_64-𝓬𝓾𝓼𝓽𝓸𝓶𝓿𝓮𝓷𝓭𝓸𝓻-linux").is_err(),
++            "unicode font hazard"
++        );
++        assert!(
++            Triple::from_str("x86_64-ćúśtőḿvéńdőŕ-linux").is_err(),
++            "diacritical mark stripping hazard"
++        );
++        assert!(
++            Triple::from_str("x86_64-customvendοr-linux").is_err(),
++            "homoglyph hazard"
++        );
++        assert!(Triple::from_str("x86_64-customvendor-linux").is_ok());
++        assert!(
++            Triple::from_str("x86_64-ﬃ-linux").is_err(),
++            "normalization hazard"
++        );
++        assert!(Triple::from_str("x86_64-ffi-linux").is_ok());
++        assert!(
++            Triple::from_str("x86_64-custom‍vendor-linux").is_err(),
++            "zero-width character hazard"
++        );
++        assert!(
++            Triple::from_str("x86_64-﻿customvendor-linux").is_err(),
++            "BOM hazard"
++        );
++
++        // Test some valid cases.
++        let t = Triple::from_str("x86_64-customvendor-linux")
++            .expect("can't parse target with custom vendor");
++        assert_eq!(t.architecture, Architecture::X86_64);
++        assert_eq!(
++            t.vendor,
++            Vendor::Custom(CustomVendor::Static("customvendor"))
++        );
++        assert_eq!(t.operating_system, OperatingSystem::Linux);
++        assert_eq!(t.environment, Environment::Unknown);
++        assert_eq!(t.binary_format, BinaryFormat::Elf);
++        assert_eq!(t.to_string(), "x86_64-customvendor-linux");
++
++        let t =
++            Triple::from_str("x86_64-customvendor").expect("can't parse target with custom vendor");
++        assert_eq!(t.architecture, Architecture::X86_64);
++        assert_eq!(
++            t.vendor,
++            Vendor::Custom(CustomVendor::Static("customvendor"))
++        );
++        assert_eq!(t.operating_system, OperatingSystem::Unknown);
++        assert_eq!(t.environment, Environment::Unknown);
++        assert_eq!(t.binary_format, BinaryFormat::Elf);
++
++        assert_eq!(
++            Triple::from_str("unknown-foo"),
++            Ok(Triple {
++                architecture: Architecture::Unknown,
++                vendor: Vendor::Custom(CustomVendor::Static("foo")),
++                operating_system: OperatingSystem::Unknown,
++                environment: Environment::Unknown,
++                binary_format: BinaryFormat::Unknown,
++            })
++        );
++    }
++
++    #[test]
++    fn deployment_version_parsing() {
++        assert_eq!(
++            Triple::from_str("aarch64-apple-macosx"),
++            Ok(Triple {
++                architecture: Architecture::Aarch64(Aarch64Architecture::Aarch64),
++                vendor: Vendor::Apple,
++                operating_system: OperatingSystem::MacOSX(None),
++                environment: Environment::Unknown,
++                binary_format: BinaryFormat::Macho,
++            })
++        );
++
++        assert_eq!(
++            Triple::from_str("aarch64-apple-macosx10.14.6"),
++            Ok(Triple {
++                architecture: Architecture::Aarch64(Aarch64Architecture::Aarch64),
++                vendor: Vendor::Apple,
++                operating_system: OperatingSystem::MacOSX(Some(DeploymentTarget {
++                    major: 10,
++                    minor: 14,
++                    patch: 6,
++                })),
++                environment: Environment::Unknown,
++                binary_format: BinaryFormat::Macho,
++            })
++        );
++
++        let expected = Triple {
++            architecture: Architecture::X86_64,
++            vendor: Vendor::Apple,
++            operating_system: OperatingSystem::Darwin(Some(DeploymentTarget {
++                major: 23,
++                minor: 0,
++                patch: 0,
++            })),
++            environment: Environment::Unknown,
++            binary_format: BinaryFormat::Macho,
++        };
++        assert_eq!(
++            Triple::from_str("x86_64-apple-darwin23"),
++            Ok(expected.clone())
++        );
++        assert_eq!(
++            Triple::from_str("x86_64-apple-darwin23.0"),
++            Ok(expected.clone())
++        );
++        assert_eq!(Triple::from_str("x86_64-apple-darwin23.0.0"), Ok(expected));
++
++        assert!(Triple::from_str("x86_64-apple-darwin.").is_err());
++        assert!(Triple::from_str("x86_64-apple-darwin23.0.0.0").is_err());
++    }
++}
+diff --git a/compiler/target-lexicon/src/triple.rs b/compiler/target-lexicon/src/triple.rs
+new file mode 100644
+index 000000000..877da007e
+--- /dev/null
++++ b/compiler/target-lexicon/src/triple.rs
+@@ -0,0 +1,565 @@
++// This file defines the `Triple` type and support code shared by all targets.
++
++use crate::data_model::CDataModel;
++use crate::parse_error::ParseError;
++use crate::targets::{
++    default_binary_format, Architecture, ArmArchitecture, BinaryFormat, Environment,
++    OperatingSystem, Riscv32Architecture, Vendor,
++};
++#[cfg(not(feature = "std"))]
++use alloc::borrow::ToOwned;
++use core::fmt;
++use core::str::FromStr;
++
++/// The target memory endianness.
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum Endianness {
++    Little,
++    Big,
++}
++
++/// The width of a pointer (in the default address space).
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++#[allow(missing_docs)]
++pub enum PointerWidth {
++    U16,
++    U32,
++    U64,
++}
++
++impl PointerWidth {
++    /// Return the number of bits in a pointer.
++    pub fn bits(self) -> u8 {
++        match self {
++            PointerWidth::U16 => 16,
++            PointerWidth::U32 => 32,
++            PointerWidth::U64 => 64,
++        }
++    }
++
++    /// Return the number of bytes in a pointer.
++    ///
++    /// For these purposes, there are 8 bits in a byte.
++    pub fn bytes(self) -> u8 {
++        match self {
++            PointerWidth::U16 => 2,
++            PointerWidth::U32 => 4,
++            PointerWidth::U64 => 8,
++        }
++    }
++}
++
++/// The calling convention, which specifies things like which registers are
++/// used for passing arguments, which registers are callee-saved, and so on.
++#[cfg_attr(feature = "rust_1_40", non_exhaustive)]
++#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
++pub enum CallingConvention {
++    /// "System V", which is used on most Unix-like platfoms. Note that the
++    /// specific conventions vary between hardware architectures; for example,
++    /// x86-32's "System V" is entirely different from x86-64's "System V".
++    SystemV,
++
++    /// The WebAssembly C ABI.
++    /// https://github.com/WebAssembly/tool-conventions/blob/master/BasicCABI.md
++    WasmBasicCAbi,
++
++    /// "Windows Fastcall", which is used on Windows. Note that like "System V",
++    /// this varies between hardware architectures. On x86-32 it describes what
++    /// Windows documentation calls "fastcall", and on x86-64 it describes what
++    /// Windows documentation often just calls the Windows x64 calling convention
++    /// (though the compiler still recognizes "fastcall" as an alias for it).
++    WindowsFastcall,
++
++    /// Apple Aarch64 platforms use their own variant of the common Aarch64
++    /// calling convention.
++    ///
++    /// <https://developer.apple.com/documentation/xcode/writing_arm64_code_for_apple_platforms>
++    AppleAarch64,
++}
++
++/// An LLVM target "triple". Historically such things had three fields, though
++/// they've added additional fields over time.
++///
++/// Note that `Triple` doesn't implement `Default` itself. If you want a type
++/// which defaults to the host triple, or defaults to unknown-unknown-unknown,
++/// use `DefaultToHost` or `DefaultToUnknown`, respectively.
++#[derive(Clone, Debug, PartialEq, Eq, Hash)]
++pub struct Triple {
++    /// The "architecture" (and sometimes the subarchitecture).
++    pub architecture: Architecture,
++    /// The "vendor" (whatever that means).
++    pub vendor: Vendor,
++    /// The "operating system" (sometimes also the environment).
++    pub operating_system: OperatingSystem,
++    /// The "environment" on top of the operating system (often omitted for
++    /// operating systems with a single predominant environment).
++    pub environment: Environment,
++    /// The "binary format" (rarely used).
++    pub binary_format: BinaryFormat,
++}
++
++impl Triple {
++    /// Return the endianness of this target's architecture.
++    pub fn endianness(&self) -> Result<Endianness, ()> {
++        self.architecture.endianness()
++    }
++
++    /// Return the pointer width of this target's architecture.
++    ///
++    /// This function is aware of x32 and ilp32 ABIs on 64-bit architectures.
++    pub fn pointer_width(&self) -> Result<PointerWidth, ()> {
++        // Some ABIs have a different pointer width than the CPU architecture.
++        match self.environment {
++            Environment::Gnux32 | Environment::GnuIlp32 => return Ok(PointerWidth::U32),
++            _ => {}
++        }
++
++        self.architecture.pointer_width()
++    }
++
++    /// Return the default calling convention for the given target triple.
++    pub fn default_calling_convention(&self) -> Result<CallingConvention, ()> {
++        Ok(match self.operating_system {
++            os if os.is_like_darwin() => match self.architecture {
++                Architecture::Aarch64(_) => CallingConvention::AppleAarch64,
++                _ => CallingConvention::SystemV,
++            },
++            OperatingSystem::Aix
++            | OperatingSystem::Bitrig
++            | OperatingSystem::Cloudabi
++            | OperatingSystem::Dragonfly
++            | OperatingSystem::Freebsd
++            | OperatingSystem::Fuchsia
++            | OperatingSystem::Haiku
++            | OperatingSystem::Hermit
++            | OperatingSystem::Hurd
++            | OperatingSystem::L4re
++            | OperatingSystem::Linux
++            | OperatingSystem::Netbsd
++            | OperatingSystem::Openbsd
++            | OperatingSystem::Redox
++            | OperatingSystem::Solaris => CallingConvention::SystemV,
++            OperatingSystem::Windows => CallingConvention::WindowsFastcall,
++            OperatingSystem::Nebulet
++            | OperatingSystem::Emscripten
++            | OperatingSystem::Wasi
++            | OperatingSystem::Unknown => match self.architecture {
++                Architecture::Wasm32 => CallingConvention::WasmBasicCAbi,
++                _ => return Err(()),
++            },
++            _ => return Err(()),
++        })
++    }
++
++    /// The C data model for a given target. If the model is not known, returns `Err(())`.
++    pub fn data_model(&self) -> Result<CDataModel, ()> {
++        match self.pointer_width()? {
++            PointerWidth::U64 => {
++                if self.operating_system == OperatingSystem::Windows {
++                    Ok(CDataModel::LLP64)
++                } else if self.default_calling_convention() == Ok(CallingConvention::SystemV)
++                    || self.architecture == Architecture::Wasm64
++                    || self.default_calling_convention() == Ok(CallingConvention::AppleAarch64)
++                {
++                    Ok(CDataModel::LP64)
++                } else {
++                    Err(())
++                }
++            }
++            PointerWidth::U32 => {
++                if self.operating_system == OperatingSystem::Windows
++                    || self.default_calling_convention() == Ok(CallingConvention::SystemV)
++                    || self.architecture == Architecture::Wasm32
++                {
++                    Ok(CDataModel::ILP32)
++                } else {
++                    Err(())
++                }
++            }
++            // TODO: on 16-bit machines there is usually a distinction
++            // between near-pointers and far-pointers.
++            // Additionally, code pointers sometimes have a different size than data pointers.
++            // We don't handle this case.
++            PointerWidth::U16 => Err(()),
++        }
++    }
++
++    /// Return a `Triple` with all unknown fields.
++    pub fn unknown() -> Self {
++        Self {
++            architecture: Architecture::Unknown,
++            vendor: Vendor::Unknown,
++            operating_system: OperatingSystem::Unknown,
++            environment: Environment::Unknown,
++            binary_format: BinaryFormat::Unknown,
++        }
++    }
++}
++
++impl fmt::Display for Triple {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        if let Some(res) = self.special_case_display(f) {
++            return res;
++        }
++
++        let implied_binary_format = default_binary_format(&self);
++
++        write!(f, "{}", self.architecture)?;
++        if self.vendor == Vendor::Unknown
++            && (self.environment != Environment::HermitKernel
++                && self.environment != Environment::LinuxKernel)
++            && ((self.operating_system == OperatingSystem::Linux
++                && (self.environment == Environment::Android
++                    || self.environment == Environment::Androideabi
++                    || self.environment == Environment::Kernel))
++                || self.operating_system == OperatingSystem::Wasi
++                || self.operating_system == OperatingSystem::WasiP1
++                || self.operating_system == OperatingSystem::WasiP2
++                || (self.operating_system == OperatingSystem::None_
++                    && (self.architecture == Architecture::Arm(ArmArchitecture::Armv4t)
++                        || self.architecture == Architecture::Arm(ArmArchitecture::Armv5te)
++                        || self.architecture == Architecture::Arm(ArmArchitecture::Armebv7r)
++                        || self.architecture == Architecture::Arm(ArmArchitecture::Armv7a)
++                        || self.architecture == Architecture::Arm(ArmArchitecture::Armv7r)
++                        || self.architecture == Architecture::Arm(ArmArchitecture::Armv8r)
++                        || self.architecture == Architecture::Arm(ArmArchitecture::Thumbv4t)
++                        || self.architecture == Architecture::Arm(ArmArchitecture::Thumbv5te)
++                        || self.architecture == Architecture::Arm(ArmArchitecture::Thumbv6m)
++                        || self.architecture == Architecture::Arm(ArmArchitecture::Thumbv7em)
++                        || self.architecture == Architecture::Arm(ArmArchitecture::Thumbv7m)
++                        || self.architecture == Architecture::Arm(ArmArchitecture::Thumbv8mBase)
++                        || self.architecture == Architecture::Arm(ArmArchitecture::Thumbv8mMain)
++                        || self.architecture == Architecture::Msp430)))
++        {
++            // As a special case, omit the vendor for Android, Wasi, and sometimes
++            // None_, depending on the hardware architecture. This logic is entirely
++            // ad-hoc, and is just sufficient to handle the current set of recognized
++            // triples.
++            write!(f, "-{}", self.operating_system)?;
++        } else if self.architecture.is_clever() && self.operating_system == OperatingSystem::Unknown
++        {
++            write!(f, "-{}", self.vendor)?;
++        } else {
++            write!(f, "-{}-{}", self.vendor, self.operating_system)?;
++        }
++
++        match (&self.vendor, self.operating_system, self.environment) {
++            (Vendor::Nintendo, OperatingSystem::Horizon, Environment::Newlib)
++            | (Vendor::Espressif, OperatingSystem::Espidf, Environment::Newlib) => {
++                // The triple representations of these platforms don't have an environment field.
++            }
++            (_, _, Environment::Unknown) => {
++                // Don't print out the environment if it is unknown.
++            }
++            _ => {
++                write!(f, "-{}", self.environment)?;
++            }
++        }
++
++        if self.binary_format != implied_binary_format || show_binary_format_with_no_os(self) {
++            // As a special case, omit a non-default binary format for some
++            // targets which happen to exclude it.
++            write!(f, "-{}", self.binary_format)?;
++        }
++        Ok(())
++    }
++}
++
++fn show_binary_format_with_no_os(triple: &Triple) -> bool {
++    if triple.binary_format == BinaryFormat::Unknown {
++        return false;
++    }
++
++    #[cfg(feature = "arch_zkasm")]
++    {
++        if triple.architecture == Architecture::ZkAsm {
++            return false;
++        }
++    }
++
++    triple.environment != Environment::Eabi
++        && triple.environment != Environment::Eabihf
++        && triple.environment != Environment::Sgx
++        && triple.architecture != Architecture::Avr
++        && triple.architecture != Architecture::Wasm32
++        && triple.architecture != Architecture::Wasm64
++        && (triple.operating_system == OperatingSystem::None_
++            || triple.operating_system == OperatingSystem::Unknown)
++}
++
++impl FromStr for Triple {
++    type Err = ParseError;
++
++    /// Parse a triple from an LLVM target triple.
++    ///
++    /// This may also be able to parse `rustc` target triples, though support
++    /// for that is secondary.
++    fn from_str(s: &str) -> Result<Self, Self::Err> {
++        if let Some(triple) = Triple::special_case_from_str(s) {
++            return Ok(triple);
++        }
++
++        let mut parts = s.split('-');
++        let mut result = Self::unknown();
++        let mut current_part;
++
++        current_part = parts.next();
++        if let Some(s) = current_part {
++            if let Ok(architecture) = Architecture::from_str(s) {
++                result.architecture = architecture;
++                current_part = parts.next();
++            } else {
++                // Insist that the triple start with a valid architecture.
++                return Err(ParseError::UnrecognizedArchitecture(s.to_owned()));
++            }
++        }
++
++        let mut has_vendor = false;
++        let mut has_operating_system = false;
++        if let Some(s) = current_part {
++            if let Ok(vendor) = Vendor::from_str(s) {
++                has_vendor = true;
++                result.vendor = vendor;
++                current_part = parts.next();
++            }
++        }
++
++        if !has_operating_system {
++            if let Some(s) = current_part {
++                if let Ok(operating_system) = OperatingSystem::from_str(s) {
++                    has_operating_system = true;
++                    result.operating_system = operating_system;
++                    current_part = parts.next();
++                }
++            }
++        }
++
++        let mut has_environment = false;
++
++        if !has_environment {
++            if let Some(s) = current_part {
++                if let Ok(environment) = Environment::from_str(s) {
++                    has_environment = true;
++                    result.environment = environment;
++                    current_part = parts.next();
++                }
++            }
++        }
++
++        let mut has_binary_format = false;
++        if let Some(s) = current_part {
++            if let Ok(binary_format) = BinaryFormat::from_str(s) {
++                has_binary_format = true;
++                result.binary_format = binary_format;
++                current_part = parts.next();
++            }
++        }
++
++        // The binary format is frequently omitted; if that's the case here,
++        // infer it from the other fields.
++        if !has_binary_format {
++            result.binary_format = default_binary_format(&result);
++        }
++
++        if let Some(s) = current_part {
++            Err(
++                if !has_vendor && !has_operating_system && !has_environment && !has_binary_format {
++                    ParseError::UnrecognizedVendor(s.to_owned())
++                } else if !has_operating_system && !has_environment && !has_binary_format {
++                    ParseError::UnrecognizedOperatingSystem(s.to_owned())
++                } else if !has_environment && !has_binary_format {
++                    ParseError::UnrecognizedEnvironment(s.to_owned())
++                } else if !has_binary_format {
++                    ParseError::UnrecognizedBinaryFormat(s.to_owned())
++                } else {
++                    ParseError::UnrecognizedField(s.to_owned())
++                },
++            )
++        } else {
++            Ok(result)
++        }
++    }
++}
++
++impl Triple {
++    /// Handle special cases in the `Display` implementation.
++    fn special_case_display(&self, f: &mut fmt::Formatter) -> Option<fmt::Result> {
++        let res = match self {
++            Triple {
++                architecture: Architecture::Arm(ArmArchitecture::Armv6k),
++                vendor: Vendor::Nintendo,
++                operating_system: OperatingSystem::Horizon,
++                ..
++            } => write!(f, "{}-{}-3ds", self.architecture, self.vendor),
++            Triple {
++                architecture: Architecture::Riscv32(Riscv32Architecture::Riscv32imc),
++                vendor: Vendor::Espressif,
++                operating_system: OperatingSystem::Espidf,
++                ..
++            } => write!(f, "{}-esp-{}", self.architecture, self.operating_system),
++            _ => return None,
++        };
++        Some(res)
++    }
++
++    /// Handle special cases in the `FromStr` implementation.
++    fn special_case_from_str(s: &str) -> Option<Self> {
++        let mut triple = Triple::unknown();
++
++        match s {
++            // Galexy is not an LLVM OS. This crate's build script parses
++            // the Cargo TARGET triple while emitting HOST. Cranelift
++            // codegen uses the llvm triple (x86_64-unknown-none-elf);
++            // HOST only feeds cranelift-native. Report none+elf.
++            "x86_64-unknown-galexy" => {
++                triple.architecture = Architecture::X86_64;
++                triple.vendor = Vendor::Unknown;
++                triple.operating_system = OperatingSystem::None_;
++                triple.environment = Environment::Unknown;
++                triple.binary_format = BinaryFormat::Elf;
++            }
++            "armv6k-nintendo-3ds" => {
++                triple.architecture = Architecture::Arm(ArmArchitecture::Armv6k);
++                triple.vendor = Vendor::Nintendo;
++                triple.operating_system = OperatingSystem::Horizon;
++                triple.environment = Environment::Newlib;
++                triple.binary_format = default_binary_format(&triple);
++            }
++            "riscv32imc-esp-espidf" => {
++                triple.architecture = Architecture::Riscv32(Riscv32Architecture::Riscv32imc);
++                triple.vendor = Vendor::Espressif;
++                triple.operating_system = OperatingSystem::Espidf;
++                triple.environment = Environment::Newlib;
++                triple.binary_format = default_binary_format(&triple);
++            }
++            _ => return None,
++        }
++
++        Some(triple)
++    }
++}
++
++/// A convenient syntax for triple literals.
++///
++/// This currently expands to code that just calls `Triple::from_str` and does
++/// an `expect`, though in the future it would be cool to use procedural macros
++/// or so to report errors at compile time instead.
++#[macro_export]
++macro_rules! triple {
++    ($str:tt) => {
++        <$crate::Triple as core::str::FromStr>::from_str($str).expect("invalid triple literal")
++    };
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn parse_errors() {
++        assert_eq!(
++            Triple::from_str(""),
++            Err(ParseError::UnrecognizedArchitecture("".to_owned()))
++        );
++        assert_eq!(
++            Triple::from_str("foo"),
++            Err(ParseError::UnrecognizedArchitecture("foo".to_owned()))
++        );
++        assert_eq!(
++            Triple::from_str("unknown-unknown-foo"),
++            Err(ParseError::UnrecognizedOperatingSystem("foo".to_owned()))
++        );
++        assert_eq!(
++            Triple::from_str("unknown-unknown-unknown-foo"),
++            Err(ParseError::UnrecognizedEnvironment("foo".to_owned()))
++        );
++        assert_eq!(
++            Triple::from_str("unknown-unknown-unknown-unknown-foo"),
++            Err(ParseError::UnrecognizedBinaryFormat("foo".to_owned()))
++        );
++        assert_eq!(
++            Triple::from_str("unknown-unknown-unknown-unknown-unknown-foo"),
++            Err(ParseError::UnrecognizedField("foo".to_owned()))
++        );
++    }
++
++    #[test]
++    fn defaults() {
++        assert_eq!(
++            Triple::from_str("unknown-unknown-unknown"),
++            Ok(Triple::unknown())
++        );
++        assert_eq!(
++            Triple::from_str("unknown-unknown-unknown-unknown"),
++            Ok(Triple::unknown())
++        );
++        assert_eq!(
++            Triple::from_str("unknown-unknown-unknown-unknown-unknown"),
++            Ok(Triple::unknown())
++        );
++    }
++
++    #[test]
++    fn unknown_properties() {
++        assert_eq!(Triple::unknown().endianness(), Err(()));
++        assert_eq!(Triple::unknown().pointer_width(), Err(()));
++        assert_eq!(Triple::unknown().default_calling_convention(), Err(()));
++    }
++
++    #[test]
++    fn apple_calling_convention() {
++        for triple in &[
++            "aarch64-apple-darwin",
++            "aarch64-apple-ios",
++            "aarch64-apple-ios-macabi",
++            "aarch64-apple-tvos",
++            "aarch64-apple-watchos",
++        ] {
++            let triple = Triple::from_str(triple).unwrap();
++            assert_eq!(
++                triple.default_calling_convention().unwrap(),
++                CallingConvention::AppleAarch64
++            );
++            assert_eq!(triple.data_model().unwrap(), CDataModel::LP64);
++        }
++
++        for triple in &["aarch64-linux-android", "x86_64-apple-ios"] {
++            assert_eq!(
++                Triple::from_str(triple)
++                    .unwrap()
++                    .default_calling_convention()
++                    .unwrap(),
++                CallingConvention::SystemV
++            );
++        }
++    }
++
++    #[test]
++    fn p32_abi() {
++        // Test that special 32-bit pointer ABIs on 64-bit architectures are
++        // reported as having 32-bit pointers.
++        for triple in &[
++            "x86_64-unknown-linux-gnux32",
++            "aarch64_be-unknown-linux-gnu_ilp32",
++            "aarch64-unknown-linux-gnu_ilp32",
++        ] {
++            assert_eq!(
++                Triple::from_str(triple).unwrap().pointer_width().unwrap(),
++                PointerWidth::U32
++            );
++        }
++
++        // Test that the corresponding ABIs have 64-bit pointers.
++        for triple in &[
++            "x86_64-unknown-linux-gnu",
++            "aarch64_be-unknown-linux-gnu",
++            "aarch64-unknown-linux-gnu",
++        ] {
++            assert_eq!(
++                Triple::from_str(triple).unwrap().pointer_width().unwrap(),
++                PointerWidth::U64
++            );
++        }
++    }
++}
+diff --git a/src/bootstrap/src/core/build_steps/compile.rs b/src/bootstrap/src/core/build_steps/compile.rs
+index 3aded5812..7fe1346a0 100644
+--- a/src/bootstrap/src/core/build_steps/compile.rs
++++ b/src/bootstrap/src/core/build_steps/compile.rs
+@@ -657,6 +657,10 @@ pub fn std_cargo(
+     } else {
+         features += &builder.std_features(target);
+         features.push_str(compiler_builtins_c_feature);
++        // No libc on Galexy. Cranelift calls memcpy/memset/memcmp/memmove.
++        if target.contains("galexy") {
++            features += " compiler-builtins-mem";
++        }
+ 
+         cargo
+             .arg("--features")
+@@ -802,7 +806,12 @@ fn run(self, builder: &Builder<'_>) {
+                 builder.cp_link_r(&stage0_codegen_backends, &sysroot_codegen_backends);
+             }
+         } else if compiler.stage == 0 {
+-            let sysroot = builder.out.join(compiler.host.triple).join("stage0-sysroot");
++            // Create (and cache) the sysroot before copying into it. A later
++            // `Sysroot` step wipes the directory on first run; doing it here
++            // means the copy below survives.
++            let libdir = builder.sysroot_target_libdir(target_compiler, target);
++            let hostdir = builder.sysroot_target_libdir(target_compiler, compiler.host);
++            let sysroot = builder.sysroot(compiler);
+ 
+             if builder.local_rebuild {
+                 // On local rebuilds this path might be a symlink to the project root,
+@@ -812,6 +821,17 @@ fn run(self, builder: &Builder<'_>) {
+             }
+ 
+             builder.cp_link_r(&builder.initial_sysroot.join("lib"), &sysroot.join("lib"));
++            // Stage 0 does not ship a Galexy sysroot. The rlibs this compiler
++            // just built have to land next to the host std or the next cargo
++            // invocation cannot find `core`.
++            if target != compiler.host {
++                add_to_sysroot(
++                    builder,
++                    &libdir,
++                    &hostdir,
++                    &build_stamp::libstd_stamp(builder, target_compiler, target),
++                );
++            }
+         } else {
+             if builder.download_rustc() {
+                 // Ensure there are no CI-rustc std artifacts.
+@@ -2418,6 +2438,11 @@ fn run(self, builder: &Builder<'_>) -> Compiler {
+ 
+                 match backend {
+                     CodegenBackendKind::Cranelift => {
++                        // Galexy links Cranelift into rustc_interface. A dylib
++                        // backend cannot be built or loaded there.
++                        if target_compiler.host.contains("galexy") {
++                            continue;
++                        }
+                         let stamp = builder
+                             .ensure(CraneliftCodegenBackend { compilers: prepare_compilers() });
+                         copy_codegen_backends_to_sysroot(builder, stamp, target_compiler);
+diff --git a/src/bootstrap/src/core/builder/cargo.rs b/src/bootstrap/src/core/builder/cargo.rs
+index 98cfd5819..fb4748704 100644
+--- a/src/bootstrap/src/core/builder/cargo.rs
++++ b/src/bootstrap/src/core/builder/cargo.rs
+@@ -171,7 +171,9 @@ pub(crate) fn new(
+         cmd_kind: Kind,
+     ) -> Cargo {
+         let mut cargo = builder.cargo(compiler, mode, source_type, target, cmd_kind);
+-        if target.synthetic {
++        // User JSON specs (and synthetic ones) are unstable. Cargo refuses a
++        // `.json` --target unless this flag is on the invocation.
++        if target.file.is_some() {
+             cargo.arg("-Zjson-target-spec");
+         }
+ 
+@@ -223,7 +225,7 @@ pub(crate) fn new_for_mir_opt_tests(
+         cmd_kind: Kind,
+     ) -> Cargo {
+         let mut cargo = builder.cargo(compiler, mode, source_type, target, cmd_kind);
+-        if target.synthetic {
++        if target.file.is_some() {
+             cargo.arg("-Zjson-target-spec");
+         }
+         cargo

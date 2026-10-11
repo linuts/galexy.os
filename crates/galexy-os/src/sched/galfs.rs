@@ -1703,7 +1703,7 @@ pub fn add_actor_named(name: &str, password: &[u8]) -> Result<u16, SysError> {
 
 fn admin_quota_limits() -> (u16, u32) {
     // The v12 pool is 128 KiB. Promoted files live in the large store,
-    // which holds one 64 MiB file; admin's byte quota matches that cap.
+    // which holds one max-size file; admin's byte quota matches that cap.
     (OBJECT_SLOTS as u16, super::large::LARGE_FILE_MAX)
 }
 
@@ -2934,7 +2934,9 @@ pub fn for_each_visible(root: u16, tokens: &[Token; TOKEN_SLOTS], mut each: impl
         {
             continue;
         }
-        let mut buf = [0u8; NAME_CAP];
+        // Longer than one component: a sysroot rlib path is
+        // `lib/rustlib/<triple>/lib/<crate>-<hash>.rlib` (~80 bytes).
+        let mut buf = [0u8; 256];
         let Some(n) = path_bytes(&table, index, root, &mut buf) else {
             continue;
         };
