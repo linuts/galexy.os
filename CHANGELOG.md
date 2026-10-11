@@ -8,6 +8,11 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#99](https://github.com/linuts/galexy.os/pull/99) — Milestone 75 —
+  the login kernel imports `srlib/*` and the target JSON into the
+  RAM store before init when the ramdisk contains `srlib/`. Serial
+  line `rustc-sysroot: 33 entries`, then the prompt. Other images
+  skip the import. `DISK_VERSION` stays 12. The 128 MiB pool stays.
 - [#98](https://github.com/linuts/galexy.os/pull/98) — Milestone 74 —
   `galexy-os-rustc` is the login image with `rustc`, `gxld`, the
   target JSON, and `srlib/*`, built only when the compiler ELF exists.

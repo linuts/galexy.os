@@ -40,6 +40,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                                       // leave auto-unlock on and keep using `VOLUME_PASSPHRASE`.
     sched::galfs::set_auto_unlock(false);
     sched::init();
+    // Compiler image only: `srlib/` is absent on the small ramdisk.
+    sched::install_compiler_sysroot();
     sched::demo::spawn_all(); // silent preemptive threads
     banner::show();
     // Hand the framebuffer to the seats: wipe the banner so init/shell

@@ -3225,9 +3225,12 @@ fn nano_typing_e2e_on(image_name: &str) {
     );
 }
 
-/// Milestone 74: the login image carries `rustc`. No arguments, so the
-/// shell's existing bare-name launch is enough. The diagnostic is the
-/// compiler's, not `command not found`.
+/// Milestone 74/75: the login image carries `rustc`, and the kernel
+/// imports `srlib/` before the prompt. No arguments, so the shell's
+/// existing bare-name launch is enough. That launch does not pass
+/// session tokens, so the compiler still cannot open the galfs JSON;
+/// the proof here is the import line, then the compiler's own usage
+/// text rather than `command not found`.
 #[test]
 fn rustc_image_login_typing_e2e() {
     if env!("GALEXY_HAVE_RUSTC") != "1" {
@@ -3249,6 +3252,16 @@ fn rustc_image_login_typing_e2e() {
         "Usage: rustc",
         Duration::from_millis(30),
         Duration::from_secs(360),
+    );
+    let sysroot = serial
+        .find("rustc-sysroot: 33 entries")
+        .expect("sysroot import line missing");
+    let ready = serial
+        .find("[boot] main loop ready")
+        .expect("boot ready line missing");
+    assert!(
+        sysroot < ready,
+        "sysroot import ran after the prompt; serial:\n{serial}"
     );
     assert!(
         serial.contains("Usage: rustc"),

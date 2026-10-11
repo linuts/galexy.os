@@ -335,14 +335,14 @@ reads the linker pipe to EOF before `Wait`.
 and typing `rustc` at the login prompt:
 
 - The compiler ramdisk (~214 MiB ELF, ~90 MiB sysroot) is attached
-  only to `test-rustc` and `test-rustc-hello`. The login image uses
-  the shared ~24 MiB ramdisk. Milestone 74 adds `galexy-os-rustc`
-  and `cargo run --rustc`, and leaves every other image alone.
-- Those test kernels copy the JSON and `srlib/*` into the RAM store
-  before they spawn `rustc`. The login kernel does not. A v12 disk
-  file cannot hold `core`'s ~66 MiB `.rmeta`. Milestone 75 repeats
-  that import on every boot of an image whose ramdisk contains
-  `srlib/`.
+  to `test-rustc`, `test-rustc-hello`, and `galexy-os-rustc`.
+  `cargo run --rustc` boots that image. Every other image keeps the
+  shared ~24 MiB ramdisk (Milestone 74).
+- The login kernel copies the JSON and `srlib/*` into the RAM store
+  before init when the ramdisk contains `srlib/` (Milestone 75).
+  A v12 disk file cannot hold `core`'s ~66 MiB `.rmeta`, so the
+  copy is RAM-only and repeats every boot. Bare `rustc` still
+  cannot read those files: `launch` does not pass session tokens.
 - The shell starts a ramdisk program only when the line has no
   spaces, and `spawn` only loads a ramdisk label (`file_name_ok`
   rejects `/`). Milestone 76 passes argv and waits. Milestone 77

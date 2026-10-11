@@ -2522,16 +2522,17 @@ disk file is capped at 64 MiB, so the copy goes through
 and is repeated every boot. It is not sealed to disk. Do not bump
 `DISK_VERSION`.
 
-- [ ] On the normal kernel, when the ramdisk contains `srlib/`, import
+- [x] On the normal kernel, when the ramdisk contains `srlib/`, import
       the JSON and every `srlib/*` entry before init, the same paths
       `test-rustc-hello` uses. The small ramdisk has no `srlib/`, so
       every other image pays nothing
-- [ ] One import per file, not a userspace loop through the 1 KiB
+- [x] One import per file, not a userspace loop through the 1 KiB
       `read`/`write` staging buffer
-- [ ] Serial line `rustc-sysroot: N entries`, then the login prompt.
+- [x] Serial line `rustc-sysroot: N entries`, then the login prompt.
       The 128 MiB pool stays. The hello compile already fit beside the
       ~90 MiB sysroot; raise the pool only if this image's compile
-      fails for lack of space
+      fails for lack of space.
+      `rustc_image_login_typing_e2e` under TCG (`rustc-sysroot: 33 entries`)
 
 ## Milestone 76 — Pass arguments to a ramdisk program
 
@@ -2582,10 +2583,11 @@ bytes. A longer source is `nano`.
 Open bullets below are tracked by milestone id where planned. Waived
 items stay here with rationale.
 
-- [ ] `rustc` is not a command at the login shell. The compiler ramdisk
-      is only on `test-rustc` and `test-rustc-hello`. A line with
-      arguments is `command not found`, and `spawn` cannot load the
-      ELF `rustc` writes. Milestones **74–77**
+- [ ] `rustc` is not yet a useful login command. Milestones 74 and 75
+      put the compiler and the sysroot on `galexy-os-rustc`. A line
+      with arguments is still `command not found`, `launch` does not
+      pass session tokens, and `spawn` cannot load the ELF `rustc`
+      writes. Milestones **76–77**
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17
       (APIC family: LAPIC timer + I/O APIC keyboard route on every boot
