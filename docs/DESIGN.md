@@ -697,7 +697,12 @@ owner the walk starts at the task's actor root. A token on the task
 (object id + rights) must cover the target: create needs CREATE on the
 parent, open needs READ, write needs WRITE, remove needs REMOVE, and
 the files snapshot needs LIST. Holding a token on a parent covers the
-children it permits. `open` of a path with no slash and no `@` still
+children it permits. `spawn` of a name with no `/` loads that ramdisk label. A name
+with `/` loads an ELF from galfs, including a RAM-store file, using
+the caller's tokens (`AccessDenied` when none cover it). The shell
+rewrites `./hello` from the login directory to `/hello`, so the
+compiled file does not collide with the ramdisk program `hello`.
+`open` of a path with no slash and no `@` still
 hits the ramdisk first and grants READ. Any other path walks galfs and
 must name a file (READ|WRITE). A directory open is `Unsupported`. A
 path with no covering token is `AccessDenied`. `write` on a galfs
@@ -1251,7 +1256,7 @@ main image and are listed at the end.
 | `test-init`, `test-jobcap` | `init_test_passes`, `jobcap_test_passes` | M53 init orphan root, M55 job Cap / Ctrl-C |
 | `test-sleep`, `test-idle` | `sleep_test_passes`, `idle_test_passes` | M56 time and deadlines, M58 policy freeze |
 | `test-rustc-hello` | `rustc_hello_runs` | M73 on-OS `rustc` links with `gxld` and the program runs |
-| `galexy-os-rustc` | `rustc_image_login_typing_e2e`, `rustc_print_cfg_typing_e2e` | M74/M75 login image carries `rustc` and imports the sysroot before the prompt. M76: `rustc --print cfg` prints `target_os="galexy"` and the prompt returns. Skipped when the ELF was absent at image build |
+| `galexy-os-rustc` | `rustc_image_login_typing_e2e`, `rustc_print_cfg_typing_e2e`, `rustc_hello_typing_e2e` | M74/M75 login image carries `rustc` and imports the sysroot. M76: `rustc --print cfg`. M77: `echo` a one-line hello, `rustc hello.rs -o hello`, `/hello` prints `hello from rustc on galexy`. Skipped when the ELF was absent at image build |
 | `test-badelf`, `test-negative` | `badelf_test_passes`, `negative_test_passes` | M51 hostile ELF oracle and negative suite; M63 loader returns `SysError` and caps image pages |
 | `test-smep`, `test-smap`, `test-umip`, `test-kaslr` | `smep_test_passes`, `smap_test_passes`, `umip_test_passes`, `kaslr_kernel_base_differs_across_boots` | M63 SMEP, SMAP, UMIP, kernel KASLR (`kaslr` boots the image twice) |
 | `test-soak`, `test-fairness`, `test-pathological`, `test-bench` | `soak_test_passes`, `fairness_test_passes`, `pathological_test_passes`, `bench_test_passes` | M51 soak (exact table closure per round), steal fairness under load, console-budget flood; M64 `test-bench` prints `[bench] name=… us=…` and the runner asserts KVM ceilings |

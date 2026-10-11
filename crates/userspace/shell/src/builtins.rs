@@ -417,7 +417,9 @@ pub(crate) fn dispatch(
             prompt(cwd);
             return None;
         };
-        launch_util(cwd, name, &arg[..n], false);
+        let mut path = [0u8; PATH_MAX];
+        let program = program_name(cwd, name, &mut path);
+        launch_util(cwd, program, &arg[..n], false);
         return None;
     }
     write_console(line);
@@ -1398,7 +1400,51 @@ pub(crate) fn launch(cwd: &Cwd, name: &[u8]) {
         prompt(cwd);
         return;
     }
-    spawn_and_prompt(cwd, name, b"", 0, false);
+    let mut path = [0u8; PATH_MAX];
+    let program = program_name(cwd, name, &mut path);
+    spawn_and_prompt(cwd, program, b"", 0, false);
+}
+
+/// A ramdisk label stays as typed. A name with `/` becomes a galfs path:
+/// `./hello` from the login directory `/` is `/hello`, so it does not
+/// collide with the ramdisk program `hello`.
+fn program_name<'a>(cwd: &Cwd, name: &'a [u8], buf: &'a mut [u8; PATH_MAX]) -> &'a [u8] {
+    if !name.contains(&b'/') {
+        return name;
+    }
+    let Some(n) = absolute_spawn_path(cwd, name, buf) else {
+        return name;
+    };
+    &buf[..n]
+}
+
+fn absolute_spawn_path(cwd: &Cwd, name: &[u8], buf: &mut [u8; PATH_MAX]) -> Option<usize> {
+    let rel = name.strip_prefix(b"./").unwrap_or(name);
+    if rel.is_empty() || rel.contains(&b" ") {
+        return None;
+    }
+    if rel.starts_with(b"/") {
+        if rel.len() > PATH_MAX {
+            return None;
+        }
+        buf[..rel.len()].copy_from_slice(rel);
+        return Some(rel.len());
+    }
+    let mid = if cwd.len == 0 { 0 } else { cwd.len + 1 };
+    let need = 1 + mid + rel.len();
+    if need > PATH_MAX {
+        return None;
+    }
+    buf[0] = b'/';
+    let mut n = 1usize;
+    if cwd.len > 0 {
+        buf[n..n + cwd.len].copy_from_slice(&cwd.buf[..cwd.len]);
+        n += cwd.len;
+        buf[n] = b'/';
+        n += 1;
+    }
+    buf[n..n + rel.len()].copy_from_slice(rel);
+    Some(n + rel.len())
 }
 
 /// Spawns a utility with `arg`. `query` adds the files snapshot grant.

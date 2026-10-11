@@ -51,6 +51,8 @@ pub(in crate::sched) struct PendingSpawn {
     pub(in crate::sched) cap1: u8,
     /// Do not publish the child as the TTY foreground (shell `cmd &`).
     pub(in crate::sched) no_fg: bool,
+    /// Parent credentials used to read a path spawn. Empty for a label.
+    pub(in crate::sched) load_fs: galfs::FsCred,
     pub(in crate::sched) armed: bool,
 }
 
@@ -71,6 +73,7 @@ pub(in crate::sched) static PENDING_SPAWN: Mutex<PendingSpawn> = Mutex::new(Pend
     cap0: 0xFF,
     cap1: 0xFF,
     no_fg: false,
+    load_fs: galfs::FsCred::none(),
     armed: false,
 });
 
@@ -153,6 +156,13 @@ pub(crate) fn task_spawn(
         if !seat && parent_fs.root == galfs::NO_OBJECT {
             return Err(SysError::AccessDenied);
         }
+        // Snapshot before attenuation. A path spawn reads the ELF with
+        // the parent's own tokens even when the child does not inherit.
+        let load_fs = if name.contains('/') {
+            parent_fs
+        } else {
+            galfs::FsCred::none()
+        };
         if inherit || wait_exit {
             galfs::attenuate_tokens(&mut parent_fs.tokens, rights_mask);
         }
@@ -176,6 +186,7 @@ pub(crate) fn task_spawn(
         pending.cap0 = caps[0];
         pending.cap1 = caps[1];
         pending.no_fg = no_fg;
+        pending.load_fs = load_fs;
         // Seats start logged out (no cards). Utilities inherit the session.
         // Bare programs keep the root for path context but hold no cards.
         pending.fs = if seat {
@@ -201,6 +212,32 @@ pub(crate) fn task_spawn(
         thread.state.store(STATE_WAITING, Ordering::Release);
         Ok(())
     })
+}
+
+/// Largest ELF a path spawn will copy out of galfs.
+const SPAWN_FILE_MAX: usize = 16 * 1024 * 1024;
+
+/// Reads `name` for a path spawn.
+///
+/// Tokens are the caller's. A path outside them is
+/// [`SysError::AccessDenied`], not a loader panic. The bytes must be an ELF.
+pub fn read_spawn_file(
+    root: u16,
+    tokens: &[galfs::Token; galfs::TOKEN_SLOTS],
+    name: &str,
+) -> Result<alloc::vec::Vec<u8>, SysError> {
+    let id = galfs::open_file(root, tokens, name)?;
+    let len = galfs::object_len(id).ok_or(SysError::NotFound)?;
+    if len == 0 || len > SPAWN_FILE_MAX {
+        return Err(SysError::BadValue);
+    }
+    let mut buf = alloc::vec![0u8; len];
+    let n = galfs::read_file_bytes(id, &mut buf).ok_or(SysError::NotFound)?;
+    if n != len {
+        return Err(SysError::BadValue);
+    }
+    loader::validate_elf(&buf)?;
+    Ok(buf)
 }
 
 /// Loads a queued program, if the shell has asked for one.
@@ -235,6 +272,7 @@ pub fn drain_spawn() {
         let cap0 = pending.cap0;
         let cap1 = pending.cap1;
         let no_fg = pending.no_fg;
+        let load_fs = pending.load_fs;
         pending.armed = false;
         Some((
             len,
@@ -252,6 +290,7 @@ pub fn drain_spawn() {
             cap0,
             cap1,
             no_fg,
+            load_fs,
         ))
     });
     let Some((
@@ -270,6 +309,7 @@ pub fn drain_spawn() {
         cap0,
         cap1,
         no_fg,
+        load_fs,
     )) = queued
     else {
         return;
@@ -308,7 +348,35 @@ pub fn drain_spawn() {
     // the child can exit. Publishing early lets the other CPU run a short
     // program to completion in the gap; the exit then wakes nobody and
     // the parent parks forever (`test-soak`'s `hello`).
-    let child_slot = if let Some(bytes) = ramdisk::find(elf_name) {
+    let path_bytes = if name.contains('/') {
+        Some(read_spawn_file(load_fs.root, &load_fs.tokens, name))
+    } else {
+        None
+    };
+    let child_slot = if let Some(loaded) = path_bytes {
+        match loaded {
+            Ok(bytes) => match loader::spawn_launched(
+                name,
+                &bytes,
+                grants,
+                &arg[..arg_len],
+                tty,
+                fs,
+                waiter_slot,
+                true,
+            ) {
+                Ok(slot) => Some(Ok(slot)),
+                Err(err) => {
+                    serial_println!("[sched] spawn '{}' refused ({:?})", name, err);
+                    Some(Err(err))
+                }
+            },
+            Err(err) => {
+                serial_println!("[sched] spawn '{}' path refused ({:?})", name, err);
+                Some(Err(err))
+            }
+        }
+    } else if let Some(bytes) = ramdisk::find(elf_name) {
         let spawned = if seat {
             loader::spawn_launched_seat(
                 name,

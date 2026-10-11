@@ -51,6 +51,7 @@ pub use iowait::wake_keyboard_waiters;
 pub use iowait::wake_pipe_waiters;
 pub(crate) use iowait::THREAD_EXIT_REASON;
 pub use spawn::drain_spawn;
+pub use spawn::read_spawn_file;
 pub use spawn::drain_thread_spawn;
 pub use spawn::ensure_shell;
 pub(crate) use spawn::for_each_scratch_path;

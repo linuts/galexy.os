@@ -4,8 +4,9 @@
 //! Utilities spawn with `SPAWN_INHERIT`, then [`galexy_rt::wait`] on the
 //! child Cap so the prompt returns after they exit. A ramdisk program
 //! with arguments gets the same inherit-and-wait path; the rest of the
-//! line is a NUL-separated argv. A bare program name returns once the
-//! load finishes (Cap dropped) and keeps running.
+//! line is a NUL-separated argv. A name with `/` is a galfs path
+//! (`/hello`, and `./hello` from `/`). A bare program name returns once
+//! the load finishes (Cap dropped) and keeps running.
 //! A bare launch shares this console. `cmd &` is a background job (`jobs`
 //! / `fg`); Ctrl-Z is not implemented. Pipelines are up to four stages
 //! joined by ` | `. A `*` word expands to

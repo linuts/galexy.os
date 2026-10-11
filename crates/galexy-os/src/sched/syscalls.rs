@@ -1332,22 +1332,31 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
         }
     }
     let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
-    if !file_name_ok(name) {
-        return SyscallResult::err(SysError::BadValue);
-    }
-    // Milestone 54: F-key seat names share the ramdisk `shell` ELF.
-    let elf_name = if crate::sched::is_console_shell_name(name) {
-        "shell"
+    // A slash is a galfs path (`/hello`, after the shell rewrites
+    // `./hello`). The bytes are read in the drain, under the caller's
+    // tokens. A label with no slash stays a ramdisk program.
+    if name.contains('/') {
+        if name.len() > 64 || !path_ok(name) {
+            return SyscallResult::err(SysError::BadValue);
+        }
     } else {
-        name
-    };
-    let Some(bytes) = crate::sched::ramdisk::find(elf_name) else {
-        return SyscallResult::err(SysError::NotFound);
-    };
-    // Hostile-ELF gate: refuse with a code before the loader touches a
-    // page table (the loader itself still asserts; see `test-badelf`).
-    if let Err(err) = crate::sched::loader::validate_elf(bytes) {
-        return SyscallResult::err(err);
+        if !file_name_ok(name) {
+            return SyscallResult::err(SysError::BadValue);
+        }
+        // Milestone 54: F-key seat names share the ramdisk `shell` ELF.
+        let elf_name = if crate::sched::is_console_shell_name(name) {
+            "shell"
+        } else {
+            name
+        };
+        let Some(bytes) = crate::sched::ramdisk::find(elf_name) else {
+            return SyscallResult::err(SysError::NotFound);
+        };
+        // Hostile-ELF gate: refuse with a code before the loader touches a
+        // page table (the loader itself still asserts; see `test-badelf`).
+        if let Err(err) = crate::sched::loader::validate_elf(bytes) {
+            return SyscallResult::err(err);
+        }
     }
     let query = frame.r10 & galexy_abi::SPAWN_GRANT_QUERY != 0;
     let wait_exit = frame.r10 & galexy_abi::SPAWN_WAIT != 0;

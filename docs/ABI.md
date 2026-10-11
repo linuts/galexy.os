@@ -45,7 +45,7 @@ gaps or duplicates). Appending is allowed; inserting is not.
 | 4 | `open` | stable | ramdisk and galfs names |
 | 5 | `read` | stable | `0` means EOF / no key / empty request per cap kind |
 | 6 | `close` | stable | reserved caps are `BadCap` |
-| 7 | `spawn` | experimental | NUL-separated argv inside the 4096-byte blob; no environment vector. `SPAWN_NO_FG` is r10 bit 5 |
+| 7 | `spawn` | experimental | A name with no `/` is a ramdisk label. A name with `/` is a galfs path read with the caller's tokens (`/hello`; the shell turns `./hello` at `/` into that path). NUL-separated argv inside the 4096-byte blob; no environment vector. `SPAWN_NO_FG` is r10 bit 5 |
 | 8 | `power` | stable | |
 | 9 | `create` | stable | |
 | 10 | `remove` | stable | |

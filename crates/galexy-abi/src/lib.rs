@@ -439,13 +439,19 @@ pub enum Syscall {
     /// Reserved caps (console, self, keyboard, loader, stats, tasks,
     /// threads) are not files and fail `BadCap`.
     Close,
-    /// `spawn(cap, name, len)` — start a ramdisk program.
+    /// `spawn(cap, name, len)` — start a program.
     ///
     /// Args: `RDI = loader cap bits`, `RSI = user address of the name`,
-    /// `RDX = byte count` (1..=64). The name is a **label**: ASCII
-    /// alphanumeric plus `.` `_` `-` (no `/`). Optional: `R8` = argument
-    /// blob address, `R9` = blob length (at most 256; NUL-separated argv,
-    /// one argument when there is no interior NUL; no env), `R10` = grant bits
+    /// `RDX = byte count` (1..=[`SPAWN_NAME_MAX`]). A name with no `/`
+    /// is a ramdisk **label**: ASCII alphanumeric plus `.` `_` `-`.
+    /// A name with `/` is a galfs path (`/hello`). The shell rewrites
+    /// `./hello` from the login directory to `/hello` before the call.
+    /// The path is read with the caller's tokens; a miss is the galfs
+    /// error (`AccessDenied`, `NotFound`), not a loader panic. The
+    /// bytes must be an ELF. Optional: `R8` = argument blob address,
+    /// `R9` = blob length (at most [`SPAWN_ARG_MAX`]; NUL-separated
+    /// argv, one argument when there is no interior NUL; no env),
+    /// `R10` = grant bits
     /// ([`SPAWN_GRANT_QUERY`], [`SPAWN_WAIT`], [`SPAWN_INHERIT`],
     /// [`SPAWN_GRANT_KEYBOARD`], [`SPAWN_WITH_CAPS`], or a combination,
     /// plus an optional rights mask in [`SPAWN_RIGHTS_BITS`], up to
