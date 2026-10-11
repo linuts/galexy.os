@@ -3277,6 +3277,70 @@ fn rustc_image_login_typing_e2e() {
     );
 }
 
+/// Milestone 76: a ramdisk program with arguments gets a NUL argv,
+/// inherits the session, and the prompt returns after it exits.
+#[test]
+fn rustc_print_cfg_typing_e2e() {
+    if env!("GALEXY_HAVE_RUSTC") != "1" {
+        eprintln!("rustc_print_cfg_typing_e2e: skipped (no target/galexy-rustc/rustc)");
+        return;
+    }
+    let keys = with_login(&[
+        ("r", "r"),
+        ("u", "u"),
+        ("s", "s"),
+        ("t", "t"),
+        ("c", "c"),
+        ("spc", " "),
+        ("minus", "-"),
+        ("minus", "-"),
+        ("p", "p"),
+        ("r", "r"),
+        ("i", "i"),
+        ("n", "n"),
+        ("t", "t"),
+        ("spc", " "),
+        ("c", "c"),
+        ("f", "f"),
+        ("g", "g"),
+        ("ret", "admin@galexy>"),
+    ]);
+    let serial = boot_and_type(
+        &image("galexy-os-rustc"),
+        &keys,
+        "[boot] main loop ready",
+        "target_os=\"galexy\"",
+        Duration::from_millis(30),
+        Duration::from_secs(360),
+    );
+    let cfg = serial
+        .find("target_os=\"galexy\"")
+        .expect("rustc --print cfg did not report target_os");
+    let prompt = serial
+        .rfind("admin@galexy>")
+        .expect("prompt missing after rustc");
+    assert!(
+        cfg < prompt,
+        "prompt did not return after rustc --print cfg; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("panic=\"abort\""),
+        "cfg missing panic=abort; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("command not found"),
+        "shell rejected rustc --print cfg; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("target file"),
+        "rustc could not read the target JSON; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[pf] ring-3 task fault"),
+        "rustc faulted; serial:\n{serial}"
+    );
+}
+
 /// Milestone 69 differential: the `galexy-os-gxld` image carries init,
 /// shell, hello and every util re-linked by `gxld` from the exact objects
 /// and rlibs rustc hands `rust-lld`. Same keystrokes, same output.

@@ -408,6 +408,18 @@ pub(crate) fn dispatch(
         launch(cwd, line);
         return None;
     }
+    // First word is a program name; the rest is a space-separated argv.
+    // Builtins already returned. A missing name stays `command not found`.
+    if let Some((name, rest)) = split_word(line) {
+        let mut arg = [0u8; LINE_MAX];
+        let Some(n) = argv_from_words(rest, &mut arg) else {
+            write_console(b"argv: too long\n");
+            prompt(cwd);
+            return None;
+        };
+        launch_util(cwd, name, &arg[..n], false);
+        return None;
+    }
     write_console(line);
     write_console(b": command not found\n");
     write_console(b"\x07"); // BEL → PC speaker
@@ -1345,6 +1357,35 @@ pub(crate) fn ls(cwd: &Cwd, long: bool) {
         return;
     };
     launch_util(cwd, b"ls", &arg[..n], true);
+}
+
+/// NUL-separated argv from a space-separated tail. Empty words are
+/// dropped. `None` when `out` cannot hold the blob. A line is at most
+/// [`LINE_MAX`], so a buffer of that size always fits.
+pub(crate) fn argv_from_words(rest: &[u8], out: &mut [u8]) -> Option<usize> {
+    let mut n = 0usize;
+    let mut i = 0usize;
+    let mut any = false;
+    while i < rest.len() {
+        while i < rest.len() && rest[i] == b' ' {
+            i += 1;
+        }
+        if i >= rest.len() {
+            break;
+        }
+        let start = i;
+        while i < rest.len() && rest[i] != b' ' {
+            i += 1;
+        }
+        if any && !push_byte(out, &mut n, 0) {
+            return None;
+        }
+        any = true;
+        if !push_bytes(out, &mut n, &rest[start..i]) {
+            return None;
+        }
+    }
+    Some(n)
 }
 
 /// Starts the ramdisk program `name`. A missing name, or a file that is
