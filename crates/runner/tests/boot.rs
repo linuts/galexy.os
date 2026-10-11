@@ -3437,6 +3437,7 @@ fn rustc_hello_typing_e2e() {
         ("minus", "-"),
         ("o", "o"),
         ("spc", " "),
+        ("slash", "/"),
         ("h", "h"),
         ("e", "e"),
         ("l", "l"),

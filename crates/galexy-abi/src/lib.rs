@@ -491,9 +491,10 @@ pub enum Syscall {
     /// Returns: `SyscallResult`. A file's rax is a READ|WRITE `Cap`. A
     /// directory (path ending in `/`) returns `0`.
     /// The bytes live in a fixed kernel table, not the ramdisk. A
-    /// ramdisk name at `/`, or a name that already exists, is
+    /// bare ramdisk label, or a name that already exists, is
     /// `Unsupported` (unless `RDX` is `1` and the name is a scratch
-    /// file, which is emptied). A missing parent directory is
+    /// file, which is emptied). A path with `/` is galfs even when
+    /// the last component matches a ramdisk label (`/hello`). A missing parent directory is
     /// `NotFound`. A full scratch table, or a full per-task file table,
     /// is `NoResource`.
     Create,

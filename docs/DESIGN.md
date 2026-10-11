@@ -709,13 +709,16 @@ path with no covering token is `AccessDenied`. `write` on a galfs
 cap is positional (Milestone 70): bytes land at the cursor, overwriting
 in place and appending past the end, and the cursor advances by the
 count. `seek` moves that same cursor, so `seek(0)` then `read` sees
-what was just written. A ramdisk name at
-`/`, or a name that already exists, is `Unsupported`. A missing parent
+what was just written. A bare ramdisk label (`hello`) is
+`Unsupported`, so it cannot replace the program. A path with `/`
+is a galfs file even when the last component matches (`/hello`).
+A name that already exists is `Unsupported`. A missing parent
 is `NotFound`. A full object table is `NoResource`. `close` drops the
 task's cap; the bytes stay until `remove`. `write` on an
 archive open is `Unsupported`. `remove(name, len)` (syscall 10) deletes
-a galfs file or an empty directory and frees the slot. A ramdisk
-name, or a directory that still has a child, is `Unsupported`. A
+a galfs file or an empty directory and frees the slot. A bare ramdisk
+label, or a directory that still has a child, is `Unsupported`.
+`/hello` can be removed. A
 missing path is `NotFound`. An open cap on a removed file becomes
 `BadCap`. `grant(path, len, rights, task, task_len)` (syscall 11)
 installs a galfs token on a live user task: `RDX` is a mask of
