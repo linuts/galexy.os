@@ -292,9 +292,10 @@ crates/
   upstream Cranelift `rustc` compiling on-OS (✅ Milestone 72),
   and `gxld` linking that object inside the test kernel (✅ Milestone 73)
   — RUSTC.md
-- **Phase 12** — `rustc` as a login-shell command: a `galexy-os-rustc`
-  image, the sysroot imported on that boot, arguments to a ramdisk
-  program, and `spawn` of the ELF the compiler wrote (Milestones 74–77)
+- **Phase 12** — `rustc` as a login-shell command: `galexy-os-rustc`
+  (✅ Milestone 74), the sysroot imported on that boot (✅ Milestone
+  75), arguments to a ramdisk program, and `spawn` of the ELF the
+  compiler wrote (Milestones 76–77)
 
 `gxc` is gone. Host `gxld` still links userspace the same way `rust-lld` does:
 

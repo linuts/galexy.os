@@ -470,7 +470,7 @@ or run the file it writes. Checkboxes: `TODO.md` Milestones **74–77**.
    Milestone 73 ramdisk, built only when `target/galexy-rustc/rustc`
    exists. `cargo run` stays the small image. `cargo run --rustc`
    boots the compiler image. CI still does not run `x.py`
-2. **75 Sysroot** — before init, import `srlib/*` and the target JSON
+2. **75 Sysroot** ✅ — before init, import `srlib/*` and the target JSON
    into the RAM store at the paths `rustc` already opens. Repeated
    every boot. The v12 disk file cap is 64 MiB and `core`'s metadata
    is ~66 MiB, so this is not a disk write. The small ramdisk has no
