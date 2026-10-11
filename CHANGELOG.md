@@ -8,7 +8,15 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Milestone 73 — `gxc` is removed. On-OS `rustc` links with `gxld`.
+- [#96](https://github.com/linuts/galexy.os/pull/96) — Milestone 73 —
+  `gxc` is removed. On-OS `rustc` links with `gxld` and the program
+  runs. Default linker is `gxld` (`linker-flavor` gnu) without
+  changing the target JSON. The link line is an `@` response file.
+  `std` closes file caps at exit so the linker pipe reaches EOF.
+  `rustc_hello_runs` (TCG): host `hello-lld` and `hello-gxld`, then
+  `rustc hello.rs -o hello`, then a program that uses `std::fs` and
+  `std::thread`. The release boot suite is 121 passes under TCG.
+  `wild` was not ported. `panic=unwind` stays a follow-on.
 - [#95](https://github.com/linuts/galexy.os/pull/95) — Milestone 72 —
   on-OS Cranelift `rustc`. Stage 1 is one static ELF
   (`scripts/build-galexy-rustc.sh`, `scripts/galexy-rustc.patch`) for
@@ -21,7 +29,7 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
   `compiler_builtins` (rlib and rmeta). Compiler threads may ask for
   17 MiB. The RAM store is 80 MiB. SSE is enabled on every CPU.
   `rustc_obj_matches_host` runs under TCG when KVM cannot create a
-  vCPU. Linking the object is Milestone 73.
+  vCPU. Linking the object landed in Milestone 73.
 - [#94](https://github.com/linuts/galexy.os/pull/94) — Milestone 71 —
   capacity for a compiler process. QEMU `-m 2G` and a
   frame bitmap covering 4 GiB. `Map` budget is 1 GiB per task. A

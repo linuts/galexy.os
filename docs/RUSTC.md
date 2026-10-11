@@ -58,8 +58,9 @@ Stage 4 (Milestone 71) is the capacity a compiler process needs. What
 | Clock | `Clock` reads `timer_ticks` | — |
 | Environment variables, cwd | None | Waive: PAL returns empty env; cwd lives in the process |
 
-The remaining work is the toolchain: cross-building Cranelift-only
-`rustc` (Stage 5) and linking its output on Galexy (Stage 6).
+Stages 1–6 are in the tree. Stage 5 cross-builds Cranelift-only
+`rustc` and runs it on Galexy. Stage 6 links that output with `gxld`
+and runs the program.
 
 ## Paths considered
 
@@ -292,10 +293,10 @@ Exit (met): `rustc_obj_matches_host` under TCG. `--print cfg` prints
 `mismatched types` and exits 1. `--emit=obj` of `hello.rs` matches the
 host Cranelift object's section sizes and function/object symbol
 sizes. CI skips that boot unless the ELF existed when the runner image
-was built; x.py does not run inside the qemu job. Linking the object
-is Stage 6.
+was built; x.py does not run inside the qemu job. Stage 6 links
+that object.
 
-### Stage 6 — Link on Galexy, run the result (Milestone 73)
+### Stage 6 — Link on Galexy, run the result (Milestone 73) ✅
 
 `rustc` writes `.o` files and spawns a linker. That linker is the
 ring-3 `gxld` from Stages 2 and 4, extended for cg_clif output: rlib
@@ -316,10 +317,14 @@ choice.
 gnu`, spawned over `spawn_with` with stdio pipes, exit status via the
 process Cap.
 
-Exit: `test-rustc-hello` — in ring 3, `rustc hello.rs -o hello` on
-galfs, `./hello` spawns and prints `hello from rustc on galexy`; a
-second program using `std::fs` + `std::thread` compiled on-OS also
-runs. This is the Phase 11 gate.
+Exit (met): `rustc_hello_runs` under TCG. Host `hello-lld` and
+`hello-gxld` both print `hello from rustc on galexy`. On-OS
+`rustc hello.rs -o hello` exits 0 and `./hello` prints the same line.
+`files.rs`, compiled on-OS, writes `/scratch` from `std::thread` and
+prints `files-ok`. `gxld` linked the sysroot hello, so `wild` was not
+ported. `.eh_frame` stays out until `panic=unwind`. `std` closes every
+file cap in `rt::cleanup`: stdio is not a `File`, and `Command::output`
+reads the linker pipe to EOF before `Wait`.
 
 ## Explicit non-goals
 

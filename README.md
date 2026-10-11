@@ -13,16 +13,17 @@ wake scheduling, and an on-OS Cranelift `rustc`.
 Not a Linux clone. No POSIX claim. Authority is **capabilities** (and
 galfs access cards), not global file descriptors or PIDs.
 
-**Status (October 2026):** Milestones 1–61 and 63–72 are in this tree
+**Status (October 2026):** Milestones 1–61 and 63–73 are in this tree
 (62 was superseded); `nano` is in the ramdisk. Milestone 67 gives init
 shutdown, `svc`, and the ABI freeze (`spawn` stays experimental).
 Milestone 71 raises the guest to 2 GiB, the per-task `Map` budget to
 1 GiB, open files to 64, and argv to 4 KiB, and adds ring-3 `gxld`.
 Milestone 72 runs a Cranelift `rustc` on Galexy and checks its object
-output against the host. Linking that object is Milestone 73.
+output against the host. Milestone 73 links that object with `gxld`
+and runs it.
 The QEMU suite is 121 runner tests plus host tests (`test-big` boots
-only under KVM; `rustc_obj_matches_host` runs when the compiler ELF
-was present at image build). The Milestone 52 review checklist is complete except
+only under KVM; `rustc_obj_matches_host` and `rustc_hello_runs` run
+when the compiler ELF was present at image build). The Milestone 52 review checklist is complete except
 the `review-rc1` tag, which is the owner's call. The `v1.0` tag is a
 separate gate (BIOS+UEFI, TCG+KVM, q35+pc, `PERF.md`).
 The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md) → Where
@@ -133,7 +134,7 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 - **Init and seats** — userspace `init` is the orphan root and respawns F-key seats; Ctrl-C kills the TTY foreground job
 - **Scheduling** — RR + pin-at-spawn + idle steal; `sleep`; blocking keyboard and pipe reads park and wake (`docs/SCHEDULING.md`)
 - **gxld** — the static ELF64 linker: `no_std` library + GNU-ld-compatible CLI; `rustc -Clinker=gxld` links every userspace program and the `galexy-os-gxld` image passes the same tests as the `rust-lld` one (`docs/LINKER.md`)
-- **rustc** — upstream Cranelift `rustc` in the `test-rustc` image. It compiles on Galexy; linking and running that output is Milestone 73 (`docs/RUSTC.md`)
+- **rustc** — upstream Cranelift `rustc`. On Galexy, `rustc hello.rs -o hello` links with `gxld` and the program runs (`docs/RUSTC.md`)
 
 ## Tests
 
@@ -285,8 +286,9 @@ crates/
 - **Phase 11** — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
   static linker (LINKER.md, ✅ Milestone 69), `std` PAL (✅ Milestone
   70), compiler-sized limits and ring-3 `gxld` (✅ Milestone 71),
-  upstream Cranelift `rustc` compiling on-OS (✅ Milestone 72).
-  Linking that object and running it is Milestone 73 — RUSTC.md
+  upstream Cranelift `rustc` compiling on-OS (✅ Milestone 72),
+  and `gxld` linking that object so `./hello` runs (✅ Milestone 73)
+  — RUSTC.md
 
 `gxc` is gone. Host `gxld` still links userspace the same way `rust-lld` does:
 

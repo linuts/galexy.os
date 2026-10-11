@@ -3,7 +3,7 @@
 //! The ramdisk holds one static `rustc` ELF, the target JSON, and the
 //! sysroot rlibs as `srlib/<file>`. This kernel copies that tree into
 //! galfs and runs three compilers: `--print cfg`, a type error, and
-//! `--emit=obj`. Linking the object is Milestone 73.
+//! `--emit=obj`. Linking that object is `test-rustc-hello`.
 
 #![no_std]
 #![no_main]

@@ -34,7 +34,7 @@ Deviations from the plan below, decided by the real inputs:
 |---|---|---|
 | no `--gc-sections` | implemented (liveness from `_start` + `SHF_GNU_RETAIN`) | `rustc` always passes it, and `lld` only reports undefined symbols from live sections — without GC, dead `core` sections would demand symbols nothing provides |
 | `32`/`32S` "legal below 4 GiB" | range-checked, and they overflow | `USER_IMAGE_BASE` is `0xC80_0000_0000`; `rustc` emits only PC-relative and 64-bit absolute relocations for this target, so nothing needs them |
-| differential via `rustc --emit=obj` + hand link line | `-Clinker=gxld -Clinker-flavor=ld` | the real link line, including `symbols.o`, `compiler_builtins` and `--gc-sections`, is what Milestone 73 will send |
+| differential via `rustc --emit=obj` + hand link line | `-Clinker=gxld -Clinker-flavor=ld` | the real link line, including `symbols.o`, `compiler_builtins` and `--gc-sections`, is what on-OS `rustc` sends (Milestone 73) |
 | GOT in the RW segment | GOT in the R segment | the image is static; slots are filled at link time and never written again |
 
 Milestone 70 added TLS: `.tdata`/`.tbss` are laid out as one block in
@@ -50,8 +50,8 @@ block today; the linker side exists so cg_clif output with native
 `#[thread_local]` links the day a runtime consumes `PT_TLS`.
 
 Milestone 71 landed the ring-3 program (`gxldos`, `bin/test-gxld`).
-Still open from this plan: `.eh_frame` kept for `unwinding` as a 72
-follow-on; cg_clif output in 73.
+Milestone 73 links cg_clif output with that program (`test-rustc-hello`).
+Still open from this plan: `.eh_frame` kept for `unwinding`.
 
 ## Why a linker at all
 
@@ -167,8 +167,8 @@ The strong test is available today and needs no kernel work:
    for `hello`, `util` and `shell`.
 2. Link each twice: `rust-lld --image-base=... --no-pie` and `gxld`.
 3. Pack both images in the ramdisk under two names; the runner boots
-   both and runs the same cases (`test-realprogram`, `test-hellogxc`,
-   the `shell_*_e2e` typing tests). Symbol addresses may differ;
+   both and runs the same cases (`test-realprogram`, the
+   `shell_*_e2e` typing tests). Symbol addresses may differ;
    behavior may not.
 
 `shell` matters because it is the input that carries archive members,
@@ -176,8 +176,9 @@ GOT relocations, `.bss`, and `compiler_builtins` symbols. A linker that
 passes on `hello` and fails on `shell` is the expected first state and
 the test names the missing piece.
 
-Milestone 73 moves the same test to the real inputs: the
-galexy-target sysroot plus `hello.rs` compiled by cg_clif.
+Milestone 73 moved the same test to the real inputs: the
+galexy-target sysroot plus `hello.rs` compiled by cg_clif
+(`hello-lld` / `hello-gxld` in `test-rustc-hello`).
 
 ## Phases
 
@@ -185,9 +186,9 @@ galexy-target sysroot plus `hello.rs` compiled by cg_clif.
 |---|---|
 | **69** ✅ | `crates/gxld` library + CLI; `gxc` emits a relocatable object and links through it (`gxc::elf` deleted); `galexy-os-gxld` differential image (`hello`, `init`, `shell`, `util`); hostile-input tests |
 | **70** ✅ | `TPOFF32` / `TPOFF64` / `GOTTPOFF`, `.tdata`/`.tbss` as one block with `PT_TLS`, the same milestone threads arrive |
-| **71** | Ring-3 `gxld` over Caps; `bin/test-gxld` links two ramdisk objects into a program that runs |
+| **71** ✅ | Ring-3 `gxld` over Caps; `bin/test-gxld` links two ramdisk objects into a program that runs |
 | **72** (follow-on) | `.eh_frame` kept for `unwinding` |
-| **73** | Links cg_clif output: rlibs with `lib.rmeta` skipped; `rustc -Clinker=gxld` on-OS; the Phase 11 gate |
+| **73** ✅ | Links cg_clif output: rlibs with `lib.rmeta` skipped; `rustc -Clinker=gxld` on-OS; the Phase 11 gate |
 
 ## Non-goals
 

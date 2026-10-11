@@ -413,7 +413,7 @@ UDP / TCP stack (`smoltcp`-class, host-tested); sockets as Caps handed
 out by init, never an ambient `socket()`; `fetch`-style utilities over
 channels. A USB stack stays out until a device needs it.
 
-## Phase 11 — Rust on Galexy (upstream `rustc` as a tenant)
+## Phase 11 — Rust on Galexy (upstream `rustc` as a tenant) ✅
 
 Goal: make Galexy a real Rust target, then run upstream `rustc` on it.
 Plan and the honest gap analysis: `docs/RUSTC.md`; the linker:
@@ -451,9 +451,10 @@ first.
    Cranelift object (`rustc_obj_matches_host`, TCG when KVM cannot
    create a vCPU). Compiler stacks are 17 MiB. One RAM-store file may
    be 80 MiB so `core`'s metadata fits. The on-disk v13 cap stays 64 MiB
-6. **73 Link and run** — `gxld` links cg_clif output (fallback: port
-   `wild`); `rustc hello.rs -o hello` in ring 3, the shell runs it. The
-   **Phase 11 gate**
+6. **73 Link and run** ✅ — `gxld` links cg_clif output (`wild` was
+   not needed); `rustc hello.rs -o hello` in ring 3 prints
+   `hello from rustc on galexy`, and a second program uses `std::fs`
+   and `std::thread`. The **Phase 11 gate** (`rustc_hello_runs`, TCG)
 
 Non-goals: `cargo` on-OS, proc macros on-OS, rebuilding `rustc` or
 `std` on Galexy, LLVM / `lld` / `mrustc` / a libc, POSIX emulation.

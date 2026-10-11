@@ -2459,25 +2459,33 @@ nightly's `library/` and teaches the `cfg_select` dispatchers about
       exits 1, and `--emit=obj` section and symbol sizes match the
       host Cranelift object. Compiler threads are 17 MiB, including
       the codegen coordinator. SSE is on for every CPU. The RAM store
-      is 80 MiB so `core`'s metadata fits. Linking is Milestone 73
+      is 80 MiB so `core`'s metadata fits. On-OS linking is Milestone 73
 
 ## Milestone 73 — Link on Galexy, run the result (Phase 11 gate)
 
-- [ ] `gxld` (Milestone 69 / 71) links cg_clif output: rlib archives
+- [x] `gxld` (Milestone 69 / 71) links cg_clif output: rlib archives
       with the `lib.rmeta` member skipped, `TPOFF32` for TLS (landed in
       Milestone 70), `.eh_frame`
       kept once `unwinding` lands; host differential test against
-      `rust-lld` on the galexy-target sysroot + `hello.rs`
-- [ ] Fallback only if `gxld` cannot cope: port `wild` (`fork` and
-      `mimalloc` off, `--threads=1`, `memmap2` → read-into-memory)
-- [ ] `rustc_session`: galexy default `-Clinker=gxld`,
-      `linker-flavor = gnu`; spawned over `spawn_with` with stdio pipes
-- [ ] `test-rustc-hello`: in ring 3, `rustc hello.rs -o hello` on galfs,
+      `rust-lld` on the galexy-target sysroot + `hello.rs`.
+      `hello-lld` and `hello-gxld` both boot and print the line.
+      `.eh_frame` waits on `panic=unwind`
+- [x] Fallback only if `gxld` cannot cope: port `wild` (`fork` and
+      `mimalloc` off, `--threads=1`, `memmap2` → read-into-memory).
+      Not taken: host and on-OS `gxld` both linked the sysroot hello
+- [x] `rustc_session`: galexy default `-Clinker=gxld`,
+      `linker-flavor = gnu`; spawned over `spawn_with` with stdio pipes.
+      The target JSON is unchanged. The linker, `--image-base`, and
+      `--no-pie` are injected after the spec loads, and the link line
+      is an `@` response file. `std` closes every file cap in
+      `rt::cleanup` so the linker's stdout pipe reaches EOF before `Wait`
+- [x] `test-rustc-hello`: in ring 3, `rustc hello.rs -o hello` on galfs,
       `./hello` prints `hello from rustc on galexy`; a second on-OS
-      program using `std::fs` + `std::thread` runs
-- [ ] Docs: `RUSTC.md` stages ✅; README "Rust on Galexy" section;
+      program using `std::fs` + `std::thread` runs.
+      `rustc_hello_runs` under TCG
+- [x] Docs: `RUSTC.md` stages ✅; README "Rust on Galexy" section;
       `COMPILER.md` notes `gxc` was removed and `rustc` is the compiler
-- [ ] Stated non-goals: `cargo` on-OS, proc macros on-OS, rebuilding
+- [x] Stated non-goals: `cargo` on-OS, proc macros on-OS, rebuilding
       `rustc` / `std` on Galexy, LLVM / `lld` / `mrustc` / libc
 
 ---
@@ -2635,7 +2643,7 @@ items stay here with rationale.
 - [x] ~~On-OS gxc~~ — **Milestone 62** superseded by Phase 11; the
       crate was removed in **Milestone 73**
 - [x] Host `gxld` — **Milestone 69**; ring-3 `gxldos` — **Milestone 71**.
-      On-OS `rustc` linking is **Milestone 73**
+      On-OS `rustc` linking — **Milestone 73**
 - [x] Kernel hardening (SMEP/SMAP/UMIP/KASLR, hostile ELF, KDF cost) —
       **Milestone 63** (Phase 9)
 - [x] Fast path (bench, KVM, release profile, IRQ completion) —
