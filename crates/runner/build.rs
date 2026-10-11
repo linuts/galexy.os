@@ -134,16 +134,27 @@ fn main() {
         .unwrap();
     }
 
+    // Milestone 72: only `test-rustc` embeds the compiler. The shared
+    // ramdisk stays the userspace set every other image boots.
+    let rustc_ramdisk = out_dir.join("ramdisk-rustc.tar");
+    let have_rustc = write_rustc_ramdisk(&rustc_ramdisk);
+    println!("cargo:rustc-env=GALEXY_HAVE_RUSTC={}", if have_rustc { "1" } else { "0" });
+
     for (name, kernel) in &bins {
         let bios_path = out_dir.join(format!("{}-bios.img", name));
         let uefi_path = out_dir.join(format!("{}-uefi.img", name));
+        let ramdisk = if name == "test-rustc" && have_rustc {
+            &rustc_ramdisk
+        } else {
+            &ramdisk_path
+        };
 
         bootloader::BiosBoot::new(kernel)
-            .set_ramdisk(&ramdisk_path)
+            .set_ramdisk(ramdisk)
             .create_disk_image(&bios_path)
             .unwrap();
         bootloader::UefiBoot::new(kernel)
-            .set_ramdisk(&ramdisk_path)
+            .set_ramdisk(ramdisk)
             .create_disk_image(&uefi_path)
             .unwrap();
 
@@ -203,6 +214,72 @@ fn main() {
             .join("../userspace/shell/src")
             .display()
     );
+}
+
+/// Packs `target/galexy-rustc` into a tar the `test-rustc` image boots.
+///
+/// Entries are the compiler ELF (`rustc`), the target JSON, and each
+/// sysroot `.rlib` as `srlib/<file>`. Returns false when the ELF is
+/// absent so CI can build the image without a stage-1 compiler.
+fn write_rustc_ramdisk(dest: &Path) -> bool {
+    let root = repo_root().join("target/galexy-rustc");
+    let bin = root.join("rustc");
+    println!("cargo:rerun-if-changed={}", bin.display());
+    if !bin.is_file() {
+        return false;
+    }
+    let elf = std::fs::read(&bin).unwrap_or_else(|e| panic!("read {}: {e}", bin.display()));
+    assert!(elf.starts_with(b"\x7fELF"), "galexy rustc is not an ELF");
+    let spec = repo_root().join("targets/x86_64-unknown-galexy.json");
+    let spec_bytes = std::fs::read(&spec).unwrap_or_else(|e| panic!("read {}: {e}", spec.display()));
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    entries.push(("rustc".into(), elf));
+    entries.push(("x86_64-unknown-galexy.json".into(), spec_bytes));
+    let rustlib = root.join("sysroot/lib/rustlib");
+    println!("cargo:rerun-if-changed={}", rustlib.display());
+    let mut rlibs = 0usize;
+    if let Ok(triples) = std::fs::read_dir(&rustlib) {
+        for triple in triples.flatten() {
+            let triple_name = triple.file_name();
+            let Some(triple_name) = triple_name.to_str() else {
+                continue;
+            };
+            if !triple_name.starts_with("x86_64-unknown-galexy") {
+                continue;
+            }
+            let Ok(dir) = std::fs::read_dir(triple.path().join("lib")) else {
+                continue;
+            };
+            for entry in dir.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("rlib") {
+                    continue;
+                }
+                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                let bytes =
+                    std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+                entries.push((format!("srlib/{name}"), bytes));
+                rlibs += 1;
+            }
+        }
+    }
+    assert!(
+        rlibs > 0,
+        "sysroot rlibs missing under {}",
+        rustlib.display()
+    );
+    let mut tar = tar::Builder::new(std::fs::File::create(dest).unwrap());
+    for (name, bytes) in &entries {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, name, bytes as &[u8]).unwrap();
+    }
+    tar.finish().unwrap();
+    true
 }
 
 /// Re-pack `source` as `dest`, letting `swap(name, body)` replace entries.

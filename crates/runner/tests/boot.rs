@@ -4,7 +4,7 @@
 mod common;
 
 use common::{
-    boot, boot_and_type, boot_and_type_ps2, boot_and_type_uefi, boot_galfs_once,
+    boot, boot_and_type, boot_and_type_ps2, boot_and_type_uefi, boot_for, boot_galfs_once,
     boot_galfs_once_virtio, boot_liveness_until, boot_uefi, boot_uefi_until, boot_with_galfs,
     boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
     boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio,
@@ -1961,6 +1961,183 @@ fn big_test_passes() {
         !serial.contains("bigtest: FAIL"),
         "bigtest failed; serial:\n{serial}"
     );
+}
+
+/// Milestone 72: on-OS Cranelift `rustc --emit=obj` matches the host
+/// cg_clif object. Skipped when `target/galexy-rustc/rustc` was absent
+/// at build time (CI does not rebuild rustc inside the qemu job).
+#[test]
+fn rustc_obj_matches_host() {
+    if env!("GALEXY_HAVE_RUSTC") != "1" {
+        eprintln!("rustc_obj_matches_host: skipped (no target/galexy-rustc/rustc)");
+        return;
+    }
+    if !phase11_kvm_only("rustc_obj_matches_host") {
+        return;
+    }
+    let host = host_hello_lines();
+    let (code, serial) = boot_for(&image("test-rustc"), Duration::from_secs(15 * 60));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-rustc should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-rustc] passed"),
+        "test-rustc success marker missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("target_os=\"galexy\""),
+        "cfg missing target_os; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("panic=\"abort\""),
+        "cfg missing panic=abort; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("mismatched types"),
+        "type error diagnostic missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("rustc-err: exit "),
+        "type error exit line missing; serial:\n{serial}"
+    );
+    // Kernel serial lines are prefixed with the uptime (`12s: `).
+    let guest: std::collections::BTreeSet<String> = serial
+        .lines()
+        .filter_map(|line| line.find("rustc-obj: ").map(|idx| line[idx..].trim().to_string()))
+        .collect();
+    let expected: std::collections::BTreeSet<String> = host.into_iter().collect();
+    assert_eq!(
+        guest, expected,
+        "on-OS object summary differs from the host cg_clif build"
+    );
+}
+
+/// Host Cranelift object for the same `hello.rs` the guest compiles.
+fn host_hello_lines() -> Vec<String> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let sysroot = root.join("target/galexy-rustc/sysroot/lib/rustlib");
+    let mut rlib_dir = None;
+    for triple in std::fs::read_dir(&sysroot).unwrap_or_else(|e| panic!("read {}: {e}", sysroot.display()))
+    {
+        let triple = triple.unwrap();
+        let name = triple.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name.starts_with("x86_64-unknown-galexy") {
+            rlib_dir = Some(triple.path().join("lib"));
+            break;
+        }
+    }
+    let rlib_dir = rlib_dir.expect("galexy sysroot rlibs");
+    let spec = root.join("targets/x86_64-unknown-galexy.json");
+    let dir = std::env::temp_dir().join(format!("galexy-rustc-host-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let hello = dir.join("hello.rs");
+    std::fs::write(&hello, "#![no_std]\npub fn hello() -> u32 {\n    72\n}\n").unwrap();
+    let obj = dir.join("hello.o");
+    let rustc = "/usr/local/rustup/toolchains/nightly-2026-10-08-x86_64-unknown-linux-gnu/bin/rustc";
+    let output = std::process::Command::new(rustc)
+        .arg("-Zunstable-options")
+        .arg("-Zcodegen-backend=cranelift")
+        .arg("--target")
+        .arg(&spec)
+        .arg("-L")
+        .arg(&rlib_dir)
+        .arg("--edition")
+        .arg("2021")
+        .arg("--crate-type")
+        .arg("lib")
+        .arg("--crate-name")
+        .arg("hello")
+        .arg("--emit=obj")
+        .arg("-o")
+        .arg(&obj)
+        .arg(&hello)
+        .output()
+        .expect("spawn host rustc");
+    assert!(
+        output.status.success(),
+        "host cg_clif failed: {}\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    object_lines(&std::fs::read(&obj).unwrap())
+}
+
+fn object_lines(bytes: &[u8]) -> Vec<String> {
+    assert!(bytes.starts_with(b"\x7fELF"), "host object is not an ELF");
+    assert_eq!(bytes[4], 2, "host object is not ELF64");
+    let shoff = u64_le(bytes, 40) as usize;
+    let shentsize = u16_le(bytes, 58) as usize;
+    let shnum = u16_le(bytes, 60) as usize;
+    let shstrndx = u16_le(bytes, 62) as usize;
+    let shstr_off = u64_le(bytes, shoff + shstrndx * shentsize + 24) as usize;
+    let mut lines = Vec::new();
+    let mut sym_off = 0usize;
+    let mut sym_size = 0usize;
+    let mut sym_link = 0usize;
+    let mut sym_entsize = 24usize;
+    for i in 0..shnum {
+        let off = shoff + i * shentsize;
+        let name = cstr_at(bytes, shstr_off + u32_le(bytes, off) as usize);
+        let sh_type = u32_le(bytes, off + 4);
+        let size = u64_le(bytes, off + 32);
+        if i != 0 && !skip_obj_section(&name) {
+            lines.push(format!("rustc-obj: sec {name} {size}"));
+        }
+        if sh_type == 2 {
+            sym_off = u64_le(bytes, off + 24) as usize;
+            sym_size = size as usize;
+            sym_link = u32_le(bytes, off + 40) as usize;
+            let entsize = u64_le(bytes, off + 56) as usize;
+            if entsize != 0 {
+                sym_entsize = entsize;
+            }
+        }
+    }
+    if sym_size > 0 {
+        let str_off = u64_le(bytes, shoff + sym_link * shentsize + 24) as usize;
+        let mut at = 0;
+        while at + 24 <= sym_size {
+            let st_name = u32_le(bytes, sym_off + at) as usize;
+            let st_info = bytes[sym_off + at + 4];
+            let st_size = u64_le(bytes, sym_off + at + 16);
+            let kind = st_info & 0xf;
+            let name = cstr_at(bytes, str_off + st_name);
+            if !name.is_empty() && !name.contains('/') && (kind == 1 || kind == 2) {
+                lines.push(format!("rustc-obj: sym {name} {st_size}"));
+            }
+            at += sym_entsize;
+        }
+    }
+    lines.sort();
+    lines
+}
+
+fn skip_obj_section(name: &str) -> bool {
+    name.is_empty()
+        || name.starts_with(".debug")
+        || name.starts_with(".comment")
+        || name.starts_with(".note")
+        || name.starts_with(".llvm")
+}
+
+fn u16_le(bytes: &[u8], off: usize) -> u16 {
+    u16::from_le_bytes(bytes[off..off + 2].try_into().unwrap())
+}
+
+fn u32_le(bytes: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap())
+}
+
+fn u64_le(bytes: &[u8], off: usize) -> u64 {
+    u64::from_le_bytes(bytes[off..off + 8].try_into().unwrap())
+}
+
+fn cstr_at(bytes: &[u8], off: usize) -> String {
+    let end = bytes[off..].iter().position(|b| *b == 0).unwrap_or(0);
+    String::from_utf8_lossy(&bytes[off..off + end]).into_owned()
 }
 
 /// Milestone 71: ring-3 gxld links two objects delivered as Caps.

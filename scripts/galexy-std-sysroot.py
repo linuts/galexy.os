@@ -416,9 +416,24 @@ pub mod galexy;
     )
 
 
+def patch_library(library: Path) -> None:
+    """Install the PAL into a rust checkout's `library/` (Milestone 72)."""
+    if not (library / "std/src").is_dir():
+        sys.exit(f"galexy-std-sysroot: not a library tree: {library}")
+    stamp = library / ".galexy-pal"
+    if stamp.is_file():
+        return
+    install_pal(library / "std/src")
+    apply_patches(library)
+    stamp.write_text("milestone-72\n")
+
+
 def main() -> None:
+    if len(sys.argv) == 3 and sys.argv[1] == "--patch-library":
+        patch_library(Path(sys.argv[2]).resolve())
+        return
     if len(sys.argv) != 3 or sys.argv[1] != "--out":
-        sys.exit("usage: galexy-std-sysroot.py --out DIR")
+        sys.exit("usage: galexy-std-sysroot.py --out DIR | --patch-library LIBRARY")
     out = Path(sys.argv[2]).resolve()
     real = rustc_sysroot()
     real_lib = real / "lib/rustlib/src/rust/library"

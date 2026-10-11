@@ -598,12 +598,18 @@ pub fn boot_galfs_once_virtio(image: &Image, legacy: bool) -> (Option<i32>, Stri
 /// Returns the QEMU exit code (see [`QEMU_EXIT_SUCCESS`] / [`QEMU_EXIT_FAILED`];
 /// `None` means timeout/kill) and everything the guest wrote to COM1.
 pub fn boot(image: &Image) -> (Option<i32>, String) {
+    boot_for(image, TEST_TIMEOUT)
+}
+
+/// Like [`boot`], with an explicit deadline. Milestone 72's compiler
+/// boot is longer than the 60 second suite default.
+pub fn boot_for(image: &Image, timeout: Duration) -> (Option<i32>, String) {
     let serial_path = serial_log_path(&image.name);
     let mut child = qemu_command(&image.bios, &serial_path)
         .spawn()
         .expect("failed to launch qemu-system-x86_64 (install qemu-desktop)");
 
-    let deadline = Instant::now() + TEST_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let code = loop {
         match child.try_wait().expect("try_wait failed") {
             Some(status) => break status.code(),

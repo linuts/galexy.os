@@ -451,9 +451,9 @@ pub(in crate::sched) static PENDING_THREAD: Mutex<PendingThread> = Mutex::new(Pe
 /// the thread stacks with the rest.
 pub(in crate::sched) const THREAD_STACK_ARENA: u64 = 2 << 30;
 /// Window reserved per thread slot (the stack grows down from its top; the
-/// unmapped remainder is the guard). 16 MiB so an 8 MiB stack
+/// unmapped remainder is the guard). 32 MiB so a 17 MiB stack
 /// ([`galexy_abi::THREAD_STACK_PAGES_MAX`]) keeps a guard page-run.
-pub(in crate::sched) const THREAD_STACK_SLOT: u64 = 16 << 20;
+pub(in crate::sched) const THREAD_STACK_SLOT: u64 = 32 << 20;
 
 /// Live records (running or parked) one address space may hold, leader
 /// included. Zombies waiting for a join do not count.
