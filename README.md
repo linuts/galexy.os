@@ -22,7 +22,7 @@ Milestone 72 runs a Cranelift `rustc` on Galexy and checks its object
 output against the host. Milestone 73 links that object with `gxld`
 and runs it inside the `test-rustc-hello` kernel. Typing `rustc` at
 a login shell is Milestones 74–77.
-The QEMU suite is 122 runner tests plus host tests (`test-big` boots
+The QEMU suite is 123 runner tests plus host tests (`test-big` boots
 only under KVM; `rustc_obj_matches_host` and `rustc_hello_runs` run
 when the compiler ELF was present at image build). The Milestone 52 review checklist is complete except
 the `review-rc1` tag, which is the owner's call. The `v1.0` tag is a
@@ -294,8 +294,8 @@ crates/
   — RUSTC.md
 - **Phase 12** — `rustc` as a login-shell command: `galexy-os-rustc`
   (✅ Milestone 74), the sysroot imported on that boot (✅ Milestone
-  75), arguments to a ramdisk program, and `spawn` of the ELF the
-  compiler wrote (Milestones 76–77)
+  75), arguments to a ramdisk program (✅ Milestone 76), and `spawn`
+  of the ELF the compiler wrote (Milestone 77)
 
 `gxc` is gone. Host `gxld` still links userspace the same way `rust-lld` does:
 
