@@ -24,10 +24,22 @@ fn image_path(name: &str, kind: &str) -> String {
 fn main() {
     let uefi = std::env::args().any(|arg| arg == "--uefi");
     let display = std::env::args().any(|arg| arg == "--display");
-    let img_path = if uefi {
-        image_path("galexy-os", "uefi")
+    let rustc = std::env::args().any(|arg| arg == "--rustc");
+    if rustc && env!("GALEXY_HAVE_RUSTC") != "1" {
+        eprintln!(
+            "[runner] --rustc needs target/galexy-rustc/rustc. Build it with scripts/build-galexy-rustc.sh. The small image does not contain a compiler."
+        );
+        std::process::exit(1);
+    }
+    let image = if rustc {
+        "galexy-os-rustc"
     } else {
-        image_path("galexy-os", "bios")
+        "galexy-os"
+    };
+    let img_path = if uefi {
+        image_path(image, "uefi")
+    } else {
+        image_path(image, "bios")
     };
 
     // Persistent galfs data disk (primary IDE slave). Created once next to

@@ -2498,17 +2498,18 @@ Putting the compiler in it would add ~214 MiB of ELF plus ~90 MiB of
 sysroot to every BIOS and UEFI image the runner builds. CI does not
 run `x.py`.
 
-- [ ] `galexy-os-rustc`: the normal kernel with the Milestone 73
+- [x] `galexy-os-rustc`: the normal kernel with the Milestone 73
       ramdisk (`rustc`, `gxld`, the target JSON, `srlib/*`). Built
       only when `target/galexy-rustc/rustc` exists. Every other image,
       including `cargo run`, keeps the small ramdisk
-- [ ] `cargo run --rustc` boots that image. When the ELF is absent the
+- [x] `cargo run --rustc` boots that image. When the ELF is absent the
       runner says so and does not pretend the small image has a
       compiler
-- [ ] The new boot test skips when `GALEXY_HAVE_RUSTC` is not `1`,
+- [x] The new boot test skips when `GALEXY_HAVE_RUSTC` is not `1`,
       same rule as `rustc_hello_runs`. It reaches the login prompt,
       and typing `rustc` with no arguments runs the compiler (a
-      diagnostic, not `command not found`)
+      diagnostic, not `command not found`).
+      `rustc_image_login_typing_e2e` under TCG
 
 ## Milestone 75 — Install the sysroot on that boot
 

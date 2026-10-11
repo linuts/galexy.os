@@ -8,6 +8,11 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#98](https://github.com/linuts/galexy.os/pull/98) — Milestone 74 —
+  `galexy-os-rustc` is the login image with `rustc`, `gxld`, the
+  target JSON, and `srlib/*`, built only when the compiler ELF exists.
+  `cargo run --rustc` boots it. The shared ramdisk is unchanged.
+  Typing `rustc` prints the compiler's usage line.
 - [#96](https://github.com/linuts/galexy.os/pull/96) — Milestone 73 —
   `gxc` is removed. On-OS `rustc` links with `gxld` and the program
   runs. Default linker is `gxld` (`linker-flavor` gnu) without

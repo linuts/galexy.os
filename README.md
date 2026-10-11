@@ -22,7 +22,7 @@ Milestone 72 runs a Cranelift `rustc` on Galexy and checks its object
 output against the host. Milestone 73 links that object with `gxld`
 and runs it inside the `test-rustc-hello` kernel. Typing `rustc` at
 a login shell is Milestones 74–77.
-The QEMU suite is 121 runner tests plus host tests (`test-big` boots
+The QEMU suite is 122 runner tests plus host tests (`test-big` boots
 only under KVM; `rustc_obj_matches_host` and `rustc_hello_runs` run
 when the compiler ELF was present at image build). The Milestone 52 review checklist is complete except
 the `review-rc1` tag, which is the owner's call. The `v1.0` tag is a
@@ -61,6 +61,7 @@ sudo pacman -S --needed qemu-desktop ovmf
 cargo run --release                 # BIOS, headless; type on this terminal
 cargo run --release -- --display    # also open the framebuffer window (F1–F12)
 cargo run --release -- --uefi       # UEFI — set OVMF_FD if the default path is missing
+cargo run --release -- --rustc      # login image with rustc (needs target/galexy-rustc/rustc)
 ```
 
 `cargo run --release` attaches a persistent `galfs.img` as **virtio-blk-pci**
@@ -204,6 +205,7 @@ OVMF image for UEFI. Nothing else.
 cargo build -p runner                       # every image under target/
 cargo run --release                         # BIOS, headless, -smp 2; KVM if a vCPU can be created, else TCG
 cargo run --release -- --display            # same, plus the framebuffer window
+cargo run --release -- --rustc              # galexy-os-rustc, when the compiler ELF was built
 OVMF_FD=/usr/share/ovmf/OVMF.fd cargo run --release -- --uefi   # UEFI; path varies per distro
 scripts/review-smoke.sh                     # focused subset: host suites + 11 boots (~10 min TCG)
 ```

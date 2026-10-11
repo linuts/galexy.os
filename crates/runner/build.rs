@@ -122,8 +122,10 @@ fn main() {
         .unwrap();
     }
 
-    // Milestone 72: only `test-rustc` embeds the compiler. The shared
-    // ramdisk stays the userspace set every other image boots.
+    // Milestone 72: the shared ramdisk stays the userspace set. The
+    // compiler ramdisk is `test-rustc` / `test-rustc-hello` only.
+    // Milestone 74 adds `galexy-os-rustc`: the normal userspace plus
+    // `rustc`, `gxld`, the target JSON, and `srlib/*`.
     let rustc_ramdisk = out_dir.join("ramdisk-rustc.tar");
     let have_rustc = write_rustc_ramdisk(&rustc_ramdisk);
     println!(
@@ -161,10 +163,21 @@ fn main() {
     }
 
     if let Some((_, kernel)) = bins.iter().find(|(name, _)| name == "galexy-os") {
-        for (variant, ramdisk) in [
+        let mut variants: Vec<(&str, &Path)> = vec![
             ("galexy-os-crashseam", &crash_ramdisk),
             ("galexy-os-gxld", &gxld_ramdisk),
-        ] {
+        ];
+        let login_rustc = out_dir.join("ramdisk-rustc-login.tar");
+        if have_rustc {
+            append_ramdisk(&ramdisk_path, &rustc_ramdisk, &login_rustc, |name| {
+                name == "rustc"
+                    || name == "gxld"
+                    || name == "x86_64-unknown-galexy.json"
+                    || name.starts_with("srlib/")
+            });
+            variants.push(("galexy-os-rustc", &login_rustc));
+        }
+        for (variant, ramdisk) in variants {
             let bios_path = out_dir.join(format!("{variant}-bios.img"));
             let uefi_path = out_dir.join(format!("{variant}-uefi.img"));
             bootloader::BiosBoot::new(kernel)
@@ -412,6 +425,53 @@ fn link_one(src: &Path, out: &Path, libs: &Path, json: &Path, gxld: Option<&Path
         out.display()
     );
     bytes
+}
+
+/// Re-pack `source` as `dest`, letting `swap(name, body)` replace entries.
+/// `base` plus the entries of `extra` that `keep` accepts. A name that
+/// already exists in `base` is a build bug: the login image must not
+/// silently replace `hello` or `shell`.
+fn append_ramdisk(base: &Path, extra: &Path, dest: &Path, keep: impl Fn(&str) -> bool) {
+    let mut entries = read_tar(base);
+    let mut names: std::collections::BTreeSet<String> =
+        entries.iter().map(|(name, _)| name.clone()).collect();
+    let mut added = 0usize;
+    for (name, body) in read_tar(extra) {
+        if !keep(&name) {
+            continue;
+        }
+        assert!(
+            names.insert(name.clone()),
+            "ramdisk name collision while building {}: {name}",
+            dest.display()
+        );
+        entries.push((name, body));
+        added += 1;
+    }
+    assert!(added > 4, "login rustc ramdisk added {added} entries");
+    let mut tar = tar::Builder::new(std::fs::File::create(dest).unwrap());
+    for (name, body) in &entries {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, name, body as &[u8]).unwrap();
+    }
+    tar.finish().unwrap();
+}
+
+fn read_tar(path: &Path) -> Vec<(String, Vec<u8>)> {
+    let bytes = std::fs::read(path).unwrap();
+    let mut archive = tar::Archive::new(std::io::Cursor::new(bytes));
+    let mut entries = Vec::new();
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        let name = entry.path().unwrap().to_string_lossy().into_owned();
+        let mut body = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut body).unwrap();
+        entries.push((name, body));
+    }
+    entries
 }
 
 /// Re-pack `source` as `dest`, letting `swap(name, body)` replace entries.
