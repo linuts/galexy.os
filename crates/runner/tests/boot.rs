@@ -3225,9 +3225,10 @@ fn nano_typing_e2e_on(image_name: &str) {
     );
 }
 
-/// Milestone 74: the login image carries `rustc`. No arguments, so the
-/// shell's existing bare-name launch is enough. The diagnostic is the
-/// compiler's, not `command not found`.
+/// Milestone 74/75: the login image carries `rustc`, and the kernel
+/// imports `srlib/` before the prompt. No arguments, so the shell's
+/// bare-name launch is enough. After the import the compiler reports
+/// a missing input file, not a missing target JSON.
 #[test]
 fn rustc_image_login_typing_e2e() {
     if env!("GALEXY_HAVE_RUSTC") != "1" {
@@ -3240,19 +3241,33 @@ fn rustc_image_login_typing_e2e() {
         ("s", "s"),
         ("t", "t"),
         ("c", "c"),
-        ("ret", "Usage: rustc"),
+        ("ret", "no input filename given"),
     ]);
     let serial = boot_and_type(
         &image("galexy-os-rustc"),
         &keys,
         "[boot] main loop ready",
-        "Usage: rustc",
+        "no input filename given",
         Duration::from_millis(30),
         Duration::from_secs(360),
     );
+    let sysroot = serial
+        .find("rustc-sysroot: 33 entries")
+        .expect("sysroot import line missing");
+    let ready = serial
+        .find("[boot] main loop ready")
+        .expect("boot ready line missing");
     assert!(
-        serial.contains("Usage: rustc"),
+        sysroot < ready,
+        "sysroot import ran after the prompt; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("no input filename given"),
         "rustc did not run; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("target file"),
+        "target JSON was not a galfs file; serial:\n{serial}"
     );
     assert!(
         !serial.contains("command not found"),

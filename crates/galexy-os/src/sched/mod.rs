@@ -203,6 +203,50 @@ pub fn init() {
     serial_println!("[sched] ready");
 }
 
+/// Copies the compiler sysroot into the RAM store when this ramdisk
+/// carries `srlib/`. Every other image returns without a serial line.
+///
+/// Paths match `test-rustc-hello`: the target JSON at the admin root,
+/// and each `srlib/*` file under
+/// `/lib/rustlib/x86_64-unknown-galexy/lib`. One kernel import per
+/// file. The bytes stay in the RAM store and are not sealed to disk.
+pub fn install_compiler_sysroot() {
+    let mut names: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
+    ramdisk::for_each_name(|name| {
+        if name.starts_with("srlib/") || name == "x86_64-unknown-galexy.json" {
+            names.push(alloc::string::String::from(name));
+        }
+    });
+    if !names.iter().any(|name| name.starts_with("srlib/")) {
+        return;
+    }
+    let root = galfs::admin_root();
+    let lib = sysroot_mkdir(root, "lib");
+    let rustlib = sysroot_mkdir(lib, "rustlib");
+    let triple = sysroot_mkdir(rustlib, "x86_64-unknown-galexy");
+    let libs = sysroot_mkdir(triple, "lib");
+    for name in &names {
+        let bytes = ramdisk::find(name).unwrap_or_else(|| panic!("ramdisk file vanished: {name}"));
+        if let Some(file_name) = name.strip_prefix("srlib/") {
+            galfs::import_promoted(libs, file_name, bytes)
+                .unwrap_or_else(|err| panic!("import {file_name}: {err:?}"));
+        } else {
+            let id = galfs::create_file_under(root, name)
+                .unwrap_or_else(|err| panic!("create {name}: {err:?}"));
+            let wrote = galfs::append_file(id, bytes).unwrap_or(0);
+            assert_eq!(wrote, bytes.len(), "short write {name}");
+        }
+    }
+    serial_println!("rustc-sysroot: {} entries", names.len());
+}
+
+fn sysroot_mkdir(parent: u16, name: &str) -> u16 {
+    if let Some(existing) = galfs::find_under(parent, name) {
+        return existing;
+    }
+    galfs::mkdir_under_root(parent, name).unwrap_or_else(|err| panic!("mkdir {name}: {err:?}"))
+}
+
 /// Adds a cooperative task to the run queue. Call from main-loop context
 /// only; `name` is used for serial-log accounting.
 pub fn spawn(name: &'static str, step: fn(&mut TaskCtx) -> TaskStatus) {
