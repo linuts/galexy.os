@@ -108,7 +108,11 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
             "/hello.rs",
         ],
     );
-    assert_eq!(sched::user_exit_code("rustc-obj"), Some(0), "emit obj failed");
+    assert_eq!(
+        sched::user_exit_code("rustc-obj"),
+        Some(0),
+        "emit obj failed"
+    );
     summarize_object();
 
     serial_println!("[test-rustc] passed");
@@ -124,9 +128,7 @@ fn install_sysroot() {
 
     let mut names: Vec<String> = Vec::new();
     sched::ramdisk::for_each_name(|name| {
-        if name.starts_with("srlib/")
-            || name == "x86_64-unknown-galexy.json"
-            || name == "hello.rs"
+        if name.starts_with("srlib/") || name == "x86_64-unknown-galexy.json" || name == "hello.rs"
         {
             names.push(String::from(name));
         }
@@ -154,7 +156,8 @@ fn mkdir(parent: u16, name: &str) -> u16 {
 }
 
 fn copy_file(parent: u16, name: &str, bytes: &[u8]) {
-    let id = sched::galfs::create_file_under(parent, name).unwrap_or_else(|_| panic!("create {name}"));
+    let id =
+        sched::galfs::create_file_under(parent, name).unwrap_or_else(|_| panic!("create {name}"));
     let n = sched::galfs::append_file(id, bytes).unwrap_or(0);
     assert_eq!(n, bytes.len(), "short write {name}: {n} of {}", bytes.len());
 }
@@ -162,7 +165,8 @@ fn copy_file(parent: u16, name: &str, bytes: &[u8]) {
 fn run_rustc(task: &str, rustc: &[u8], parts: &[&str]) {
     let arg = join_args(parts);
     serial_println!("[test-rustc] spawn {}", task);
-    sched::loader::spawn_program_session(task, rustc, &arg).unwrap_or_else(|_| panic!("spawn {task}"));
+    sched::loader::spawn_program_session(task, rustc, &arg)
+        .unwrap_or_else(|_| panic!("spawn {task}"));
     wait_until_dead(task);
 }
 

@@ -138,7 +138,10 @@ fn main() {
     // ramdisk stays the userspace set every other image boots.
     let rustc_ramdisk = out_dir.join("ramdisk-rustc.tar");
     let have_rustc = write_rustc_ramdisk(&rustc_ramdisk);
-    println!("cargo:rustc-env=GALEXY_HAVE_RUSTC={}", if have_rustc { "1" } else { "0" });
+    println!(
+        "cargo:rustc-env=GALEXY_HAVE_RUSTC={}",
+        if have_rustc { "1" } else { "0" }
+    );
 
     for (name, kernel) in &bins {
         let bios_path = out_dir.join(format!("{}-bios.img", name));
@@ -233,7 +236,8 @@ fn write_rustc_ramdisk(dest: &Path) -> bool {
     let elf = std::fs::read(&bin).unwrap_or_else(|e| panic!("read {}: {e}", bin.display()));
     assert!(elf.starts_with(b"\x7fELF"), "galexy rustc is not an ELF");
     let spec = repo_root().join("targets/x86_64-unknown-galexy.json");
-    let spec_bytes = std::fs::read(&spec).unwrap_or_else(|e| panic!("read {}: {e}", spec.display()));
+    let spec_bytes =
+        std::fs::read(&spec).unwrap_or_else(|e| panic!("read {}: {e}", spec.display()));
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     entries.push(("rustc".into(), elf));
     entries.push(("x86_64-unknown-galexy.json".into(), spec_bytes));

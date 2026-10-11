@@ -2005,7 +2005,10 @@ fn rustc_obj_matches_host() {
     // Kernel serial lines are prefixed with the uptime (`12s: `).
     let guest: std::collections::BTreeSet<String> = serial
         .lines()
-        .filter_map(|line| line.find("rustc-obj: ").map(|idx| line[idx..].trim().to_string()))
+        .filter_map(|line| {
+            line.find("rustc-obj: ")
+                .map(|idx| line[idx..].trim().to_string())
+        })
         .collect();
     let expected: std::collections::BTreeSet<String> = host.into_iter().collect();
     assert_eq!(
@@ -2019,7 +2022,8 @@ fn host_hello_lines() -> Vec<String> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let sysroot = root.join("target/galexy-rustc/sysroot/lib/rustlib");
     let mut rlib_dir = None;
-    for triple in std::fs::read_dir(&sysroot).unwrap_or_else(|e| panic!("read {}: {e}", sysroot.display()))
+    for triple in
+        std::fs::read_dir(&sysroot).unwrap_or_else(|e| panic!("read {}: {e}", sysroot.display()))
     {
         let triple = triple.unwrap();
         let name = triple.file_name();
@@ -2036,7 +2040,8 @@ fn host_hello_lines() -> Vec<String> {
     let hello = dir.join("hello.rs");
     std::fs::write(&hello, "#![no_std]\npub fn hello() -> u32 {\n    72\n}\n").unwrap();
     let obj = dir.join("hello.o");
-    let rustc = "/usr/local/rustup/toolchains/nightly-2026-10-08-x86_64-unknown-linux-gnu/bin/rustc";
+    let rustc =
+        "/usr/local/rustup/toolchains/nightly-2026-10-08-x86_64-unknown-linux-gnu/bin/rustc";
     let output = std::process::Command::new(rustc)
         .arg("-Zunstable-options")
         .arg("-Zcodegen-backend=cranelift")
