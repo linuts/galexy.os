@@ -90,7 +90,10 @@ deny-warnings = false
 debug = false
 debug-assertions = false
 optimize = true
-channel = "dev"
+# Stage 0 stamps core metadata as 1.101.0-nightly (1d81eb4ad 2026-10-07).
+# A dev channel omits the git hash and reports 1.101.0-dev, which the
+# guest rejects (E0514). Nightly keeps the hash and matches that stamp.
+channel = "nightly"
 # Static image, no dynamic loader. The default rpath flags are -Wl,
 # which rust-lld rejects.
 rpath = false
