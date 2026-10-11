@@ -4534,10 +4534,21 @@ index 000000000..877da007e
 +    }
 +}
 diff --git a/src/bootstrap/src/core/build_steps/compile.rs b/src/bootstrap/src/core/build_steps/compile.rs
-index 3aded5812..7dce15ee6 100644
+index 3aded5812..7fe1346a0 100644
 --- a/src/bootstrap/src/core/build_steps/compile.rs
 +++ b/src/bootstrap/src/core/build_steps/compile.rs
-@@ -802,7 +802,12 @@ fn run(self, builder: &Builder<'_>) {
+@@ -657,6 +657,10 @@ pub fn std_cargo(
+     } else {
+         features += &builder.std_features(target);
+         features.push_str(compiler_builtins_c_feature);
++        // No libc on Galexy. Cranelift calls memcpy/memset/memcmp/memmove.
++        if target.contains("galexy") {
++            features += " compiler-builtins-mem";
++        }
+ 
+         cargo
+             .arg("--features")
+@@ -802,7 +806,12 @@ fn run(self, builder: &Builder<'_>) {
                  builder.cp_link_r(&stage0_codegen_backends, &sysroot_codegen_backends);
              }
          } else if compiler.stage == 0 {
@@ -4551,7 +4562,7 @@ index 3aded5812..7dce15ee6 100644
  
              if builder.local_rebuild {
                  // On local rebuilds this path might be a symlink to the project root,
-@@ -812,6 +817,17 @@ fn run(self, builder: &Builder<'_>) {
+@@ -812,6 +821,17 @@ fn run(self, builder: &Builder<'_>) {
              }
  
              builder.cp_link_r(&builder.initial_sysroot.join("lib"), &sysroot.join("lib"));
@@ -4569,7 +4580,7 @@ index 3aded5812..7dce15ee6 100644
          } else {
              if builder.download_rustc() {
                  // Ensure there are no CI-rustc std artifacts.
-@@ -2418,6 +2434,11 @@ fn run(self, builder: &Builder<'_>) -> Compiler {
+@@ -2418,6 +2438,11 @@ fn run(self, builder: &Builder<'_>) -> Compiler {
  
                  match backend {
                      CodegenBackendKind::Cranelift => {
