@@ -5,12 +5,12 @@
 //! path because they update the same parent and session fields.
 
 use super::iowait::*;
-use super::task::*;
 use super::thread::*;
 
 use super::{context, galfs, loader, lockout, pipe, ramdisk};
 use crate::serial_println;
 use crate::sync::Mutex;
+use alloc::vec;
 use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use galexy_abi::{Cap, CapRights, SysError, SyscallResult, PROC_CAP_BASE};
 use x86_64::instructions::interrupts;
@@ -108,16 +108,16 @@ pub(crate) fn task_spawn(
             return Err(SysError::NoResource);
         }
         let mut threads = THREADS.lock();
+        // Files, session, and the must-change gate live on the process
+        // leader (Milestone 70); the park below is on the calling slot.
+        let owner = running_proc_index(&threads, slot)?;
         {
-            let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-            if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-                return Err(SysError::BadCap);
-            }
             // F-key console names: only init may spawn seats (Milestone 54).
             let seat = is_console_shell_name(name);
-            if seat && !thread.is_init {
+            if seat && !threads[slot - 1].is_init {
                 return Err(SysError::Unsupported);
             }
+            let thread = &threads[owner];
             let (cap0, cap1) = (caps[0], caps[1]);
             if cap0 != 0xFF {
                 let n = thread.files.len();
@@ -142,10 +142,10 @@ pub(crate) fn task_spawn(
             return Err(SysError::NoResource);
         }
         let parent_tty = threads[slot - 1].tty;
-        let parent_must = threads[slot - 1].must_change;
+        let parent_must = threads[owner].must_change;
         let mut parent_fs = galfs::FsCred {
-            root: threads[slot - 1].fs_root,
-            tokens: threads[slot - 1].fs_tokens,
+            root: threads[owner].fs_root,
+            tokens: threads[owner].fs_tokens,
         };
         // Pre-login seats launch nothing: a task without a session root
         // (logged out, or never logged in) may only be init spawning a
@@ -210,6 +210,9 @@ pub(crate) fn task_spawn(
 /// `wait_exit` wakes with Cap bits in `rax`, with `wait_exit` parks until
 /// the child exits (exit code in `rax`).
 pub fn drain_spawn() {
+    // Threads queue beside programs; every main loop that drains one
+    // drains the other.
+    drain_thread_spawn();
     let queued = interrupts::without_interrupts(|| {
         let mut pending = PENDING_SPAWN.lock();
         if !pending.armed {
@@ -417,6 +420,268 @@ pub fn drain_spawn() {
     });
 }
 
+/// One queued [`galexy_abi::Syscall::ThreadSpawn`] (Milestone 70). The
+/// syscall records the request and parks the caller; the main loop maps
+/// the stack and builds the record, since neither may allocate under the
+/// syscall's IRQ gate.
+pub(in crate::sched) struct PendingThread {
+    pub(in crate::sched) entry: u64,
+    pub(in crate::sched) arg: u64,
+    pub(in crate::sched) pages: u8,
+    /// 1-based slot of the parked caller (leader or sibling thread).
+    pub(in crate::sched) waiter_slot: u8,
+    /// 1-based slot of the process leader the thread joins.
+    pub(in crate::sched) leader_slot: u8,
+    pub(in crate::sched) armed: bool,
+}
+
+pub(in crate::sched) static PENDING_THREAD: Mutex<PendingThread> = Mutex::new(PendingThread {
+    entry: 0,
+    arg: 0,
+    pages: 0,
+    waiter_slot: 0,
+    leader_slot: 0,
+    armed: false,
+});
+
+/// Start of the per-slot thread stack arena inside a task's tree: the
+/// image at `+0`, heap at `+512 MiB`, main stack at `+1 GiB`, then one
+/// [`THREAD_STACK_SLOT`] window per thread slot from `+2 GiB`. All of it
+/// sits under the task's single P4 entry, so `free_user_tree` reclaims
+/// the thread stacks with the rest.
+pub(in crate::sched) const THREAD_STACK_ARENA: u64 = 2 << 30;
+/// Window reserved per thread slot (the stack grows down from its top; the
+/// unmapped remainder is the guard).
+pub(in crate::sched) const THREAD_STACK_SLOT: u64 = 1 << 20;
+
+/// Live records (running or parked) one address space may hold, leader
+/// included. Zombies waiting for a join do not count.
+pub(in crate::sched) const THREADS_PER_PROCESS: usize = galexy_abi::THREADS_PER_PROCESS as usize;
+
+/// Top of the user stack for thread slot `slot` of a task whose image is
+/// at [`galexy_abi::USER_IMAGE_BASE`].
+pub(in crate::sched) fn thread_stack_top(slot: u8) -> u64 {
+    galexy_abi::USER_IMAGE_BASE + THREAD_STACK_ARENA + u64::from(slot) * THREAD_STACK_SLOT
+}
+
+/// Queues a thread of the caller's process and parks the caller.
+///
+/// `entry` must lie inside the image window; `pages` is the stack size
+/// (`0` = [`galexy_abi::THREAD_STACK_PAGES_DEFAULT`]). The caller wakes
+/// with [`CapRights::PROC_PARENT`] Cap bits on the **leader's** process
+/// table (so any thread may `Wait` on it), or an error. Lock order:
+/// `PENDING_THREAD`, then `THREADS`.
+pub(crate) fn task_thread_spawn(entry: u64, arg: u64, pages: u64) -> Result<(), SysError> {
+    let pages = if pages == 0 {
+        galexy_abi::THREAD_STACK_PAGES_DEFAULT
+    } else {
+        pages
+    };
+    if pages > galexy_abi::THREAD_STACK_PAGES_MAX {
+        return Err(SysError::BadValue);
+    }
+    let image = galexy_abi::USER_IMAGE_BASE;
+    if entry < image || entry >= image + loader::USER_IMAGE_WINDOW {
+        return Err(SysError::BadValue);
+    }
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut pending = PENDING_THREAD.lock();
+        if pending.armed {
+            return Err(SysError::NoResource);
+        }
+        let mut threads = THREADS.lock();
+        let owner = running_proc_index(&threads, slot)?;
+        let cr3 = threads[owner].cr3.load(Ordering::Acquire);
+        let live = threads
+            .iter()
+            .filter(|t| {
+                let state = t.state.load(Ordering::Acquire);
+                t.cr3.load(Ordering::Acquire) == cr3
+                    && (state == STATE_RUNNING || state == STATE_WAITING)
+            })
+            .count();
+        if live >= THREADS_PER_PROCESS {
+            return Err(SysError::NoResource);
+        }
+        pending.entry = entry;
+        pending.arg = arg;
+        pending.pages = pages as u8;
+        pending.waiter_slot = slot as u8;
+        pending.leader_slot = (owner + 1) as u8;
+        pending.armed = true;
+        let thread = &mut threads[slot - 1];
+        clear_wait_fields(thread);
+        thread.state.store(STATE_WAITING, Ordering::Release);
+        Ok(())
+    })
+}
+
+/// Builds the queued thread, if any (main-loop context: kernel tree).
+///
+/// Maps `pages` stack pages at the slot's arena window in the process
+/// tree (pages a previous occupant of the slot left mapped are zeroed and
+/// reused), fabricates the ring-3 frame with `RDI = arg`, installs a join
+/// Cap on the leader, wakes the caller with the Cap bits, and releases
+/// the thread.
+pub fn drain_thread_spawn() {
+    let queued = interrupts::without_interrupts(|| {
+        let mut pending = PENDING_THREAD.lock();
+        if !pending.armed {
+            return None;
+        }
+        pending.armed = false;
+        Some((
+            pending.entry,
+            pending.arg,
+            pending.pages,
+            pending.waiter_slot,
+            pending.leader_slot,
+        ))
+    });
+    let Some((entry, arg, pages, waiter_slot, leader_slot)) = queued else {
+        return;
+    };
+    let pages = pages as usize;
+    let leader = interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let wi = waiter_slot as usize - 1;
+        let li = leader_slot as usize - 1;
+        if wi >= threads.len() || li >= threads.len() {
+            return None;
+        }
+        // The process died (exit, kill, fault) between the syscall and
+        // this drain: the caller was tombstoned with it and wakes nobody.
+        if threads[wi].state.load(Ordering::Acquire) != STATE_WAITING {
+            return None;
+        }
+        let leader_state = threads[li].state.load(Ordering::Acquire);
+        if leader_state != STATE_RUNNING && leader_state != STATE_WAITING {
+            return None;
+        }
+        let occupied = threads
+            .iter()
+            .filter(|t| t.state.load(Ordering::Acquire) != STATE_FREED)
+            .count();
+        if occupied + 2 > MAX_THREADS || !spawn_frames_available() {
+            wake_spawn_waiter(
+                &mut threads,
+                waiter_slot,
+                SyscallResult::err(SysError::NoResource),
+            );
+            return None;
+        }
+        Some(LeaderSnapshot::of(&threads, li))
+    });
+    let Some(leader) = leader else {
+        return;
+    };
+    // Heap growth can broadcast a TLB shootdown: allocate before the gate.
+    let kstack = vec![0u8; THREAD_STACK_SIZE];
+    let slot = register_thread(&leader, kstack);
+    let stack_top = thread_stack_top(slot);
+    let stack_base = stack_top - (pages as u64) * 4096;
+    let ctx = interrupts::without_interrupts(|| {
+        assert!(
+            crate::arch::mm::on_kernel_tree(),
+            "drain_thread_spawn: must run on the kernel tree (main-loop context)"
+        );
+        use x86_64::structures::paging::{Mapper, Page, PageTableFlags, PhysFrame, Translate};
+        use x86_64::{PhysAddr, VirtAddr};
+        let root = PhysFrame::from_start_address(PhysAddr::new(leader.cr3))
+            .expect("drain_thread_spawn: corrupt leader CR3");
+        let flags = PageTableFlags::PRESENT
+            | PageTableFlags::WRITABLE
+            | PageTableFlags::USER_ACCESSIBLE
+            | PageTableFlags::NO_EXECUTE;
+        let mut top_frame: Option<PhysFrame> = None;
+        let mut short = false;
+        // SAFETY: the leader's tree is a FreshL4 root; the main loop runs
+        // on the kernel tree, so it is not active here. Every frame we
+        // touch is either freshly allocated or already owned by this tree.
+        unsafe {
+            crate::arch::mm::with_table(root, |mapper| {
+                for i in 0..pages {
+                    let addr = VirtAddr::new(stack_base + (i as u64) * 4096);
+                    let frame = match mapper.translate_addr(addr) {
+                        Some(phys) => PhysFrame::containing_address(phys),
+                        None => {
+                            let Some(frame) = crate::arch::mm::allocate_frame() else {
+                                short = true;
+                                return;
+                            };
+                            let page = Page::containing_address(addr);
+                            match mapper.map_to(
+                                page,
+                                frame,
+                                flags,
+                                &mut crate::arch::mm::TaskFrameAlloc,
+                            ) {
+                                Ok(flush) => flush.flush(),
+                                Err(_) => {
+                                    short = true;
+                                    return;
+                                }
+                            }
+                            frame
+                        }
+                    };
+                    core::ptr::write_bytes(
+                        crate::arch::mm::frame_virt(frame.start_address()).as_mut_ptr::<u64>(),
+                        0,
+                        512,
+                    );
+                    top_frame = Some(frame);
+                }
+            });
+        }
+        let (Some(top), false) = (top_frame, short) else {
+            return None;
+        };
+        let fab = crate::arch::mm::frame_virt(top.start_address()) + 4096u64;
+        let (cs, ss) = context::user_cs_ss();
+        // SAFETY: `fab` is the phys-map image of the fresh top stack page;
+        // `entry` was range-checked against the image window (a bad
+        // address faults in ring 3 and takes only this process down).
+        Some(unsafe {
+            context::init_user_frame(fab.as_u64(), stack_top - 512, entry, arg, 0, cs, ss)
+        })
+    });
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let ti = slot as usize - 1;
+        let abandon = |threads: &mut [Thread], err: SysError| {
+            // Never ran: tombstone it waited so the reaper takes it
+            // without a join, and leave the shared tree alone.
+            threads[ti].exit_waited.store(true, Ordering::Release);
+            threads[ti].state.store(STATE_EXITED, Ordering::Release);
+            wake_spawn_waiter(threads, waiter_slot, SyscallResult::err(err));
+        };
+        let Some(ctx) = ctx else {
+            abandon(&mut threads, SysError::NoResource);
+            return;
+        };
+        threads[ti].ctx.store(ctx, Ordering::Release);
+        let Some(cap_bits) = install_proc_cap(&mut threads, leader_slot, slot) else {
+            abandon(&mut threads, SysError::NoResource);
+            return;
+        };
+        serial_println!(
+            "[sched] thread '{}' of '{}' ready (slot {}, {} stack page(s), entry {:#x})",
+            threads[ti].name(),
+            leader.name(),
+            slot,
+            pages,
+            entry
+        );
+        wake_spawn_waiter(&mut threads, waiter_slot, SyscallResult::ok(cap_bits));
+        release_deferred(&mut threads, slot);
+    });
+}
+
 /// Names of the twelve shells. F1 keeps `shell` so a faulted shell is
 /// still the task the restart log and the typing tests already know.
 pub(in crate::sched) const SHELL_NAMES: [&str; 12] = [
@@ -518,6 +783,9 @@ pub fn interrupt_foreground(tty: u8) -> bool {
             threads[i].debug_id
         );
         wake_exit_waiters(&mut threads, slot, EXIT_KILLED);
+        if threads[i].leader_slot == 0 {
+            exit_siblings(&mut threads, slot as usize, EXIT_KILLED);
+        }
         FG_SLOTS[tty].store(0, Ordering::Release);
         true
     })
@@ -659,7 +927,8 @@ pub(in crate::sched) fn install_proc_cap(
     if waiter_slot == 0 || child_slot == 0 {
         return None;
     }
-    let wi = waiter_slot as usize - 1;
+    // A thread's process Caps land on its leader's table.
+    let wi = proc_index(threads, waiter_slot as usize)?;
     let ci = child_slot as usize - 1;
     let gen = threads.get(ci)?.cap_gen.load(Ordering::Acquire);
     let parent = threads.get_mut(wi)?;
@@ -709,7 +978,8 @@ pub(in crate::sched) fn stamp_waiter_frame(thread: &Thread, result: SyscallResul
 /// Wakes every task Cap-waiting on `child_slot` for exit, stamping exit codes.
 pub(in crate::sched) fn wake_exit_waiters(threads: &mut [Thread], child_slot: u8, exit_code: u64) {
     let mut any = false;
-    for thread in threads.iter_mut() {
+    for i in 0..threads.len() {
+        let thread = &threads[i];
         if thread.wait_child_slot.load(Ordering::Acquire) != child_slot {
             continue;
         }
@@ -722,14 +992,19 @@ pub(in crate::sched) fn wake_exit_waiters(threads: &mut [Thread], child_slot: u8
         let pi = thread.wait_proc_index.load(Ordering::Acquire);
         if pi != WAIT_PROC_NONE {
             let pi = pi as usize;
-            if pi < MAX_PROC_CAPS {
-                if let Some(handle) = thread.procs[pi] {
-                    if handle.child_slot == child_slot {
-                        thread.procs[pi] = None;
+            // The Cap table is the waiter's process table (its leader's
+            // when the waiter is a thread).
+            if let Some(owner) = proc_index(threads, i + 1) {
+                if pi < MAX_PROC_CAPS {
+                    if let Some(handle) = threads[owner].procs[pi] {
+                        if handle.child_slot == child_slot {
+                            threads[owner].procs[pi] = None;
+                        }
                     }
                 }
             }
         }
+        let thread = &threads[i];
         clear_wait_fields(thread);
         stamp_waiter_frame(thread, SyscallResult::ok(exit_code));
         set_running(thread);
@@ -754,9 +1029,10 @@ pub(crate) fn for_each_scratch_path(mut each: impl FnMut(&[u8])) {
     }
     interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        let Some(thread) = threads.get(slot - 1) else {
+        let Some(owner) = proc_index(&threads, slot) else {
             return;
         };
+        let thread = &threads[owner];
         galfs::for_each_visible(thread.fs_root, &thread.fs_tokens, |path| each(path));
     });
 }
@@ -782,35 +1058,34 @@ pub(crate) fn task_wait(cap: Cap, poll: bool) -> Result<Option<u64>, SysError> {
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        {
-            let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-            if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-                return Err(SysError::BadCap);
-            }
-        }
-        let handle = threads[slot - 1].procs[pi].ok_or(SysError::BadCap)?;
+        let owner = running_proc_index(&threads, slot)?;
+        let handle = threads[owner].procs[pi].ok_or(SysError::BadCap)?;
         if !handle.rights.contains(CapRights::PROC_WAIT) {
             return Err(SysError::AccessDenied);
         }
         let ci = handle.child_slot as usize;
         if ci == 0 || ci > threads.len() {
-            threads[slot - 1].procs[pi] = None;
+            threads[owner].procs[pi] = None;
             return Err(SysError::BadCap);
+        }
+        // A thread joining itself would park forever.
+        if ci == slot {
+            return Err(SysError::BadValue);
         }
         let gen = threads[ci - 1].cap_gen.load(Ordering::Acquire);
         if gen != handle.gen {
-            threads[slot - 1].procs[pi] = None;
+            threads[owner].procs[pi] = None;
             return Err(SysError::BadCap);
         }
         let state = threads[ci - 1].state.load(Ordering::Acquire);
         if state == STATE_EXITED || state == STATE_FREED {
             let code = threads[ci - 1].exit_code.load(Ordering::Acquire);
             threads[ci - 1].exit_waited.store(true, Ordering::Release);
-            threads[slot - 1].procs[pi] = None;
+            threads[owner].procs[pi] = None;
             return Ok(Some(code));
         }
         if state != STATE_RUNNING && state != STATE_WAITING {
-            threads[slot - 1].procs[pi] = None;
+            threads[owner].procs[pi] = None;
             return Err(SysError::BadCap);
         }
         // Still alive. A poll returns without parking so a supervisor can
@@ -865,7 +1140,8 @@ pub(crate) fn task_kill(cap: Cap) -> Result<(), SysError> {
             if !thread.is_user {
                 return Err(SysError::BadCap);
             }
-            thread.procs[pi].ok_or(SysError::BadCap)?
+            let owner = proc_index(&threads, slot).ok_or(SysError::BadCap)?;
+            threads[owner].procs[pi].ok_or(SysError::BadCap)?
         };
         if !handle.rights.contains(CapRights::PROC_KILL) {
             return Err(SysError::AccessDenied);
@@ -910,6 +1186,11 @@ pub(crate) fn task_kill(cap: Cap) -> Result<(), SysError> {
             debug_id
         );
         wake_exit_waiters(&mut threads, handle.child_slot, EXIT_KILLED);
+        // Killing a process leader ends its threads; killing one thread
+        // (by its join Cap) leaves the rest of the process alone.
+        if threads[ci - 1].leader_slot == 0 {
+            exit_siblings(&mut threads, ci, EXIT_KILLED);
+        }
         Ok(())
     })
 }
@@ -955,10 +1236,7 @@ pub(crate) fn task_grant(path: &str, rights: u8, target: &str) -> Result<(), Sys
     let result = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let (fs_root, fs_tokens) = {
-            let caller = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-            if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
-                return Err(SysError::BadCap);
-            }
+            let caller = &threads[running_proc_index(&threads, slot)?];
             deny_must_change(caller)?;
             (caller.fs_root, caller.fs_tokens)
         };
@@ -973,6 +1251,7 @@ pub(crate) fn task_grant(path: &str, rights: u8, target: &str) -> Result<(), Sys
         }) else {
             return Err(SysError::NotFound);
         };
+        let ti = proc_index(&threads, ti + 1).ok_or(SysError::NotFound)?;
         galfs::push_token(&mut threads[ti].fs_tokens, object, rights)
     });
     log_token(
@@ -992,10 +1271,7 @@ pub(crate) fn task_revoke(path: &str, rights: u8, target: &str) -> Result<(), Sy
     let result = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let (fs_root, fs_tokens) = {
-            let caller = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-            if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
-                return Err(SysError::BadCap);
-            }
+            let caller = &threads[running_proc_index(&threads, slot)?];
             deny_must_change(caller)?;
             (caller.fs_root, caller.fs_tokens)
         };
@@ -1010,6 +1286,7 @@ pub(crate) fn task_revoke(path: &str, rights: u8, target: &str) -> Result<(), Sy
         }) else {
             return Err(SysError::NotFound);
         };
+        let ti = proc_index(&threads, ti + 1).ok_or(SysError::NotFound)?;
         galfs::revoke_token(&mut threads[ti].fs_tokens, object, rights)
     });
     log_token(
@@ -1061,10 +1338,8 @@ pub(crate) fn task_pipe() -> Result<(Cap, Cap), SysError> {
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &mut threads[owner];
         let mut free = [usize::MAX; 2];
         let mut nfree = 0usize;
         for (i, slot) in thread.files.iter().enumerate() {
@@ -1117,9 +1392,9 @@ pub(in crate::sched) fn move_spawn_caps(
     cap0: u8,
     cap1: u8,
 ) -> Result<(), SysError> {
-    let parent = waiter_slot as usize - 1;
+    let parent = proc_index(threads, waiter_slot as usize).ok_or(SysError::BadCap)?;
     let child = child_slot as usize - 1;
-    if parent >= threads.len() || child >= threads.len() || parent == child {
+    if child >= threads.len() || parent == child {
         return Err(SysError::BadCap);
     }
     let mut srcs = [cap0, cap1];
@@ -1159,30 +1434,25 @@ pub(crate) fn task_give(cap: Cap, target: &str) -> Result<Cap, SysError> {
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let file = {
-            let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-            if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
-                return Err(SysError::BadCap);
-            }
-            caller.files[index].take().ok_or(SysError::BadCap)?
-        };
-        let Some(ti) = threads.iter().position(|t| {
-            t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
-        }) else {
+        let owner = running_proc_index(&threads, slot)?;
+        let file = threads[owner].files[index].take().ok_or(SysError::BadCap)?;
+        let target_index = threads
+            .iter()
+            .position(|t| {
+                t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
+            })
+            .and_then(|ti| proc_index(&threads, ti + 1));
+        let Some(ti) = target_index else {
             // Put it back — target missing.
-            if let Some(caller) = threads.get_mut(slot - 1) {
-                caller.files[index] = Some(file);
-            } else {
-                release_file(file);
-            }
+            threads[owner].files[index] = Some(file);
             return Err(SysError::NotFound);
         };
-        if ti == slot - 1 {
+        if ti == owner {
             threads[ti].files[index] = Some(file);
             return Err(SysError::BadValue);
         }
         let Some(dest) = threads[ti].files.iter().position(|s| s.is_none()) else {
-            threads[slot - 1].files[index] = Some(file);
+            threads[owner].files[index] = Some(file);
             return Err(SysError::NoResource);
         };
         let rights = file.rights;
@@ -1203,13 +1473,8 @@ pub(in crate::sched) fn task_give_proc(cap: Cap, target: &str) -> Result<Cap, Sy
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let handle = {
-            let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-            if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
-                return Err(SysError::BadCap);
-            }
-            caller.procs[pi].ok_or(SysError::BadCap)?
-        };
+        let owner = running_proc_index(&threads, slot)?;
+        let handle = threads[owner].procs[pi].ok_or(SysError::BadCap)?;
         if !handle.rights.contains(CapRights::PROC_TRANSFER) {
             return Err(SysError::AccessDenied);
         }
@@ -1218,7 +1483,7 @@ pub(in crate::sched) fn task_give_proc(cap: Cap, target: &str) -> Result<Cap, Sy
             || ci > threads.len()
             || threads[ci - 1].cap_gen.load(Ordering::Acquire) != handle.gen
         {
-            threads[slot - 1].procs[pi] = None;
+            threads[owner].procs[pi] = None;
             return Err(SysError::BadCap);
         }
         // Attenuate: intersection of table rights and Cap word.
@@ -1226,19 +1491,23 @@ pub(in crate::sched) fn task_give_proc(cap: Cap, target: &str) -> Result<Cap, Sy
         if !rights.contains(CapRights::PROC_TRANSFER) {
             return Err(SysError::AccessDenied);
         }
-        let Some(ti) = threads.iter().position(|t| {
-            t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
-        }) else {
+        let target_index = threads
+            .iter()
+            .position(|t| {
+                t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
+            })
+            .and_then(|ti| proc_index(&threads, ti + 1));
+        let Some(ti) = target_index else {
             return Err(SysError::NotFound);
         };
-        if ti == slot - 1 {
+        if ti == owner {
             return Err(SysError::BadValue);
         }
         let Some(dest) = threads[ti].procs.iter().position(|s| s.is_none()) else {
             return Err(SysError::NoResource);
         };
         // Take from caller only after the target has a free slot.
-        threads[slot - 1].procs[pi] = None;
+        threads[owner].procs[pi] = None;
         threads[ti].procs[dest] = Some(ProcHandle {
             child_slot: handle.child_slot,
             gen: handle.gen,
@@ -1248,7 +1517,8 @@ pub(in crate::sched) fn task_give_proc(cap: Cap, target: &str) -> Result<Cap, Sy
     })
 }
 
-/// Sets the read cursor on an archive or galfs open. Returns the new offset.
+/// Sets the file cursor on an archive or galfs open. `read` and galfs
+/// `write` share it. Returns the new offset.
 pub(crate) fn task_seek(cap: Cap, offset: i64, whence: u64) -> Result<u64, SysError> {
     let index = file_slot(cap)?;
     let slot = current_slot();
@@ -1257,7 +1527,8 @@ pub(crate) fn task_seek(cap: Cap, offset: i64, whence: u64) -> Result<u64, SysEr
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &mut threads[owner];
         let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
         let effective = file.rights.intersection(cap.rights());
         if !effective.contains(CapRights::READ) && !effective.contains(CapRights::WRITE) {
@@ -1315,10 +1586,7 @@ pub(crate) fn task_whoami(out: &mut [u8]) -> Result<usize, SysError> {
     }
     interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let thread = &threads[running_proc_index(&threads, slot)?];
         galfs::name_of_root(thread.fs_root, out)
     })
 }
@@ -1354,10 +1622,7 @@ pub(crate) fn task_tokens(out: &mut [u8]) -> Result<usize, SysError> {
     }
     interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let thread = &threads[running_proc_index(&threads, slot)?];
         if thread.fs_root == galfs::NO_OBJECT {
             return Err(SysError::AccessDenied);
         }
@@ -1378,10 +1643,7 @@ pub(crate) fn task_quota(out: &mut [u8], name: Option<&str>) -> Result<usize, Sy
     }
     let (used_o, max_o, used_b, max_b) = interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let thread = &threads[running_proc_index(&threads, slot)?];
         if thread.fs_root == galfs::NO_OBJECT {
             return Err(SysError::AccessDenied);
         }
@@ -1401,10 +1663,7 @@ pub(crate) fn task_setquota(name: &str, max_objects: u16, max_bytes: u32) -> Res
     }
     interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let thread = &threads[running_proc_index(&threads, slot)?];
         if !admin_caller(thread.fs_root, &thread.fs_tokens) {
             return Err(SysError::AccessDenied);
         }
@@ -1422,10 +1681,7 @@ pub(crate) fn task_useradd(name: &str, password: &[u8]) -> Result<(), SysError> 
     }
     let added = interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let thread = &threads[running_proc_index(&threads, slot)?];
         if !admin_caller(thread.fs_root, &thread.fs_tokens) {
             return Err(SysError::AccessDenied);
         }
@@ -1476,14 +1732,9 @@ pub(crate) fn task_login(name: &str, password: &[u8]) -> Result<(), SysError> {
     let target = galfs::root_named(name)?;
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        {
-            let caller = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-            if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
-                return Err(SysError::BadCap);
-            }
-        }
+        let owner = running_proc_index(&threads, slot)?;
         let init_live = init_supervisor_live(&threads);
-        let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        let caller = &mut threads[owner];
         let gen = install_session(caller, target, true, init_live)?;
         let debug_id = caller.debug_id;
         serial_println!(
@@ -1493,6 +1744,7 @@ pub(crate) fn task_login(name: &str, password: &[u8]) -> Result<(), SysError> {
             tty.saturating_add(1),
             debug_id
         );
+        sync_session_to_threads(&mut threads, owner);
         Ok(())
     })?;
     lockout::record_success(name, tty);
@@ -1510,10 +1762,8 @@ pub(crate) fn task_logout() -> Result<(), SysError> {
     }
     let seal = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
-        if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let owner = running_proc_index(&threads, slot)?;
+        let caller = &mut threads[owner];
         let tty = caller.tty;
         let was_in = caller.fs_root != galfs::NO_OBJECT;
         let debug_id = caller.debug_id;
@@ -1524,6 +1774,7 @@ pub(crate) fn task_logout() -> Result<(), SysError> {
             tty.saturating_add(1),
             debug_id
         );
+        sync_session_to_threads(&mut threads, owner);
         Ok(was_in && !sessions_open(&threads))
     })?;
     if seal {
@@ -1584,10 +1835,7 @@ pub(crate) fn task_share(path: &str, rights: u8, grantee: &str) -> Result<(), Sy
     }
     let (fs_root, fs_tokens) = interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        let caller = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-        if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let caller = &threads[running_proc_index(&threads, slot)?];
         deny_must_change(caller)?;
         Ok((caller.fs_root, caller.fs_tokens))
     })?;
@@ -1602,10 +1850,7 @@ pub(crate) fn task_unshare(path: &str, rights: u8, grantee: &str) -> Result<(), 
     }
     let (fs_root, fs_tokens) = interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        let caller = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-        if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let caller = &threads[running_proc_index(&threads, slot)?];
         deny_must_change(caller)?;
         Ok((caller.fs_root, caller.fs_tokens))
     })?;
@@ -1621,6 +1866,28 @@ pub(in crate::sched) fn sessions_open(threads: &[Thread]) -> bool {
         let state = t.state.load(Ordering::Acquire);
         state == STATE_RUNNING || state == STATE_WAITING
     })
+}
+
+/// Copies the session fields a thread record carries (grants, root,
+/// born-admin, generation) from the leader at `owner` to every thread of
+/// that process (Milestone 70), so a login, logout, or `su` from any
+/// thread is what the dispatcher's grant checks see on all of them.
+pub(in crate::sched) fn sync_session_to_threads(threads: &mut [Thread], owner: usize) {
+    let leader_slot = (owner + 1) as u8;
+    let cr3 = threads[owner].cr3.load(Ordering::Acquire);
+    let grants = threads[owner].grants;
+    let fs_root = threads[owner].fs_root;
+    let born_admin = threads[owner].born_admin;
+    let session_gen = threads[owner].session_gen;
+    for t in threads.iter_mut() {
+        if t.leader_slot != leader_slot || t.cr3.load(Ordering::Acquire) != cr3 {
+            continue;
+        }
+        t.grants = grants;
+        t.fs_root = fs_root;
+        t.born_admin = born_admin;
+        t.session_gen = session_gen;
+    }
 }
 
 pub(in crate::sched) fn clear_session(caller: &mut Thread) -> u64 {
@@ -1647,10 +1914,7 @@ pub(crate) fn task_passwd(name: Option<&str>, password: &[u8]) -> Result<(), Sys
     // session, so the flag read here is still valid after the KDF.
     let (name_len, own_account, fs_root) = interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let thread = &threads[running_proc_index(&threads, slot)?];
         if thread.fs_root == galfs::NO_OBJECT {
             return Err(SysError::AccessDenied);
         }
@@ -1684,8 +1948,8 @@ pub(crate) fn task_passwd(name: Option<&str>, password: &[u8]) -> Result<(), Sys
         let must_change = galfs::actor_must_change(fs_root);
         interrupts::without_interrupts(|| {
             let mut threads = THREADS.lock();
-            if let Some(thread) = threads.get_mut(slot - 1) {
-                thread.must_change = must_change;
+            if let Some(owner) = proc_index(&threads, slot) {
+                threads[owner].must_change = must_change;
             }
         });
     }
@@ -1703,10 +1967,7 @@ pub(crate) fn task_userdel(name: &str) -> Result<(), SysError> {
     }
     let removed = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let thread = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
-            return Err(SysError::BadCap);
-        }
+        let thread = &threads[running_proc_index(&threads, slot)?];
         if !admin_caller(thread.fs_root, &thread.fs_tokens) {
             return Err(SysError::AccessDenied);
         }
@@ -1766,11 +2027,9 @@ pub(crate) fn task_su(name: &str) -> Result<(), SysError> {
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
+        let owner = running_proc_index(&threads, slot)?;
         let (fs_root, fs_tokens, born_admin) = {
-            let caller = threads.get(slot - 1).ok_or(SysError::BadCap)?;
-            if !caller.is_user || caller.state.load(Ordering::Acquire) != STATE_RUNNING {
-                return Err(SysError::BadCap);
-            }
+            let caller = &threads[owner];
             deny_must_change(caller)?;
             (caller.fs_root, caller.fs_tokens, caller.born_admin)
         };
@@ -1788,7 +2047,7 @@ pub(crate) fn task_su(name: &str) -> Result<(), SysError> {
             }
         }
         let init_live = init_supervisor_live(&threads);
-        let caller = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        let caller = &mut threads[owner];
         let tty = caller.tty;
         let gen = install_session(caller, target, false, init_live)?;
         let debug_id = caller.debug_id;
@@ -1799,6 +2058,7 @@ pub(crate) fn task_su(name: &str) -> Result<(), SysError> {
             tty.saturating_add(1),
             debug_id
         );
+        sync_session_to_threads(&mut threads, owner);
         Ok(())
     })
 }
@@ -1860,6 +2120,9 @@ pub(in crate::sched) fn idle_scan(all_tasks: bool) {
             }
             threads[i].exit_code.store(EXIT_KILLED, Ordering::Release);
             threads[i].state.store(STATE_EXITED, Ordering::Release);
+            if threads[i].leader_slot == 0 {
+                exit_siblings(&mut threads, i + 1, EXIT_KILLED);
+            }
         }
         cleared && !sessions_open(&threads)
     });

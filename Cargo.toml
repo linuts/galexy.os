@@ -14,8 +14,11 @@ members = [
     "crates/userspace/shell",
     "crates/userspace/util",
     "crates/userspace/stdmin",
+    "crates/userspace/stdtest",
+    "crates/userspace/threadtest",
     "crates/gxc",
     "crates/gxld",
+    "crates/xtask",
 ]
 default-members = ["crates/runner"]
 

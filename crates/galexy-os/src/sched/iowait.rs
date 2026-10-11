@@ -222,6 +222,9 @@ pub unsafe fn syscall_handoff(
             let t = &threads[slot - 1];
             t.ctx.store(frame as u64, Ordering::Relaxed);
             context::fx_save(t.fx as *mut u8);
+            if t.is_user {
+                t.fs_base.store(read_fs_base(), Ordering::Relaxed);
+            }
         }
         if exit {
             if threads[slot - 1].is_init {
@@ -232,7 +235,7 @@ pub unsafe fn syscall_handoff(
             raw[..n].copy_from_slice(&threads[slot - 1].name_bytes[..n]);
             let debug_id = threads[slot - 1].debug_id;
             // Exit code: syscall Exit puts it in rdi before handoff; faults use 0.
-            let code = if reason == "syscall" {
+            let code = if reason == "syscall" || reason == THREAD_EXIT_REASON {
                 // SAFETY: frame is the exiting task's uniform context.
                 unsafe { (*frame).rdi }
             } else {
@@ -251,6 +254,13 @@ pub unsafe fn syscall_handoff(
                 debug_id
             );
             wake_exit_waiters(&mut threads, slot as u8, code);
+            // Milestone 70: `exit`, a fault, or a leader's `thread_exit`
+            // ends the whole process. Only a thread's own `thread_exit`
+            // leaves its siblings running.
+            let thread_only = reason == THREAD_EXIT_REASON && threads[slot - 1].leader_slot != 0;
+            if !thread_only {
+                exit_siblings(&mut threads, slot, code);
+            }
         }
 
         // Advance the rotation: first eligible slot strictly after the
@@ -294,6 +304,10 @@ pub unsafe fn syscall_handoff(
             crate::arch::set_tss_rsp0(VirtAddr::new(top));
         }
         enter_task_cr3(cr3);
+        write_fs_base(match cand {
+            0 => 0,
+            s => threads[s - 1].fs_base.load(Ordering::Relaxed),
+        });
         me.current.store(who, Ordering::Relaxed);
         // Outgoing thread's tail is still on its stack until `mov rsp`.
         // The naked tail publishes CTX_STABLE from gs:[40] after that.
@@ -363,6 +377,9 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
                 let t = &threads[i - 1];
                 context::fx_save(t.fx as *mut u8);
                 t.ctx.store(frame as u64, Ordering::Relaxed);
+                if t.is_user {
+                    t.fs_base.store(read_fs_base(), Ordering::Relaxed);
+                }
             }
         }
 
@@ -504,6 +521,10 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
             crate::arch::set_tss_rsp0(VirtAddr::new(top));
         }
         enter_task_cr3(cr3);
+        write_fs_base(match next_slot {
+            0 => 0,
+            s => threads[s - 1].fs_base.load(Ordering::Relaxed),
+        });
         me.current.store(who, Ordering::Relaxed);
         // `current` here is the outgoing slot (reloaded above). Its tail
         // still owns the stack until the naked `mov rsp`; gs:[40] tells
@@ -584,7 +605,8 @@ pub(in crate::sched) fn init_ctrl_queued() -> bool {
 }
 
 /// Wake sleepers whose deadline is due. Call under the timer path after
-/// `timer_ticks` advances.
+/// `timer_ticks` advances. A futex waiter's deadline is a timeout: it
+/// wakes with [`SysError::TimedOut`].
 pub(in crate::sched) fn wake_due_sleepers(threads: &mut [Thread], now: u64) {
     for thread in threads.iter_mut() {
         if thread.state.load(Ordering::Acquire) != STATE_WAITING {
@@ -594,10 +616,125 @@ pub(in crate::sched) fn wake_due_sleepers(threads: &mut [Thread], now: u64) {
         if deadline == 0 || now < deadline {
             continue;
         }
+        let result = if thread.io_kind.load(Ordering::Acquire) == IO_FUTEX {
+            SyscallResult::err(SysError::TimedOut)
+        } else {
+            SyscallResult::ok(0)
+        };
         clear_wait_fields(thread);
-        stamp_waiter_frame(thread, SyscallResult::ok(0));
+        stamp_waiter_frame(thread, result);
         set_running(thread);
     }
+}
+
+/// `syscall_handoff` reason for [`galexy_abi::Syscall::ThreadExit`].
+pub(crate) const THREAD_EXIT_REASON: &str = "thread-exit";
+
+/// Tombstones every other slot that shares `slot`'s address space
+/// (Milestone 70). Parked siblings are cancelled with `Interrupted`
+/// first so no waiter is stranded; join waiters see `code`. A sibling
+/// that is RUNNING on another CPU keeps its current quantum and is
+/// skipped by that CPU's next rotation; its syscalls fail `BadCap` from
+/// here on. Caller holds [`THREADS`].
+pub(in crate::sched) fn exit_siblings(threads: &mut [Thread], slot: usize, code: u64) {
+    let cr3 = threads[slot - 1].cr3.load(Ordering::Acquire);
+    if cr3 == 0 {
+        return;
+    }
+    for i in 0..threads.len() {
+        if i == slot - 1 || threads[i].cr3.load(Ordering::Acquire) != cr3 {
+            continue;
+        }
+        let state = threads[i].state.load(Ordering::Acquire);
+        if state != STATE_RUNNING && state != STATE_WAITING {
+            continue;
+        }
+        if state == STATE_WAITING {
+            interrupt_io_waiter(threads, i);
+        }
+        threads[i].exit_code.store(code, Ordering::Release);
+        threads[i].state.store(STATE_EXITED, Ordering::Release);
+        serial_println!(
+            "[sched] thread '{}' ended with its process code={} id={}",
+            threads[i].name(),
+            code,
+            threads[i].debug_id
+        );
+        wake_exit_waiters(threads, (i + 1) as u8, code);
+    }
+}
+
+/// Parks the calling thread on the futex word at `addr` while it still
+/// reads `expected`. Returns `Ok(true)` when parked (caller hands off),
+/// `Ok(false)` when the word already differs. The compare and the park
+/// happen under [`THREADS`], which every wake also takes, so a wake that
+/// follows the waker's store cannot slip between them.
+pub(crate) fn task_futex_wait(addr: u64, expected: u32, timeout_ms: u64) -> Result<bool, SysError> {
+    if !addr.is_multiple_of(4) {
+        return Err(SysError::BadValue);
+    }
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    let deadline = if timeout_ms == 0 {
+        0
+    } else {
+        crate::arch::timer_ticks().saturating_add(timeout_ms.min(galexy_abi::SLEEP_MS_MAX))
+    };
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        running_proc_index(&threads, slot)?;
+        let mut raw = [0u8; 4];
+        // SAFETY: the dispatcher accepted `addr` as 4 readable user bytes
+        // of the active tree, which is the caller's own address space.
+        unsafe {
+            crate::arch::user_copy::copy_from_user(addr, raw.as_mut_ptr(), 4);
+        }
+        if u32::from_le_bytes(raw) != expected {
+            return Ok(false);
+        }
+        park_io(&mut threads, slot, IO_FUTEX, 0, addr, 0, 0);
+        threads[slot - 1]
+            .sleep_deadline
+            .store(deadline, Ordering::Release);
+        Ok(true)
+    })
+}
+
+/// Wakes up to `count` threads of the calling process parked on `addr`.
+/// Returns how many woke.
+pub(crate) fn task_futex_wake(addr: u64, count: u64) -> Result<u64, SysError> {
+    if !addr.is_multiple_of(4) {
+        return Err(SysError::BadValue);
+    }
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        running_proc_index(&threads, slot)?;
+        let cr3 = threads[slot - 1].cr3.load(Ordering::Acquire);
+        let mut woken = 0u64;
+        for thread in threads.iter_mut() {
+            if woken >= count {
+                break;
+            }
+            if thread.state.load(Ordering::Acquire) != STATE_WAITING
+                || thread.io_kind.load(Ordering::Acquire) != IO_FUTEX
+                || thread.io_addr.load(Ordering::Acquire) != addr
+                || thread.cr3.load(Ordering::Acquire) != cr3
+            {
+                continue;
+            }
+            clear_wait_fields(thread);
+            stamp_waiter_frame(thread, SyscallResult::ok(0));
+            set_running(thread);
+            woken += 1;
+        }
+        Ok(woken)
+    })
 }
 
 /// Marks `thread` runnable and kicks its owner out of `hlt` when that
@@ -636,6 +773,8 @@ pub(in crate::sched) const IO_BLOCK: u8 = 4;
 pub(in crate::sched) const IO_CHAN_RECV: u8 = 5;
 /// Init control `send` parked until init replies.
 pub(in crate::sched) const IO_INIT_RPC: u8 = 6;
+/// Futex wait (Milestone 70): `io_addr` is the word, `cr3` the key space.
+pub(in crate::sched) const IO_FUTEX: u8 = 7;
 
 pub(in crate::sched) fn clear_wait_fields(thread: &Thread) {
     thread.wait_child_slot.store(0, Ordering::Relaxed);
@@ -838,7 +977,11 @@ pub(in crate::sched) fn complete_chan_recv(threads: &mut [Thread], index: usize)
     let cap = Cap::from_bits(threads[index].io_cap.load(Ordering::Acquire));
     let caps_out = threads[index].io_extra.load(Ordering::Acquire);
     let cr3 = threads[index].cr3.load(Ordering::Acquire);
-    let end = match channel_end(&threads[index], cap) {
+    let Some(owner) = proc_index(threads, index + 1) else {
+        finish_chan_waiter(&threads[index], SyscallResult::err(SysError::BadCap));
+        return;
+    };
+    let end = match channel_end(&threads[owner], cap) {
         Ok((cid, end)) if cid == id => end,
         _ => {
             finish_chan_waiter(&threads[index], SyscallResult::err(SysError::BadCap));
@@ -853,7 +996,7 @@ pub(in crate::sched) fn complete_chan_recv(threads: &mut [Thread], index: usize)
                     let _ = channel::unpull(ch, delivery);
                     return Ok(ChanStep::Done(SyscallResult::err(SysError::BadBuffer)));
                 }
-                let free = threads[index].files.iter().filter(|s| s.is_none()).count();
+                let free = threads[owner].files.iter().filter(|s| s.is_none()).count();
                 if need > free {
                     let _ = channel::unpull(ch, delivery);
                     return Ok(ChanStep::Done(SyscallResult::err(SysError::NoResource)));
@@ -864,11 +1007,11 @@ pub(in crate::sched) fn complete_chan_recv(threads: &mut [Thread], index: usize)
                 let mut caps = [0u64; 2];
                 for (i, file) in delivery.caps.into_iter().enumerate() {
                     let Some(file) = file else { continue };
-                    let Some(slot) = threads[index].files.iter().position(|s| s.is_none()) else {
+                    let Some(slot) = threads[owner].files.iter().position(|s| s.is_none()) else {
                         continue;
                     };
                     let rights = file.rights;
-                    threads[index].files[slot] = Some(file);
+                    threads[owner].files[slot] = Some(file);
                     caps[i] = Cap::new(galexy_abi::FILE_CAP_BASE + slot as u64, rights).bits();
                 }
                 Ok(ChanStep::Payload { n, bytes, caps })

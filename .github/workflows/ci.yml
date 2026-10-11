@@ -47,7 +47,7 @@ jobs:
       - name: Clippy (host crates, all targets)
         run: >
           cargo clippy
-          -p galexy-abi -p galexy-core -p galexy-crypto -p galexy-galf
+          -p galexy-abi -p galexy-core -p galexy-crypto -p galexy-galf -p xtask
           -p galfs-fsck -p gxc -p gxld
           --all-targets -- -D warnings
 
@@ -58,7 +58,7 @@ jobs:
 
       - name: Clippy (userspace programs, x86_64-unknown-galexy)
         run: |
-          cargo clippy -p galexy-rt -p hello -p init -p shell -p util \
+          cargo clippy -p galexy-rt -p hello -p init -p shell -p util -p threadtest \
             --target targets/x86_64-unknown-galexy.json \
             -Zbuild-std=core,alloc \
             -Zbuild-std-features=compiler-builtins-mem \
@@ -66,7 +66,7 @@ jobs:
           overlay="$(python3 scripts/galexy-std-sysroot.py --out target/ci-std-overlay)"
           RUSTC_WRAPPER="$PWD/scripts/galexy-rustc-wrapper.py" \
             GALEXY_SYSROOT="$overlay" \
-            cargo clippy -p stdmin \
+            cargo clippy -p stdmin -p stdtest \
             --target targets/x86_64-unknown-galexy.json \
             -Zbuild-std=std,panic_abort \
             -Zbuild-std-features=compiler-builtins-mem \

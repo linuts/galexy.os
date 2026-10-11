@@ -4,7 +4,14 @@
 //! contract with it is the syscall ABI (`galexy-abi`). Syscall wrappers
 //! carry the register contract from `docs/DESIGN.md` (arch/syscall):
 //! RAX = number in / value out, RDX = len-arg in / ok-flag out,
-//! RDI/RSI = args. RCX and R11 are clobbered by the instruction itself.
+//! RDI/RSI = args, R8/R9/R10 = extra args. RCX and R11 are clobbered by
+//! the instruction itself.
+//!
+//! Exactly one function holds the `syscall` instruction: [`raw_syscall`],
+//! an `#[inline(never)] extern "C"` stub (Milestone 70). Every wrapper
+//! here, and every `std` PAL module, calls it through a plain `call`, so
+//! a code generator without inline-assembly support (cg_clif on the OS
+//! itself) only ever meets an ordinary function.
 
 #![no_std]
 #![deny(clippy::all)]
@@ -19,7 +26,9 @@ use core::arch::asm;
 use core::cell::UnsafeCell;
 #[cfg(not(feature = "std"))]
 use core::panic::PanicInfo;
-use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+#[cfg(not(feature = "std"))]
+use core::sync::atomic::{AtomicBool, AtomicUsize};
+use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 use galexy_abi::{Cap, CapRights, Syscall, SyscallResult};
 
@@ -33,12 +42,31 @@ pub fn self_cap() -> Cap {
     galexy_abi::reserved::self_cap()
 }
 
-/// One syscall: number + 3 args, register-form result back.
-pub fn syscall(number: u64, a0: u64, a1: u64, a2: u64) -> SyscallResult {
+/// The one `syscall` instruction in ring 3.
+///
+/// `number` rides in RAX, `a0`/`a1`/`a2` in RDI/RSI/RDX, `r8`/`r9`/`r10`
+/// in the registers of the same name. The kernel answers with RAX = value
+/// and RDX = ok flag; this stub folds them into a [`SyscallResult`]
+/// (`#[repr(C)]`, so the SysV ABI returns it in RAX:RDX).
+///
+/// `#[inline(never)] extern "C"`: callers never see the `asm!`. A program
+/// compiled by a backend without inline assembly links this symbol like
+/// any other function.
+#[inline(never)]
+pub extern "C" fn raw_syscall(
+    number: u64,
+    a0: u64,
+    a1: u64,
+    a2: u64,
+    r8: u64,
+    r9: u64,
+    r10: u64,
+) -> SyscallResult {
     let value: u64;
     let ok: u64;
     // SAFETY: the kernel's syscall entry is uniform; rcx/r11 are clobbered
-    // by the instruction itself per the x86_64 syscall ABI.
+    // by the instruction itself per the x86_64 syscall ABI. The kernel
+    // preserves every other register.
     unsafe {
         asm!(
             "syscall",
@@ -46,12 +74,25 @@ pub fn syscall(number: u64, a0: u64, a1: u64, a2: u64) -> SyscallResult {
             inlateout("rdx") a2 => ok,
             in("rdi") a0,
             in("rsi") a1,
+            in("r8") r8,
+            in("r9") r9,
+            in("r10") r10,
             lateout("rcx") _,
             lateout("r11") _,
             options(nostack),
         );
     }
     SyscallResult { ok: ok != 0, value }
+}
+
+/// One syscall: number + 3 args, register-form result back.
+pub fn syscall(number: u64, a0: u64, a1: u64, a2: u64) -> SyscallResult {
+    raw_syscall(number, a0, a1, a2, 0, 0, 0)
+}
+
+/// One syscall with the `r8`/`r9` extra arguments.
+pub fn syscall_r8r9(number: u64, a0: u64, a1: u64, a2: u64, r8: u64, r9: u64) -> SyscallResult {
+    raw_syscall(number, a0, a1, a2, r8, r9, 0)
 }
 
 /// Writes bytes to the console through the console capability.
@@ -116,91 +157,34 @@ pub fn remove(name: &[u8]) -> SyscallResult {
 /// caller must already hold every bit being granted. `r8`/`r9` are the
 /// target task name.
 pub fn grant(path: &[u8], rights: u64, task: &[u8]) -> SyscallResult {
-    let value: u64;
-    let ok: u64;
-    // SAFETY: same syscall entry as [`syscall`]. r8/r9 name the target;
-    // rcx/r11 are clobbered by the instruction.
-    unsafe {
-        asm!(
-            "syscall",
-            inlateout("rax") Syscall::Grant as u64 => value,
-            inlateout("rdx") rights => ok,
-            in("rdi") path.as_ptr() as u64,
-            in("rsi") path.len() as u64,
-            in("r8") task.as_ptr() as u64,
-            in("r9") task.len() as u64,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack),
-        );
-    }
-    SyscallResult { ok: ok != 0, value }
+    path_rights_target(Syscall::Grant, path, rights, task)
 }
 
 /// Drops galfs token rights from a live user task. Same layout as [`grant`].
 pub fn revoke(path: &[u8], rights: u64, task: &[u8]) -> SyscallResult {
-    let value: u64;
-    let ok: u64;
-    // SAFETY: same syscall entry as [`grant`].
-    unsafe {
-        asm!(
-            "syscall",
-            inlateout("rax") Syscall::Revoke as u64 => value,
-            inlateout("rdx") rights => ok,
-            in("rdi") path.as_ptr() as u64,
-            in("rsi") path.len() as u64,
-            in("r8") task.as_ptr() as u64,
-            in("r9") task.len() as u64,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack),
-        );
-    }
-    SyscallResult { ok: ok != 0, value }
+    path_rights_target(Syscall::Revoke, path, rights, task)
 }
 
 /// Durable home share for actor `user` (re-applied at login).
 pub fn share(path: &[u8], rights: u64, user: &[u8]) -> SyscallResult {
-    let value: u64;
-    let ok: u64;
-    // SAFETY: same register layout as [`grant`]; target is an actor name.
-    unsafe {
-        asm!(
-            "syscall",
-            inlateout("rax") Syscall::Share as u64 => value,
-            inlateout("rdx") rights => ok,
-            in("rdi") path.as_ptr() as u64,
-            in("rsi") path.len() as u64,
-            in("r8") user.as_ptr() as u64,
-            in("r9") user.len() as u64,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack),
-        );
-    }
-    SyscallResult { ok: ok != 0, value }
+    path_rights_target(Syscall::Share, path, rights, user)
 }
 
 /// Clear durable share rights for actor `user`.
 pub fn unshare(path: &[u8], rights: u64, user: &[u8]) -> SyscallResult {
-    let value: u64;
-    let ok: u64;
-    // SAFETY: same entry as [`share`].
-    unsafe {
-        asm!(
-            "syscall",
-            inlateout("rax") Syscall::Unshare as u64 => value,
-            inlateout("rdx") rights => ok,
-            in("rdi") path.as_ptr() as u64,
-            in("rsi") path.len() as u64,
-            in("r8") user.as_ptr() as u64,
-            in("r9") user.len() as u64,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack),
-        );
-    }
-    SyscallResult { ok: ok != 0, value }
+    path_rights_target(Syscall::Unshare, path, rights, user)
+}
+
+/// `rdi`/`rsi` = path, `rdx` = rights, `r8`/`r9` = target name.
+fn path_rights_target(number: Syscall, path: &[u8], rights: u64, target: &[u8]) -> SyscallResult {
+    syscall_r8r9(
+        number as u64,
+        path.as_ptr() as u64,
+        path.len() as u64,
+        rights,
+        target.as_ptr() as u64,
+        target.len() as u64,
+    )
 }
 
 /// Creates a pipe. On success, `out` receives `[read_cap, write_cap]` bits.
@@ -221,7 +205,8 @@ pub fn give(cap: Cap, task: &[u8]) -> SyscallResult {
     )
 }
 
-/// Sets the read cursor on an open file. `whence` is [`galexy_abi::SEEK_SET`],
+/// Sets the file cursor on an open file. galfs `read` and `write` share
+/// it. `whence` is [`galexy_abi::SEEK_SET`],
 /// [`galexy_abi::SEEK_CUR`], or [`galexy_abi::SEEK_END`].
 pub fn seek(cap: Cap, offset: i64, whence: u64) -> SyscallResult {
     syscall(Syscall::Seek as u64, cap.bits(), offset as u64, whence)
@@ -246,24 +231,14 @@ pub fn user_name(name: &[u8], op: u64) -> SyscallResult {
 
 /// Like [`user_name`], with a password in `r8`/`r9` for add/login/passwd.
 pub fn user_name_pass(name: &[u8], password: &[u8], op: u64) -> SyscallResult {
-    let value: u64;
-    let ok: u64;
-    // SAFETY: same syscall entry as [`syscall`]. r8/r9 are the password.
-    unsafe {
-        asm!(
-            "syscall",
-            inlateout("rax") Syscall::User as u64 => value,
-            inlateout("rdx") op => ok,
-            in("rdi") name.as_ptr() as u64,
-            in("rsi") name.len() as u64,
-            in("r8") password.as_ptr() as u64,
-            in("r9") password.len() as u64,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack),
-        );
-    }
-    SyscallResult { ok: ok != 0, value }
+    syscall_r8r9(
+        Syscall::User as u64,
+        name.as_ptr() as u64,
+        name.len() as u64,
+        op,
+        password.as_ptr() as u64,
+        password.len() as u64,
+    )
 }
 
 /// Password login as `name`.
@@ -295,46 +270,26 @@ pub fn user_passwd(name: &[u8], password: &[u8]) -> SyscallResult {
 /// Reads an actor quota record into `buf` (at least [`galexy_abi::QUOTA_LEN`]).
 /// Empty `name` means the caller's actor.
 pub fn user_quota(buf: &mut [u8], name: &[u8]) -> SyscallResult {
-    let value: u64;
-    let ok: u64;
-    // SAFETY: user buffer + optional name; same entry as other `user` ops.
-    unsafe {
-        asm!(
-            "syscall",
-            inlateout("rax") Syscall::User as u64 => value,
-            inlateout("rdx") galexy_abi::USER_QUOTA => ok,
-            in("rdi") buf.as_mut_ptr() as u64,
-            in("rsi") buf.len() as u64,
-            in("r8") name.as_ptr() as u64,
-            in("r9") name.len() as u64,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack),
-        );
-    }
-    SyscallResult { ok: ok != 0, value }
+    syscall_r8r9(
+        Syscall::User as u64,
+        buf.as_mut_ptr() as u64,
+        buf.len() as u64,
+        galexy_abi::USER_QUOTA,
+        name.as_ptr() as u64,
+        name.len() as u64,
+    )
 }
 
 /// Admin: set object/byte limits for actor `name`.
 pub fn user_setquota(name: &[u8], max_objects: u16, max_bytes: u32) -> SyscallResult {
-    let value: u64;
-    let ok: u64;
-    // SAFETY: name is a user buffer; limits ride in r8/r9.
-    unsafe {
-        asm!(
-            "syscall",
-            inlateout("rax") Syscall::User as u64 => value,
-            inlateout("rdx") galexy_abi::USER_SETQUOTA => ok,
-            in("rdi") name.as_ptr() as u64,
-            in("rsi") name.len() as u64,
-            in("r8") max_objects as u64,
-            in("r9") max_bytes as u64,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack),
-        );
-    }
-    SyscallResult { ok: ok != 0, value }
+    syscall_r8r9(
+        Syscall::User as u64,
+        name.as_ptr() as u64,
+        name.len() as u64,
+        galexy_abi::USER_SETQUOTA,
+        u64::from(max_objects),
+        u64::from(max_bytes),
+    )
 }
 
 /// Like [`create`], and if the path is an existing scratch file its bytes
@@ -350,23 +305,14 @@ pub fn create_replace(name: &[u8]) -> SyscallResult {
 
 /// Moves a galfs dirent from `old` to `new` without copying bytes.
 pub fn rename(old: &[u8], new: &[u8]) -> SyscallResult {
-    let value: u64;
-    let ok: u64;
-    // SAFETY: same syscall entry as [`grant`]; rdx/r8 carry the new path.
-    unsafe {
-        asm!(
-            "syscall",
-            inlateout("rax") Syscall::Rename as u64 => value,
-            inlateout("rdx") new.as_ptr() as u64 => ok,
-            in("rdi") old.as_ptr() as u64,
-            in("rsi") old.len() as u64,
-            in("r8") new.len() as u64,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack),
-        );
-    }
-    SyscallResult { ok: ok != 0, value }
+    syscall_r8r9(
+        Syscall::Rename as u64,
+        old.as_ptr() as u64,
+        old.len() as u64,
+        new.as_ptr() as u64,
+        new.len() as u64,
+        0,
+    )
 }
 
 /// Sets the length of an open galfs file. Requires WRITE on `cap`.
@@ -386,23 +332,14 @@ pub fn user_tokens(buf: &mut [u8]) -> SyscallResult {
 
 /// Writes galfs metadata for `path` into `buf` (at least [`galexy_abi::STAT_LEN`]).
 pub fn stat(path: &[u8], buf: &mut [u8]) -> SyscallResult {
-    let value: u64;
-    let ok: u64;
-    // SAFETY: same syscall entry as [`rename`]; rdx/r8 are the out buffer.
-    unsafe {
-        asm!(
-            "syscall",
-            inlateout("rax") Syscall::Stat as u64 => value,
-            inlateout("rdx") buf.as_mut_ptr() as u64 => ok,
-            in("rdi") path.as_ptr() as u64,
-            in("rsi") path.len() as u64,
-            in("r8") buf.len() as u64,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack),
-        );
-    }
-    SyscallResult { ok: ok != 0, value }
+    syscall_r8r9(
+        Syscall::Stat as u64,
+        path.as_ptr() as u64,
+        path.len() as u64,
+        buf.as_mut_ptr() as u64,
+        buf.len() as u64,
+        0,
+    )
 }
 
 /// Writes bytes to a capability (a scratch file, or the console).
@@ -551,27 +488,69 @@ pub fn spawn(name: &[u8]) -> SyscallResult {
 /// pass `SPAWN_INHERIT` and call [`wait`] on the Cap. `r8`/`r9`/`r10` are
 /// set explicitly so a leftover register is not an argument.
 pub fn spawn_with(name: &[u8], arg: &[u8], grants: u64) -> SyscallResult {
-    let value: u64;
-    let ok: u64;
-    let cap = loader_cap();
-    // SAFETY: same syscall entry as [`syscall`]. r8/r9/r10 are the spawn
-    // argument and grant bits; rcx/r11 are clobbered by the instruction.
-    unsafe {
-        asm!(
-            "syscall",
-            inlateout("rax") Syscall::Spawn as u64 => value,
-            inlateout("rdx") name.len() as u64 => ok,
-            in("rdi") cap.bits(),
-            in("rsi") name.as_ptr() as u64,
-            in("r8") arg.as_ptr() as u64,
-            in("r9") arg.len() as u64,
-            in("r10") grants,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack),
-        );
-    }
-    SyscallResult { ok: ok != 0, value }
+    raw_syscall(
+        Syscall::Spawn as u64,
+        loader_cap().bits(),
+        name.as_ptr() as u64,
+        name.len() as u64,
+        arg.as_ptr() as u64,
+        arg.len() as u64,
+        grants,
+    )
+}
+
+/// Starts a second thread in this address space at `entry(arg)`.
+///
+/// `stack_pages` is the user stack size in 4 KiB pages (`0` =
+/// [`galexy_abi::THREAD_STACK_PAGES_DEFAULT`], at most
+/// [`galexy_abi::THREAD_STACK_PAGES_MAX`]). Parks until the thread exists;
+/// `value` is a process Cap for it, so [`wait`] joins it and returns the
+/// code it passed to [`thread_exit`]. The thread must not return from
+/// `entry`. The heap, open files, and process Caps are shared; `std`'s
+/// `thread::spawn` is the comfortable form of this call.
+///
+/// Stable since Milestone 70.
+pub fn thread_spawn(entry: extern "C" fn(u64) -> !, arg: u64, stack_pages: u64) -> SyscallResult {
+    syscall(
+        Syscall::ThreadSpawn as u64,
+        entry as usize as u64,
+        arg,
+        stack_pages,
+    )
+}
+
+/// Ends the calling thread with `code` (never returns). Siblings keep
+/// running; from the leader this is [`exit`]. Stable since Milestone 70.
+pub fn thread_exit(code: u64) -> ! {
+    let _ = syscall(Syscall::ThreadExit as u64, code, 0, 0);
+    park_forever()
+}
+
+/// Parks while `*word == expected`. `timeout_ms` of `0` means wait for a
+/// wake; otherwise [`galexy_abi::SysError::TimedOut`] when the timeout
+/// fires first. Returns at once (ok) when the word already differs.
+///
+/// Stable since Milestone 70.
+pub fn futex_wait(word: &AtomicU32, expected: u32, timeout_ms: u64) -> SyscallResult {
+    syscall_r8r9(
+        Syscall::Futex as u64,
+        galexy_abi::FUTEX_WAIT,
+        word.as_ptr() as u64,
+        u64::from(expected),
+        timeout_ms,
+        0,
+    )
+}
+
+/// Wakes up to `count` threads parked on `word`; `value` is the number
+/// woken. Stable since Milestone 70.
+pub fn futex_wake(word: &AtomicU32, count: u64) -> SyscallResult {
+    syscall(
+        Syscall::Futex as u64,
+        galexy_abi::FUTEX_WAKE,
+        word.as_ptr() as u64,
+        count,
+    )
 }
 
 struct StartupArg {
@@ -761,28 +740,6 @@ pub fn init_rpc(op: u8, name: &[u8], reply: &mut [u8]) -> SyscallResult {
     )
 }
 
-fn syscall_r8r9(number: u64, a0: u64, a1: u64, a2: u64, r8: u64, r9: u64) -> SyscallResult {
-    let value: u64;
-    let ok: u64;
-    // SAFETY: same syscall entry as [`syscall`]. r8/r9 are the extra args;
-    // rcx/r11 are clobbered by the instruction.
-    unsafe {
-        asm!(
-            "syscall",
-            inlateout("rax") number => value,
-            inlateout("rdx") a2 => ok,
-            in("rdi") a0,
-            in("rsi") a1,
-            in("r8") r8,
-            in("r9") r9,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack),
-        );
-    }
-    SyscallResult { ok: ok != 0, value }
-}
-
 /// Where [`write_std`] sends bytes. `0xFF` is the console.
 static STDOUT_SLOT: AtomicU8 = AtomicU8::new(0xFF);
 
@@ -850,17 +807,31 @@ pub fn write_std(bytes: &[u8]) -> SyscallResult {
 }
 
 /// Bump allocator over [`map_pages`]. `dealloc` does not unmap.
+///
+/// Only the `no_std` runtime installs it: a `std` program's allocator is
+/// the PAL's `System` (dlmalloc over `Map`), and two `#[global_allocator]`s
+/// in one image do not link. One spin lock serializes the threads of a
+/// process (Milestone 70); the lock holder never blocks, so a waiter
+/// yields its quantum instead of spinning hot.
+#[cfg(not(feature = "std"))]
 struct BumpAlloc;
 
+#[cfg(not(feature = "std"))]
+static HEAP_LOCK: AtomicBool = AtomicBool::new(false);
+#[cfg(not(feature = "std"))]
 static HEAP_CURSOR: AtomicUsize = AtomicUsize::new(0);
+#[cfg(not(feature = "std"))]
 static HEAP_END: AtomicUsize = AtomicUsize::new(0);
+#[cfg(not(feature = "std"))]
 static HEAP_PAGES: AtomicUsize = AtomicUsize::new(0);
 
+#[cfg(not(feature = "std"))]
 fn heap_align(value: usize, align: usize) -> usize {
     let align = align.max(1);
     (value + align - 1) & !(align - 1)
 }
 
+#[cfg(not(feature = "std"))]
 fn heap_grow() -> bool {
     if HEAP_PAGES.load(Ordering::Relaxed) >= galexy_abi::USER_HEAP_PAGES as usize {
         return false;
@@ -884,8 +855,25 @@ fn heap_grow() -> bool {
     true
 }
 
-// SAFETY: one task owns this image. `alloc` returns null when the 32-page
-// budget is exhausted. `dealloc` intentionally leaks the mapping.
+#[cfg(not(feature = "std"))]
+fn heap_lock() {
+    while HEAP_LOCK
+        .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        let _ = yield_now();
+    }
+}
+
+#[cfg(not(feature = "std"))]
+fn heap_unlock() {
+    HEAP_LOCK.store(false, Ordering::Release);
+}
+
+// SAFETY: the heap words change only under `HEAP_LOCK`. `alloc` returns
+// null when the 32-page budget is exhausted. `dealloc` intentionally
+// leaks the mapping.
+#[cfg(not(feature = "std"))]
 unsafe impl core::alloc::GlobalAlloc for BumpAlloc {
     unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
         let size = layout.size();
@@ -893,7 +881,8 @@ unsafe impl core::alloc::GlobalAlloc for BumpAlloc {
         if size == 0 {
             return align as *mut u8;
         }
-        loop {
+        heap_lock();
+        let got = loop {
             let cursor = HEAP_CURSOR.load(Ordering::Relaxed);
             let end = HEAP_END.load(Ordering::Relaxed);
             if cursor != 0 {
@@ -901,26 +890,33 @@ unsafe impl core::alloc::GlobalAlloc for BumpAlloc {
                 let next = aligned.saturating_add(size);
                 if next >= aligned && next <= end {
                     HEAP_CURSOR.store(next, Ordering::Relaxed);
-                    return aligned as *mut u8;
+                    break aligned as *mut u8;
                 }
             }
             if !heap_grow() {
-                return core::ptr::null_mut();
+                break core::ptr::null_mut();
             }
-        }
+        };
+        heap_unlock();
+        got
     }
 
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
 }
 
+#[cfg(not(feature = "std"))]
 #[global_allocator]
 static HEAP: BumpAlloc = BumpAlloc;
 
 /// Exits the calling task with `code` (never returns).
 pub fn exit(code: u64) -> ! {
     let _ = syscall(Syscall::Exit as u64, code, 0, 0);
-    // `exit` never returns; reaching here = a kernel bug. Park with
-    // interrupts off so nothing wedges further.
+    park_forever()
+}
+
+/// `exit` / `thread_exit` never return; reaching here = a kernel bug.
+/// Park with interrupts off so nothing wedges further.
+fn park_forever() -> ! {
     loop {
         // SAFETY: cli+hlt on the park path is the intended behavior.
         unsafe { asm!("cli", "hlt", options(nomem, nostack)) };

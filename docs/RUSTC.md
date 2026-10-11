@@ -49,12 +49,12 @@ where Galexy stands today:
 | `rustc` needs | Galexy today | Gap |
 |---|---|---|
 | Hundreds of MB of heap | No user heap; 4-page stack; QEMU default 128 MiB (runner passes no `-m`); frame bitmap covers 512 MiB | `Map` syscall (Milestone 66), 2 GiB QEMU memory, bitmap past 512 MiB |
-| At least one spawned thread with an 8 MiB stack, TLS, locks | One task = one thread; no user TLS; FS base unused in ring 3 | `ThreadSpawn` sharing CR3, `Futex`, user `wrfsbase` TLS |
+| At least one spawned thread with an 8 MiB stack, TLS, locks | `ThreadSpawn` shares CR3; `Futex`; key TLS via `wrfsbase`. Stack cap is 256 KiB (64 pages) | 8 MiB stacks (Milestone 71) |
 | Read a 30–60 MB sysroot | Ramdisk `open` + `read` + `seek` on archive names ✅ | Big tar, nothing else |
 | Write multi-MB `.o` / `.rlib` / ELF outputs | galfs: 32 KiB per file, 128 KiB pool, 8 open files per task | galfs large-volume format, 64 open files |
 | Long command lines | `SPAWN_ARG_MAX` = 256, single blob | argv v2 at ≥ 4 KiB |
-| Spawn the linker, capture its exit status / stderr | `spawn_with` + Caps at spawn + `pipe` + `wait` ✅ | PAL glue only |
-| `fs`: open / read / write / seek / stat / create / remove / rename / readdir | All present as syscalls ✅ (`write` is append-only; readdir is the files snapshot) | Positional write |
+| Spawn the linker, capture its exit status / stderr | `spawn_with` + Caps at spawn + `pipe` + `wait`; the PAL's `process` module ✅ | Ring-3 `gxld` (Milestone 71) |
+| `fs`: open / read / write / seek / stat / create / remove / rename / readdir | All present ✅. galfs `write` is positional; readdir is the files snapshot | Large files (Milestone 71) |
 | Clock | `Sleep` only | `Clock` (Milestone 66) |
 | Environment variables, cwd | None | Waive: PAL returns empty env; cwd lives in the process |
 
@@ -84,7 +84,8 @@ two need no fork of the Rust repository and no kernel change.
 `target_family`, `panic-strategy = "abort"`, `relocation-model =
 "static"`, `code-model = "large"`, `linker-flavor = "gnu-lld"` with
 `rust-lld`, `executables = true`, `has-thread-local = false`,
-`singlethread = true`, `disable-redzone = false` (SYSCALL switches to
+`singlethread = false` (Milestone 70; Milestone 68 shipped `true`),
+`disable-redzone = false` (SYSCALL switches to
 the kernel stack; the red zone is the user's). The large code model is
 required: a static `R_X86_64_32S` cannot name `USER_IMAGE_BASE`
 (`0xc8000000000`). The kernel stays on the prebuilt
@@ -101,15 +102,11 @@ invokes that cargo itself: a workspace `-Zbuild-std` would also rebuild
 upstream `std` does not compile for an OS it has never listed: `cfg_select`
 in `sys/alloc`, `sys/io/error`, and `sys/random` has no default, and the
 single-thread TLS path is not selected by `not(target_has_threads)`.
-`scripts/galexy-std-sysroot.py` copies the toolchain `library/` and adds
-those unsupported fallbacks (null allocator, generic I/O errors, static
-TLS, address-derived `HashMap` keys). That is not a rust-lang/rust fork;
-Milestone 70 is the fork, and it deletes this overlay. `stdmin` opts in
-with `#![feature(restricted_std)]` and the `galexy-rt` `std` feature,
-which drops `galexy-rt`'s panic handler so `panic_abort` can provide it.
-The `#[global_allocator]` stays: it is the `Map` bump allocator from
-Milestone 66. `String`, `Vec`, `HashMap`, and `format!` work.
-`std::fs`, threads, and `println!` do not.
+`scripts/galexy-std-sysroot.py` copies the toolchain `library/` and, as
+of Milestone 70, installs `std-pal/` over it. Milestone 68 used that
+script for four unsupported fallbacks only. `stdmin` is a plain
+`fn main`: `println!`, `String`, `Vec`, `HashMap`, and `format!` work,
+and so do `std::fs`, threads, and the rest of the PAL (Stage 3).
 
 Exit (met): ramdisk program `stdmin` builds a `HashMap<String, Vec<u32>>`,
 formats it, and writes through the console Cap. `shell_stdmin_typing_e2e`
@@ -129,53 +126,81 @@ place that knows the loader contract. Proof is the differential image:
 
 It came this early because it is the only Phase 11 item with no
 kernel dependency and it de-risks Stage 6, the step most likely to fail.
-What Stage 6 adds on top is TLS (Stage 3), cg_clif's output shape, and
-the ring-3 wrapper (Stage 4) — not a new linker.
+What Stage 6 adds on top is cg_clif's output shape and the ring-3
+wrapper (Stage 4). TLS relocations landed with Stage 3.
 
 Exit (met): `test-hellogxc` green through `gxld`; `gxld_image_*_e2e`
 green; hostile-input tests return `Err`.
 
-### Stage 3 — Real PAL in a rust-lang/rust fork (Milestone 70)
+### Stage 3 — Real PAL (Milestone 70) ✅
 
-Fork `rust-lang/rust` as `galexy-rust`, tracked monthly like Xous does.
-Three edits upstream documents for exactly this (`wiki.osdev.org/
-Porting_Rust_standard_library`):
+The platform layer lives in `std-pal/` at the repo root, one file per
+`std::sys` module, laid out as it lands inside `library/std/src/`.
+`scripts/galexy-std-sysroot.py` is the in-tree form of "fork
+`rust-lang/rust`": it copies the pinned nightly's `library/`, installs
+`std-pal/`, generates `sys/pal/galexy/abi.rs` from `galexy-abi` (so std
+and the kernel cannot disagree about a syscall number), and patches
+the `cfg_select` dispatchers (`build.rs` allowlist, `pal/mod.rs`, the
+futex lists, the `thread_local` key). The overlay is content-addressed
+under the `--out` directory. Cargo records no build-script dep-info
+for paths under `target/`, so a regenerated overlay at a fixed path
+would reuse std's stale build script; the directory name is a hash of
+the script, `std-pal/`, and the ABI crate. Cargo also caches
+`rustc --print sysroot` in `<target-dir>/.rustc_info.json`, keyed on
+the compiler and not on `GALEXY_SYSROOT`. The runner deletes that file
+before its nested std build. A developer re-running the CI std clippy
+after a PAL change should `rm target/.rustc_info.json` too.
 
-- `library/std/build.rs`: add `target_os == "galexy"` to the supported
-  list (drops `restricted_std`).
-- `library/std/src/sys/pal/mod.rs`: `target_os = "galexy" => mod galexy`.
-- `library/std/src/sys/pal/galexy/`: copy `unsupported`, then fill in
-  modules in this order, each over `galexy-abi` syscalls:
+| Module | Backed by |
+|---|---|
+| `alloc` | dlmalloc over `Map` (Milestone 66) |
+| `stdio` | console Cap `write`; stdin from the keyboard / pipe Cap handed at spawn |
+| `time` | `Clock` |
+| `args` | argv v2 blob |
+| `os` | env empty; cwd in-process; `Exit`; `SysError` → `io::Error` |
+| `fs` | `Open` / `Read` / `Write` / `Seek` / `Stat` / `Create` / `Remove` / `Rename` / `Truncate`; `read_dir` from the files snapshot. galfs `Write` is positional at the cursor |
+| `process` | `spawn_with` + `pipe` Caps for stdio + `Wait` for status |
+| `thread` + `thread_local_key` | `ThreadSpawn` (new slot, same CR3, fresh user stack, kernel stack); per-thread pointer in the FS base via user-mode `wrfsbase` (CR4.FSGSBASE is already on; the kernel never touches FS in ring 3). Join is process-Cap `Wait` |
+| `sync` | `std`'s generic futex implementations over `Futex` |
+| `random` | `rdrand` in the PAL |
+| `net` | `unsupported` until Phase 10 |
 
-| Module | Backed by | Kernel work |
-|---|---|---|
-| `alloc` | `Map` | Milestone 66 |
-| `stdio` | console Cap `write`; stdin from the keyboard / pipe Cap handed at spawn | none |
-| `time` | `Clock` | Milestone 66 |
-| `args` | argv v2 blob | argv size bump |
-| `os` (env, cwd, exit, errno mapping) | env empty; cwd per-process; `Exit`; `SysError` → `io::ErrorKind` | none |
-| `fs` | `Open` / `Read` / `Write` / `Seek` / `Stat` / `Create` / `Remove` / `Rename` / `Truncate`; `read_dir` from the files snapshot | positional `Write` (or `Seek`-then-append semantics documented) |
-| `process` | `spawn_with` + `pipe` Caps for stdio + `Wait` for status | none |
-| `thread` + `thread_local_key` | `ThreadSpawn` (new slot, same CR3, fresh user stack, kernel stack); per-thread pointer in FS base via user-mode `wrfsbase` (CR4.FSGSBASE is already on; the kernel never touches FS in ring 3) | `ThreadSpawn`, `ThreadExit`, join via the existing process Cap `Wait` |
-| `sync` | `std`'s generic futex implementations | `Futex` (`wait(addr, expected)` / `wake(addr, n)`) on the Milestone 57 park / wake machinery |
-| `random` | `rdrand` in the PAL | none |
-| `net` | `unsupported` until Phase 10 | none |
+Key-based TLS stays. `has-thread-local` is still false, so compiled
+code does not emit `#[thread_local]`. `gxld` does link `.tdata`/`.tbss`
+and resolves `TPOFF32` / `TPOFF64` / `GOTTPOFF`, and it emits `PT_TLS`
+after the three `PT_LOAD`s. The loader maps only `PT_LOAD`s and skips
+that header. No program shipped today carries a TLS block.
 
-Key-based TLS (`thread_local_key`) is chosen over native `#[thread_local]`
-so the ELF loader need not learn `PT_TLS` yet; the cost is a pointer
-chase per access, which a compiler's hot paths tolerate (the OSDev
-guide calls this the easy, multi-thread-safe option).
+Every PAL and `galexy-rt` stub that contains `asm!` is
+`#[inline(never)] extern "C"`, so a code generator without inline
+assembly links an ordinary function.
 
-Build and ship the way Xous did: `cargo build` of `library/sysroot`
-from the fork for the Galexy target, copy the `.rlib`s into a rustup
-toolchain's `lib/rustlib/x86_64-unknown-galexy/lib`, and `rustup
-toolchain link galexy`. No `x.py` dance for users of the target.
+Ship the way Xous did, without a separate compiler checkout:
+`cargo xtask sysroot` builds `library/sysroot` for
+`x86_64-unknown-galexy`, copies the `.rlib`s and the sibling `.rmeta`
+files this nightly writes beside them into
+`lib/rustlib/x86_64-unknown-galexy/lib` of a toolchain directory, and
+`rustup toolchain link galexy`. The spec has to be resolved by name
+from that toolchain. Building against the JSON path stamps every rlib
+with `x86_64-unknown-galexy-<hash>`, which later compiles (they load
+the spec from the sysroot) will not accept. `bin/rustc` in the
+toolchain is a script that injects `-Zunstable-options` — a custom
+target still requires it — and clears `LD_LIBRARY_PATH`, which
+otherwise makes rustc load the host `librustc_driver` and report the
+pinned nightly as its sysroot. `bin/` and the driver libraries are
+hardlinks for the same reason: a symlink resolves back to the nightly.
+`--check` compiles a std program with `rustc` and with
+`cargo +galexy build --target x86_64-unknown-galexy` (no
+`-Zbuild-std`) and accepts the ELF the way `sched/loader.rs` does.
+The image base is still a link argument
+(`--image-base=USER_IMAGE_BASE --no-pie`), the same line each
+userspace `build.rs` already passes.
 
-Exit: `bin/test-std` — threads with a `Mutex<Vec<_>>`, `std::fs` writing
-and re-reading a galfs file, `Command::new("echo").output()`,
-`Instant::now()` monotonic. Plus one real crate ported with zero
-patches (`toml` or `regex` parsing a file from the ramdisk) to prove the
-target is honest.
+Exit (met): `bin/test-thread`, `bin/test-futex`, and `bin/test-std` —
+threads with a `Mutex<Vec<_>>`, `std::fs` writing and re-reading a
+galfs file, `Command::new("echo").output()`, `Instant::now()`
+monotonic, and `toml` 1.x parsing a ramdisk file with zero patches.
+`stdtest` prints `stdtest: passed (75 checks)`.
 
 ### Stage 4 — Capacity for a compiler process (Milestone 71)
 

@@ -14,6 +14,7 @@ pub(crate) const ET_EXEC: u16 = 2;
 pub(crate) const EM_X86_64: u16 = 0x3E;
 
 pub(crate) const PT_LOAD: u32 = 1;
+pub(crate) const PT_TLS: u32 = 7;
 pub(crate) const PF_X: u32 = 1;
 pub(crate) const PF_W: u32 = 2;
 pub(crate) const PF_R: u32 = 4;
@@ -55,6 +56,9 @@ pub(crate) const R_X86_64_PLT32: u32 = 4;
 pub(crate) const R_X86_64_GOTPCREL: u32 = 9;
 pub(crate) const R_X86_64_32: u32 = 10;
 pub(crate) const R_X86_64_32S: u32 = 11;
+pub(crate) const R_X86_64_TPOFF64: u32 = 18;
+pub(crate) const R_X86_64_GOTTPOFF: u32 = 22;
+pub(crate) const R_X86_64_TPOFF32: u32 = 23;
 pub(crate) const R_X86_64_PC64: u32 = 24;
 pub(crate) const R_X86_64_GOTPC32: u32 = 26;
 pub(crate) const R_X86_64_SIZE32: u32 = 32;

@@ -1,0 +1,20 @@
+[package]
+name = "threadtest"
+version = "0.1.0"
+edition = "2021"
+description = "Ring-3 no_std probes for the Milestone 70 thread and futex syscalls; driven by the test-thread and test-futex kernels."
+
+[[bin]]
+name = "thread-test"
+path = "src/bin/thread-test.rs"
+
+[[bin]]
+name = "futex-test"
+path = "src/bin/futex-test.rs"
+
+[dependencies]
+galexy-rt = { path = "../galexy-rt" }
+galexy-abi = { path = "../../galexy-abi" }
+
+[build-dependencies]
+galexy-abi = { path = "../../galexy-abi" }

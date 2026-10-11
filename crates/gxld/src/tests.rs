@@ -104,6 +104,24 @@ impl Obj {
         });
         self
     }
+    fn sym_typed(
+        mut self,
+        name: &'static str,
+        bind: u8,
+        stype: u8,
+        sec: &'static str,
+        value: u64,
+    ) -> Self {
+        self.syms.push(Sym {
+            name,
+            bind,
+            stype,
+            sec,
+            value,
+            size: 0,
+        });
+        self
+    }
 
     fn build(&self) -> Vec<u8> {
         // Section indices: 0 null, 1..=n user, then symtab, strtab, shstrtab,
@@ -590,19 +608,147 @@ fn absolute_32bit_relocation_overflows_above_4g() {
     ));
 }
 
-#[test]
-fn unsupported_constructs_are_errors_not_panics() {
-    let tls = Obj::new()
-        .text(&[0xc3])
+/// `.text`: `mov eax, fs:[disp32]` (TPOFF32 at 4) twice, then
+/// `mov rax, [rip+GOT]` (GOTTPOFF at 19, addend -4), then an 8-byte slot
+/// for a TPOFF64, then `ret`. `.tdata` is 8 initialized bytes, `.tbss` 16
+/// zero bytes, so the block is 24 bytes and TP = block start + 24.
+fn tls_obj() -> Vec<u8> {
+    let text = [
+        0x64, 0x8b, 0x04, 0x25, 0, 0, 0, 0, // mov eax, fs:[tvar]
+        0x64, 0x8b, 0x04, 0x25, 0, 0, 0, 0, // mov eax, fs:[tzero]
+        0x48, 0x8b, 0x05, 0, 0, 0, 0, // mov rax, [rip+GOT(tvar)]
+        0, 0, 0, 0, 0, 0, 0, 0, // .quad tvar@TPOFF
+        0xc3,
+    ];
+    Obj::new()
+        .text(&text)
+        .section(
+            ".tdata",
+            SHT_PROGBITS,
+            SHF_ALLOC | SHF_WRITE | SHF_TLS,
+            &[1, 2, 3, 4, 5, 6, 7, 8],
+        )
         .section(
             ".tbss",
             SHT_NOBITS,
             SHF_ALLOC | SHF_WRITE | SHF_TLS,
+            &[0; 16],
+        )
+        .section(
+            ".data",
+            SHT_PROGBITS,
+            SHF_ALLOC | SHF_WRITE | SHF_GNU_RETAIN,
+            &[0xaa, 0xbb, 0xcc, 0xdd],
+        )
+        .reloc(".text", 4, R_X86_64_TPOFF32, "tvar", 0)
+        .reloc(".text", 12, R_X86_64_TPOFF32, "tzero", 0)
+        .reloc(".text", 19, R_X86_64_GOTTPOFF, "tvar", -4)
+        .reloc(".text", 23, R_X86_64_TPOFF64, "tzero", 4)
+        .sym("_start", STB_GLOBAL, ".text", 0)
+        .sym_typed("tvar", STB_GLOBAL, STT_TLS, ".tdata", 0)
+        .sym_typed("tzero", STB_GLOBAL, STT_TLS, ".tbss", 8)
+        .build()
+}
+
+#[test]
+fn tls_block_gets_pt_tls_and_tp_offsets() {
+    let files = [("tls.o", tls_obj())];
+    let img = link(&inputs(&files), &Options::default()).unwrap();
+    crate::validate(&img, BASE).unwrap();
+
+    // Three PT_LOADs then one PT_TLS.
+    let ph = phdrs(&img);
+    assert_eq!(ph.len(), 4);
+    let types: Vec<u32> = (0..4).map(|i| read_u32(&img, 64 + i * 56)).collect();
+    assert_eq!(types, [PT_LOAD, PT_LOAD, PT_LOAD, PT_TLS]);
+    let rw = ph[2];
+    let tls = ph[3];
+    assert_eq!(tls.0, PF_R);
+    // `.data` (4 bytes) then the block aligned to 8.
+    let tls_vaddr = rw.2 + 8;
+    assert_eq!(tls.2, tls_vaddr);
+    assert_eq!(tls.1, tls_vaddr - BASE);
+    assert_eq!(tls.3, 8);
+    assert_eq!(tls.4, 24);
+    assert_eq!(read_u64(&img, 64 + 3 * 56 + 48), 8);
+    // The template lives in the RW segment's file-backed part.
+    assert_eq!(rw.3, 16);
+    assert_eq!(rw.4, 32);
+    let tdata_off = (tls_vaddr - BASE) as usize;
+    assert_eq!(&img[tdata_off..tdata_off + 8], &[1, 2, 3, 4, 5, 6, 7, 8]);
+
+    // TP = block start + align_up(24, 8) = start + 24.
+    let text_off = (ph[1].2 - BASE) as usize;
+    let tpoff = |at: usize| read_u32(&img, text_off + at) as i32;
+    assert_eq!(tpoff(4), -24, "tvar is the first byte of the block");
+    assert_eq!(tpoff(12), -8, "tzero is 8 bytes into tbss");
+    // TPOFF64 with addend 4.
+    assert_eq!(read_u64(&img, text_off + 23) as i64, -4);
+    // GOTTPOFF: the slot holds the TP offset.
+    let p = ph[1].2 + 19;
+    let disp = read_u32(&img, text_off + 19) as i32 as i64;
+    let slot = (p as i64 + 4 + disp) as u64;
+    assert!(slot >= BASE && slot < ph[1].2, "GOT slot in the R segment");
+    assert_eq!(read_u64(&img, (slot - BASE) as usize) as i64, -24);
+}
+
+#[test]
+fn tls_relocations_need_a_tls_symbol_and_block() {
+    let non_tls = Obj::new()
+        .text(&[0x64, 0x8b, 0x04, 0x25, 0, 0, 0, 0, 0xc3])
+        .section(".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, &[0; 8])
+        .reloc(".text", 4, R_X86_64_TPOFF32, "plain", 0)
+        .sym("_start", STB_GLOBAL, ".text", 0)
+        .sym("plain", STB_GLOBAL, ".data", 0)
+        .build();
+    let files = [("a.o", non_tls)];
+    assert!(matches!(
+        link(&inputs(&files), &Options::default()),
+        Err(Error::Input { .. })
+    ));
+
+    let tls_sym_outside = Obj::new()
+        .text(&[0xc3])
+        .section(".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, &[0; 8])
+        .sym("_start", STB_GLOBAL, ".text", 0)
+        .sym_typed("t", STB_GLOBAL, STT_TLS, ".data", 0)
+        .build();
+    let files = [("a.o", tls_sym_outside)];
+    assert!(matches!(
+        link(&inputs(&files), &Options::default()),
+        Err(Error::Input { .. })
+    ));
+
+    let tls_common = Obj::new()
+        .text(&[0xc3])
+        .sym("_start", STB_GLOBAL, ".text", 0)
+        .sym_typed("t", STB_GLOBAL, STT_TLS, "*COM*", 8)
+        .build();
+    let files = [("a.o", tls_common)];
+    assert!(matches!(
+        link(&inputs(&files), &Options::default()),
+        Err(Error::Unsupported { .. })
+    ));
+
+    // Without TLS sections there is no PT_TLS and three PT_LOADs.
+    let files = [("hello.o", hello_obj())];
+    let img = link(&inputs(&files), &Options::default()).unwrap();
+    assert_eq!(phdrs(&img).len(), 3);
+}
+
+#[test]
+fn unsupported_constructs_are_errors_not_panics() {
+    let ctors = Obj::new()
+        .text(&[0xc3])
+        .section(
+            ".init_array",
+            SHT_INIT_ARRAY,
+            SHF_ALLOC | SHF_WRITE,
             &[0; 8],
         )
         .sym("_start", STB_GLOBAL, ".text", 0)
         .build();
-    let files = [("a.o", tls)];
+    let files = [("a.o", ctors)];
     assert!(matches!(
         link(&inputs(&files), &Options::default()),
         Err(Error::Unsupported { .. })

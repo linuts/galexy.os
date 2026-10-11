@@ -279,9 +279,9 @@ crates/
 - **Phase 10** — network (virtio-net, small stack, sockets as Caps),
   after `v1.0`
 - **Phase 11** — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
-  static linker (LINKER.md, ✅ Milestone 69), `std` PAL, upstream
-  `rustc` with the Cranelift backend compiling and linking on-OS —
-  RUSTC.md
+  static linker (LINKER.md, ✅ Milestone 69), `std` PAL (✅ Milestone
+  70), upstream `rustc` with the Cranelift backend compiling and
+  linking on-OS — RUSTC.md
 
 Host-compile the gxr hello (not rustc) and link it with `gxld`:
 
@@ -303,8 +303,18 @@ RUSTFLAGS="-Clinker=target/release/gxld -Clinker-flavor=ld" \
   -Zjson-target-spec
 ```
 
-`stdmin` is the `std` program (`HashMap`, `format!`); its build uses
-`-Zbuild-std=std,panic_abort` and `scripts/galexy-std-sysroot.py`.
+`stdmin` and `stdtest` are `std` programs. The runner builds them with
+`-Zbuild-std=std,panic_abort` against `scripts/galexy-std-sysroot.py`.
+To use the target without `-Zbuild-std`:
+
+```sh
+cargo xtask sysroot          # toolchain dir + `rustup toolchain link galexy`
+cargo +galexy build --target x86_64-unknown-galexy
+```
+
+Pass `--image-base=0xc8000000000 --no-pie` (see `docs/RUSTC.md`).
+`cargo xtask sysroot --check` compiles a std hello both ways and
+checks the ELF the way the loader does.
 Details: [`docs/COMPILER.md`](docs/COMPILER.md), [`docs/LINKER.md`](docs/LINKER.md), [`docs/RUSTC.md`](docs/RUSTC.md).
 
 Details: [`docs/ROADMAP.md`](docs/ROADMAP.md).

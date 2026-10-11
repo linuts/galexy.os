@@ -27,6 +27,11 @@ pub(crate) enum Class {
     Data,
     /// `RW` segment, zero-filled.
     Bss,
+    /// TLS initialization image (`.tdata`), file-backed in the `RW`
+    /// segment and described by `PT_TLS`.
+    Tdata,
+    /// Zero-filled tail of the TLS block (`.tbss`).
+    Tbss,
     /// Not in the image (debug, notes, groups, COMDAT losers, …).
     Discard,
 }
@@ -311,6 +316,18 @@ pub(crate) fn parse_object(name: &str, bytes: &[u8]) -> Result<Object> {
                     s.name
                 )));
             }
+            let in_tls = matches!(out_sections[idx].class, Class::Tdata | Class::Tbss);
+            if s.stype == STT_TLS && !in_tls {
+                return Err(input(format!(
+                    "TLS symbol `{}` is not in a TLS section",
+                    s.name
+                )));
+            }
+        } else if s.stype == STT_TLS && s.shndx == Shndx::Common {
+            return Err(Error::Unsupported {
+                what: format!("TLS COMMON symbol `{}`", s.name),
+                input: name.to_string(),
+            });
         }
     }
 
@@ -328,10 +345,16 @@ fn classify(input: &str, name: &str, sh_type: u32, flags: u64) -> Result<Class> 
         return Ok(Class::Discard);
     }
     if flags & SHF_TLS != 0 {
-        return Err(Error::Unsupported {
-            what: format!("TLS section {name} (Milestone 70)"),
-            input: input.to_string(),
-        });
+        return match sh_type {
+            SHT_PROGBITS => Ok(Class::Tdata),
+            SHT_NOBITS => Ok(Class::Tbss),
+            _ => Err(Error::Input {
+                input: input.to_string(),
+                detail: format!(
+                    "section {name}: TLS section of type {sh_type} is neither PROGBITS nor NOBITS"
+                ),
+            }),
+        };
     }
     if matches!(sh_type, SHT_INIT_ARRAY | SHT_FINI_ARRAY | SHT_PREINIT_ARRAY) {
         return Err(Error::Unsupported {

@@ -1808,6 +1808,124 @@ fn hellogxc_test_passes() {
     );
 }
 
+/// Milestone 70: `ThreadSpawn` / `ThreadExit` from ring 3. Four joined
+/// workers, slot reuse, the `BadValue` paths, and a sibling left spinning
+/// when the leader exits; the kernel reaps every thread and frame.
+#[test]
+fn thread_test_passes() {
+    let (code, serial) = boot(&image("test-thread"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-thread should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-thread] passed"),
+        "test-thread success marker missing; serial:\n{serial}"
+    );
+    for line in [
+        "thread-test: joined 4 counter=4000",
+        "thread-test: errors ok",
+        "thread-test: passed",
+    ] {
+        assert!(
+            serial.contains(line),
+            "thread-test line {line:?} missing; serial:\n{serial}"
+        );
+    }
+    for k in 0..4 {
+        let line = format!("thread-test: worker {k} done");
+        assert!(
+            serial.contains(&line),
+            "{line:?} missing; serial:\n{serial}"
+        );
+    }
+    assert!(
+        !serial.contains("thread-test: FAIL"),
+        "thread-test reported a failure; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[pf] ring-3 task fault"),
+        "thread-test faulted; serial:\n{serial}"
+    );
+}
+
+/// Milestone 70: `Futex` wait/wake. A 200-turn ping-pong, the edge cases,
+/// and a wake-all of three parked threads.
+#[test]
+fn futex_test_passes() {
+    let (code, serial) = boot(&image("test-futex"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-futex should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-futex] passed"),
+        "test-futex success marker missing; serial:\n{serial}"
+    );
+    for line in [
+        "futex-test: rounds=200",
+        "futex-test: edges ok",
+        "futex-test: woke 3",
+        "futex-test: passed",
+    ] {
+        assert!(
+            serial.contains(line),
+            "futex-test line {line:?} missing; serial:\n{serial}"
+        );
+    }
+    assert!(
+        !serial.contains("futex-test: FAIL"),
+        "futex-test reported a failure; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[pf] ring-3 task fault"),
+        "futex-test faulted; serial:\n{serial}"
+    );
+}
+
+/// Milestone 70: a real `std` program (threads, sync, TLS, fs, process,
+/// time, env, HashMap, the unpatched `toml` crate) on the Galexy PAL.
+#[test]
+fn std_test_passes() {
+    let (code, serial) = boot(&image("test-std"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-std should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-std] passed"),
+        "test-std success marker missing; serial:\n{serial}"
+    );
+    for line in [
+        "stdtest: start",
+        "stdtest: partial line",
+        "stdtest: stderr ok",
+        "stdtest: passed (",
+        // `Command::new("hello").status()` inherits the console.
+        HELLO_TEXT,
+    ] {
+        assert!(
+            serial.contains(line),
+            "stdtest line {line:?} missing; serial:\n{serial}"
+        );
+    }
+    assert!(
+        !serial.contains("stdtest: FAIL"),
+        "stdtest reported a failure; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[pf] ring-3 task fault"),
+        "stdtest faulted; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("panicked at"),
+        "stdtest panicked; serial:\n{serial}"
+    );
+}
+
 #[test]
 fn runshell_test_passes() {
     let (code, serial) = boot(&image("test-runshell"));

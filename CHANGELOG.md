@@ -8,6 +8,17 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#93](https://github.com/linuts/galexy.os/pull/93) — Milestone 70 —
+  `std` for `x86_64-unknown-galexy`. `std-pal/` is the
+  platform layer; `scripts/galexy-std-sysroot.py` installs it into the
+  pinned nightly's `library/`. Kernel: `ThreadSpawn` / `ThreadExit`
+  (one address space, join via process-Cap `Wait`), `Futex`, positional
+  galfs `Write`. `gxld` links `.tdata`/`.tbss` with `PT_TLS` and
+  `TPOFF32` / `TPOFF64` / `GOTTPOFF`. `cargo xtask sysroot` builds
+  `library/sysroot` and `rustup toolchain link galexy`. `test-thread`,
+  `test-futex`, and `test-std` (75 checks, unpatched `toml`) boot.
+  `ThreadSpawn`, `ThreadExit`, `Futex`, and `SysError::TimedOut` are
+  stable.
 - [#92](https://github.com/linuts/galexy.os/pull/92) — Milestone 68 —
   `targets/x86_64-unknown-galexy.json` replaces
   `x86_64-unknown-none` for userspace. `hello`, `init`, `shell` and

@@ -129,16 +129,22 @@ fn main() -> i32 {
             continue;
         }
         let n = (got.value as usize).min(buf.len());
-        // One key closes help, including the rest of this read (an arrow
-        // is several bytes). None of them are inserted.
+        // One key closes help. An arrow is several bytes, so the whole
+        // sequence is that one key. A later key batched into the same
+        // read (the queue fills while this task is off-CPU) still runs.
+        let mut bytes = &buf[..n];
         if ed.help {
             ed.help = false;
             parse = Parse::Normal;
+            let skip = key_len(bytes);
+            bytes = &bytes[skip..];
             draw(doc, path, &mut ed);
-            continue;
+            if bytes.is_empty() {
+                continue;
+            }
         }
         let mut redraw = false;
-        for &byte in &buf[..n] {
+        for &byte in bytes {
             match feed(&mut parse, doc, cut, path, &mut ed, byte) {
                 Step::Stay => {}
                 Step::Redraw => redraw = true,
@@ -230,6 +236,33 @@ fn push(doc: &mut [u8], len: &mut usize, bytes: &[u8]) -> bool {
     doc[*len..*len + bytes.len()].copy_from_slice(bytes);
     *len += bytes.len();
     true
+}
+
+/// Length of the first key in `buf`.
+///
+/// A CSI sequence (`ESC [` + parameters + a final byte) is one key.
+/// `ESC` plus a non-`[` byte is one key. Everything else is one byte.
+/// A truncated escape is consumed whole so the next read does not
+/// resume it mid-sequence.
+fn key_len(buf: &[u8]) -> usize {
+    if buf.first() != Some(&0x1b) {
+        return 1;
+    }
+    if buf.len() < 2 {
+        return 1;
+    }
+    if buf[1] != b'[' {
+        return 2;
+    }
+    let mut i = 2;
+    while i < buf.len() {
+        let byte = buf[i];
+        i += 1;
+        if !(byte.is_ascii_digit() || byte == b';') {
+            break;
+        }
+    }
+    i
 }
 
 fn feed(

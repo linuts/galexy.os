@@ -186,6 +186,31 @@ pub fn spawn_program(name: &str, bytes: &[u8]) -> Result<ProgramRegion, galexy_a
     .0)
 }
 
+/// Like [`spawn_program`], with session grants (console, keyboard, loader,
+/// queries) and a startup argument: what a logged-in seat gives a program
+/// it launches. Test kernels use it for programs that `Spawn` children or
+/// read the `files` snapshot (`std::process`, `std::fs::read_dir`).
+pub fn spawn_program_session(
+    name: &str,
+    bytes: &[u8],
+    arg: &[u8],
+) -> Result<ProgramRegion, galexy_abi::SysError> {
+    Ok(spawn_program_placed(
+        name,
+        bytes,
+        None,
+        false,
+        Grants::session(),
+        arg,
+        0,
+        crate::sched::galfs::admin_cred(),
+        0,
+        false,
+        false,
+    )?
+    .0)
+}
+
 /// Like [`spawn_program`], with an explicit grant set, a startup argument,
 /// a console index, and galfs credentials inherited from the parent.
 ///

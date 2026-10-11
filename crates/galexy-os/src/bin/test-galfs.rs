@@ -78,7 +78,9 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let _secret = galfs::create_file_under(desktop, "secret").expect("secret");
 
     // Guest seat: no root, no tokens — must not open dan's tree.
-    let (region, _) = sched::spawn_user_with("denied", galfs::unauth_cred(), |gr| {
+    // Pinned to the BSP: an AP owner reaps and wipes the scratch page
+    // before this loop can read the report.
+    let (region, _) = sched::spawn_user_with_on("denied", galfs::unauth_cred(), 0, |gr| {
         unsafe {
             core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
         }
@@ -137,7 +139,9 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     // Empty cards until the kernel installs list+read on dan's Desktop.
     // (User-space granter blobs race across CPUs under oneshot idle; the
     // grant/revoke syscalls stay covered by host unit paths + shell e2e.)
-    let (holder_region, _) = sched::spawn_user_with("holder", galfs::unauth_cred(), |gr| {
+    // Pinned to the BSP so the AP idle loop cannot wipe `done` before
+    // the peek below (`holder never finished` under a loaded host).
+    let (holder_region, _) = sched::spawn_user_with_on("holder", galfs::unauth_cred(), 0, |gr| {
         unsafe {
             core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
         }

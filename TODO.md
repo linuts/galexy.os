@@ -1259,8 +1259,8 @@ Fill semantic gaps reviewers expect from a small FS.
       size, owner, held rights); shell `stat` util
 - [x] **Directory read**: keep **files snapshot** only (`FILES` cap /
       `ls`); `open` on a directory stays `Unsupported` (documented)
-- [x] **Write cursor**: **append-only** `write` is permanent for review;
-      `seek` moves the read cursor only (documented)
+- [x] **Write cursor**: galfs `write` is positional at the cursor
+      (Milestone 70); `seek` moves the cursor `read` and `write` share
 - [x] **Empty-dir rules / non-empty `userdel`**: refuse non-empty delete
       (unchanged); no recursive `rm -r` — document in `GALFS.md`
 - [x] **Hard links / symlinks**: non-goal for review (documented in
@@ -2330,8 +2330,10 @@ with zero kernel dependencies; de-risks Milestone 73.
       `CODE_4_GOTPCRELX` with a synthesized GOT in the R segment,
       `GOTPC32`, `SIZE32` / `SIZE64`; every 32-bit field range-checked;
       undefined weak PC-relative resolves to the location itself;
-      `TPOFF32` / TLS sections / `REL` / `.init_array` are
-      `Unsupported` errors (TLS → Milestone 70)
+      `REL` / `.init_array` are `Unsupported` errors.
+      `TPOFF32` / `TPOFF64` / `GOTTPOFF` and `.tdata`/`.tbss` link
+      (Milestone 70): one TLS block in the RW segment, `PT_TLS` after
+      the three `PT_LOAD`s. The loader still maps only `PT_LOAD`s
 - [x] Output: `ET_EXEC`, entry `_start`, `gxld::validate` mirrors the
       loader's rules (W^X, page-aligned disjoint segments, entry inside
       the window); layout constants come from `galexy-abi`, never retyped
@@ -2351,7 +2353,7 @@ with zero kernel dependencies; de-risks Milestone 73.
       `rust-lld` image and assert the same output and no ring-3 fault
 - [x] Hostile input: host tests over hand-built relocatables and
       archives (truncated at every header boundary, garbage, relocation
-      past its section, unknown relocation type, TLS, bad archive member)
+      past its section, unknown relocation type, bad archive member)
       return `Err`, never panic
 - [x] Non-goals written in `LINKER.md`: dynamic linking, `PT_INTERP`,
       `PT_DYNAMIC`, PLT, linker scripts, LTO, relaxation, string
@@ -2360,37 +2362,46 @@ with zero kernel dependencies; de-risks Milestone 73.
       large files → Milestone 71); the crate is `no_std + alloc` so it
       is a thin `main` later
 
-## Milestone 70 — `std` PAL in a `galexy-rust` fork
+## Milestone 70 — `std` PAL ✅
 
-- [ ] Fork `rust-lang/rust` as `galexy-rust`, pinned to one nightly;
-      `library/std/build.rs` lists `galexy`; `sys/pal/mod.rs` selects
-      `pal/galexy`
-- [ ] PAL modules over `galexy-abi`: `alloc` (`Map`), `stdio` (console /
-      spawn-handed Caps), `time` (`Clock`), `args` (argv v2), `os` (env
-      empty, cwd in-process, `SysError` → `io::ErrorKind`), `fs`
-      (existing file syscalls; `read_dir` from the files snapshot),
-      `process` (`spawn_with` + `pipe` + `Wait`), `random` (`rdrand`)
-- [ ] Kernel: `Syscall::ThreadSpawn` / `ThreadExit` — new slot, same
+The "fork" is in-tree. `std-pal/` is the platform layer;
+`scripts/galexy-std-sysroot.py` installs it into a copy of the pinned
+nightly's `library/` and teaches the `cfg_select` dispatchers about
+`target_os = "galexy"`. `cargo xtask sysroot` builds that tree and
+`rustup toolchain link`s it. See `docs/RUSTC.md` Stage 3.
+
+- [x] `std-pal/` + overlay script (the in-tree galexy-rust): `build.rs`
+      lists `galexy`; `sys/pal/mod.rs` selects `pal/galexy`
+- [x] PAL modules over `galexy-abi`: `alloc` (dlmalloc over `Map`),
+      `stdio`, `time` (`Clock`), `args`, `os` (env empty, cwd
+      in-process, `SysError` → `io::Error`), `fs` (file syscalls;
+      `read_dir` from the files snapshot), `process` (`spawn_with` +
+      `pipe` + `Wait`), `random` (`rdrand`)
+- [x] Kernel: `Syscall::ThreadSpawn` / `ThreadExit` — new slot, same
       CR3, fresh user + kernel stack, join via process Cap `Wait`;
       design in `PROCESS.md` beside `Channel`; `bin/test-thread`
-- [ ] Kernel: `Syscall::Futex` — `wait(addr, expected)` / `wake(addr,
+- [x] Kernel: `Syscall::Futex` — `wait(addr, expected)` / `wake(addr,
       n)` on the Milestone 57 park / wake state; `bin/test-futex`
-- [ ] PAL `thread` + `thread_local_key` with the per-thread pointer in
+- [x] PAL `thread` + `thread_local_key` with the per-thread pointer in
       FS base via user-mode `wrfsbase` (kernel never touches FS in ring
       3); `sync` from `std`'s generic futex implementations
-- [ ] Positional `Write` (or documented seek-then-append) so
-      `File::write_at` / `seek` + `write` behave
-- [ ] Sysroot shipped the Xous way: `cargo build` of `library/sysroot`
-      → `.rlib`s copied into `lib/rustlib/x86_64-unknown-galexy/lib`;
-      `rustup toolchain link galexy`; `xtask sysroot` does it
-- [ ] `bin/test-std`: threads + `Mutex<Vec<_>>`, `std::fs` round-trip on
-      galfs, `Command::new("echo").output()`, monotonic `Instant`
-- [ ] One real crate ported with zero patches (`toml` or `regex` over a
-      ramdisk file)
-- [ ] Milestone 67 ABI freeze extended to `ThreadSpawn` / `Futex`
-- [ ] Every `galexy-rt` / PAL syscall stub is `#[inline(never)]
+- [x] Positional galfs `Write`: bytes land at the cursor, `seek` moves
+      that cursor for `read` and `write`
+- [x] Sysroot shipped the Xous way: `cargo xtask sysroot` builds
+      `library/sysroot`, copies `.rlib`s and sibling `.rmeta`s into
+      `lib/rustlib/x86_64-unknown-galexy/lib`, and `rustup toolchain
+      link galexy`. `--check` compiles a std program with `rustc` and
+      with `cargo`
+- [x] `bin/test-std`: threads + `Mutex<Vec<_>>`, `std::fs` round-trip,
+      `Command::new("echo").output()`, monotonic `Instant`
+- [x] `toml` 1.x parsed from a ramdisk file with zero patches
+- [x] Milestone 67 ABI freeze extended to `ThreadSpawn` / `ThreadExit`
+      / `Futex` and `SysError::TimedOut` (`docs/ABI.md`)
+- [x] Every `galexy-rt` / PAL syscall stub is `#[inline(never)]
       extern "C"` (cg_clif on-OS must never meet `asm!`)
-- [ ] `gxld` grows `TPOFF32` (TLS) the same milestone threads arrive
+- [x] `gxld` grows `TPOFF32` / `TPOFF64` / `GOTTPOFF` and lays
+      `.tdata`/`.tbss` out as one block with `PT_TLS`. The loader still
+      skips non-`PT_LOAD` headers; `has-thread-local` stays false
 
 ## Milestone 71 — Capacity for a compiler process
 
@@ -2437,7 +2448,8 @@ with zero kernel dependencies; de-risks Milestone 73.
 ## Milestone 73 — Link on Galexy, run the result (Phase 11 gate)
 
 - [ ] `gxld` (Milestone 69 / 71) links cg_clif output: rlib archives
-      with the `lib.rmeta` member skipped, `TPOFF32` for TLS, `.eh_frame`
+      with the `lib.rmeta` member skipped, `TPOFF32` for TLS (landed in
+      Milestone 70), `.eh_frame`
       kept once `unwinding` lands; host differential test against
       `rust-lld` on the galexy-target sysroot + `hello.rs`
 - [ ] Fallback only if `gxld` cannot cope: port `wild` (`fork` and

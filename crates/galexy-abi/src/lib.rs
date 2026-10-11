@@ -404,6 +404,9 @@ pub enum Syscall {
     ///
     /// Args: `RDI = cap bits (u64)`, `RSI = user address`, `RDX = byte count`.
     /// Returns: `SyscallResult` (rax). Requires CapRights::WRITE.
+    /// On a galfs file the bytes land at the cursor: overwrite in place,
+    /// append past the end, and advance the cursor by the count (Milestone
+    /// 70). A pipe is unchanged.
     Write,
     /// `cap_info(cap)` — TEMPLATE/test syscall: return the handle's own
     /// bits back (proves the dispatch machinery; removed at ABI 1.0).
@@ -523,7 +526,9 @@ pub enum Syscall {
     /// are `BadCap`. A missing task or a full target table is `NotFound`
     /// / `NoResource`.
     Give,
-    /// `seek(cap, offset, whence)` — set the read cursor on an open file.
+    /// `seek(cap, offset, whence)` — set the file cursor on an open file.
+    ///
+    /// galfs `read` and `write` share this cursor (Milestone 70).
     ///
     /// Args: `RDI = cap bits`, `RSI = signed offset as u64 bits`,
     /// `RDX = whence` ([`SEEK_SET`], [`SEEK_CUR`], or [`SEEK_END`]).
@@ -680,7 +685,66 @@ pub enum Syscall {
     ///
     /// **Stable** (Milestone 67).
     Recv,
+    /// `thread_spawn(entry, arg, stack_pages)` — start a thread in the
+    /// calling task's address space.
+    ///
+    /// Args: `RDI = entry address` (ring-3 code in the caller's image),
+    /// `RSI = argument` (arrives in the new thread's `RDI`), `RDX = stack
+    /// pages` (`0` = [`THREAD_STACK_PAGES_DEFAULT`]; at most
+    /// [`THREAD_STACK_PAGES_MAX`]). No Cap. Returns: `SyscallResult`
+    /// (rax = process Cap bits with [`CapRights::PROC_PARENT`], installed
+    /// on the process — the leader's table, shared by every thread).
+    /// `Wait` on that Cap is `join`; `rax` is the thread's exit code.
+    ///
+    /// The new thread shares the CR3, file table, process-Cap table,
+    /// heap budget, grants, and galfs credentials with the caller. It gets
+    /// its own kernel stack, its own user stack (fresh pages in the
+    /// shared tree, a guard gap below), and `FS` base `0`. The caller
+    /// parks until the thread is registered (the kernel allocates on the
+    /// main loop, not inside the syscall). More than
+    /// [`THREADS_PER_PROCESS`] live records in one address space, or a
+    /// full kernel thread table, is `NoResource`; an entry outside the
+    /// image window is `BadValue`.
+    ///
+    /// **Stable** (Milestone 70). See `docs/PROCESS.md`.
+    ThreadSpawn,
+    /// `thread_exit(code)` — terminate the CALLING thread only.
+    ///
+    /// Args: `RDI = exit code (u64)`. No return. Siblings keep running;
+    /// `Wait` on the thread's Cap returns `code`. From the process leader
+    /// (the slot the loader created) this is [`Syscall::Exit`]: the whole
+    /// process ends.
+    ///
+    /// **Stable** (Milestone 70).
+    ThreadExit,
+    /// `futex(op, addr, value, timeout_ms)` — wait on / wake a 32-bit word.
+    ///
+    /// Args: `RDI = op` ([`FUTEX_WAIT`] / [`FUTEX_WAKE`]), `RSI = user
+    /// address` of a 4-byte-aligned `u32` in the caller's tree,
+    /// `RDX = expected value` (wait) or `count` (wake), `R8 = timeout in
+    /// milliseconds` (wait only; `0` = none; clamped to [`SLEEP_MS_MAX`]).
+    /// No Cap. Returns: `SyscallResult`. Wait: `rax = 0` when woken, or
+    /// when `*addr != expected` at call time; [`SysError::TimedOut`] when
+    /// the timeout fired first; [`SysError::Interrupted`] when killed.
+    /// Wake: `rax = threads woken` (at most `count`). Waiters are keyed by
+    /// `(address space, address)`, so a word is private to one process.
+    ///
+    /// **Stable** (Milestone 70).
+    Futex,
 }
+
+/// `futex` op (`RDI`): park while `*addr == expected`.
+pub const FUTEX_WAIT: u64 = 0;
+/// `futex` op (`RDI`): wake up to `count` waiters on `addr`.
+pub const FUTEX_WAKE: u64 = 1;
+
+/// `thread_spawn` stack size when `RDX` is `0` (64 KiB).
+pub const THREAD_STACK_PAGES_DEFAULT: u64 = 16;
+/// Largest `thread_spawn` stack (256 KiB). Milestone 71 lifts this.
+pub const THREAD_STACK_PAGES_MAX: u64 = 64;
+/// Running-or-parked records one address space may hold, leader included.
+/// Exited threads awaiting a join do not count.
+pub const THREADS_PER_PROCESS: u64 = 16;
 
 /// Maximum bytes in a spawn program **name** (label). Matches the kernel
 /// name buffer; longer names are `BadValue`.
@@ -736,7 +800,7 @@ pub const WAIT_POLL: u64 = 1;
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (lifting the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 31] = [
+pub const SYSCALLS: [Syscall; 34] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -768,6 +832,9 @@ pub const SYSCALLS: [Syscall; 31] = [
     Syscall::Channel,
     Syscall::Send,
     Syscall::Recv,
+    Syscall::ThreadSpawn,
+    Syscall::ThreadExit,
+    Syscall::Futex,
 ];
 
 /// Maximum `sleep(ms)` argument (one minute). Longer waits loop in userspace.
@@ -800,7 +867,11 @@ pub const MAX_SYSCALL: u64 = SYSCALLS.len() as u64 - 1;
 /// RAX = payload or error code and RDX = ok flag (`1` success, `0`
 /// failure); single registers, no struct packing at this ABI level.
 /// `docs/ABI.md` is the stability table.
+///
+/// `repr(C)` so an `extern "C"` syscall stub (galexy-rt, the `std` PAL)
+/// can return it by value with one layout across codegen backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
 pub struct SyscallResult {
     /// `true` = success (`rdx` = payload); `false` = failure (`rdx` = code).
     pub ok: bool,
@@ -866,6 +937,10 @@ pub enum SysError {
     /// **Stable** (Milestone 43). Wrong passwords stay [`Self::AccessDenied`];
     /// an unknown actor stays [`Self::NotFound`]. See `docs/AUTH.md`.
     Locked = 9,
+    /// A [`Syscall::Futex`] wait reached its timeout before a wake.
+    ///
+    /// **Stable** (Milestone 70). Only the futex wait returns it.
+    TimedOut = 10,
 }
 
 impl SysError {
@@ -881,6 +956,7 @@ impl SysError {
             7 => SysError::NoResource,
             8 => SysError::Interrupted,
             9 => SysError::Locked,
+            10 => SysError::TimedOut,
             _ => SysError::Unsupported,
         }
     }

@@ -1,6 +1,6 @@
 //! Integration test kernel: galfs files.
 //!
-//! A ring-3 blob creates a file, writes bytes, reads them back, proves
+//! A ring-3 blob creates a file, writes bytes, seeks back, reads them, proves
 //! `banner.txt` cannot be created over the archive, and still reads the
 //! archive copy. It then fills the object table and checks the next
 //! create is `NoResource`.
@@ -189,6 +189,13 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     code.extend_from_slice(&[0x0F, 0x05]);
     store(&mut code, 2, 0x18);
     store(&mut code, 0, 0x20);
+
+    // galfs write advances the cursor (Milestone 70). Rewind, then read.
+    code.extend_from_slice(&[0x4C, 0x89, 0xE7]); // mov rdi, r12
+    code.extend_from_slice(&[0x48, 0x31, 0xF6]); // xor rsi, rsi
+    code.extend_from_slice(&[0x48, 0x31, 0xD2]); // xor rdx, rdx (SEEK_SET)
+    mov_eax(&mut code, Syscall::Seek as u32);
+    code.extend_from_slice(&[0x0F, 0x05]);
 
     // read back into data at 0x38
     code.extend_from_slice(&[0x4C, 0x89, 0xE7]); // mov rdi, r12

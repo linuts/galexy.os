@@ -1,0 +1,17 @@
+[package]
+name = "stdtest"
+version = "0.1.0"
+edition = "2021"
+description = "std conformance program for x86_64-unknown-galexy: threads, sync, TLS, fs, process, time, env, HashMap, and the unpatched toml crate; driven by the test-std kernel."
+
+[[bin]]
+name = "stdtest"
+path = "src/main.rs"
+
+[dependencies]
+# A real crates.io crate, ported with zero patches (Milestone 70 exit).
+toml = "1"
+serde = { version = "1", features = ["derive"] }
+
+[build-dependencies]
+galexy-abi = { path = "../../galexy-abi" }

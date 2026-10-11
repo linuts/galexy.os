@@ -56,14 +56,17 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     };
     sched::ramdisk::init(archive);
 
-    let (consumer_region, _) = sched::spawn_user_task("consumer", |gr| {
+    // Both on the BSP. Round-robin would pin the producer to the AP, and
+    // that CPU's idle loop reaps and zero-wipes the report before this
+    // peek (`producer never finished` under a loaded host).
+    let (consumer_region, _) = sched::spawn_user_task_on("consumer", 0, |gr| {
         unsafe {
             core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
         }
         build_consumer(gr.code.as_u64(), gr.scratch.as_u64())
     });
 
-    let (producer_region, _) = sched::spawn_user_task("producer", |gr| {
+    let (producer_region, _) = sched::spawn_user_task_on("producer", 0, |gr| {
         unsafe {
             core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
         }
@@ -72,7 +75,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     let prod: *const ProducerReport = mm::frame_virt(producer_region.scratch_phys).as_ptr();
     let cons: *const ConsumerReport = mm::frame_virt(consumer_region.scratch_phys).as_ptr();
-    // Spin-poll before reap — the other CPU may reap its own blob and wipe.
+    // Spin-poll before the BSP reap. Both tasks are pinned here, so this
+    // loop is the only reaper.
     x86_64::instructions::interrupts::enable();
     let mut elapsed = 0u64;
     let pref = loop {

@@ -353,6 +353,16 @@ pub(in crate::sched) struct Thread {
     pub(in crate::sched) heap_pages: u16,
     /// Second user pointer for a parked channel `recv` (cap-out buffer).
     pub(in crate::sched) io_extra: AtomicU64,
+    /// Milestone 70: `0` for a process leader (the slot the loader made).
+    /// A thread from [`galexy_abi::Syscall::ThreadSpawn`] stores its
+    /// leader's 1-based slot here; `files`, `procs`, `heap_pages`, and
+    /// the galfs credentials are read from that record (see
+    /// [`proc_index`]). State, context, stacks, and wait fields stay
+    /// per-slot.
+    pub(in crate::sched) leader_slot: u8,
+    /// Ring-3 `FS` base, saved on switch-out and restored on switch-in
+    /// (user TLS pointer; the kernel never reads it). Milestone 70.
+    pub(in crate::sched) fs_base: AtomicU64,
 }
 
 impl Thread {
@@ -360,6 +370,50 @@ impl Thread {
         let n = self.name_len as usize;
         core::str::from_utf8(&self.name_bytes[..n]).unwrap_or("")
     }
+}
+
+/// Index of the record that owns `slot`'s process-wide tables (open
+/// files, process Caps, heap budget, galfs credentials). A leader is its
+/// own record; a thread points at its leader. `None` for a bad slot.
+pub(in crate::sched) fn proc_index(threads: &[Thread], slot: usize) -> Option<usize> {
+    let thread = threads.get(slot.checked_sub(1)?)?;
+    let leader = thread.leader_slot as usize;
+    if leader == 0 {
+        Some(slot - 1)
+    } else if leader <= threads.len() {
+        Some(leader - 1)
+    } else {
+        None
+    }
+}
+
+/// [`proc_index`] for a syscall: the calling slot must be a RUNNING user
+/// task. Every per-process syscall starts here.
+pub(in crate::sched) fn running_proc_index(
+    threads: &[Thread],
+    slot: usize,
+) -> Result<usize, SysError> {
+    let thread = threads.get(slot.wrapping_sub(1)).ok_or(SysError::BadCap)?;
+    if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+        return Err(SysError::BadCap);
+    }
+    proc_index(threads, slot).ok_or(SysError::BadCap)
+}
+
+/// Reads the ring-3 `FS` base of the task running on this CPU.
+pub(in crate::sched) fn read_fs_base() -> u64 {
+    let value: u64;
+    // SAFETY: CR4.FSGSBASE is asserted at bring-up (`arch/cpu.rs`); the
+    // instruction only reads a register.
+    unsafe { core::arch::asm!("rdfsbase {}", out(reg) value, options(nomem, nostack)) };
+    value
+}
+
+/// Installs the ring-3 `FS` base for the task about to run on this CPU.
+pub(in crate::sched) fn write_fs_base(value: u64) {
+    // SAFETY: CR4.FSGSBASE is on; the kernel uses `GS` (per-CPU), never
+    // `FS`, so the write only affects the next ring-3 code.
+    unsafe { core::arch::asm!("wrfsbase {}", in(reg) value, options(nomem, nostack)) };
 }
 
 /// Copies `name` into a fixed buffer, stopping on a char boundary at 64.
@@ -654,6 +708,34 @@ pub fn reap() {
                 threads[i].state.store(STATE_EXITED, Ordering::Release);
                 continue;
             }
+            // Milestone 70: a thread's record owns only its stacks. The
+            // file / process tables and the tree belong to the leader.
+            let is_thread = threads[i].leader_slot != 0;
+            if !is_thread {
+                // A leader takes its threads with it: their join Caps in
+                // this table must not travel to init as orphans, and the
+                // thread slots reap without a waiter.
+                let my_cr3 = threads[i].cr3.load(Ordering::Acquire);
+                for pi in 0..MAX_PROC_CAPS {
+                    let Some(handle) = threads[i].procs[pi] else {
+                        continue;
+                    };
+                    let ci = handle.child_slot as usize;
+                    if ci == 0 || ci > threads.len() {
+                        continue;
+                    }
+                    if threads[ci - 1].leader_slot == child_slot
+                        && threads[ci - 1].cap_gen.load(Ordering::Acquire) == handle.gen
+                    {
+                        threads[i].procs[pi] = None;
+                    }
+                }
+                for t in threads.iter() {
+                    if t.leader_slot == child_slot && t.cr3.load(Ordering::Acquire) == my_cr3 {
+                        t.exit_waited.store(true, Ordering::Release);
+                    }
+                }
+            }
             // Canary check BEFORE the stack is freed: a deep overflow writes
             // the magic word last (stack grows downward, canary is at the
             // very bottom). User tasks: heap check applies to `kstack`
@@ -677,10 +759,13 @@ pub fn reap() {
             // init; reparent. Without init, children become kernel roots
             // and Caps die with this task (legacy test path).
             let dead_slot = (i + 1) as u8;
-            transfer_orphans_to_init(&mut threads, dead_slot, i);
+            if !is_thread {
+                transfer_orphans_to_init(&mut threads, dead_slot, i);
+            }
             // File/process caps die with the task. Pipe and channel ends
             // are closed so a peer is not stuck and the tables return to
-            // empty. Bump gen so foreign Caps fail.
+            // empty. Bump gen so foreign Caps fail. A thread's tables are
+            // empty by construction (it used the leader's).
             for slot in threads[i].files.iter_mut() {
                 if let Some(file) = slot.take() {
                     release_file(file);
@@ -690,6 +775,7 @@ pub fn reap() {
             threads[i].cap_gen.fetch_add(1, Ordering::AcqRel);
             threads[i].exit_waited.store(false, Ordering::Relaxed);
             threads[i].parent_slot = 0;
+            threads[i].leader_slot = 0;
             // SAFETY: the fx area was leaked at spawn; its slot is a
             // tombstone now — no code will dereference it again.
             unsafe { drop(Box::from_raw(threads[i].fx)) };
@@ -707,7 +793,24 @@ pub fn reap() {
             let name_len = threads[i].name_len as usize;
             name_raw[..name_len].copy_from_slice(&threads[i].name_bytes[..name_len]);
             let name = core::str::from_utf8(&name_raw[..name_len]).unwrap_or("");
-            if task_cr3 != 0 {
+            // Milestone 70: the tree is shared by every thread of the
+            // process. The LAST record to reap frees it — any other slot
+            // still naming this CR3 (running, waiting, or an unreaped
+            // zombie) means the walk must wait for that slot's reaper.
+            let tree_shared = task_cr3 != 0
+                && threads.iter().enumerate().any(|(j, t)| {
+                    j != i
+                        && t.cr3.load(Ordering::Acquire) == task_cr3
+                        && t.state.load(Ordering::Acquire) != STATE_FREED
+                });
+            if task_cr3 != 0 && tree_shared {
+                serial_println!(
+                    "[sched] thread '{}' reaped; tree cr3={:#x} stays with its siblings",
+                    name,
+                    task_cr3
+                );
+            }
+            if task_cr3 != 0 && !tree_shared {
                 // SAFETY: the address came from a real FreshL4 allocation.
                 let root = PhysFrame::from_start_address(PhysAddr::new(task_cr3))
                     .expect("reap: corrupt task CR3");
@@ -831,6 +934,8 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
             console_budget_used: 0,
             heap_pages: 0,
             io_extra: AtomicU64::new(0),
+            leader_slot: 0,
+            fs_base: AtomicU64::new(0),
         });
         // The record is RUNNING before the poke. An idle owner otherwise
         // stays in `hlt` until its tickless deadline (up to a second).
@@ -839,6 +944,138 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
         if !init.defer_run {
             poke_owner(owner);
         }
+        slot
+    })
+}
+
+/// Process-wide fields a new thread copies from its leader (Milestone 70).
+/// Read under [`THREADS`]; the record is pushed after the allocations.
+#[derive(Clone, Copy)]
+pub(in crate::sched) struct LeaderSnapshot {
+    pub(in crate::sched) leader_slot: u8,
+    pub(in crate::sched) name_bytes: [u8; NAME_CAP],
+    pub(in crate::sched) name_len: u8,
+    pub(in crate::sched) cr3: u64,
+    pub(in crate::sched) user_p4: u16,
+    pub(in crate::sched) grants: Grants,
+    pub(in crate::sched) tty: u8,
+    pub(in crate::sched) fs_root: u16,
+    pub(in crate::sched) born_admin: bool,
+    pub(in crate::sched) session_gen: u64,
+}
+
+impl LeaderSnapshot {
+    /// Copies the shared fields of the process record at `index`.
+    pub(in crate::sched) fn of(threads: &[Thread], index: usize) -> Self {
+        let t = &threads[index];
+        Self {
+            leader_slot: (index + 1) as u8,
+            name_bytes: t.name_bytes,
+            name_len: t.name_len,
+            cr3: t.cr3.load(Ordering::Acquire),
+            user_p4: t.user_p4,
+            grants: t.grants,
+            tty: t.tty,
+            fs_root: t.fs_root,
+            born_admin: t.born_admin,
+            session_gen: t.session_gen,
+        }
+    }
+
+    /// The leader's listing name.
+    pub(in crate::sched) fn name(&self) -> &str {
+        core::str::from_utf8(&self.name_bytes[..self.name_len as usize]).unwrap_or("?")
+    }
+}
+
+/// `<leader>.t<slot>`: the thread's listing name, truncated to fit.
+pub(in crate::sched) fn thread_name(leader: &LeaderSnapshot, slot: u8) -> ([u8; NAME_CAP], u8) {
+    let mut bytes = [0u8; NAME_CAP];
+    let mut n = (leader.name_len as usize).min(NAME_CAP - 6);
+    bytes[..n].copy_from_slice(&leader.name_bytes[..n]);
+    bytes[n] = b'.';
+    bytes[n + 1] = b't';
+    n += 2;
+    if slot >= 100 {
+        bytes[n] = b'0' + slot / 100;
+        n += 1;
+    }
+    if slot >= 10 {
+        bytes[n] = b'0' + (slot / 10) % 10;
+        n += 1;
+    }
+    bytes[n] = b'0' + slot % 10;
+    n += 1;
+    (bytes, n as u8)
+}
+
+/// Registers a thread of an existing process (Milestone 70). The record
+/// shares the leader's CR3 and points at the leader for every per-process
+/// table; it starts `WAITING` with no context — the drain maps its user
+/// stack, fabricates the frame, stores the context, and releases it.
+/// `kstack` is allocated by the caller outside the IRQ gate. Returns the
+/// 1-based slot.
+pub(in crate::sched) fn register_thread(leader: &LeaderSnapshot, kstack: Vec<u8>) -> u8 {
+    interrupts::without_interrupts(|| {
+        let mut kstack = kstack;
+        kstack[..8].copy_from_slice(&STACK_CANARY.to_le_bytes());
+        let kstack_top = (kstack.as_ptr() as u64 + kstack.len() as u64) & !0xF;
+        let fx = Box::into_raw(Box::new(FxArea::new()));
+        let owner = next_cpu();
+        let slot = push_thread(Thread {
+            // Named after registration (the slot is part of the name).
+            name_bytes: leader.name_bytes,
+            name_len: leader.name_len,
+            state: AtomicU8::new(STATE_WAITING),
+            ctx: AtomicU64::new(0),
+            ticks: AtomicU64::new(0),
+            fx,
+            is_user: true,
+            stack: Vec::new(),
+            kstack,
+            kstack_top,
+            cr3: AtomicU64::new(leader.cr3),
+            user_p4: leader.user_p4,
+            owner,
+            stolen_at: AtomicU64::new(0),
+            files: [None; MAX_OPEN_FILES],
+            procs: [None; MAX_PROC_CAPS],
+            no_steal: false,
+            wait_child_slot: AtomicU8::new(0),
+            wait_proc_index: AtomicU8::new(WAIT_PROC_NONE),
+            wait_child_gen: AtomicU32::new(0),
+            wait_for_exit: AtomicBool::new(false),
+            sleep_deadline: AtomicU64::new(0),
+            io_kind: AtomicU8::new(0),
+            io_pipe: AtomicU8::new(0),
+            io_addr: AtomicU64::new(0),
+            io_len: AtomicU32::new(0),
+            io_cap: AtomicU64::new(0),
+            exit_code: AtomicU64::new(0),
+            cap_gen: AtomicU32::new(1),
+            debug_id: NEXT_DEBUG_ID.fetch_add(1, Ordering::Relaxed),
+            parent_slot: leader.leader_slot,
+            is_init: false,
+            exit_waited: AtomicBool::new(false),
+            grants: leader.grants,
+            tty: leader.tty,
+            fs_root: leader.fs_root,
+            fs_tokens: [galfs::Token::empty(); galfs::TOKEN_SLOTS],
+            born_admin: leader.born_admin,
+            must_change: false,
+            session_gen: leader.session_gen,
+            last_input_tick: 0,
+            console_budget_tick: 0,
+            console_budget_used: 0,
+            heap_pages: 0,
+            io_extra: AtomicU64::new(0),
+            leader_slot: leader.leader_slot,
+            fs_base: AtomicU64::new(0),
+        });
+        let (name_bytes, name_len) = thread_name(leader, slot);
+        let mut threads = THREADS.lock();
+        threads[slot as usize - 1].name_bytes = name_bytes;
+        threads[slot as usize - 1].name_len = name_len;
         slot
     })
 }
@@ -908,6 +1145,8 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             console_budget_used: 0,
             heap_pages: 0,
             io_extra: AtomicU64::new(0),
+            leader_slot: 0,
+            fs_base: AtomicU64::new(0),
         });
         serial_println!("[sched] thread '{}' ready (owner cpu {})", name, owner);
         let _ = _slot;
@@ -1017,6 +1256,20 @@ pub fn spawn_user_with(
     build: impl FnOnce(UserRegion) -> Vec<u8>,
 ) -> (UserRegion, u8) {
     spawn_user_with_grants(name, fs, Grants::console(), build, None)
+}
+
+/// Like [`spawn_user_with`], pinned to `cpu`.
+///
+/// A scratch peek loses when an AP owner reaps and zero-wipes the tree
+/// from its idle loop. Pinning to the BSP keeps that reap in the test's
+/// own `reap` call (`test-galfs`).
+pub fn spawn_user_with_on(
+    name: &str,
+    fs: galfs::FsCred,
+    cpu: u8,
+    build: impl FnOnce(UserRegion) -> Vec<u8>,
+) -> (UserRegion, u8) {
+    spawn_user_with_grants(name, fs, Grants::console(), build, Some(cpu))
 }
 
 /// Like [`spawn_user_with`], with an explicit grant set.
@@ -1218,6 +1471,8 @@ pub(crate) fn spawn_user_with_grants(
             console_budget_used: 0,
             heap_pages: 0,
             io_extra: AtomicU64::new(0),
+            leader_slot: 0,
+            fs_base: AtomicU64::new(0),
         });
         serial_println!(
             "[sched] user task '{}' ready (own tree cr3={:#x}, p4={}, code @ {:#x}, kstack top {:#x})",
@@ -1268,6 +1523,28 @@ pub fn is_name_live(name: &str) -> bool {
         THREADS.lock().iter().any(|t| {
             let state = t.state.load(Ordering::Relaxed);
             t.name() == name && (state == STATE_RUNNING || state == STATE_WAITING)
+        })
+    })
+}
+
+/// Exit code of the user task named `name`, once that slot is `EXITED` or `FREED`.
+///
+/// The code stays on the slot through reap, until that slot is reused.
+/// An AP owner zero-wipes the task tree from its idle loop the moment
+/// the task exits, so a scratch-page peek on the BSP loses under load
+/// (`test-smpuser`). The exit code is the record that survives the wipe.
+pub fn user_exit_code(name: &str) -> Option<u64> {
+    interrupts::without_interrupts(|| {
+        THREADS.lock().iter().find_map(|t| {
+            if !t.is_user || t.name() != name {
+                return None;
+            }
+            let state = t.state.load(Ordering::Acquire);
+            if state == STATE_EXITED || state == STATE_FREED {
+                Some(t.exit_code.load(Ordering::Acquire))
+            } else {
+                None
+            }
         })
     })
 }
@@ -1371,8 +1648,8 @@ pub(crate) fn task_proc_inspect(cap: Cap, dst: &mut [u8]) -> Result<usize, SysEr
     }
     interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
-        let handle =
-            threads.get(slot - 1).ok_or(SysError::BadCap)?.procs[pi].ok_or(SysError::BadCap)?;
+        let owner = proc_index(&threads, slot).ok_or(SysError::BadCap)?;
+        let handle = threads[owner].procs[pi].ok_or(SysError::BadCap)?;
         if !handle.rights.contains(CapRights::PROC_INSPECT) {
             return Err(SysError::AccessDenied);
         }
