@@ -1972,11 +1972,11 @@ fn rustc_obj_matches_host() {
         eprintln!("rustc_obj_matches_host: skipped (no target/galexy-rustc/rustc)");
         return;
     }
-    if !phase11_kvm_only("rustc_obj_matches_host") {
-        return;
-    }
+    // KVM is faster for a 200 MiB compiler. TCG still proves the object
+    // diff; this host's KVM cannot create a vCPU, so the test does not
+    // skip when the accelerator is TCG.
     let host = host_hello_lines();
-    let (code, serial) = boot_for(&image("test-rustc"), Duration::from_secs(15 * 60));
+    let (code, serial) = boot_for(&image("test-rustc"), Duration::from_secs(45 * 60));
     assert_eq!(
         code,
         Some(QEMU_EXIT_SUCCESS),
