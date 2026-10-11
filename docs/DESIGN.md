@@ -29,7 +29,7 @@ crates/
 ├── userspace/           # ring-3 programs, one package per program
 │   ├── galexy-rt/       #   the runtime: entry!, syscall wrappers, panic handler
 │   └── hello/           #   the first real Rust user program
-├── gxc/                 # host mini Rust-subset compiler (gxr → ELF) — docs/COMPILER.md
+├── gxld/                # static ELF64 linker — docs/LINKER.md
 └── runner/              # host tooling: builds BIOS+UEFI images, launches QEMU,
                          #   hosts the boot tests (tests/boot.rs)
 ```
@@ -685,7 +685,8 @@ path in a fixed galfs table (128 objects, 32 actors with one root each,
 64-byte component names, shared 256×512-byte block pool with 8 direct
 pointers plus one single-indirect block per file / 32 KiB on the v12
 image — Milestone 45 / GALF v12). A write past 32 KiB promotes that
-file into the RAM large store (4 KiB blocks, 80 MiB; Milestone 72);
+file into the RAM large store (4 KiB blocks, 80 MiB per file, 128 MiB
+pool; Milestones 72–73);
 that promotion allocates on the kernel heap while the write syscall
 holds the thread table. A path ending in `/` is a directory and
 returns 0. A file returns
@@ -1249,7 +1250,7 @@ main image and are listed at the end.
 | `test-proccap`, `test-selfcap`, `test-procgive`, `test-procbudget`, `test-capforge`, `test-orphan` | `proccap_test_passes`, `selfcap_test_passes`, `procgive_test_passes`, `procbudget_test_passes`, `capforge_test_passes`, `orphan_test_passes` | M47 process Caps and forge battery |
 | `test-init`, `test-jobcap` | `init_test_passes`, `jobcap_test_passes` | M53 init orphan root, M55 job Cap / Ctrl-C |
 | `test-sleep`, `test-idle` | `sleep_test_passes`, `idle_test_passes` | M56 time and deadlines, M58 policy freeze |
-| `test-hellogxc` | `hellogxc_test_passes` | M61 hello via `gxc`, M69 `gxld` link |
+| `test-rustc-hello` | `rustc_hello_runs` | M73 on-OS `rustc` links with `gxld` and the program runs |
 | `test-badelf`, `test-negative` | `badelf_test_passes`, `negative_test_passes` | M51 hostile ELF oracle and negative suite; M63 loader returns `SysError` and caps image pages |
 | `test-smep`, `test-smap`, `test-umip`, `test-kaslr` | `smep_test_passes`, `smap_test_passes`, `umip_test_passes`, `kaslr_kernel_base_differs_across_boots` | M63 SMEP, SMAP, UMIP, kernel KASLR (`kaslr` boots the image twice) |
 | `test-soak`, `test-fairness`, `test-pathological`, `test-bench` | `soak_test_passes`, `fairness_test_passes`, `pathological_test_passes`, `bench_test_passes` | M51 soak (exact table closure per round), steal fairness under load, console-budget flood; M64 `test-bench` prints `[bench] name=… us=…` and the runner asserts KVM ceilings |
@@ -1260,7 +1261,7 @@ Host suites (no QEMU): `galexy-abi` (table integrity), `galexy-core`
 (`Ring`, tar, `parse_path` exhaustive sweep), `galexy-crypto`
 (vectors), `galexy-galf` (slot round trip, generation monotonicity,
 token algebra properties, v13 image check including a 64 MiB file),
-`galfs-fsck`, `gxc`, `gxld`.
+`galfs-fsck`, `gxld`.
 
 ## User heap, clock, and channels (Milestone 66)
 

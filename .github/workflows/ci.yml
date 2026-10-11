@@ -42,13 +42,13 @@ jobs:
         run: >
           cargo test
           -p galexy-abi -p galexy-core -p galexy-crypto -p galexy-galf
-          -p galfs-fsck -p gxc -p gxld
+          -p galfs-fsck -p gxld
 
       - name: Clippy (host crates, all targets)
         run: >
           cargo clippy
           -p galexy-abi -p galexy-core -p galexy-crypto -p galexy-galf -p xtask
-          -p galfs-fsck -p gxc -p gxld
+          -p galfs-fsck -p gxld
           --all-targets -- -D warnings
 
       - name: Clippy (kernel bins, x86_64-unknown-none)

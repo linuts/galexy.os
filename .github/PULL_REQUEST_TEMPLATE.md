@@ -9,7 +9,7 @@
 <!-- Paste the commands you ran and what they printed. "CI is green" is
      not a test plan on its own — name the boots that cover the change. -->
 
-- [ ] Host suites: `cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxc -p gxld`
+- [ ] Host suites: `cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxld`
 - [ ] `cargo test -p runner --test audit_strings`
 - [ ] Targeted boots: `cargo test -p runner --test boot --release -- <names>`
 - [ ] Full boot suite (required for a milestone-closing PR, BIOS + UEFI)

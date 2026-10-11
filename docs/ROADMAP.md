@@ -341,11 +341,10 @@ multi-priority scheduling classes, realtime guarantees, tickless *busy*
 Goal: a **Galexy-owned** tiny Rust-subset compiler that emits a static
 ELF the existing loader will run — enough for hello through the console
 Cap. Host `rustc` keeps building real programs (`shell`, utils). `gxc`
-was the learning path and is now **frozen at gxr v0** as a fixture;
-the self-host path is upstream `rustc` (Phase 11). Plan:
-`docs/COMPILER.md`. Checkboxes: `TODO.md` Milestones **59–61** ✅;
-**62** (on-OS `gxc`) is superseded by Phase 11. Style: `docs/STYLE.md`
-→ Compiler.
+was the learning path. Milestone 73 removed the crate; the on-OS
+compiler is upstream `rustc` (Phase 11). Plan: `docs/COMPILER.md`.
+Checkboxes: `TODO.md` Milestones **59–61** ✅; **62** (on-OS `gxc`) is
+superseded by Phase 11. Style: `docs/STYLE.md` → Compiler.
 
 Reuse before inventing: `galexy-abi` + `galexy-rt` + ELF loader + existing
 `hello` tests; Cranelift and/or `object`/`iced-x86` for codegen/ELF;
@@ -359,8 +358,8 @@ for a Cranelift-backed subset shape. Not mrustc, not full rustc-in-tree.
 3. **61 Hello via gxc** ✅ — `hello.gxr` → ramdisk `hello-gxc` +
    `test-hellogxc`; rustc-built `hello` stays green beside it
 4. **62 On-OS gxc** *superseded* — on-OS compilation is `rustc`
-   (Phase 11); `gxc` only changes once more, to emit a relocatable
-   object for `gxld` (Milestone 69)
+   (Phase 11). The crate emitted a relocatable object for `gxld`
+   (Milestone 69) and was removed in Milestone 73
 
 Non-goals for this phase: Rust/cargo parity, compiling the kernel or
 shell with `gxc`, LLVM/mrustc in-tree, kernel JIT, growing gxr.
@@ -414,7 +413,7 @@ UDP / TCP stack (`smoltcp`-class, host-tested); sockets as Caps handed
 out by init, never an ambient `socket()`; `fetch`-style utilities over
 channels. A USB stack stays out until a device needs it.
 
-## Phase 11 — Rust on Galexy (upstream `rustc` as a tenant)
+## Phase 11 — Rust on Galexy (upstream `rustc` as a tenant) ✅
 
 Goal: make Galexy a real Rust target, then run upstream `rustc` on it.
 Plan and the honest gap analysis: `docs/RUSTC.md`; the linker:
@@ -450,11 +449,12 @@ first.
    Galexy host (nightly-2026-10-08). On-OS `--print cfg`, a
    `mismatched types` diagnostic, and `--emit=obj` match the host
    Cranelift object (`rustc_obj_matches_host`, TCG when KVM cannot
-   create a vCPU). Compiler stacks are 17 MiB. The RAM store is 80 MiB
-   so `core`'s metadata fits. The on-disk v13 cap stays 64 MiB
-6. **73 Link and run** — `gxld` links cg_clif output (fallback: port
-   `wild`); `rustc hello.rs -o hello` in ring 3, the shell runs it. The
-   **Phase 11 gate**
+   create a vCPU). Compiler stacks are 17 MiB. One RAM-store file may
+   be 80 MiB so `core`'s metadata fits. The on-disk v13 cap stays 64 MiB
+6. **73 Link and run** ✅ — `gxld` links cg_clif output (`wild` was
+   not needed); `rustc hello.rs -o hello` in ring 3 prints
+   `hello from rustc on galexy`, and a second program uses `std::fs`
+   and `std::thread`. The **Phase 11 gate** (`rustc_hello_runs`, TCG)
 
 Non-goals: `cargo` on-OS, proc macros on-OS, rebuilding `rustc` or
 `std` on Galexy, LLVM / `lld` / `mrustc` / a libc, POSIX emulation.

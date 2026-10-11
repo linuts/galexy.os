@@ -10,7 +10,7 @@ galexy-galf = { path = "../galexy-galf" }
 bootloader = "0.11"
 tar = "0.4"
 galexy-crypto = { path = "../galexy-crypto" }
-gxc = { path = "../gxc" }
+galexy-abi = { path = "../galexy-abi" }
 gxld = { path = "../gxld" }
 galexy-os = { path = "../galexy-os", artifact = "bin", target = "x86_64-unknown-none" }
 # Userspace is not an artifact dependency. It builds for the JSON target

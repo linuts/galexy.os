@@ -3,7 +3,7 @@
 //! The ramdisk holds one static `rustc` ELF, the target JSON, and the
 //! sysroot rlibs as `srlib/<file>`. This kernel copies that tree into
 //! galfs and runs three compilers: `--print cfg`, a type error, and
-//! `--emit=obj`. Linking the object is Milestone 73.
+//! `--emit=obj`. Linking that object is `test-rustc-hello`.
 
 #![no_std]
 #![no_main]
@@ -138,7 +138,8 @@ fn install_sysroot() {
     for name in &names {
         let bytes = sched::ramdisk::find(name).expect("ramdisk file vanished");
         if let Some(file_name) = name.strip_prefix("srlib/") {
-            copy_file(libs, file_name, bytes);
+            sched::galfs::import_promoted(libs, file_name, bytes)
+                .unwrap_or_else(|_| panic!("import {file_name}"));
         } else {
             copy_file(root, name, bytes);
         }

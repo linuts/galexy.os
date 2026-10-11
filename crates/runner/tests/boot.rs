@@ -1785,29 +1785,6 @@ fn sleep_test_passes() {
     );
 }
 
-/// Milestone 61: ELF from host `gxc` (gxr subset) runs under the loader.
-#[test]
-fn hellogxc_test_passes() {
-    let (code, serial) = boot(&image("test-hellogxc"));
-    assert_eq!(
-        code,
-        Some(QEMU_EXIT_SUCCESS),
-        "test-hellogxc should exit with Success; serial:\n{serial}"
-    );
-    assert!(
-        serial.contains("[test-hellogxc] passed"),
-        "test-hellogxc success marker missing; serial:\n{serial}"
-    );
-    assert!(
-        serial.contains("[loader] program 'hello-gxc' ready"),
-        "loader spawn marker missing; serial:\n{serial}"
-    );
-    assert!(
-        serial.contains(HELLO_GXC_TEXT),
-        "gxc hello console output missing from serial; serial:\n{serial}"
-    );
-}
-
 /// Milestone 70: `ThreadSpawn` / `ThreadExit` from ring 3. Four joined
 /// workers, slot reuse, the `BadValue` paths, and a sibling left spinning
 /// when the leader exits; the kernel reaps every thread and frame.
@@ -2017,6 +1994,40 @@ fn rustc_obj_matches_host() {
     );
 }
 
+/// Milestone 73: host `rust-lld` and `gxld` images of a cg_clif hello both
+/// boot, then ring 3 `rustc hello.rs -o hello` links with on-OS `gxld`
+/// and runs. A second program uses `std::fs` and `std::thread`.
+#[test]
+fn rustc_hello_runs() {
+    if env!("GALEXY_HAVE_RUSTC") != "1" {
+        eprintln!("rustc_hello_runs: skipped (no target/galexy-rustc/rustc)");
+        return;
+    }
+    let (code, serial) = boot_for(&image("test-rustc-hello"), Duration::from_secs(45 * 60));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-rustc-hello should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-rustc-hello] passed"),
+        "test-rustc-hello success marker missing; serial:\n{serial}"
+    );
+    for line in [
+        "ref-lld: exit 0",
+        "ref-gxld: exit 0",
+        "rustc-hello: exit 0",
+        "on-hello: exit 0",
+        "rustc-files: exit 0",
+        "on-files: exit 0",
+        "scratch: from a thread",
+        "hello from rustc on galexy",
+        "files-ok",
+    ] {
+        assert!(serial.contains(line), "missing {line:?}; serial:\n{serial}");
+    }
+}
+
 /// Host Cranelift object for the same `hello.rs` the guest compiles.
 fn host_hello_lines() -> Vec<String> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -2191,9 +2202,6 @@ fn runshell_test_passes() {
 /// The exact text the real hello program prints through the console
 /// syscall (mirrored to COM1 by the kernel).
 const HELLO_TEXT: &str = "Hello from a real Rust user program!";
-
-/// Text from `crates/gxc/examples/hello.gxr` (Milestone 61).
-const HELLO_GXC_TEXT: &str = "Hello from gxc!";
 
 /// Login screen: username then masked password (`*` echo).
 const LOGIN_ADMIN_KEYS: &[(&str, &str)] = &[

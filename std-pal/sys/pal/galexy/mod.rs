@@ -36,7 +36,20 @@ use crate::io;
 pub unsafe fn init(_argc: isize, _argv: *const *const u8, _sigpipe: u8) {}
 
 // SAFETY: must be called only once during runtime cleanup.
-pub unsafe fn cleanup() {}
+//
+// `std::fs::File` closes its slot in `Drop`. Stdio does not: `Stdout` is a
+// unit struct, so a pipe write end stays open until the kernel reaps the
+// task. Reap waits until the parent `Wait`s, and `Command::output` reads
+// the pipe to EOF before it waits. Close every file slot after
+// `io::cleanup` has flushed, so the parent sees EOF and can wait. An
+// empty slot returns `BadCap`.
+pub unsafe fn cleanup() {
+    // Same width as `sched::thread::MAX_OPEN_FILES` (the file-cap band).
+    const MAX_OPEN_FILES: u64 = 64;
+    for slot in 0..MAX_OPEN_FILES {
+        let _ = syscall::close(syscall::file_cap(slot, abi::CapRights::NONE));
+    }
+}
 
 pub fn unsupported<T>() -> io::Result<T> {
     Err(unsupported_err())

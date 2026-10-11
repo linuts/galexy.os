@@ -29,7 +29,7 @@ rustc -V
 command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 not found" >&2; exit 1; }
 
 say "host suites"
-cargo test -q -p galexy-abi -p galexy-core -p galexy-crypto -p galexy-galf -p galfs-fsck -p gxc -p gxld
+cargo test -q -p galexy-abi -p galexy-core -p galexy-crypto -p galexy-galf -p galfs-fsck -p gxld
 
 say "no secrets on serial"
 cargo test -q -p runner --test audit_strings

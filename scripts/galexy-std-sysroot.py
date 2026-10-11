@@ -421,11 +421,23 @@ def patch_library(library: Path) -> None:
     if not (library / "std/src").is_dir():
         sys.exit(f"galexy-std-sysroot: not a library tree: {library}")
     stamp = library / ".galexy-pal"
-    if stamp.is_file():
+    std_src = library / "std/src"
+    if not stamp.is_file():
+        install_pal(std_src)
+        apply_patches(library)
+        stamp.write_text("milestone-72\n")
         return
-    install_pal(library / "std/src")
-    apply_patches(library)
-    stamp.write_text("milestone-72\n")
+    # The dispatcher patches are one-shot. PAL sources are copies of
+    # `std-pal/` and have to follow that tree, or a later rustc build
+    # links the stale `join_paths`.
+    for src in pal_files():
+        rel = src.relative_to(STD_PAL)
+        dest = std_src / rel
+        data = src.read_bytes()
+        if dest.is_file() and dest.read_bytes() == data:
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
 
 
 def main() -> None:

@@ -4,8 +4,8 @@ Plan for getting the real Rust toolchain onto Galexy.OS by the lowest
 path of resistance: reuse what upstream already built for new operating
 systems, and grow the kernel only where a compiler actually hits a wall.
 This is the Phase 11 plan; checkboxes live in `TODO.md` Milestones
-**68–73**; the linker has its own plan in `LINKER.md`. `gxc`
-(`COMPILER.md`) is frozen as a fixture; this document is about running
+**68–73**; the linker has its own plan in `LINKER.md`. `gxc` was
+removed in Milestone 73 (`COMPILER.md`); this document is about running
 *upstream* `rustc` on Galexy.
 
 ## What "migrate rustc" means here
@@ -51,15 +51,16 @@ Stage 4 (Milestone 71) is the capacity a compiler process needs. What
 | Hundreds of MB of heap | `Map` up to 1 GiB per task; QEMU `-m 2G`; frame bitmap covers 4 GiB | — |
 | At least one spawned thread with an 8 MiB stack, TLS, locks | `ThreadSpawn` shares CR3; `Futex`; key TLS via `wrfsbase`. A spawned thread may ask for 4352 pages (17 MiB); the default stays 16 pages | — |
 | Read a 30–60 MB sysroot | Ramdisk `open` + `read` + `seek`; sysroot `.rlib`s are packed under `rust/` | The packed set is the crates the PAL links, not a full 60 MB sysroot |
-| Write multi-MB `.o` / `.rlib` / ELF outputs | 64 open files. Writes past 32 KiB promote into a RAM store: 4 KiB blocks, double indirection, 80 MiB per file | Those bytes are not sealed into a v12 disk. Host v13 (`check_image`) is the on-disk large format; the kernel still syncs v12 |
+| Write multi-MB `.o` / `.rlib` / ELF outputs | 64 open files. Writes past 32 KiB promote into a RAM store: 4 KiB blocks, 80 MiB per file, 128 MiB shared pool | Those bytes are not sealed into a v12 disk. Host v13 (`check_image`) is the on-disk large format; the kernel still syncs v12 |
 | Long command lines | `SPAWN_ARG_MAX` = 4096 | — |
 | Spawn the linker, capture its exit status / stderr | `gxldos` receives input and output Caps at spawn and does not open a path; `test-gxld` links two objects into a program that exits `0x71` | stderr capture is the existing pipe path; `test-gxld` checks the exit code |
 | `fs`: open / read / write / seek / stat / create / remove / rename / readdir | All present. `write` is positional; readdir is the files snapshot; files past 32 KiB use the RAM store | — |
 | Clock | `Clock` reads `timer_ticks` | — |
 | Environment variables, cwd | None | Waive: PAL returns empty env; cwd lives in the process |
 
-The remaining work is the toolchain: cross-building Cranelift-only
-`rustc` (Stage 5) and linking its output on Galexy (Stage 6).
+Stages 1–6 are in the tree. Stage 5 cross-builds Cranelift-only
+`rustc` and runs it on Galexy. Stage 6 links that output with `gxld`
+and runs the program.
 
 ## Paths considered
 
@@ -69,7 +70,7 @@ The remaining work is the toolchain: cross-building Cranelift-only
 | B. `rustc` via a WASI runtime on Galexy (`rustc.wasm` on `wasmi` / `wasmtime`) | Rejected: `rustc` has no WASI host build (no threads, no `dlopen`, LLVM/cg_clif not on wasm32 hosts); we would be porting the runtime *and* the compiler |
 | C. `mrustc` / `gccrs` | Rejected: C++ codebases, need a C/C++ toolchain port and a libc first |
 | D. cg_clif JIT mode (`-Cllvm-args=jit-mode`) to skip linking | Rejected: requires every dependency as a dylib + `libloading`; Galexy has no dynamic loader |
-| E. Grow `gxc` into Rust | Rejected for this goal: it is a learning compiler; Rust parity is years of frontend work. `gxc` stays as-is |
+| E. Grow `gxc` into Rust | Rejected. Milestone 73 removed `gxc`. The on-OS compiler is this `rustc` |
 | F. Native `std` via a libc shim (`relibc` / musl port, `unix` PAL) | Rejected: a libc is a bigger port than a PAL and would import POSIX into a capability OS |
 
 ## The plan, in six stages
@@ -116,9 +117,10 @@ types the name and checks the line.
 Full plan and status: `LINKER.md`. A `no_std + alloc` library that
 turns ELF64 relocatable objects and `ar` archives into the `ET_EXEC`
 the loader already accepts, reading inputs with the `object` crate and
-taking the layout rules from `galexy-abi`. It absorbed `gxc::elf`, so
-`gxc` is a producer of relocatable objects and the linker is the one
-place that knows the loader contract. Proof is the differential image:
+taking the layout rules from `galexy-abi`. It absorbed `gxc::elf`.
+`gxc` used to produce relocatable objects; Milestone 73 removed that
+crate, and the linker is the one place that knows the loader contract.
+Proof is the differential image:
 `rustc -Clinker=gxld -Clinker-flavor=ld` re-links `hello`, `init`,
 `shell` and `util` from the exact objects and rlibs it hands
 `rust-lld`; `galexy-os-gxld` boots and passes the same typing tests.
@@ -210,8 +212,9 @@ monotonic, and `toml` 1.x parsing a ramdisk file with zero patches.
   the maximum to 17 MiB.
 - **Storage**: writes past the v12 32 KiB file promote into a RAM
   store with the same file body: 4 KiB blocks, `u32` length, double
-  indirection, 64 MiB (80 MiB since Milestone 72, for `core`'s
-  metadata). v12 disks still load and sync; promoted bytes
+  indirection, 64 MiB (80 MiB per file since Milestone 72, for
+  `core`'s metadata; 128 MiB shared pool since Milestone 73). v12
+  disks still load and sync; promoted bytes
   stay in RAM. Host `galexy-galf` v13 is the sealed large-volume
   image (extent map, pool sized to the disk, files of 64 MiB).
   `check_image` dispatches on the version, so v12 and v13 both fsck.
@@ -273,7 +276,8 @@ JSON target's spec hash must match the rlibs stage 0 built. Bootstrap
 still passes `-Zembed-metadata=no`, so the image carries each rlib's
 sibling `.rmeta`. A `no_std` hello needs only `libcore` and
 `libcompiler_builtins`. `core`'s metadata is about 66 MiB, which is
-why the RAM store is 80 MiB. The on-disk v13 file cap stays 64 MiB.
+why one file may be 80 MiB. The shared pool is 128 MiB so a `std`
+sysroot fits beside that metadata. The on-disk v13 file cap stays 64 MiB.
 
 Cranelift injects SSE for this OS. The kernel enables `CR4.OSFXSR` on
 every CPU (an AP's trampoline otherwise reloads CR4 with only PAE) and
@@ -289,10 +293,10 @@ Exit (met): `rustc_obj_matches_host` under TCG. `--print cfg` prints
 `mismatched types` and exits 1. `--emit=obj` of `hello.rs` matches the
 host Cranelift object's section sizes and function/object symbol
 sizes. CI skips that boot unless the ELF existed when the runner image
-was built; x.py does not run inside the qemu job. Linking the object
-is Stage 6.
+was built; x.py does not run inside the qemu job. Stage 6 links
+that object.
 
-### Stage 6 — Link on Galexy, run the result (Milestone 73)
+### Stage 6 — Link on Galexy, run the result (Milestone 73) ✅
 
 `rustc` writes `.o` files and spawns a linker. That linker is the
 ring-3 `gxld` from Stages 2 and 4, extended for cg_clif output: rlib
@@ -313,10 +317,14 @@ choice.
 gnu`, spawned over `spawn_with` with stdio pipes, exit status via the
 process Cap.
 
-Exit: `test-rustc-hello` — in ring 3, `rustc hello.rs -o hello` on
-galfs, `./hello` spawns and prints `hello from rustc on galexy`; a
-second program using `std::fs` + `std::thread` compiled on-OS also
-runs. This is the Phase 11 gate.
+Exit (met): `rustc_hello_runs` under TCG. Host `hello-lld` and
+`hello-gxld` both print `hello from rustc on galexy`. On-OS
+`rustc hello.rs -o hello` exits 0 and `./hello` prints the same line.
+`files.rs`, compiled on-OS, writes `/scratch` from `std::thread` and
+prints `files-ok`. `gxld` linked the sysroot hello, so `wild` was not
+ported. `.eh_frame` stays out until `panic=unwind`. `std` closes every
+file cap in `rt::cleanup`: stdio is not a `File`, and `Command::output`
+reads the linker pipe to EOF before `Wait`.
 
 ## Explicit non-goals
 
