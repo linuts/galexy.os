@@ -161,7 +161,7 @@ fn copy_file(parent: u16, name: &str, bytes: &[u8]) {
 
 fn run_rustc(task: &str, rustc: &[u8], parts: &[&str]) {
     let arg = join_args(parts);
-    serial_println!("[test-rustc] spawn {task}");
+    serial_println!("[test-rustc] spawn {}", task);
     sched::loader::spawn_program_session(task, rustc, &arg).unwrap_or_else(|_| panic!("spawn {task}"));
     wait_until_dead(task);
 }
@@ -240,7 +240,7 @@ fn summarize_object() {
     lines.sort();
     assert!(!lines.is_empty(), "hello.o has no sections");
     for line in &lines {
-        serial_println!("{line}");
+        serial_println!("{}", line);
     }
 }
 
