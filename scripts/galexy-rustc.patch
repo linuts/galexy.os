@@ -799,6 +799,29 @@ index 59cda1238..e2ad71710 100644
          fn analyze_source_file_dispatch(
              src: &str,
              lines: &mut Vec<RelativeBytePos>,
+diff --git a/compiler/rustc_span/src/fatal_error.rs b/compiler/rustc_span/src/fatal_error.rs
+index 5e2d82681..13cd955e2 100644
+--- a/compiler/rustc_span/src/fatal_error.rs
++++ b/compiler/rustc_span/src/fatal_error.rs
+@@ -13,7 +13,17 @@ impl !Send for FatalError {}
+ 
+ impl FatalError {
+     pub fn raise(self) -> ! {
+-        std::panic::resume_unwind(Box::new(FatalErrorMarker))
++        // Galexy rustc is panic=abort, so this sentinel cannot unwind into
++        // catch_fatal_errors. The diagnostic is already out; leave with the
++        // compiler's failure status instead of aborting the process.
++        #[cfg(target_os = "galexy")]
++        {
++            std::process::exit(1);
++        }
++        #[cfg(not(target_os = "galexy"))]
++        {
++            std::panic::resume_unwind(Box::new(FatalErrorMarker))
++        }
+     }
+ }
+ 
 diff --git a/compiler/rustc_span/src/symbol.rs b/compiler/rustc_span/src/symbol.rs
 index b36e13b66..2ee9841a1 100644
 --- a/compiler/rustc_span/src/symbol.rs
