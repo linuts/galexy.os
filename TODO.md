@@ -2434,24 +2434,33 @@ nightly's `library/` and teaches the `cfg_select` dispatchers about
 
 ## Milestone 72 — `rustc` cross-built for Galexy (Cranelift only)
 
-- [ ] `bootstrap.toml` from cg_clif's `setup_rust_fork.sh`:
-      `codegen-backends = ["cranelift"]`, `llvm-tools = false`,
-      `full-bootstrap = true`, `download-ci-llvm = true` (host only);
-      `./x.py build --stage 1 compiler/rustc --target
-      x86_64-unknown-galexy`
-- [ ] `rustc_target`: builtin `x86_64_unknown_galexy` spec
-- [ ] Patches, cfg-gated on `target_os = "galexy"`:
-      `rustc_data_structures::memmap` read-into-`Vec`; `jobserver`
-      dummy via `[patch.crates-io]`; `getrandom_backend="rdrand"`;
-      `stacker` heap stacks verified; `rustc_driver_impl` signal paths
-      confirmed `cfg(unix)`-only; `psm` assembled with
-      `CC_x86_64_unknown_galexy=clang --target=x86_64-unknown-none-elf`
-- [ ] `panic=abort` MVP (`FatalError::raise` aborts after diagnostics);
-      `unwinding` crate for `panic=unwind` as a follow-on
-- [ ] `rustc` + `rustc_driver` + `rustc_codegen_cranelift` on the
-      ramdisk; `test-rustc-obj`: on-OS `rustc --emit=obj hello.rs`
-      symbol table and section sizes match the host cg_clif build;
-      `--print cfg`; one asserted type-error diagnostic
+- [x] Stage 1 Cranelift `rustc` for the Galexy host
+      (`scripts/build-galexy-rustc.sh`, `scripts/galexy-rustc.patch`,
+      nightly-2026-10-08 / `1d81eb4ad`). `channel = "nightly"` so the
+      guest version matches stage 0's `core` metadata.
+      `download-ci-llvm = false`: this build never compiles LLVM.
+      `./x.py build --stage 1 compiler/rustc --host` the JSON (stage 2
+      is not run). One static ELF
+- [x] Builtin `x86_64_unknown_galexy`. On-OS `--print cfg` uses that
+      name. `--emit=obj` passes `/x86_64-unknown-galexy.json` so the
+      spec hash matches the stage 0 rlibs
+- [x] Patches, cfg-gated on `target_os = "galexy"`: memmap reads into
+      a `Vec`; `jobserver` already picks its non-unix dummy (no
+      crates.io patch); `getrandom_backend="rdrand"`; `stacker` and
+      `psm` are outside the rustc link closure; `ctrlc` is cfg'd off;
+      `compiler-builtins-mem` supplies `memcpy`. `target-lexicon`
+      maps the triple to none+elf
+- [x] `panic=abort`. `FatalError::raise` calls `process::exit(1)`:
+      `resume_unwind` cannot be caught, so a diagnostic would otherwise
+      abort the process (code 134). `unwinding` stays a follow-on
+- [x] `test-rustc` ramdisk: the ELF, the JSON, and `libcore` plus
+      `compiler_builtins` (rlib and rmeta). `rustc_obj_matches_host`
+      (TCG when KVM cannot create a vCPU): `--print cfg`
+      (`target_os="galexy"`, `panic="abort"`), `mismatched types`
+      exits 1, and `--emit=obj` section and symbol sizes match the
+      host Cranelift object. Compiler threads are 17 MiB, including
+      the codegen coordinator. SSE is on for every CPU. The RAM store
+      is 80 MiB so `core`'s metadata fits. Linking is Milestone 73
 
 ## Milestone 73 — Link on Galexy, run the result (Phase 11 gate)
 

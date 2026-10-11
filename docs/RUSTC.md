@@ -49,9 +49,9 @@ Stage 4 (Milestone 71) is the capacity a compiler process needs. What
 | `rustc` needs | Galexy today | Gap |
 |---|---|---|
 | Hundreds of MB of heap | `Map` up to 1 GiB per task; QEMU `-m 2G`; frame bitmap covers 4 GiB | — |
-| At least one spawned thread with an 8 MiB stack, TLS, locks | `ThreadSpawn` shares CR3; `Futex`; key TLS via `wrfsbase`. A spawned thread may ask for 2048 pages (8 MiB); the default stays 16 pages | — |
+| At least one spawned thread with an 8 MiB stack, TLS, locks | `ThreadSpawn` shares CR3; `Futex`; key TLS via `wrfsbase`. A spawned thread may ask for 4352 pages (17 MiB); the default stays 16 pages | — |
 | Read a 30–60 MB sysroot | Ramdisk `open` + `read` + `seek`; sysroot `.rlib`s are packed under `rust/` | The packed set is the crates the PAL links, not a full 60 MB sysroot |
-| Write multi-MB `.o` / `.rlib` / ELF outputs | 64 open files. Writes past 32 KiB promote into a RAM store: 4 KiB blocks, double indirection, 64 MiB per file | Those bytes are not sealed into a v12 disk. Host v13 (`check_image`) is the on-disk large format; the kernel still syncs v12 |
+| Write multi-MB `.o` / `.rlib` / ELF outputs | 64 open files. Writes past 32 KiB promote into a RAM store: 4 KiB blocks, double indirection, 80 MiB per file | Those bytes are not sealed into a v12 disk. Host v13 (`check_image`) is the on-disk large format; the kernel still syncs v12 |
 | Long command lines | `SPAWN_ARG_MAX` = 4096 | — |
 | Spawn the linker, capture its exit status / stderr | `gxldos` receives input and output Caps at spawn and does not open a path; `test-gxld` links two objects into a program that exits `0x71` | stderr capture is the existing pipe path; `test-gxld` checks the exit code |
 | `fs`: open / read / write / seek / stat / create / remove / rename / readdir | All present. `write` is positional; readdir is the files snapshot; files past 32 KiB use the RAM store | — |
@@ -206,10 +206,12 @@ monotonic, and `toml` 1.x parsing a ramdisk file with zero patches.
 - **Memory**: `-m 2G` in the runner and `cargo run`; the frame bitmap
   covers 4 GiB; `Map` budget per task is 1 GiB. A spawned thread may
   ask for 8 MiB (`THREAD_STACK_PAGES_MAX`); the leader's stack stays
-  4 pages and the thread default stays 16 pages.
+  4 pages and the thread default stays 16 pages. Milestone 72 raised
+  the maximum to 17 MiB.
 - **Storage**: writes past the v12 32 KiB file promote into a RAM
   store with the same file body: 4 KiB blocks, `u32` length, double
-  indirection, 64 MiB. v12 disks still load and sync; promoted bytes
+  indirection, 64 MiB (80 MiB since Milestone 72, for `core`'s
+  metadata). v12 disks still load and sync; promoted bytes
   stay in RAM. Host `galexy-galf` v13 is the sealed large-volume
   image (extent map, pool sized to the disk, files of 64 MiB).
   `check_image` dispatches on the version, so v12 and v13 both fsck.
@@ -231,61 +233,64 @@ Exit: `bin/test-big` (KVM only) allocates 300 MiB, writes a 20 MiB
 file, re-reads it, and checks a hash. `test-fsck` checks the live v12
 table and a promoted large file. Host tests check a sealed v13 image.
 
-### Stage 5 — `rustc` cross-built for Galexy, Cranelift only (Milestone 72)
+### Stage 5 — `rustc` cross-built for Galexy, Cranelift only (Milestone 72) ✅
 
-Use the configuration cg_clif's own CI uses to build a `rustc` with no
-LLVM backend, then point it at our target:
+`scripts/build-galexy-rustc.sh` builds stage 1 of nightly-2026-10-08
+(`1d81eb4ad`) with `codegen-backends = ["cranelift"]` and
+`--host` / `--target` set to `x86_64-unknown-galexy.json`. The result
+is one static ELF. `rustc_driver` and `rustc_codegen_cranelift` are
+rlibs inside it, not separate ramdisk files. Stage 2 is not run: that
+would try to execute the Galexy ELF on Linux. `download-ci-llvm` is
+false. Cranelift does not compile LLVM, and LLVM cannot instruction-select
+this target. The fork lives outside this repo; `scripts/galexy-rustc.patch`
+is the diff.
 
-```toml
-[build]
-full-bootstrap = true
-target = ["x86_64-unknown-galexy"]
+`channel = "nightly"` so the guest reports
+`1.101.0-nightly (1d81eb4ad 2026-10-07)`, the same string stage 0
+stamped into `core`'s `.rmeta`. A `dev` channel says `1.101.0-dev` and
+the guest rejects the crate (`E0514`).
 
-[rust]
-codegen-backends = ["cranelift"]
-llvm-tools = false
-download-rustc = false
+What the fork changes, cfg-gated on `target_os = "galexy"`:
 
-[llvm]
-download-ci-llvm = true   # host only: the *host* compiler keeps LLVM
-```
+| Crate | What landed |
+|---|---|
+| `rustc_target` | builtin `x86_64_unknown_galexy` (soft-float, panic abort, large code model, linker still `rust-lld`) |
+| `rustc_interface` | the `cranelift` backend arm |
+| `rustc` `main` | hops onto a 17 MiB thread before parsing argv. The leader stack stays 4 pages |
+| `rustc_codegen_ssa` | the codegen coordinator uses that same stack. The default 64 KiB thread overflows it |
+| `rustc_span` | `FatalError::raise` calls `process::exit(1)`. `panic=abort` cannot catch the unwind sentinel |
+| `rustc_data_structures` | memmap reads into a `Vec` |
+| `rustc_metadata` | proc-macro dlopen returns "no dynamic loader" |
+| `compiler_builtins` | the `mem` feature, so `memcpy` / `memset` / `memcmp` / `memmove` link |
+| `target-lexicon` | the triple maps to x86_64 / none / elf. No new OS variant |
+| `getrandom` | `--cfg getrandom_backend="rdrand"` |
+| `jobserver` | the crate's existing non-unix dummy. No crates.io patch |
+| `stacker` / `psm` | not in the rustc link closure |
 
-`./x.py build --stage 1 compiler/rustc --target x86_64-unknown-galexy`
-yields `rustc` + `rustc_driver` + `rustc_codegen_cranelift` as Galexy
-ELFs, built by the Linux host compiler. LLVM is never ported; it only
-lives in the host toolchain that does the cross build. The Galexy
-`rustc` has one backend, Cranelift, and `-Zcodegen-backend` is not
-needed on-OS.
+`--print cfg` uses the builtin name. `--emit=obj` passes
+`/x86_64-unknown-galexy.json` plus `-Zunstable-options`, because a
+JSON target's spec hash must match the rlibs stage 0 built. Bootstrap
+still passes `-Zembed-metadata=no`, so the image carries each rlib's
+sibling `.rmeta`. A `no_std` hello needs only `libcore` and
+`libcompiler_builtins`. `core`'s metadata is about 66 MiB, which is
+why the RAM store is 80 MiB. The on-disk v13 file cap stays 64 MiB.
 
-Expected patch set in the fork, all cfg-gated on `target_os = "galexy"`
-and each small:
+Cranelift injects SSE for this OS. The kernel enables `CR4.OSFXSR` on
+every CPU (an AP's trampoline otherwise reloads CR4 with only PAE) and
+new threads restore a masked `MXCSR`. The soft-float warning from
+issue 162235 stays a warning.
 
-| Crate | Issue | Patch |
-|---|---|---|
-| `rustc_target` | builtin spec | add `x86_64_unknown_galexy` so `--target x86_64-unknown-galexy` works without a JSON on-OS |
-| `rustc_data_structures::memmap` | `memmap2` is unix/windows only | use the existing read-into-`Vec` fallback (today behind `cfg(miri)`) |
-| `jobserver` | unix/windows only | the dummy implementation it already ships for wasm, enabled for galexy (`[patch.crates-io]`) |
-| `getrandom` | no OS source | `--cfg getrandom_backend="rdrand"` |
-| `stacker` / `psm` | stack growth via `mmap` on unix | `psm`'s x86_64 SysV assembly is OS-neutral; stacker's non-unix path allocates stacks on the heap — verify, else `-Zstack-size`-only |
-| `rustc_driver_impl` | signal handlers, `ctrlc` | already `cfg(unix)` — confirm nothing leaks |
-| `rustc_session` / `rustc_codegen_ssa` | default linker | `linker-flavor = gnu` with linker `gxld` (Stage 6) |
-| `psm` build script | needs a cross assembler | `CC_x86_64_unknown_galexy=clang`, `--target=x86_64-unknown-none-elf` |
-| panic strategy | `FatalError::raise` uses `resume_unwind` | MVP on `panic=abort`: errors print, then abort. Then `unwinding` crate for real `panic=unwind` |
+Inline `asm!` in a crate compiled on-OS is still out of scope. The
+sysroot was built on the host. PAL syscall stubs stay
+`#[inline(never)]`.
 
-Inline assembly is the one Cranelift-specific trap: cg_clif compiles
-`asm!` by shelling out to an assembler (`CG_CLIF_FORCE_GNU_AS`), which
-Galexy does not have. The prebuilt sysroot is compiled on the host, so
-`core` / `std` / `compiler_builtins` asm is already machine code; but
-`#[inline]` functions instantiate in the *caller's* crate. Rule: every
-`galexy-rt` / PAL syscall stub is `#[inline(never)] extern "C"` so user
-crates compiled on-OS never contain `asm!`. `core::hint::black_box` is
-an intrinsic, not asm, in cg_clif.
-
-Exit: on-OS `rustc --emit=obj hello.rs` under `test-rustc-obj` produces
-an ELF relocatable whose symbol table and section sizes match the
-host-side cg_clif output for the same source and sysroot (the runner
-compares the two). Also `rustc --print cfg` and an intentional type
-error whose diagnostic text is asserted.
+Exit (met): `rustc_obj_matches_host` under TCG. `--print cfg` prints
+`target_os="galexy"` and `panic="abort"` and exits 0. `bad.rs` prints
+`mismatched types` and exits 1. `--emit=obj` of `hello.rs` matches the
+host Cranelift object's section sizes and function/object symbol
+sizes. CI skips that boot unless the ELF existed when the runner image
+was built; x.py does not run inside the qemu job. Linking the object
+is Stage 6.
 
 ### Stage 6 — Link on Galexy, run the result (Milestone 73)
 
@@ -335,8 +340,8 @@ runs. This is the Phase 11 gate.
 | cg_clif rejects some inline asm in the sysroot at *host* build time | Host build uses GNU `as`; only on-OS compiles must avoid `asm!`, which the `#[inline(never)]` rule enforces |
 | `gxld` meets a relocation or section cg_clif emits that v0 does not handle | The differential test names it early (Stage 2 runs on rustc-built `shell` from day one); `wild` is the fallback (Stage 6) |
 | A subtly wrong link is a debugging sink | No layout or relocation change lands without the `rust-lld` differential green (`STYLE.md` → Linker) |
-| `panic=abort` turns every `FatalError` into a process abort | Acceptable for the gate; `unwinding` crate + `.eh_frame` from cg_clif afterwards |
-| 2 GiB of guest RAM slows TCG runs | Stages 4–6 tests are KVM-only in CI (Milestone 64 provides the path); TCG keeps the Stage 1–3 tests |
+| `panic=abort` turns every `FatalError` into a process abort | Stage 5 calls `process::exit(1)` after the diagnostic. `unwinding` plus `.eh_frame` is still the follow-on |
+| 2 GiB of guest RAM slows TCG runs | `rustc_obj_matches_host` ran under TCG on a host whose KVM cannot create a vCPU. CI runs it only when the ELF was already built |
 | galfs large-volume rewrite is bigger than hoped | RAM scratch volume for outputs; galfs v13 lands later without blocking the gate |
 
 ## Order of operations vs. the v1.0 roadmap

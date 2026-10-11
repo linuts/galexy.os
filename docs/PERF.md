@@ -77,11 +77,11 @@ ceiling is `NoResource`, never a panic.
 | Pipes system-wide / bytes per pipe | 8 / 256 | `sched::pipe` |
 | galfs tokens per task | 8 | `GALFS.md` → Table limits |
 | galfs actors / objects / shares | 32 / 128 / 32 | `GALFS.md` |
-| galfs block pool / max file | v12: 256 × 512 B / 32 KiB on disk. A larger file promotes into a RAM store, 4 KiB blocks, 64 MiB | `GALFS.md` |
+| galfs block pool / max file | v12: 256 × 512 B / 32 KiB on disk. A larger file promotes into a RAM store, 4 KiB blocks, 80 MiB (Milestone 72) | `GALFS.md` |
 | Default actor quota | 16 objects, 16 KiB | `GALFS.md` |
 | Path | 8 components × 64 bytes; actor names 32 | `galexy_core::path` |
 | Spawn name / arg blob | 64 / 4096 bytes | `galexy_abi` |
-| User stack | leader: 4 pages. Spawned thread: 16 pages by default, up to 2048 (8 MiB) | `THREAD_STACK_PAGES_MAX` |
+| User stack | leader: 4 pages. Spawned thread: 16 pages by default, up to 4352 (17 MiB) | `THREAD_STACK_PAGES_MAX` |
 | User image window | 512 MiB above `USER_IMAGE_BASE` | `loader::USER_IMAGE_WINDOW` |
 | User heap (`Map`) | 262_144 pages / 1 GiB per task | `galexy_abi::USER_HEAP_PAGES` |
 | Channels | 8 system-wide; one message of 256 bytes and two file Caps | `sched::channel` |
