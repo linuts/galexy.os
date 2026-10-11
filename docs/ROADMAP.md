@@ -466,7 +466,7 @@ writes the source, spawns `rustc`, and exits QEMU. The login image
 never receives the compiler, and the shell cannot pass it arguments
 or run the file it writes. Checkboxes: `TODO.md` Milestones **74–77**.
 
-1. **74 Image** — `galexy-os-rustc` is the normal kernel plus the
+1. **74 Image** ✅ — `galexy-os-rustc` is the normal kernel plus the
    Milestone 73 ramdisk, built only when `target/galexy-rustc/rustc`
    exists. `cargo run` stays the small image. `cargo run --rustc`
    boots the compiler image. CI still does not run `x.py`
