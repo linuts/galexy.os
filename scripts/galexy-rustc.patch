@@ -527,6 +527,23 @@ index a30dd1c3e..0ec7e1514 100644
              }
              Arch::AArch64 => match &sess.target.os {
                  Os::None => vec![],
+diff --git a/compiler/rustc_codegen_ssa/src/back/write.rs b/compiler/rustc_codegen_ssa/src/back/write.rs
+index 04be7956e..15c3b3143 100644
+--- a/compiler/rustc_codegen_ssa/src/back/write.rs
++++ b/compiler/rustc_codegen_ssa/src/back/write.rs
+@@ -1777,8 +1777,12 @@ enum CodegenState {
+             }),
+         }))
+     };
++    // The coordinator runs the codegen message loop. On a host whose
++    // default thread stack is 64 KiB (Galexy), that loop overflows.
++    // Give it the same stack rustc uses for its other compile threads.
+     return std::thread::Builder::new()
+         .name("coordinator".to_owned())
++        .stack_size(stack_size)
+         .spawn(f)
+         .expect("failed to spawn coordinator thread");
+ 
 diff --git a/compiler/rustc_data_structures/Cargo.toml b/compiler/rustc_data_structures/Cargo.toml
 index daae72a9b..ebec03e99 100644
 --- a/compiler/rustc_data_structures/Cargo.toml
