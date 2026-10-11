@@ -260,6 +260,7 @@ the flag because it lives in the sealed actor record.
 | Utility (`SPAWN_INHERIT`, or legacy `SPAWN_WAIT`) | Parent’s tokens, optionally ANDed with the `r10` rights mask (bits 8..15). Mask `0` keeps the full set |
 | Bare program (`hello`, `linger`, …) | Parent’s `fs_root`, **empty tokens** (the mask does not apply) |
 | `nano` | Same cards as a utility, plus `SPAWN_GRANT_KEYBOARD` (bit 3). The shell Cap-waits, so it is not reading that seat's keys at the same time |
+| Spaced command (`rustc hello.rs -o hello`) | Same cards as a utility, plus `SPAWN_GRANT_QUERY` and `SPAWN_GRANT_LOADER` (bit 6). `rustc` lists the sysroot and spawns `gxld`. Power stays with the shell. Named utilities do not get the loader |
 
 Every `SPAWN_WAIT` / `SPAWN_INHERIT` ramdisk binary is trusted code
 running with the caller’s cards. The ramdisk is **measured, not

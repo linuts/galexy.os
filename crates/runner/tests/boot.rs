@@ -3341,6 +3341,150 @@ fn rustc_print_cfg_typing_e2e() {
     );
 }
 
+/// Milestone 77: type a one-line hello, compile it, run `/hello`.
+///
+/// The source is `fn main(){println!("hello from rustc on galexy");}`
+/// written with `echo … > hello.rs` (66 bytes, under `LINE_MAX`).
+#[test]
+fn rustc_hello_typing_e2e() {
+    if env!("GALEXY_HAVE_RUSTC") != "1" {
+        eprintln!("rustc_hello_typing_e2e: skipped (no target/galexy-rustc/rustc)");
+        return;
+    }
+    let keys = with_login(&[
+        ("e", "e"),
+        ("c", "c"),
+        ("h", "h"),
+        ("o", "o"),
+        ("spc", " "),
+        ("f", "f"),
+        ("n", "n"),
+        ("spc", " "),
+        ("m", "m"),
+        ("a", "a"),
+        ("i", "i"),
+        ("n", "n"),
+        ("shift+9", "("),
+        ("shift+0", ")"),
+        ("shift+bracket_left", "{"),
+        ("p", "p"),
+        ("r", "r"),
+        ("i", "i"),
+        ("n", "n"),
+        ("t", "t"),
+        ("l", "l"),
+        ("n", "n"),
+        ("shift+1", "!"),
+        ("shift+9", "("),
+        ("shift+apostrophe", "\""),
+        ("h", "h"),
+        ("e", "e"),
+        ("l", "l"),
+        ("l", "l"),
+        ("o", "o"),
+        ("spc", " "),
+        ("f", "f"),
+        ("r", "r"),
+        ("o", "o"),
+        ("m", "m"),
+        ("spc", " "),
+        ("r", "r"),
+        ("u", "u"),
+        ("s", "s"),
+        ("t", "t"),
+        ("c", "c"),
+        ("spc", " "),
+        ("o", "o"),
+        ("n", "n"),
+        ("spc", " "),
+        ("g", "g"),
+        ("a", "a"),
+        ("l", "l"),
+        ("e", "e"),
+        ("x", "x"),
+        ("y", "y"),
+        ("shift+apostrophe", "\""),
+        ("shift+0", ")"),
+        ("semicolon", ";"),
+        ("shift+bracket_right", "}"),
+        ("spc", " "),
+        ("shift+dot", ">"),
+        ("spc", " "),
+        ("h", "h"),
+        ("e", "e"),
+        ("l", "l"),
+        ("l", "l"),
+        ("o", "o"),
+        ("dot", "."),
+        ("r", "r"),
+        ("s", "s"),
+        ("ret", "admin@galexy>"),
+        ("r", "r"),
+        ("u", "u"),
+        ("s", "s"),
+        ("t", "t"),
+        ("c", "c"),
+        ("spc", " "),
+        ("h", "h"),
+        ("e", "e"),
+        ("l", "l"),
+        ("l", "l"),
+        ("o", "o"),
+        ("dot", "."),
+        ("r", "r"),
+        ("s", "s"),
+        ("spc", " "),
+        ("minus", "-"),
+        ("o", "o"),
+        ("spc", " "),
+        ("slash", "/"),
+        ("h", "h"),
+        ("e", "e"),
+        ("l", "l"),
+        ("l", "l"),
+        ("o", "o"),
+        ("ret", "admin@galexy>"),
+        ("slash", "/"),
+        ("h", "h"),
+        ("e", "e"),
+        ("l", "l"),
+        ("l", "l"),
+        ("o", "o"),
+        ("ret", "hello from rustc on galexy"),
+    ]);
+    let serial = boot_and_type(
+        &image("galexy-os-rustc"),
+        &keys,
+        "[boot] main loop ready",
+        "hello from rustc on galexy",
+        Duration::from_millis(30),
+        Duration::from_secs(900),
+    );
+    let first = serial
+        .find("hello from rustc on galexy")
+        .expect("source line was not echoed");
+    assert!(
+        serial[first + 1..].contains("hello from rustc on galexy"),
+        "/hello did not print; serial:\n{serial}"
+    );
+    assert!(
+        serial.rfind("admin@galexy>").is_some(),
+        "prompt missing; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("command not found"),
+        "shell rejected a command; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[pf] ring-3 task fault"),
+        "a program faulted; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("error:"),
+        "rustc reported an error; serial:\n{serial}"
+    );
+}
+
 /// Milestone 69 differential: the `galexy-os-gxld` image carries init,
 /// shell, hello and every util re-linked by `gxld` from the exact objects
 /// and rlibs rustc hands `rust-lld`. Same keystrokes, same output.

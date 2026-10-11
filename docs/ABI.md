@@ -45,7 +45,7 @@ gaps or duplicates). Appending is allowed; inserting is not.
 | 4 | `open` | stable | ramdisk and galfs names |
 | 5 | `read` | stable | `0` means EOF / no key / empty request per cap kind |
 | 6 | `close` | stable | reserved caps are `BadCap` |
-| 7 | `spawn` | experimental | NUL-separated argv inside the 4096-byte blob; no environment vector. `SPAWN_NO_FG` is r10 bit 5 |
+| 7 | `spawn` | experimental | A name with no `/` is a ramdisk label. A name with `/` is a galfs path read with the caller's tokens (`/hello`; the shell turns `./hello` at `/` into that path). NUL-separated argv inside the 4096-byte blob; no environment vector. `SPAWN_NO_FG` is r10 bit 5 |
 | 8 | `power` | stable | |
 | 9 | `create` | stable | |
 | 10 | `remove` | stable | |
@@ -98,7 +98,7 @@ Unknown codes decode to `Unsupported`. New codes append.
 | File cap band | `FILE_CAP_BASE = 3`, sixty-four per task (`MAX_OPEN_FILES`) | stable (ceiling raised in Milestone 71) |
 | Process cap band | `PROC_CAP_BASE = 0x80`, `MAX_PROC_CAPS = 16` per task | stable as of Milestone 71 (base moved from `0x40` so file caps `3..=66` do not overlap; ceiling stays 16). `SPAWN_WITH_CAPS` nibbles still name slots 0–14 |
 | Query snapshots (`stats`, `tasks`, `threads`, `files`, `dmesg`, self) | text, one record per line; field names are informational | **unstable** — parse defensively; field set grows |
-| `spawn` grant word (`r10`) | QUERY 1, WAIT 2, INHERIT 4, KEYBOARD 8, WITH_CAPS 16, NO_FG 32, rights mask bits 8..15, file-slot nibbles bits 16..23 | experimental with `spawn` |
+| `spawn` grant word (`r10`) | QUERY 1, WAIT 2, INHERIT 4, KEYBOARD 8, WITH_CAPS 16, NO_FG 32, LOADER 64, rights mask bits 8..15, file-slot nibbles bits 16..23 | experimental with `spawn` |
 | `spawn` limits | `SPAWN_NAME_MAX = 64`, `SPAWN_ARG_MAX = 4096` | experimental with `spawn` (arg ceiling raised in Milestone 71) |
 | Token rights | READ 1, WRITE 2, LIST 4, CREATE 8, REMOVE 16, ONCE 128 (`grant`/`su` only) | stable |
 | `seek` whence | SET 0, CUR 1, END 2 | stable |

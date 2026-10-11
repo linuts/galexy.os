@@ -137,6 +137,7 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(THREADS_PER_PROCESS, 16);
     assert_eq!(SysError::TimedOut as u64, 10);
     assert_eq!(SPAWN_NO_FG, 32);
+    assert_eq!(SPAWN_GRANT_LOADER, 64);
     assert_eq!(USER_HEAP_PAGES, 262_144);
     assert_eq!(CHAN_MSG_MAX, 256);
     assert_eq!(PROC_CAP_BASE, 0x80);

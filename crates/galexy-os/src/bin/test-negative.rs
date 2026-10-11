@@ -62,6 +62,27 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let secret = galfs::create_file_under(desktop, "secret").expect("secret file");
     galfs::append_file(secret, b"shh\n").expect("write secret");
 
+    // Path spawn uses the caller's tokens. Empty cards cannot read the
+    // file; cards that can read it still refuse a non-ELF.
+    let admin_cred = galfs::admin_cred();
+    let denied = sched::read_spawn_file(
+        admin_cred.root,
+        &galfs::unauth_cred().tokens,
+        "/Desktop/secret",
+    );
+    assert_eq!(
+        denied.unwrap_err(),
+        SysError::AccessDenied,
+        "path spawn without a token must be AccessDenied"
+    );
+    let not_elf = sched::read_spawn_file(admin_cred.root, &admin_cred.tokens, "/Desktop/secret");
+    assert_eq!(
+        not_elf.unwrap_err(),
+        SysError::Unsupported,
+        "a readable non-ELF must fail validate, not panic"
+    );
+    serial_println!("[test-negative] path spawn tokens");
+
     let baseline = mm::free_frames();
 
     // 1. Logged-out seat: launcher grants, no session root.

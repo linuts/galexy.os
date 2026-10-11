@@ -253,8 +253,9 @@ pub const POWER_REBOOT: u64 = 1;
 ///
 /// The child always receives the console. Bits other than the spawn
 /// flags and the rights mask ([`SPAWN_RIGHTS_BITS`]) are rejected.
-/// The loader and power stay with the shell. Keyboard stays there too
-/// unless [`SPAWN_GRANT_KEYBOARD`] is set.
+/// Power stays with the shell. The loader stays there too unless
+/// [`SPAWN_GRANT_LOADER`] is set. Keyboard stays there unless
+/// [`SPAWN_GRANT_KEYBOARD`] is set.
 pub const SPAWN_GRANT_QUERY: u64 = 1;
 /// `spawn` grant bit (`r10`): park the caller until the child exits
 /// (not only until the ELF is loaded). Convenience for Cap-wait; the
@@ -286,6 +287,13 @@ pub const SPAWN_WITH_CAPS: u64 = 16;
 /// what publishes the job for Ctrl-C. Without the flag, spawn still
 /// installs the foreground slot (Milestone 55).
 pub const SPAWN_NO_FG: u64 = 32;
+/// `spawn` grant bit (`r10`, bit 6): also give the new task the loader.
+///
+/// `rustc` needs this. It lists the sysroot with the query grant and
+/// then `spawn`s `gxld`. Power is not included. A child that does not
+/// set the bit cannot spawn, which is every utility the shell starts
+/// by name (`echo`, `ls`).
+pub const SPAWN_GRANT_LOADER: u64 = 64;
 /// `spawn` `r10` shift of the first moved file-slot index.
 pub const SPAWN_CAP_SHIFT: u64 = 16;
 /// Nibble in the [`SPAWN_CAP_SHIFT`] fields meaning "no second Cap".
@@ -439,18 +447,24 @@ pub enum Syscall {
     /// Reserved caps (console, self, keyboard, loader, stats, tasks,
     /// threads) are not files and fail `BadCap`.
     Close,
-    /// `spawn(cap, name, len)` — start a ramdisk program.
+    /// `spawn(cap, name, len)` — start a program.
     ///
     /// Args: `RDI = loader cap bits`, `RSI = user address of the name`,
-    /// `RDX = byte count` (1..=64). The name is a **label**: ASCII
-    /// alphanumeric plus `.` `_` `-` (no `/`). Optional: `R8` = argument
-    /// blob address, `R9` = blob length (at most 256; NUL-separated argv,
-    /// one argument when there is no interior NUL; no env), `R10` = grant bits
+    /// `RDX = byte count` (1..=[`SPAWN_NAME_MAX`]). A name with no `/`
+    /// is a ramdisk **label**: ASCII alphanumeric plus `.` `_` `-`.
+    /// A name with `/` is a galfs path (`/hello`). The shell rewrites
+    /// `./hello` from the login directory to `/hello` before the call.
+    /// The path is read with the caller's tokens; a miss is the galfs
+    /// error (`AccessDenied`, `NotFound`), not a loader panic. The
+    /// bytes must be an ELF. Optional: `R8` = argument blob address,
+    /// `R9` = blob length (at most [`SPAWN_ARG_MAX`]; NUL-separated
+    /// argv, one argument when there is no interior NUL; no env),
+    /// `R10` = grant bits
     /// ([`SPAWN_GRANT_QUERY`], [`SPAWN_WAIT`], [`SPAWN_INHERIT`],
-    /// [`SPAWN_GRANT_KEYBOARD`], [`SPAWN_WITH_CAPS`], or a combination,
-    /// plus an optional rights mask in [`SPAWN_RIGHTS_BITS`], up to
-    /// two file-slot nibbles at [`SPAWN_CAP_SHIFT`], and
-    /// [`SPAWN_NO_FG`]).
+    /// [`SPAWN_GRANT_KEYBOARD`], [`SPAWN_WITH_CAPS`], [`SPAWN_NO_FG`],
+    /// [`SPAWN_GRANT_LOADER`], or a combination, plus an optional
+    /// rights mask in [`SPAWN_RIGHTS_BITS`] and up to two file-slot
+    /// nibbles at [`SPAWN_CAP_SHIFT`]).
     /// Returns: `SyscallResult` — without [`SPAWN_WAIT`], `rax` is a
     /// process Cap ([`PROC_CAP_BASE`] + slot) with [`CapRights::PROC_PARENT`];
     /// with [`SPAWN_WAIT`], `rax` is the child's exit code (the Cap is still
@@ -477,9 +491,10 @@ pub enum Syscall {
     /// Returns: `SyscallResult`. A file's rax is a READ|WRITE `Cap`. A
     /// directory (path ending in `/`) returns `0`.
     /// The bytes live in a fixed kernel table, not the ramdisk. A
-    /// ramdisk name at `/`, or a name that already exists, is
+    /// bare ramdisk label, or a name that already exists, is
     /// `Unsupported` (unless `RDX` is `1` and the name is a scratch
-    /// file, which is emptied). A missing parent directory is
+    /// file, which is emptied). A path with `/` is galfs even when
+    /// the last component matches a ramdisk label (`/hello`). A missing parent directory is
     /// `NotFound`. A full scratch table, or a full per-task file table,
     /// is `NoResource`.
     Create,

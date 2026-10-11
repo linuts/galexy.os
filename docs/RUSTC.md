@@ -23,7 +23,8 @@ because the second is impossible without the first:
    host for the Galexy target, with the Cranelift backend — compiles
    `hello.rs` in ring 3, links it, and the shell runs the result.
    Milestone 73 proved the compile and the link inside a test kernel.
-   The shell half is Milestones 74–77.
+   Milestones 74–77 put that compiler on the login shell:
+   `rustc hello.rs -o /hello` then `/hello`.
 
 Self-hosting in the strong sense (Galexy rebuilding `rustc` on Galexy) is
 **not** a goal of this plan. A Cranelift-built `rustc` compiling `rustc`
@@ -331,8 +332,7 @@ reads the linker pipe to EOF before `Wait`.
 
 ### On the shell (Milestones 74–77)
 
-`test-rustc-hello` is not a seat. Three gaps sit between that boot
-and typing `rustc` at the login prompt:
+`test-rustc-hello` is not a seat. The login shell is:
 
 - The compiler ramdisk (~214 MiB ELF, ~90 MiB sysroot) is attached
   to `test-rustc`, `test-rustc-hello`, and `galexy-os-rustc`.
@@ -344,9 +344,12 @@ and typing `rustc` at the login prompt:
   copy is RAM-only and repeats every boot. A program with
   arguments inherits the session, so `rustc` can open those files
   (Milestone 76). A bare name still does not.
-- `spawn` only loads a ramdisk label (`file_name_ok` rejects `/`).
-  Milestone 77 loads `/hello` from galfs. The typed gate is
-  `rustc hello.rs -o hello` and then `/hello`.
+- `spawn` of a path loads that galfs ELF (Milestone 77). The typed
+  gate is `rustc hello.rs -o /hello` and then `/hello`, which prints
+  `hello from rustc on galexy`. The bare label `hello` stays the
+  ramdisk program, so `-o hello` is `Unsupported`. A spaced command
+  receives the query grant (`read_dir` of the sysroot) and the loader
+  grant (`rustc` spawns `gxld`).
 
 ## Explicit non-goals
 

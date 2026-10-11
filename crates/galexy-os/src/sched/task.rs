@@ -218,20 +218,35 @@ pub(crate) fn task_write_ex(cap: Cap, src: &[u8]) -> Result<IoOp, SysError> {
     Ok(op)
 }
 
+/// True when `name` is a bare ramdisk label (`hello`).
+///
+/// A path that contains `/` is a galfs object even when the last
+/// component matches (`/hello`). Spawn of the bare label still loads
+/// the ramdisk program.
+fn shadows_ramdisk(name: &str) -> bool {
+    if name.contains('/') || name.contains('@') {
+        return false;
+    }
+    let Ok(parsed) = galfs::parse_path(name) else {
+        return false;
+    };
+    parsed.owner.is_none()
+        && parsed.n == 1
+        && crate::sched::ramdisk::find(parsed.comps[0]).is_some()
+}
+
 /// Creates a galfs file or directory for the current user task.
 ///
 /// A path ending in `/` is a directory and the returned cap is null.
 /// A file cap carries READ and WRITE. `replace` empties an existing
-/// file instead of failing. A ramdisk name at `/` cannot be
-/// replaced. A name that already exists is `Unsupported`. A missing
+/// file instead of failing. A bare ramdisk label cannot be replaced.
+/// `/hello` can: it is a galfs file, and `hello` stays the ramdisk
+/// program. A name that already exists is `Unsupported`. A missing
 /// parent is `NotFound`. A full object table, or a full per-task file
 /// table, is `NoResource`. A path with no create token is `AccessDenied`.
 pub(crate) fn task_create(name: &str, replace: bool) -> Result<Cap, SysError> {
-    let parsed = galfs::parse_path(name)?;
-    if parsed.owner.is_none()
-        && parsed.n == 1
-        && crate::sched::ramdisk::find(parsed.comps[0]).is_some()
-    {
+    galfs::parse_path(name)?;
+    if shadows_ramdisk(name) {
         return Err(SysError::Unsupported);
     }
     let slot = current_slot();
@@ -267,16 +282,14 @@ pub(crate) fn task_create(name: &str, replace: bool) -> Result<Cap, SysError> {
 
 /// Deletes a galfs file or an empty directory and frees its slot.
 ///
-/// A ramdisk name at `/` is `Unsupported`. A directory that still has a
-/// child is `Unsupported`. A missing path is `NotFound`. Any task's open
-/// cap on that slot is dropped, so a later read or write is `BadCap`.
-/// A path with no remove token is `AccessDenied`.
+/// A bare ramdisk label is `Unsupported`. A path with `/` is galfs
+/// (`/hello` can be removed; `hello` cannot). A directory that still
+/// has a child is `Unsupported`. A missing path is `NotFound`. Any
+/// task's open cap on that slot is dropped, so a later read or write
+/// is `BadCap`. A path with no remove token is `AccessDenied`.
 pub(crate) fn task_remove(name: &str) -> Result<(), SysError> {
-    let parsed = galfs::parse_path(name)?;
-    if parsed.owner.is_none()
-        && parsed.n == 1
-        && crate::sched::ramdisk::find(parsed.comps[0]).is_some()
-    {
+    galfs::parse_path(name)?;
+    if shadows_ramdisk(name) {
         return Err(SysError::Unsupported);
     }
     let slot = current_slot();
@@ -311,18 +324,9 @@ pub(crate) fn task_remove(name: &str) -> Result<(), SysError> {
 
 /// Moves a galfs dirent from `old` to `new`.
 pub(crate) fn task_rename(old: &str, new: &str) -> Result<(), SysError> {
-    let old_parsed = galfs::parse_path(old)?;
-    let new_parsed = galfs::parse_path(new)?;
-    if old_parsed.owner.is_none()
-        && old_parsed.n == 1
-        && crate::sched::ramdisk::find(old_parsed.comps[0]).is_some()
-    {
-        return Err(SysError::Unsupported);
-    }
-    if new_parsed.owner.is_none()
-        && new_parsed.n == 1
-        && crate::sched::ramdisk::find(new_parsed.comps[0]).is_some()
-    {
+    galfs::parse_path(old)?;
+    galfs::parse_path(new)?;
+    if shadows_ramdisk(old) || shadows_ramdisk(new) {
         return Err(SysError::Unsupported);
     }
     let slot = current_slot();
@@ -379,11 +383,8 @@ pub(crate) fn task_truncate(cap: Cap, new_len: u64) -> Result<(), SysError> {
 
 /// Writes galfs metadata for `name` into `out`.
 pub(crate) fn task_stat(name: &str, out: &mut [u8]) -> Result<usize, SysError> {
-    let parsed = galfs::parse_path(name)?;
-    if parsed.owner.is_none()
-        && parsed.n == 1
-        && crate::sched::ramdisk::find(parsed.comps[0]).is_some()
-    {
+    galfs::parse_path(name)?;
+    if shadows_ramdisk(name) {
         return Err(SysError::Unsupported);
     }
     let slot = current_slot();

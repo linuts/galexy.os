@@ -697,20 +697,28 @@ owner the walk starts at the task's actor root. A token on the task
 (object id + rights) must cover the target: create needs CREATE on the
 parent, open needs READ, write needs WRITE, remove needs REMOVE, and
 the files snapshot needs LIST. Holding a token on a parent covers the
-children it permits. `open` of a path with no slash and no `@` still
+children it permits. `spawn` of a name with no `/` loads that ramdisk label. A name
+with `/` loads an ELF from galfs, including a RAM-store file, using
+the caller's tokens (`AccessDenied` when none cover it). The shell
+rewrites `./hello` from the login directory to `/hello`, so the
+compiled file does not collide with the ramdisk program `hello`.
+`open` of a path with no slash and no `@` still
 hits the ramdisk first and grants READ. Any other path walks galfs and
 must name a file (READ|WRITE). A directory open is `Unsupported`. A
 path with no covering token is `AccessDenied`. `write` on a galfs
 cap is positional (Milestone 70): bytes land at the cursor, overwriting
 in place and appending past the end, and the cursor advances by the
 count. `seek` moves that same cursor, so `seek(0)` then `read` sees
-what was just written. A ramdisk name at
-`/`, or a name that already exists, is `Unsupported`. A missing parent
+what was just written. A bare ramdisk label (`hello`) is
+`Unsupported`, so it cannot replace the program. A path with `/`
+is a galfs file even when the last component matches (`/hello`).
+A name that already exists is `Unsupported`. A missing parent
 is `NotFound`. A full object table is `NoResource`. `close` drops the
 task's cap; the bytes stay until `remove`. `write` on an
 archive open is `Unsupported`. `remove(name, len)` (syscall 10) deletes
-a galfs file or an empty directory and frees the slot. A ramdisk
-name, or a directory that still has a child, is `Unsupported`. A
+a galfs file or an empty directory and frees the slot. A bare ramdisk
+label, or a directory that still has a child, is `Unsupported`.
+`/hello` can be removed. A
 missing path is `NotFound`. An open cap on a removed file becomes
 `BadCap`. `grant(path, len, rights, task, task_len)` (syscall 11)
 installs a galfs token on a live user task: `RDX` is a mask of
@@ -825,16 +833,19 @@ after they finish; bare program names (`hello`, `linger`) drop the Cap
 (Cap remains installed). `r8`/`r9` are an optional argument, at most 256
 bytes, copied onto the child's stack (`rdi` is the address, `rsi` the
 length). `r10` bits are `SPAWN_GRANT_QUERY`, `SPAWN_WAIT`,
-`SPAWN_INHERIT`, and/or `SPAWN_GRANT_KEYBOARD` (bit 3). Any other bit
-outside the rights mask is `BadValue`.
+`SPAWN_INHERIT`, `SPAWN_GRANT_KEYBOARD` (bit 3), `SPAWN_WITH_CAPS`,
+`SPAWN_NO_FG`, and `SPAWN_GRANT_LOADER` (bit 6). Any other bit
+outside the rights mask and the file-slot nibbles is `BadValue`.
 User `spawn` rejects the F-key shell names (`shell`…`shell12`) and
 rejects a name that already has a live task (`NoResource`), so typing
 `shell` cannot start a second keyboard-less shell that spins. The child
 always receives the console, and it writes the console of the task that
 spawned it. `SPAWN_GRANT_KEYBOARD` also gives the child the keyboard
 so an interactive program (`nano`) can read keys while the shell
-Cap-waits. The loader stays with the shell once it is logged in. Power
-stays on init while init is alive. Boot starts one shell on each F-key, pinned to the BSP,
+Cap-waits. The loader stays with the shell except when the spawn
+sets `SPAWN_GRANT_LOADER`: a spaced command (`rustc hello.rs -o hello`)
+receives it so the compiler can start `gxld`. Named utilities (`echo`,
+`ls`) do not. Power stays on init while init is alive. Boot starts one shell on each F-key, pinned to the BSP,
 logged out (pre-login grants, no tokens, login banner with 1-based TTY).
 Password login restores loader/query. An admin login receives Power
 only when init is not running. F1's shell
@@ -1251,7 +1262,7 @@ main image and are listed at the end.
 | `test-init`, `test-jobcap` | `init_test_passes`, `jobcap_test_passes` | M53 init orphan root, M55 job Cap / Ctrl-C |
 | `test-sleep`, `test-idle` | `sleep_test_passes`, `idle_test_passes` | M56 time and deadlines, M58 policy freeze |
 | `test-rustc-hello` | `rustc_hello_runs` | M73 on-OS `rustc` links with `gxld` and the program runs |
-| `galexy-os-rustc` | `rustc_image_login_typing_e2e`, `rustc_print_cfg_typing_e2e` | M74/M75 login image carries `rustc` and imports the sysroot before the prompt. M76: `rustc --print cfg` prints `target_os="galexy"` and the prompt returns. Skipped when the ELF was absent at image build |
+| `galexy-os-rustc` | `rustc_image_login_typing_e2e`, `rustc_print_cfg_typing_e2e`, `rustc_hello_typing_e2e` | M74/M75 login image carries `rustc` and imports the sysroot. M76: `rustc --print cfg`. M77: `echo` a one-line hello, `rustc hello.rs -o /hello`, `/hello` prints `hello from rustc on galexy`. Skipped when the ELF was absent at image build |
 | `test-badelf`, `test-negative` | `badelf_test_passes`, `negative_test_passes` | M51 hostile ELF oracle and negative suite; M63 loader returns `SysError` and caps image pages |
 | `test-smep`, `test-smap`, `test-umip`, `test-kaslr` | `smep_test_passes`, `smap_test_passes`, `umip_test_passes`, `kaslr_kernel_base_differs_across_boots` | M63 SMEP, SMAP, UMIP, kernel KASLR (`kaslr` boots the image twice) |
 | `test-soak`, `test-fairness`, `test-pathological`, `test-bench` | `soak_test_passes`, `fairness_test_passes`, `pathological_test_passes`, `bench_test_passes` | M51 soak (exact table closure per round), steal fairness under load, console-budget flood; M64 `test-bench` prints `[bench] name=… us=…` and the runner asserts KVM ceilings |

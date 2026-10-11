@@ -8,6 +8,14 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#101](https://github.com/linuts/galexy.os/pull/101) — Milestone 77 —
+  `spawn` of a path loads an ELF from galfs under the caller's tokens.
+  A bare label stays a ramdisk program. The shell rewrites `./hello`
+  at `/` to `/hello`. A spaced command gets the query and loader
+  grants, so `rustc` can list the sysroot and spawn `gxld`.
+  `rustc hello.rs -o /hello` then `/hello` prints
+  `hello from rustc on galexy`. The release boot suite is 124 passes
+  under TCG.
 - [#100](https://github.com/linuts/galexy.os/pull/100) — Milestone 76 —
   a shell line whose first word is a ramdisk program is split on
   spaces into a NUL-separated argv, spawned with `SPAWN_INHERIT`,

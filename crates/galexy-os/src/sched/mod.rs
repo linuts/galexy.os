@@ -61,6 +61,7 @@ pub use spawn::interrupt_foreground;
 pub use spawn::is_console_shell_name;
 pub use spawn::note_tty_input;
 pub use spawn::poll_idle_logouts;
+pub use spawn::read_spawn_file;
 pub use spawn::seats_are_live;
 pub use spawn::set_foreground_for_test;
 pub use spawn::shell_is_live;

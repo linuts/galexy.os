@@ -2561,19 +2561,20 @@ cannot reuse that name. The login directory is `/`. `echo` redirection
 (`echo … > name`) can write the one-line source; that line fits in 80
 bytes. A longer source is `nano`.
 
-- [ ] A spawn name that is a path (`/hello`, `./hello` from the login
+- [x] A spawn name that is a path (`/hello`, `./hello` from the login
       directory) loads an ELF from galfs, including a RAM-store file.
       A label with no `/` stays a ramdisk program. `spawn` stays
       experimental: `galexy-abi`, `docs/ABI.md`, and `DESIGN.md` record
       the path form in the same PR
-- [ ] Session tokens apply. A path outside the caller's tokens fails
+- [x] Session tokens apply. A path outside the caller's tokens fails
       with the existing galfs error, not a loader panic
-- [ ] Typed E2E on `galexy-os-rustc` (skipped when the ELF was absent
+- [x] Typed E2E on `galexy-os-rustc` (skipped when the ELF was absent
       at image build): log in, write `hello.rs` with `echo`, run
-      `rustc hello.rs -o hello`, run `/hello`, and see
+      `rustc hello.rs -o /hello`, run `/hello`, and see
       `hello from rustc on galexy`. The prompt returns after each
-      command
-- [ ] Non-goals stay non-goals: `cargo`, proc macros, rebuilding
+      command. `-o hello` is `Unsupported`: that bare label is the
+      ramdisk program
+- [x] Non-goals stay non-goals: `cargo`, proc macros, rebuilding
       `rustc` or `std` on Galexy, `panic=unwind`, incremental
       compilation, and the compiler on the shared ramdisk
 
@@ -2584,8 +2585,12 @@ bytes. A longer source is `nano`.
 Open bullets below are tracked by milestone id where planned. Waived
 items stay here with rationale.
 
-- [ ] `rustc` can take arguments at the login shell (Milestones 74–76).
-      `spawn` still cannot load the ELF it writes. Milestone **77**
+- [x] ~~`rustc` can take arguments at the login shell (Milestones 74–76).
+      `spawn` still cannot load the ELF it writes. Milestone **77**~~ —
+      CLOSED by Milestone 77. `rustc hello.rs -o /hello` then `/hello`
+      prints `hello from rustc on galexy`. A spaced command receives
+      the query and loader grants so `rustc` can list the sysroot and
+      spawn `gxld`. The bare label `hello` stays the ramdisk program
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17
       (APIC family: LAPIC timer + I/O APIC keyboard route on every boot
