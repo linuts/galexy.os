@@ -8,6 +8,11 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#109](https://github.com/linuts/galexy.os/pull/109) — Milestone 91 —
+  Pin RustPython `85d5956` (MIT) and link one static ELF with the
+  galexy sysroot. Cranelift, no C library, no `std::net`. The target
+  JSON is unchanged. The ELF passes the sysroot loader check. It
+  does not boot yet.
 - [#108](https://github.com/linuts/galexy.os/pull/108) — Phase 14
   plan — RustPython is Milestones 91–96 and is required before the
   `v1.0` tag. The command is `python` on `galexy-os-python`. The
