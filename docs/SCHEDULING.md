@@ -71,6 +71,10 @@ system is the preemptive thread/user-task rotation.
 - Cap-kill wakes Cap-waiters with exit status `137`; a kill of a
   sleep / keyboard / pipe waiter clears the park with
   `SysError::Interrupted` before the slot goes `EXITED`.
+- Idle lock freezes the seat after 5 min at the prompt. A keyboard
+  read in progress returns `Locked`. The task is not exited, and a
+  Cap-wait is left parked. The scan names console shells only, so
+  init and the other services keep running.
 - **`sleep(ms)`** (Milestone 56): park until monotonic `timer_ticks`
   reaches a deadline; no Cap. Idle LAPIC arm is
   `min(next second, next sleeper)`. Busy IRQ path still re-arms a
@@ -193,7 +197,7 @@ lock-order table remains Milestone 48; do not invent a second story here.
 | Concern | Doc |
 | --- | --- |
 | Who may wait/kill a task | `PROCESS.md` (process Cap) |
-| Login cool-down / idle logout clock | monotonic `timer_ticks` (lockout + idle logout, M43). `Date` is civil UTC and does not move this |
+| Login cool-down / idle lock clock | monotonic `timer_ticks` (lockout + idle lock, M43). `Date` is civil UTC and does not move this |
 | Seat restart / Cap-wait supervision | `PROCESS.md` Phase 6; wake primitives here |
 | galfs tokens on a task | `AUTH.md` / `GALFS.md` |
 

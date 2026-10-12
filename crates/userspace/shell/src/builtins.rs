@@ -9,9 +9,9 @@ use core::sync::atomic::Ordering;
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
     close, dmesg_cap, grant, init_rpc, init_rpc_at, init_rpc_every, read, reboot, revoke, share,
-    shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, user, user_login,
-    user_logout, user_name, user_name_pass, user_passwd, user_quota, user_setquota, wait,
-    write_console,
+    shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, user, user_lock,
+    user_login, user_logout, user_name, user_name_pass, user_passwd, user_quota, user_setquota,
+    wait, write_console,
 };
 
 /// Sectioned help — short command column + one-line blurb.
@@ -52,6 +52,7 @@ pub(crate) fn show_help() {
     help_row(b"quota [user]", b"show object/byte limits");
     help_row(b"quota set ...", b"quota set <user> <objs> <bytes>");
     help_row(b"login [user]", b"password prompt (or inline pass)");
+    help_row(b"lock", b"freeze the session");
     help_row(b"logout", b"return to login screen");
     help_row(b"passwd [name]", b"masked password + confirm prompts");
     help_row(b"useradd <name>", b"create account (optional pass)");
@@ -130,6 +131,7 @@ pub(crate) fn help_row(cmd: &[u8], blurb: &[u8]) {
 pub(crate) fn must_change_allowed(line: &[u8]) -> bool {
     line == b"help"
         || line == b"whoami"
+        || line == b"lock"
         || line == b"logout"
         || line == b"fetch"
         || line == b"dashboard"
@@ -365,6 +367,15 @@ pub(crate) fn dispatch(
             must_change,
         );
         return None;
+    }
+    if line == b"lock" {
+        history.save();
+        let result = user_lock();
+        if !result.ok {
+            report_user(cwd, b"lock", result, false);
+            return None;
+        }
+        return Some(ReplEnd::Locked);
     }
     if line == b"logout" {
         // Persist while the session still holds galfs tokens — after

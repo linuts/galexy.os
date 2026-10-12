@@ -1865,6 +1865,123 @@ pub(crate) fn task_logout() -> Result<(), SysError> {
     Ok(())
 }
 
+/// Freeze `caller` in place. Tokens and the actor stay. Returns false
+/// when there is no session or the seat is already locked.
+pub(in crate::sched) fn apply_lock(caller: &mut Thread) -> bool {
+    if caller.fs_root == galfs::NO_OBJECT || caller.locked {
+        return false;
+    }
+    caller.locked = true;
+    caller.last_input_tick = 0;
+    true
+}
+
+/// Freeze the caller's session (`lock`, or the idle scan).
+pub(crate) fn task_lock() -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let owner = running_proc_index(&threads, slot)?;
+        let tty = threads[owner].tty;
+        let debug_id = threads[owner].debug_id;
+        if threads[owner].fs_root == galfs::NO_OBJECT {
+            return Err(SysError::AccessDenied);
+        }
+        if !apply_lock(&mut threads[owner]) {
+            return Ok(());
+        }
+        let mut name_buf = [0u8; 32];
+        let name_len = galfs::name_of_root(threads[owner].fs_root, &mut name_buf).unwrap_or(0);
+        let name = core::str::from_utf8(&name_buf[..name_len]).unwrap_or("?");
+        serial_println!(
+            "[auth] session lock user={} tty={} id={}",
+            name,
+            tty.saturating_add(1),
+            debug_id
+        );
+        sync_session_to_threads(&mut threads, owner);
+        Ok(())
+    })
+}
+
+/// `rax = 1` when the caller's session is locked.
+pub(crate) fn task_locked() -> Result<u64, SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let thread = &threads[running_proc_index(&threads, slot)?];
+        if thread.fs_root == galfs::NO_OBJECT {
+            return Err(SysError::AccessDenied);
+        }
+        Ok(u64::from(thread.locked))
+    })
+}
+
+/// Resume a locked session after the actor's password checks out.
+///
+/// The KDF runs outside [`THREADS`], same as login. A cool-down returns
+/// [`SysError::Locked`] before the KDF.
+pub(crate) fn task_unlock_session(password: &[u8]) -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    let tty = current_tty();
+    let mut name_buf = [0u8; 32];
+    let (name_len, gen, debug_id) = interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let thread = &threads[running_proc_index(&threads, slot)?];
+        if thread.fs_root == galfs::NO_OBJECT || !thread.locked {
+            return Err(SysError::AccessDenied);
+        }
+        let n = galfs::name_of_root(thread.fs_root, &mut name_buf)?;
+        Ok((n, thread.session_gen, thread.debug_id))
+    })?;
+    let name = core::str::from_utf8(&name_buf[..name_len]).unwrap_or("");
+    if lockout::blocked(name, tty) {
+        lockout::note_refused(name, tty);
+        return Err(SysError::Locked);
+    }
+    match galfs::verify_password(name, password) {
+        Ok(true) => {}
+        Ok(false) => {
+            lockout::record_failure(name, tty, true);
+            return Err(SysError::AccessDenied);
+        }
+        Err(SysError::NotFound) => {
+            lockout::record_failure(name, tty, false);
+            return Err(SysError::NotFound);
+        }
+        Err(err) => return Err(err),
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let owner = running_proc_index(&threads, slot)?;
+        let caller = &mut threads[owner];
+        if caller.session_gen != gen || !caller.locked || caller.fs_root == galfs::NO_OBJECT {
+            return Err(SysError::AccessDenied);
+        }
+        caller.locked = false;
+        caller.last_input_tick = crate::arch::timer_ticks();
+        serial_println!(
+            "[auth] session unlock user={} tty={} id={}",
+            name,
+            tty.saturating_add(1),
+            debug_id
+        );
+        sync_session_to_threads(&mut threads, owner);
+        Ok(())
+    })?;
+    lockout::record_success(name, tty);
+    Ok(())
+}
+
 /// Install `ALL` on `target`, durable home shares, and grants for that actor.
 ///
 /// `from_login` sets [`Thread::born_admin`] from the target (password
@@ -1885,6 +2002,7 @@ pub(in crate::sched) fn install_session(
         caller.born_admin = admin;
     }
     caller.must_change = galfs::actor_must_change(target);
+    caller.locked = false;
     caller.last_input_tick = crate::arch::timer_ticks();
     let gen = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
     caller.session_gen = gen;
@@ -1961,6 +2079,7 @@ pub(in crate::sched) fn sync_session_to_threads(threads: &mut [Thread], owner: u
     let fs_root = threads[owner].fs_root;
     let born_admin = threads[owner].born_admin;
     let session_gen = threads[owner].session_gen;
+    let locked = threads[owner].locked;
     for t in threads.iter_mut() {
         if t.leader_slot != leader_slot || t.cr3.load(Ordering::Acquire) != cr3 {
             continue;
@@ -1969,6 +2088,7 @@ pub(in crate::sched) fn sync_session_to_threads(threads: &mut [Thread], owner: u
         t.fs_root = fs_root;
         t.born_admin = born_admin;
         t.session_gen = session_gen;
+        t.locked = locked;
     }
 }
 
@@ -1977,6 +2097,7 @@ pub(in crate::sched) fn clear_session(caller: &mut Thread) -> u64 {
     caller.fs_tokens = [galfs::Token::empty(); galfs::TOKEN_SLOTS];
     caller.born_admin = false;
     caller.must_change = false;
+    caller.locked = false;
     caller.last_input_tick = 0;
     let gen = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
     caller.session_gen = gen;
@@ -2145,7 +2266,7 @@ pub(crate) fn task_su(name: &str) -> Result<(), SysError> {
     })
 }
 
-/// Records a keystroke on `tty` so idle logout starts from now.
+/// Records a keystroke on `tty` so idle lock starts from now.
 pub fn note_tty_input(tty: u8) {
     let now = crate::arch::timer_ticks();
     interrupts::without_interrupts(|| {
@@ -2158,19 +2279,21 @@ pub fn note_tty_input(tty: u8) {
     });
 }
 
-/// Logged-in console shells with no keys for [`IDLE_LOGOUT_MS`] are exited
-/// (init respawns a logged-out seat). A shell Cap-waiting on a foreground
-/// child pauses that clock until the child exits, or until
-/// [`FOREGROUND_IDLE_MS`] with no keys. Test kernels pass `all_tasks` so a
-/// blob can trip the same path.
+/// Logged-in console shells with no keys for [`IDLE_LOGOUT_MS`] are
+/// locked. The actor and tokens stay; the password opens the same seat.
+/// A keyboard read in progress returns [`SysError::Locked`] so the shell
+/// can draw the lock screen. A Cap-wait is left alone.
+///
+/// A shell Cap-waiting on a foreground child pauses that clock until the
+/// child exits, or until [`FOREGROUND_IDLE_MS`] with no keys. Test kernels
+/// pass `all_tasks` so a blob can trip the same path.
 pub(in crate::sched) fn idle_scan(all_tasks: bool) {
     let now = crate::arch::timer_ticks();
-    let seal = interrupts::without_interrupts(|| {
+    interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let n = threads.len();
-        let mut cleared = false;
         for i in 0..n {
-            if !threads[i].is_user {
+            if !threads[i].is_user || threads[i].locked {
                 continue;
             }
             let state = threads[i].state.load(Ordering::Acquire);
@@ -2186,7 +2309,7 @@ pub(in crate::sched) fn idle_scan(all_tasks: bool) {
             // A foreground child (`rustc`, `nano`) keeps the seat, up to
             // [`FOREGROUND_IDLE_MS`] after the last key. The clock
             // restarts when the Cap-wait ends, so the prompt is not
-            // already inside the 60 s window. Keys during the wait
+            // already inside the 5 min window. Keys during the wait
             // (nano) move `last_input_tick` and extend the pause.
             let holding =
                 state == STATE_WAITING && threads[i].wait_for_exit.load(Ordering::Acquire);
@@ -2203,42 +2326,56 @@ pub(in crate::sched) fn idle_scan(all_tasks: bool) {
             if !idle_due(last, now) {
                 continue;
             }
+            let Some(owner) = proc_index(&threads, i + 1) else {
+                continue;
+            };
+            if !apply_lock(&mut threads[owner]) {
+                continue;
+            }
             let tty = threads[i].tty;
-            let mut raw = [0u8; NAME_CAP];
-            let name_len = threads[i].name_len as usize;
-            raw[..name_len].copy_from_slice(&threads[i].name_bytes[..name_len]);
-            let name = core::str::from_utf8(&raw[..name_len]).unwrap_or("?");
+            let mut name_buf = [0u8; 32];
+            let name_len = galfs::name_of_root(threads[owner].fs_root, &mut name_buf).unwrap_or(0);
+            let name = core::str::from_utf8(&name_buf[..name_len]).unwrap_or("?");
             serial_println!(
-                "[auth] idle logout user={} tty={}",
+                "[auth] idle lock user={} tty={}",
                 name,
                 tty.saturating_add(1)
             );
-            let _ = clear_session(&mut threads[i]);
-            cleared = true;
-            if state == STATE_WAITING {
-                interrupt_io_waiter(&mut threads, i);
-            }
-            threads[i].exit_code.store(EXIT_KILLED, Ordering::Release);
-            threads[i].state.store(STATE_EXITED, Ordering::Release);
-            if threads[i].leader_slot == 0 {
-                exit_siblings(&mut threads, i + 1, EXIT_KILLED);
+            sync_session_to_threads(&mut threads, owner);
+            // The prompt is a keyboard read. Hand it `Locked` so the shell
+            // draws the lock screen instead of taking the next key as a
+            // command. A Cap-wait (and a sleep) stays parked.
+            if state == STATE_WAITING && threads[i].io_kind.load(Ordering::Acquire) == IO_KEYBOARD {
+                clear_wait_fields(&threads[i]);
+                stamp_waiter_frame(&threads[i], SyscallResult::err(SysError::Locked));
+                set_running(&threads[i]);
             }
         }
-        cleared && !sessions_open(&threads)
     });
-    if seal {
-        galfs::seal_and_lock();
-    }
 }
 
-/// Main-loop idle logout for F-key shells.
-pub fn poll_idle_logouts() {
+/// Main-loop idle lock for F-key shells.
+pub fn poll_idle_locks() {
     idle_scan(false);
 }
 
 /// Same scan, including non-shell tasks. Test kernels only.
 pub fn test_poll_idle_all() {
     idle_scan(true);
+}
+
+/// True when a live user task named `name` has a locked session.
+pub fn test_session_locked(name: &str) -> bool {
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        threads.iter().any(|t| {
+            let state = t.state.load(Ordering::Acquire);
+            t.is_user
+                && t.name() == name
+                && t.locked
+                && (state == STATE_RUNNING || state == STATE_WAITING)
+        })
+    })
 }
 
 /// Moves `name`'s last keystroke `ticks` into the past (test tick injection).

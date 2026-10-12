@@ -103,11 +103,14 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
 3. After a successful password login the prompt is `user@galexy>`.
 4. `whoami` while logged out fails (`AccessDenied`).
 5. `logout` returns to the login screen (not a shell prompt).
+6. `lock`, and 5 min with no keys, freeze the seat. The password
+   resumes it. Cwd and the actor stay.
 
 ## Password login and logout
 
 ```text
 login [user] [password]
+lock
 logout
 ```
 
@@ -123,6 +126,20 @@ Inline `login <user> <password>` remains for scripts and older tests.
 
 `logout` clears tokens, sets `fs_root = none`, restores pre-login grants,
 and returns the shell to the login screen.
+
+`lock` freezes that same session. Tokens stay. File, spawn, and power
+calls return `Locked` until the actor's password is entered again
+(`USER_UNLOCK_SESSION`). Whoami, the keyboard, and the console still
+work, so the shell can draw the lock screen. Logout still ends the
+session. A child that already inherited cards keeps them until that
+child exits, same as logout. Five failed unlock guesses use the same
+cool-down as login.
+
+Init and the other services are other tasks. Locking this seat does
+not stop them, and it does not seal the volume, so a service that
+uses the disk keeps the key. The production idle scan only freezes
+logged-in console shells (`shell` through `shell12`). The locked
+shell cannot `svc` until the password opens it. Init keeps the table.
 
 ### Login lockout
 
@@ -218,16 +235,14 @@ through init; `svc status` is open to any logged-in seat
 
 Login and logout bump a session generation (`[auth] session login
 user=… gen=N tty=K`). It is an audit counter, not a capability. A
-logged-in F-key shell with no keystrokes for 60 s (`IDLE_LOGOUT_MS` on
-`timer_ticks`) is exited; init respawns a logged-out seat
-(`[auth] idle logout`). A shell Cap-waiting on a foreground child
-pauses that clock. The pause ends when the child exits (the 60 s
-window starts then) or after 15 min with no keys
-(`FOREGROUND_IDLE_MS`). Keys during the wait, such as `nano`, move
-that 15 min window. A `rustc` compile longer than a minute is not
-logged out underneath, and a command left running with nobody at the
-keyboard still is. The shell is what logs out. A child that already
-inherited cards keeps them until that child exits.
+logged-in F-key shell with no keystrokes for 5 min (`IDLE_LOGOUT_MS` on
+`timer_ticks`) is locked (`[auth] idle lock`). The seat stays. The
+password opens it. A shell Cap-waiting on a foreground child pauses
+that clock. The pause ends when the child exits (the 5 min window
+starts then) or after 15 min with no keys (`FOREGROUND_IDLE_MS`).
+Keys during the wait, such as `nano`, move that 15 min window. A
+`rustc` compile is not locked underneath, and a command left running
+with nobody at the keyboard still is. The shell is what locks.
 
 COM1 audit lines name the actor, path, rights mask, or target task.
 They never include password bytes. Rights are the raw mask
@@ -237,6 +252,9 @@ after login. Repeated `login fail` lines collapse in that ring.
 
 ```text
 [auth] session login user=admin gen=1 tty=1
+[auth] session lock user=admin tty=1
+[auth] idle lock user=admin tty=1
+[auth] session unlock user=admin tty=1
 [auth] session logout gen=2 tty=1
 [auth] session su user=eve gen=3 tty=1
 [auth] passwd user=admin

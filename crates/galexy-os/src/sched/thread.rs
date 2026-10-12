@@ -84,8 +84,8 @@ pub(in crate::sched) static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 /// Test kernels shrink the idle window. `0` means [`IDLE_LOGOUT_MS`].
 pub(in crate::sched) static IDLE_LIMIT_OVERRIDE: AtomicU64 = AtomicU64::new(0);
 /// Logged-in console with no keystrokes for this long is logged out.
-/// Same clock as lockout (`timer_ticks`, ~1 ms).
-pub const IDLE_LOGOUT_MS: u64 = 60_000;
+/// Five minutes at the prompt. Same clock as lockout (`timer_ticks`, ~1 ms).
+pub const IDLE_LOGOUT_MS: u64 = 5 * 60_000;
 /// Cap-wait on a foreground child pauses [`IDLE_LOGOUT_MS`] for this long
 /// after the last key. A compile does not read the keyboard; a command
 /// left running with nobody there still logs the seat out.
@@ -366,9 +366,12 @@ pub(in crate::sched) struct Thread {
     pub(in crate::sched) session_gen: u64,
     /// `timer_ticks` of the last key delivered to this TTY, or 0 if none.
     pub(in crate::sched) last_input_tick: u64,
-    /// Idle logout is paused for a Cap-waited foreground child. The next
-    /// scan after that wait clears it and restarts the 60 s clock.
+    /// Idle lock is paused for a Cap-waited foreground child. The next
+    /// scan after that wait clears it and restarts the [`IDLE_LOGOUT_MS`] clock.
     pub(in crate::sched) idle_hold: bool,
+    /// Session is frozen. Tokens stay; file, spawn, and power fail
+    /// [`galexy_abi::SysError::Locked`] until the password is entered again.
+    pub(in crate::sched) locked: bool,
     /// Timer tick when [`console_budget_used`] was last reset.
     pub(in crate::sched) console_budget_tick: u64,
     /// Console bytes written during [`console_budget_tick`].
@@ -958,6 +961,7 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
             session_gen: 0,
             last_input_tick: 0,
             idle_hold: false,
+            locked: false,
             console_budget_tick: 0,
             console_budget_used: 0,
             heap_pages: 0,
@@ -1094,6 +1098,7 @@ pub(in crate::sched) fn register_thread(leader: &LeaderSnapshot, kstack: Vec<u8>
             session_gen: leader.session_gen,
             last_input_tick: 0,
             idle_hold: false,
+            locked: false,
             console_budget_tick: 0,
             console_budget_used: 0,
             heap_pages: 0,
@@ -1171,6 +1176,7 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             session_gen: 0,
             last_input_tick: 0,
             idle_hold: false,
+            locked: false,
             console_budget_tick: 0,
             console_budget_used: 0,
             heap_pages: 0,
@@ -1498,6 +1504,7 @@ pub(crate) fn spawn_user_with_grants(
             session_gen: 0,
             last_input_tick: 0,
             idle_hold: false,
+            locked: false,
             console_budget_tick: 0,
             console_budget_used: 0,
             heap_pages: 0,

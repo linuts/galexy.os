@@ -21,7 +21,8 @@
 //! fastfetch-style dashboard prints, then the prompt is `user@galexy>`
 //! (with `:/path` when cwd is not `/`). Up/down arrows recall lines from
 //! the session history (loaded from / saved to per-user `shell.history`
-//! on login / logout). `logout` returns to login.
+//! on login / logout). `lock` freezes the seat until the same password.
+//! Five minutes with no keys does that too. `logout` returns to login.
 
 #![no_std]
 #![no_main]
@@ -31,7 +32,7 @@ extern crate alloc;
 use galexy_abi::{Cap, SysError};
 use galexy_rt::{
     arg, entry, keyboard_cap, read, stats_cap, tasks_cap, user, user_login, user_unlock,
-    volume_locked, write_console, yield_now,
+    user_unlock_session, volume_locked, write_console, yield_now,
 };
 
 mod builtins;
@@ -68,12 +69,15 @@ fn main() -> i32 {
         }
         let mut history = History::new();
         history.load();
-        match repl(kbd, &mut cwd, &mut must_change, &mut history) {
-            ReplEnd::Logout => {
-                must_change = false;
-                continue;
+        loop {
+            match repl(kbd, &mut cwd, &mut must_change, &mut history) {
+                ReplEnd::Logout => {
+                    must_change = false;
+                    break;
+                }
+                ReplEnd::Locked => lock_screen(kbd, tty),
+                ReplEnd::Die(code) => return code,
             }
-            ReplEnd::Die(code) => return code,
         }
     }
 }
@@ -139,6 +143,52 @@ fn login_screen(kbd: Cap, tty: u8) -> Option<bool> {
                     yield_now();
                 }
             }
+        }
+    }
+}
+
+/// Password prompt for a frozen session. Cwd and history are kept.
+fn lock_screen(kbd: Cap, tty: u8) {
+    loop {
+        write_console(&[0x0c]);
+        write_console(b"Galexy.OS v");
+        write_console(galexy_abi::OS_VERSION.as_bytes());
+        write_console(b" (tty");
+        write_tty_digits(tty);
+        write_console(b")\n\nSession locked\nUser     ");
+        let mut name = [0u8; USER_MAX];
+        let got = user(&mut name, galexy_abi::USER_WHOAMI);
+        if got.ok && got.value > 0 {
+            write_console(&name[..(got.value as usize).min(USER_MAX)]);
+        } else {
+            write_console(b"?");
+        }
+        write_console(b"\n\nPassword: ");
+        let mut pass = [0u8; PASS_MAX];
+        let plen = match read_line(kbd, &mut pass, true) {
+            LineRead::Denied => {
+                wipe(&mut pass);
+                return;
+            }
+            LineRead::Cancel | LineRead::Overlong | LineRead::Line(0) => {
+                wipe(&mut pass);
+                continue;
+            }
+            LineRead::Line(n) => n,
+        };
+        let result = user_unlock_session(&pass[..plen]);
+        wipe(&mut pass);
+        if result.ok {
+            write_console(b"\n");
+            return;
+        }
+        if result.value == SysError::Locked as u64 {
+            write_console(b"\nLogin locked\n");
+        } else {
+            write_console(b"\nLogin incorrect\n");
+        }
+        for _ in 0..30 {
+            yield_now();
         }
     }
 }

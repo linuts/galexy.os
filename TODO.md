@@ -1124,9 +1124,10 @@ Make seats behave like accounts, not permanent admin shells.
 - [x] **Remove `crash` from production shells**: `crash-seam` feature.
       The `galexy-os` ramdisk omits it. Supervisor e2e boots
       `galexy-os-crashseam` (same kernel, shell rebuilt with the feature)
-- [x] **Idle timeout**: 60 s (`IDLE_LOGOUT_MS`) with no keys on a
-      logged-in F-key shell exits the seat (init respawns logged out).
-      `bin/test-idle` backdates `last_input_tick`
+- [x] **Idle timeout**: 5 min (`IDLE_LOGOUT_MS`) with no keys on a
+      logged-in F-key shell locks the seat (the password opens it).
+      Other tasks keep running. `bin/test-idle` backdates
+      `last_input_tick` and checks a logged-in `probe` still syncs
 - [x] **Session id / generation**: `NEXT_SESSION` bumps on login, `su`,
       and logout. Serial: `[auth] session login user=… gen=N tty=K`
 - [x] Tests: lockout trips (`bin/test-lockout`, host `LoginLockout`)
@@ -1166,7 +1167,7 @@ Lockout and idle logout need a trustworthy clock source.
       lines use monotonic `timer_ticks` only
 - [x] **Lockout cool-down** wired to monotonic `timer_ticks` (absolute
       deadline; `test-lockout` waits it out). Reboot clears RAM state.
-- [x] **Idle logout** wired to monotonic `timer_ticks` (60 s, see above)
+- [x] **Idle lock** wired to monotonic `timer_ticks` (5 min, see above)
 - [x] **Timeout helpers**: `test_backdate_input` injects ticks on the
       same `timer_ticks` clock (`bin/test-idle`). No QEMU accel flag
       (TCG stays the suite default)

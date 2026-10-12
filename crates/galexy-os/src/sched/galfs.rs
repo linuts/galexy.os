@@ -685,7 +685,7 @@ pub fn seal_and_lock() {
 ///
 /// Residual RAM remanence after this wipe is an accepted cold-boot risk.
 ///
-/// IRQ-gated: the main loop reaches here through idle logout with IF=1,
+/// IRQ-gated: logout reaches here from the syscall path with IF=0,
 /// and `VOLUME_KEY` / `VOLUME_PASS` are also taken by syscalls (IF=0) on
 /// the same CPU — a preempted holder would wedge them (lock-audit rule).
 pub fn wipe_volume_key() {
