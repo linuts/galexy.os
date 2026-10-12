@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#119](https://github.com/linuts/galexy.os/pull/119) — Demo —
+  The reviewer tour is a real two-seat card (`grant lr /Desktop shell2`,
+  path `/admin@Desktop`). A seat parked on its prompt can receive the
+  card. Another seat presses Enter after the volume passphrase is chosen.
 - [#118](https://github.com/linuts/galexy.os/pull/118) — Auth —
   A fresh disk has no volume passphrase until the operator chooses
   one. The login screen then says to log in as admin and run
