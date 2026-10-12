@@ -422,6 +422,14 @@ pub(crate) fn dispatch(
         two_path_util(cwd, b"mv", rest);
         return None;
     }
+    // `python` with no file is the REPL. It needs the keyboard, and the
+    // prompt waits until `exit()`. `python FILE` takes the argv path
+    // below and does not take the keyboard.
+    if line == b"python" {
+        let grants = galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_KEYBOARD;
+        spawn_and_prompt(cwd, b"python", b"", grants, true);
+        return None;
+    }
     if !line.contains(&b' ') {
         launch(cwd, line);
         return None;

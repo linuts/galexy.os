@@ -2847,8 +2847,8 @@ This phase can land beside Phase 10 and Phase 13.
       --python` boots it. `cargo run` stays the small image
 - [x] The runner skips the image when the ELF was absent at build.
       CI does not download RustPython
-- [x] `python` with no arguments prints a usage line and returns to
-      the prompt. There is no REPL
+- [x] `python` with no arguments is the REPL. `exit()` returns to
+      the prompt
 
 ## Milestone 96 — Run it (Phase 14 gate)
 
@@ -2858,9 +2858,9 @@ This phase can land beside Phase 10 and Phase 13.
 - [ ] The same login runs a program that reads one galfs file and
       writes another. The prompt returns after each command
 - [ ] That run leaves no child task
-- [ ] Non-goals stay non-goals: CPython, `pip`, a REPL, sockets, a
-      Python service, and a copy of the RustPython tree in this
-      repository
+- [ ] Non-goals stay non-goals: CPython, `pip`, sockets, a Python
+      service, and a copy of the RustPython tree in this repository.
+      `python` with no file is the REPL (`>>>`, `exit()`)
 
 ---
 

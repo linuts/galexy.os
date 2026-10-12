@@ -2089,67 +2089,35 @@ fn python_hello_runs() {
     );
 }
 
-/// Milestone 95: `galexy-os-python` carries `python`. No arguments
-/// print a usage line and the prompt comes back. There is no REPL.
-/// Skipped when the ELF was absent at image build.
+/// Milestone 95, with the REPL the login command grew: `python` with
+/// no file prints `>>>`, runs one statement, and `exit()` returns to
+/// the shell. Skipped when the ELF was absent at image build.
 #[test]
-fn python_usage_typing_e2e() {
+fn python_repl_typing_e2e() {
     if env!("GALEXY_HAVE_PYTHON") != "1" {
-        eprintln!("python_usage_typing_e2e: skipped (no target/galexy-python/python)");
+        eprintln!("python_repl_typing_e2e: skipped (no target/galexy-python/python)");
         return;
     }
-    let keys = with_login(&[
-        ("p", "p"),
-        ("y", "y"),
-        ("t", "t"),
-        ("h", "h"),
-        ("o", "o"),
-        ("n", "n"),
-        ("ret", "usage: python FILE"),
-        ("e", "e"),
-        ("c", "c"),
-        ("h", "h"),
-        ("o", "o"),
-        ("spc", " "),
-        ("p", "p"),
-        ("y", "y"),
-        ("minus", "-"),
-        ("p", "p"),
-        ("r", "r"),
-        ("o", "o"),
-        ("m", "m"),
-        ("p", "p"),
-        ("t", "t"),
-        ("ret", "py-prompt"),
-    ]);
-    let serial = boot_and_type(
-        &image("galexy-os-python"),
-        &keys,
-        "[boot] main loop ready",
-        "py-prompt",
-        Duration::from_millis(30),
+    let serial = boot_typed(
+        "galexy-os-python",
+        &[
+            ("python", ">>>"),
+            ("print(\"py-repl\")", "py-repl"),
+            ("exit()", "admin@galexy>"),
+        ],
+        "py-repl",
         Duration::from_secs(360),
     );
-    let usage = serial
-        .find("usage: python FILE")
-        .expect("python printed no usage line");
-    let marker = serial
-        .rfind("py-prompt")
-        .expect("prompt did not accept a command after python");
-    let prompt = serial
-        .rfind("admin@galexy>")
-        .expect("prompt missing after python");
+    let banner = serial.find(">>>").expect("python drew no REPL");
+    let marker = serial.rfind("py-repl").expect("REPL did not print");
+    let prompt = serial.rfind("admin@galexy>").expect("prompt missing");
     assert!(
-        usage < marker && marker < prompt,
-        "prompt did not return after python; serial:\n{serial}"
+        banner < marker && marker < prompt,
+        "prompt did not return after the REPL; serial:\n{serial}"
     );
     assert!(
         !serial.contains("command not found"),
         "shell rejected python; serial:\n{serial}"
-    );
-    assert!(
-        !serial.contains(">>>"),
-        "python drew a REPL; serial:\n{serial}"
     );
     assert!(
         !serial.contains("[pf]"),
@@ -2159,6 +2127,129 @@ fn python_usage_typing_e2e() {
         !serial.contains("[PANIC]") && !serial.contains("double fault"),
         "kernel panicked; serial:\n{serial}"
     );
+}
+
+/// Milestone 96: the image `cargo run` boots carries `python`. A typed
+/// login writes `hello.py`, runs it, then copies one galfs file to
+/// another. `tasks` afterwards does not list `python`. When `rustc`
+/// was built, the same boot imports the sysroot. Skipped when the
+/// interpreter ELF was absent.
+#[test]
+fn python_hello_typing_e2e() {
+    if env!("GALEXY_HAVE_PYTHON") != "1" || env!("GALEXY_HAVE_DESK") != "1" {
+        eprintln!("python_hello_typing_e2e: skipped (no desk image with python)");
+        return;
+    }
+    let serial = boot_typed(
+        "galexy-os-desk",
+        &[
+            (
+                "echo print(\"hello from python on galexy\") > hello.py",
+                "admin@galexy>",
+            ),
+            ("python hello.py", "hello from python on galexy"),
+            ("echo alpha > note.txt", "admin@galexy>"),
+            (
+                "echo open(\"out.txt\",\"w\").write(open(\"note.txt\").read()) > copy.py",
+                "admin@galexy>",
+            ),
+            ("python copy.py", "admin@galexy>"),
+            ("cat out.txt", "alpha"),
+            ("tasks", "spawned since boot"),
+        ],
+        "spawned since boot",
+        Duration::from_secs(900),
+    );
+    let typed = serial
+        .find("hello from python on galexy")
+        .expect("hello.py was not echoed");
+    assert!(
+        serial[typed + 1..].contains("hello from python on galexy"),
+        "python hello.py did not print; serial:\n{serial}"
+    );
+    let copied = serial.rfind("alpha").expect("cat did not print the copy");
+    let tasks_at = serial
+        .rfind("spawned since boot")
+        .expect("tasks did not answer");
+    assert!(copied < tasks_at, "cat ran after tasks; serial:\n{serial}");
+    assert!(
+        !serial[tasks_at..].contains("name=python"),
+        "python was still a task; serial:\n{serial}"
+    );
+    if env!("GALEXY_HAVE_RUSTC") == "1" {
+        let sysroot = serial
+            .find("rustc-sysroot:")
+            .expect("rustc sysroot was not imported");
+        let ready = serial
+            .find("[boot] main loop ready")
+            .expect("boot ready line missing");
+        assert!(sysroot < ready, "sysroot import ran after the prompt");
+    }
+    assert!(
+        !serial.contains("command not found"),
+        "shell rejected a command; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[pf]"),
+        "a program faulted; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+}
+
+/// Login, then each `(line, marker)` is typed and Enter waits for `marker`.
+fn boot_typed(
+    image_name: &str,
+    lines: &[(&str, &str)],
+    final_marker: &str,
+    timeout: Duration,
+) -> String {
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    for (line, marker) in lines {
+        owned.extend(type_line(line, marker));
+    }
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    boot_and_type(
+        &image(image_name),
+        &keys,
+        "[boot] main loop ready",
+        final_marker,
+        Duration::from_millis(30),
+        timeout,
+    )
+}
+
+fn type_line(line: &str, marker: &str) -> Vec<(String, String)> {
+    let mut keys = Vec::new();
+    for c in line.chars() {
+        keys.push(keystroke(c));
+    }
+    keys.push(("ret".to_string(), marker.to_string()));
+    keys
+}
+
+fn keystroke(c: char) -> (String, String) {
+    let code = match c {
+        'a'..='z' | '0'..='9' => c.to_string(),
+        ' ' => "spc".to_string(),
+        '(' => "shift+9".to_string(),
+        ')' => "shift+0".to_string(),
+        '"' => "shift+apostrophe".to_string(),
+        '>' => "shift+dot".to_string(),
+        '.' => "dot".to_string(),
+        ',' => "comma".to_string(),
+        '-' => "minus".to_string(),
+        _ => panic!("no qcode for {c:?}"),
+    };
+    (code, c.to_string())
 }
 
 /// Milestone 73: host `rust-lld` and `gxld` images of a cg_clif hello both

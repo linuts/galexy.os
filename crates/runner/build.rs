@@ -186,12 +186,7 @@ fn main() {
                 &ramdisk_path,
                 &rustc_ramdisk,
                 &login_rustc,
-                |name| {
-                    name == "rustc"
-                        || name == "gxld"
-                        || name == "x86_64-unknown-galexy.json"
-                        || name.starts_with("srlib/")
-                },
+                keep_rustc_login,
                 5,
             );
             variants.push(("galexy-os-rustc", &login_rustc));
@@ -208,6 +203,37 @@ fn main() {
                 1,
             );
             variants.push(("galexy-os-python", &login_python));
+        }
+        // `cargo run` boots this image when either ELF was built. Test
+        // kernels keep the small ramdisk. CI, which has neither ELF,
+        // still builds `galexy-os` and skips the desk.
+        let desk = out_dir.join("ramdisk-desk.tar");
+        let have_desk = if have_rustc && have_python {
+            let mid = out_dir.join("ramdisk-desk-rustc.tar");
+            append_ramdisk(&ramdisk_path, &rustc_ramdisk, &mid, keep_rustc_login, 5);
+            append_ramdisk(&mid, &python_ramdisk, &desk, |name| name == "python", 1);
+            true
+        } else if have_rustc {
+            append_ramdisk(&ramdisk_path, &rustc_ramdisk, &desk, keep_rustc_login, 5);
+            true
+        } else if have_python {
+            append_ramdisk(
+                &ramdisk_path,
+                &python_ramdisk,
+                &desk,
+                |name| name == "python",
+                1,
+            );
+            true
+        } else {
+            false
+        };
+        println!(
+            "cargo:rustc-env=GALEXY_HAVE_DESK={}",
+            if have_desk { "1" } else { "0" }
+        );
+        if have_desk {
+            variants.push(("galexy-os-desk", &desk));
         }
         for (variant, ramdisk) in variants {
             let bios_path = out_dir.join(format!("{variant}-bios.img"));
@@ -229,6 +255,8 @@ fn main() {
                 uefi_path.display()
             ));
         }
+    } else {
+        println!("cargo:rustc-env=GALEXY_HAVE_DESK=0");
     }
 
     println!("cargo:rustc-env=GALEXY_IMAGES={}", manifest);
@@ -480,6 +508,13 @@ fn link_one(src: &Path, out: &Path, libs: &Path, json: &Path, gxld: Option<&Path
         out.display()
     );
     bytes
+}
+
+fn keep_rustc_login(name: &str) -> bool {
+    name == "rustc"
+        || name == "gxld"
+        || name == "x86_64-unknown-galexy.json"
+        || name.starts_with("srlib/")
 }
 
 /// `base` plus the entries of `extra` that `keep` accepts. A name that

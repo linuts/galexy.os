@@ -500,13 +500,15 @@ This phase can land beside Phase 10 and Phase 13.
 4. **94 Files** ✅ — the same kernel reads and writes a galfs file
    with the task's token. `builtins.open` is `std::fs` (`_io.FileIO`
    needs host_env). A missing token is a Python exception
-5. **95 Image** ✅ — `galexy-os-python`, `cargo run --release -- --python`.
-   `cargo run` stays small. No arguments print a usage line and the
-   prompt returns. No REPL
-6. **96 Run it** — typed login: `python hello.py`, then a program
-   that copies a file. No child task. **Phase 14 gate**
+5. **95 Image** ✅ — `galexy-os-python` when the ELF exists. `cargo run`
+   boots `galexy-os-desk` with no flag, and that image also carries
+   `rustc` and its sysroot when the compiler ELF was built. The
+   shared test ramdisk stays small
+6. **96 Run it** — typed login on that image: `python hello.py`, then
+   a program that copies a file. No child task. `python` with no file
+   is the REPL. **Phase 14 gate**
 
-Non-goals: CPython, `pip`, a REPL, `subprocess`, sockets, a Python
+Non-goals: CPython, `pip`, `subprocess`, sockets, a Python
 service, and a copy of the RustPython tree in this repository.
 
 ## Phase 11 — Rust on Galexy (upstream `rustc` as a tenant) ✅

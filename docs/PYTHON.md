@@ -3,14 +3,13 @@
 Phase 14. Milestones **91–96**. Required before the `v1.0` tag.
 It can land beside Phase 10 and Phase 13. It does not wait on a
 lane, and a lane does not wait on it. Checkboxes live in `TODO.md`.
-Nothing in this phase is built yet.
 
 Galexy already runs upstream `rustc` in ring 3. The same kind of
 tenant is the Python interpreter: upstream [RustPython](https://github.com/RustPython/RustPython),
 built on the host for `x86_64-unknown-galexy`, and started from a
 login seat. The command is `python`. CPython is not imported.
 
-The tag gate is a typed login on the Python image:
+The tag gate is a typed login on the image `cargo run` boots:
 
 ```text
 echo 'print("hello from python on galexy")' > hello.py
@@ -22,18 +21,19 @@ one galfs file and writes another. That is the whole requirement.
 
 ## What a program is
 
-`python` is a ramdisk program on `galexy-os-python`, the same shape
-as `rustc` on `galexy-os-rustc`. A normal `cargo run` does not carry
-it. The shell already passes argv and Cap-waits for a ramdisk name
-with arguments. This phase does not add a syscall, a reserved Cap,
-or an init row.
+`python` is a ramdisk program. `cargo run` carries it, and `rustc`
+with its sysroot, whenever those ELFs were built. No flag selects
+the image. The test kernels keep the small ramdisk, so CI does not
+download RustPython. The shell passes argv and Cap-waits. `python`
+with no file also takes the keyboard, because that is the REPL.
+This phase does not add a syscall, a reserved Cap, or an init row.
 
 | Word | What it is |
 | --- | --- |
 | **Interpreter** | One static RustPython ELF. The stdlib it ships is frozen into that ELF. |
 | **Program** | A galfs file of Python source. The seat named it. The interpreter holds that seat's tokens and no others. |
 | **Allow-list** | The modules Milestone 92 freezes. A name that is not on it raises `ImportError`. The process stays up. |
-| **Image** | `galexy-os-python`. Built only when the ELF exists. CI does not fetch RustPython. |
+| **Image** | `galexy-os-desk`, what `cargo run` boots when `python` or `rustc` was built. CI does not fetch RustPython. |
 
 The shell path for `python hello.py` is the existing one: inherit
 the session, the query grant, the loader grant every ramdisk label
@@ -50,9 +50,9 @@ Milestone 96 checks that the run did not leave a child task.
 | `socket`, `ssl`, and `asyncio` networks | `std::net` stays unsupported (`NET.md`). A later milestone may speak a lane. It is not this phase, and it is not a BSD socket with a Python name. |
 | `sqlite3`, `ctypes`, `cffi` | Those need C. |
 | `os.fork`, `os.exec`, `os.system`, `os.environ`, `subprocess`, `multiprocessing` | There is no environment block and no fork. Spawn stays the kernel's, and this program does not call it. |
-| A REPL | No keyboard grant. `python` with no file prints a usage line and exits. An editor is a later milestone. |
+| A second editor | `nano` is already the editor. The REPL reads the seat keyboard and does not draw a screen of its own. |
 | A new syscall or a Python service | The ABI freeze holds. Init does not supervise the interpreter. The seat does, for one run. |
-| Putting `python` on the shared ramdisk | The compiler image already showed why. `cargo run` stays the small image. |
+| Putting `python` on the shared test ramdisk | Test kernels and CI stay small. The login image `cargo run` boots is the one that carries it. |
 | Changing `targets/x86_64-unknown-galexy.json` | The spec is frozen. If the build cannot use it, Milestone 91 stops and says why. It does not edit the file. |
 | `--sysroot` pointed at this repository | Host builds use `cargo xtask sysroot` and the linked `galexy` toolchain, the same rule as every other `std` program. |
 
@@ -179,22 +179,24 @@ with that civil time, and `time.monotonic` still moves like
 ### 95 Image
 
 `galexy-os-python` is the normal kernel plus a ramdisk that
-contains `python`. `cargo run --release -- --python` boots it.
-`cargo run` stays the small image. The runner skips the image
-when the ELF was absent at build, the same way it skips
-`galexy-os-rustc`. CI does not download RustPython.
+contains `python`. `cargo run` boots `galexy-os-desk` instead,
+which is that ramdisk plus the `rustc` sysroot when the compiler
+ELF was built too. No flag is required. The runner skips the
+desk image when neither ELF was present at build. CI does not
+download RustPython, and the shared test ramdisk stays small.
 
-`python` with no arguments prints `usage: python FILE` and
-returns to the prompt. It does not draw a REPL. The proof is
-`python_usage_typing_e2e` on that image.
+`python` with no arguments is the REPL (`>>>`). `exit()` returns
+to the shell. The proof is `python_repl_typing_e2e`.
 
 ### 96 Run it — Phase 14 gate
 
-Typed login on `galexy-os-python` (TCG). The seat writes
-`hello.py` with `echo`, runs `python hello.py`, and sees
-`hello from python on galexy`. It then runs a program that
-reads one file and writes another. The prompt returns after
-each command. `tasks` shows no child of that run.
+Typed login on `galexy-os-desk` (TCG), the image `cargo run`
+boots. The seat writes `hello.py` with `echo`, runs
+`python hello.py`, and sees `hello from python on galexy`. It
+then runs a program that reads one file and writes another.
+The prompt returns after each command. `tasks` shows no child
+of that run. When `rustc` was built, the same boot has already
+imported the sysroot.
 
 That boot is `python_hello_typing_e2e`. It is skipped when
 the ELF was absent at image build.
