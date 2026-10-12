@@ -2050,6 +2050,10 @@ fn python_hello_runs() {
         "bad.py ran past the refused import; serial:\n{serial}"
     );
     assert!(
+        !serial.contains("[pf]"),
+        "ring-3 fault (a guard-page fault still exits 0); serial:\n{serial}"
+    );
+    assert!(
         !serial.contains("[PANIC]") && !serial.contains("double fault"),
         "kernel panicked; serial:\n{serial}"
     );

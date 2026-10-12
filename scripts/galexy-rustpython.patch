@@ -142,12 +142,12 @@ new file mode 100644
 index 0000000..05dd80e
 --- /dev/null
 +++ b/crates/galexy-python/src/main.rs
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,106 @@
 +//! Run one Python file on the Galexy RustPython VM.
 +//!
 +//! `python PATH` reads the file and executes it with builtins and `sys`.
 +//! There is no REPL and no network. An import whose top-level name is
-+//! not in `allow.txt` is `ImportError`. The process keeps running.
++//! not in `allow.txt` is `ImportError`. The process prints it and exits.
 +
 +use rustpython_vm::{Interpreter, Settings, compiler};
 +
@@ -157,17 +157,35 @@ index 0000000..05dd80e
 +
 +fn main() {
 +    galexy_libcalls::keep();
++    // The leader stack is four pages at image+1GiB. Milestone 93 wrote
++    // the guard under it (`err=0x6`, `rip=0xc8001ac8472`,
++    // `cr2=0xc803ffffa70`). Hop to the 17 MiB thread cap first.
++    #[cfg(target_os = "galexy")]
++    {
++        let code = std::thread::Builder::new()
++            .stack_size(17 * 1024 * 1024)
++            .spawn(python_main)
++            .expect("python thread")
++            .join()
++            .unwrap_or(101);
++        std::process::exit(code);
++    }
++    #[cfg(not(target_os = "galexy"))]
++    std::process::exit(python_main());
++}
++
++fn python_main() -> i32 {
 +    let mut argv: Vec<String> = std::env::args().collect();
 +    if argv.len() < 2 {
 +        eprintln!("usage: python FILE");
-+        std::process::exit(2);
++        return 2;
 +    }
 +    let path = argv[1].clone();
 +    let source = match std::fs::read_to_string(&path) {
 +        Ok(text) => text,
 +        Err(err) => {
 +            eprintln!("python: {path}: {err}");
-+            std::process::exit(1);
++            return 1;
 +        }
 +    };
 +    // sys.argv is the script and whatever followed it.
@@ -176,18 +194,21 @@ index 0000000..05dd80e
 +    let mut settings = Settings::default();
 +    settings.argv = argv;
 +    let interp = Interpreter::without_stdlib(settings);
++    let mut status = 0;
 +    interp.enter(|vm| {
 +        let scope = vm.new_scope_with_builtins();
 +        let prelude = allow_prelude();
 +        if let Err(exc) = run(vm, &prelude, scope.clone(), "<galexy>") {
 +            vm.print_exception(&exc);
-+            std::process::exit(1);
++            status = 1;
++            return;
 +        }
 +        if let Err(exc) = run(vm, &source, scope, &path) {
 +            vm.print_exception(&exc);
-+            std::process::exit(1);
++            status = 1;
 +        }
 +    });
++    status
 +}
 +
 +fn run(
