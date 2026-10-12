@@ -2,26 +2,26 @@
 
 Direction-level plan. Concrete check-off items live in `TODO.md`.
 
-## Where we stand (review, October 2026)
+## Where we stand (October 2026)
 
-Snapshot at commit `80cc05e` (Milestone 50 merged), **Ready** row refreshed for the Milestone 51 docs pack. The bar is a
-**secure, fast, modern-only, full-feature, ready** OS. Each row says
-what is true today and which milestone closes the gap.
+Through Milestone 77. The bar is a **secure, fast, modern-only,
+full-feature, ready** OS. Each row says what is true today and which
+milestone closes the gap.
 
 | Bar | Today | Gap → milestone |
 | --- | --- | --- |
 | **Secure** | Capabilities everywhere (26 syscalls, no ambient PID / fd); PBKDF2 passwords, lockout, idle logout, must-change; sealed dual-slot GALF (ChaCha20 + HMAC); W^X user maps, NX, guard pages, kstack canary, stack/secret wipe; TOCTOU-safe copies; lock-order table; audit lines without secrets; zero `static mut`; SMEP / SMAP / UMIP when CPUID reports them; kernel KASLR in P4 indexes 1..=24; Spectre v1 mask on dispatch; per-actor KDF cost (GALF v12) | KPTI / IBRS / MDS / CET waived for v1.0 (single-tenant guest, kernel half stays mapped; `THREAT.md`) |
 | **Fast** | Deadline one-shot LAPIC, tickless idle, idle steal, park/wake for sleep / keyboard / pipe / virtio-blk; IF=0 syscall path never allocates; console budget; release profile (`opt-level = 3`, fat LTO); KVM when `KVM_CREATE_VCPU` succeeds; `test-bench` numbers in `PERF.md`; pipe ends move at spawn | PCID and a new heap allocator waived (`PERF.md`: yield does not switch CR3 and does not allocate). ATA PIO stays the legacy disk fallback. Desktop-class throughput is a non-goal. The landing host's KVM column is empty: a snapshot restore dropped VMXON while `CR4.VMXE` stayed set |
 | **Modern only** | `-M q35` default; PCIe ECAM when `MCFG` is present; virtio 1.x + MSI-X; virtio-input keyboard; HPET (else PIT) calibration with a CPUID 0x15/0x16 cross-check; x2APIC and TSC-deadline when CPUID reports them; 8259 mask-only when the FADT says the pair is absent | Named fallbacks stay: PS/2, PIO IDE on `-M pc`, legacy virtio I/O BAR, port PCI config. QEMU TCG through 8.2 does not enumerate x2APIC; TCG still does not enumerate TSC-deadline. 5-level paging, huge user pages, USB, GPU beyond GOP, and network stay out (Phase 10 / non-goals) |
-| **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, pipelines, background jobs, tab completion; utilities including `nano`, `head`, `tail`, `wc`, `grep`, `uptime`; per-task heap, argv, `Clock`, capability channels; galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; gxc hello; init owns shutdown, `svc`, and the service table | Network and USB → **Phase 10**. `v1.0` tag is a separate gate after 67 |
-| **Ready** | 82 QEMU test kernels, 114 runner boots (includes `nano`, `test-userheap`, `test-channel`, `test-bench`, `test-lockgrow`, `test-dmasplit`, legacy virtio, PS/2 typing, `svc status`, shutdown-through-init, and a sealed-disk `passwd` reboot), host suites green; CI workflow (`host` + `qemu` jobs, release images); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 and 63–67 closed (`review-rc1` tag is the owner's call). Next: the **v1.0 tag** (BIOS+UEFI, TCG+KVM, q35+pc, `PERF.md`) |
+| **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, pipelines, background jobs, tab completion; utilities including `nano`, `head`, `tail`, `wc`, `grep`, `uptime`; per-task heap, argv, `Clock`, capability channels; galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; init owns shutdown, `svc`, and the service table; on-OS Cranelift `rustc` at the login shell (`rustc hello.rs -o /hello`, then `/hello`) | Network and USB → **Phase 10**, after the `v1.0` tag |
+| **Ready** | 88 QEMU test kernels, 124 runner tests (BIOS + UEFI, `q35` + `pc`, including `nano`, `test-userheap`, `test-channel`, `test-bench`, `test-lockgrow`, `test-dmasplit`, legacy virtio, PS/2 typing, `svc status`, shutdown-through-init, a sealed-disk `passwd` reboot, and `rustc_hello_typing_e2e`), host suites green; CI workflow (`host` + `qemu` jobs, release images); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 and 63–77 are closed. The `review-rc1` tag and the `v1.0` tag are the owner's call. `v1.0` still needs a KVM pass (`KVM_CREATE_VCPU` fails on the landing host) and `PERF.md` KVM cells. Phase 10 stays after that tag |
 
 Order of work: **51 → 52** (`review-rc1`), then **63 → 64 → 65 → 66 →
 67** (`v1.0`). Security first because every later change should land
 on a kernel that already has SMAP on and a loader that returns errors.
 64 measured before 65 modernizes, so the device rewrite has a
-baseline. Network is a phase of its own after `v1.0`; `v1.0` ships
-without it and says so.
+baseline. **68 → 77** have landed (Phase 11 and Phase 12). Network is
+a phase of its own after `v1.0`; `v1.0` ships without it and says so.
 
 ## Phase 0 — Boot & TTY ✅
 
@@ -460,12 +460,10 @@ first.
 Non-goals: `cargo` on-OS, proc macros on-OS, rebuilding `rustc` or
 `std` on Galexy, LLVM / `lld` / `mrustc` / a libc, POSIX emulation.
 
-## Phase 12 — `rustc` at the login shell
+## Phase 12 — `rustc` at the login shell ✅
 
-Phase 11 runs the compiler inside `test-rustc-hello`. That kernel
-writes the source, spawns `rustc`, and exits QEMU. The login image
-never receives the compiler, and the shell cannot pass it arguments
-or run the file it writes. Checkboxes: `TODO.md` Milestones **74–77**.
+The login image carries `rustc`. The shell passes it arguments and
+runs the ELF it writes. Checkboxes: `TODO.md` Milestones **74–77**.
 
 1. **74 Image** ✅ — `galexy-os-rustc` is the normal kernel plus the
    Milestone 73 ramdisk, built only when `target/galexy-rustc/rustc`
@@ -477,8 +475,10 @@ or run the file it writes. Checkboxes: `TODO.md` Milestones **74–77**.
    is ~66 MiB, so this is not a disk write. The small ramdisk has no
    `srlib/` and skips the import
 3. **76 Arguments** ✅ — a ramdisk program with arguments gets a
-   NUL-separated argv and the shell waits for it. A spaced line that
-   is not a builtin and not a ramdisk program is still `command not found`
+   NUL-separated argv and the shell waits for it. The loader bit is
+   set for that ramdisk program (`rustc` spawns `gxld`) and not for a
+   galfs path. A spaced line that is not a builtin and not a ramdisk
+   program is still `command not found`
 4. **77 Run it** ✅ — `spawn` of `/hello` loads that galfs ELF. The
    **Phase 12 gate** is a typed login on `galexy-os-rustc`:
    `rustc hello.rs -o /hello`, then `/hello` prints

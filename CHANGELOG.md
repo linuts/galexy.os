@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#103](https://github.com/linuts/galexy.os/pull/103) — Scorecard —
+  Phases 11 and 12 are marked done. Milestones 68–77 were already
+  merged. The roadmap counts 124 runner tests and the login command
+  `rustc hello.rs -o /hello`. The `v1.0` tag and Phase 10 stay open.
 - [#102](https://github.com/linuts/galexy.os/pull/102) — Follow-up to
   Milestones 70–77 — the shell grants the loader only to a ramdisk
   program with arguments. A galfs path with arguments inherits the
