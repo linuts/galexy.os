@@ -48,3 +48,6 @@ version = "0.38.0"
 
 [dependencies.x86_64]
 version = "0.15.2"
+
+# Standalone so `cargo install --path` does not join the bootloader workspace.
+[workspace]

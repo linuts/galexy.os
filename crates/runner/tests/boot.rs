@@ -5,8 +5,8 @@ mod common;
 
 use common::{
     boot, boot_and_type, boot_and_type_ps2, boot_and_type_uefi, boot_for, boot_galfs_once,
-    boot_galfs_once_virtio, boot_liveness_until, boot_uefi, boot_uefi_until, boot_with_galfs,
-    boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
+    boot_galfs_once_virtio, boot_liveness_until, boot_uefi, boot_uefi_rng, boot_uefi_until,
+    boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
     boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio,
     boot_with_galfs_virtio_legacy, boot_with_tpm, image, uart_login_serial, use_kvm,
     GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
@@ -611,7 +611,9 @@ fn rand_prefers_tpm() {
 
 #[test]
 fn rand_uefi_uses_firmware() {
-    let serial = boot_uefi(&image("test-rand"), Duration::from_secs(90));
+    // Distro OVMF from 2024.02 has no `EFI_RNG_PROTOCOL`. This boot uses
+    // firmware that publishes it.
+    let serial = boot_uefi_rng(&image("test-rand"), Duration::from_secs(90));
     assert!(
         serial.contains("[test-rand] source=bios"),
         "UEFI firmware rng was not the rand source; serial:\n{serial}"

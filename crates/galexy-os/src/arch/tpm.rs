@@ -8,7 +8,23 @@ use galexy_crypto::{
     get_random_command, parse_get_random, startup_clear_command, startup_ok, RandomReply,
 };
 
+use crate::serial_println;
+
 use super::acpi::{self, Tpm2};
+
+/// The ACPI `TPM2` control address is the CRB tail (`ctrl_req`), not the
+/// locality block. QEMU publishes `0xFED40040` for start methods 7 and 8.
+const CRB_CTRL_REQ: u64 = 0x00;
+const CRB_CTRL_START: u64 = 0x0C;
+const CRB_CTRL_CMD_SIZE: u64 = 0x18;
+const CRB_CTRL_CMD_PA: u64 = 0x1C;
+const CRB_CTRL_RSP_SIZE: u64 = 0x24;
+const CRB_CTRL_RSP_PA: u64 = 0x28;
+/// Locality registers sit 0x40 bytes before the tail.
+const CRB_LOC_STATE: u64 = 0x00;
+const CRB_LOC_CTRL: u64 = 0x08;
+/// `tpmRegValidSts` (bit 7) and `locAssigned` (bit 1).
+const CRB_LOC_ASSIGNED: u32 = 0x82;
 
 const START_TIS: u32 = 6;
 const START_CRB: u32 = 7;
@@ -29,89 +45,140 @@ pub(super) fn get_random(phys_offset: u64, out: &mut [u8; 32]) -> bool {
 }
 
 fn crb_random(phys_offset: u64, info: Tpm2, out: &mut [u8; 32]) -> bool {
-    let base = info.control;
-    if !crb_ready(phys_offset, base) {
+    let ctrl = info.control;
+    // Locality is optional. A device that ignores the request still
+    // accepts the command on the tail registers.
+    crb_request_locality(phys_offset, ctrl.wrapping_sub(0x40));
+    if !crb_cmd_ready(phys_offset, ctrl) {
+        serial_println!("[tpm] crb not ready");
         return false;
     }
-    let cmd_size = read32(phys_offset, base + 0x58);
-    let cmd_pa = read64(phys_offset, base + 0x5C);
-    let rsp_size = read32(phys_offset, base + 0x64);
-    let rsp_pa = read64(phys_offset, base + 0x68);
-    if cmd_pa == 0 || rsp_pa == 0 || cmd_size < 12 || rsp_size < 64 {
+    let cmd_size = read32(phys_offset, ctrl + CRB_CTRL_CMD_SIZE);
+    let cmd_pa = read64(phys_offset, ctrl + CRB_CTRL_CMD_PA);
+    let rsp_size = read32(phys_offset, ctrl + CRB_CTRL_RSP_SIZE);
+    let rsp_pa = read64(phys_offset, ctrl + CRB_CTRL_RSP_PA);
+    if cmd_pa == 0 || rsp_pa == 0 || cmd_size < 12 || rsp_size < 44 {
+        serial_println!(
+            "[tpm] crb buffers cmd={:#x}/{} rsp={:#x}/{}",
+            cmd_pa,
+            cmd_size,
+            rsp_pa,
+            rsp_size
+        );
         return false;
     }
     let mut resp = [0u8; 64];
+    let rsp_len = core::cmp::min(rsp_size as usize, resp.len());
     if !crb_submit(
         phys_offset,
-        base,
+        ctrl,
         cmd_pa,
         rsp_pa,
+        rsp_len,
         &get_random_command(32),
         &mut resp,
     ) {
+        serial_println!("[tpm] crb start timed out");
         return false;
     }
     match parse_get_random(&resp, out) {
-        RandomReply::Bytes(32) => !uniform(out),
-        RandomReply::NeedStartup => {
-            if !crb_ready(phys_offset, base) {
-                return false;
+        RandomReply::Bytes(32) => {
+            if uniform(out) {
+                serial_println!("[tpm] getrandom uniform");
+                false
+            } else {
+                true
             }
-            if !crb_submit(
-                phys_offset,
-                base,
-                cmd_pa,
-                rsp_pa,
-                &startup_clear_command(),
-                &mut resp,
-            ) || !startup_ok(&resp)
-            {
-                return false;
-            }
-            if !crb_ready(phys_offset, base) {
-                return false;
-            }
-            if !crb_submit(
-                phys_offset,
-                base,
-                cmd_pa,
-                rsp_pa,
-                &get_random_command(32),
-                &mut resp,
-            ) {
-                return false;
-            }
-            matches!(parse_get_random(&resp, out), RandomReply::Bytes(32)) && !uniform(out)
         }
-        _ => false,
+        RandomReply::NeedStartup => {
+            if !crb_cmd_ready(phys_offset, ctrl)
+                || !crb_submit(
+                    phys_offset,
+                    ctrl,
+                    cmd_pa,
+                    rsp_pa,
+                    rsp_len,
+                    &startup_clear_command(),
+                    &mut resp,
+                )
+                || !startup_ok(&resp)
+            {
+                log_reply("startup", &resp);
+                return false;
+            }
+            if !crb_cmd_ready(phys_offset, ctrl)
+                || !crb_submit(
+                    phys_offset,
+                    ctrl,
+                    cmd_pa,
+                    rsp_pa,
+                    rsp_len,
+                    &get_random_command(32),
+                    &mut resp,
+                )
+            {
+                serial_println!("[tpm] getrandom after startup timed out");
+                return false;
+            }
+            let ok =
+                matches!(parse_get_random(&resp, out), RandomReply::Bytes(32)) && !uniform(out);
+            if !ok {
+                log_reply("getrandom", &resp);
+            }
+            ok
+        }
+        _ => {
+            log_reply("getrandom", &resp);
+            false
+        }
     }
 }
 
-fn crb_ready(phys_offset: u64, base: u64) -> bool {
-    write32(phys_offset, base + 0x08, 1);
-    if !spin_until(|| read32(phys_offset, base) & 0x82 == 0x82) {
-        return false;
+/// Writes `requestAccess` and waits briefly. Failure is not fatal.
+fn crb_request_locality(phys_offset: u64, loc: u64) {
+    write32(phys_offset, loc + CRB_LOC_CTRL, 1);
+    // The command still runs if this never sticks. A short wait keeps a
+    // device that ignores locality from stalling boot.
+    for _ in 0..4096 {
+        if read32(phys_offset, loc + CRB_LOC_STATE) & CRB_LOC_ASSIGNED == CRB_LOC_ASSIGNED {
+            return;
+        }
+        core::hint::spin_loop();
     }
-    write32(phys_offset, base + 0x40, 1);
-    spin_until(|| read32(phys_offset, base + 0x40) & 1 == 0)
+}
+
+/// `cmdReady`: write 1 to `ctrl_req` and wait until the device clears it.
+fn crb_cmd_ready(phys_offset: u64, ctrl: u64) -> bool {
+    write32(phys_offset, ctrl + CRB_CTRL_REQ, 1);
+    spin_until(|| read32(phys_offset, ctrl + CRB_CTRL_REQ) & 1 == 0)
 }
 
 fn crb_submit(
     phys_offset: u64,
-    base: u64,
+    ctrl: u64,
     cmd_pa: u64,
     rsp_pa: u64,
+    rsp_len: usize,
     cmd: &[u8],
     resp: &mut [u8; 64],
 ) -> bool {
     write_bytes(phys_offset, cmd_pa, cmd);
     fence();
-    write32(phys_offset, base + 0x4C, 1);
-    if !spin_until(|| read32(phys_offset, base + 0x4C) & 1 == 0) {
+    write32(phys_offset, ctrl + CRB_CTRL_START, 1);
+    if !spin_until(|| read32(phys_offset, ctrl + CRB_CTRL_START) & 1 == 0) {
         return false;
     }
-    read_bytes(phys_offset, rsp_pa, resp);
+    read_bytes(phys_offset, rsp_pa, &mut resp[..rsp_len]);
     true
+}
+
+fn log_reply(what: &str, resp: &[u8]) {
+    if resp.len() >= 10 {
+        let rc = u32::from_be_bytes([resp[6], resp[7], resp[8], resp[9]]);
+        serial_println!("[tpm] {} rc={:#x}", what, rc);
+    } else {
+        serial_println!("[tpm] {} short", what);
+    }
 }
 
 fn tis_random(phys_offset: u64, info: Tpm2, out: &mut [u8; 32]) -> bool {

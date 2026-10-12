@@ -69,12 +69,19 @@ fn build_uefi_bootloader() -> PathBuf {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let mut cmd = Command::new(cargo);
     cmd.arg("install").arg("bootloader-x86_64-uefi");
-    if Path::new("uefi").exists() {
-        // local build
-        cmd.arg("--path").arg("uefi");
-        println!("cargo:rerun-if-changed=uefi");
-        println!("cargo:rerun-if-changed=common");
-        cmd.arg("--target-dir").arg("target/uefi_target");
+    // Galexy patch: this copy calls `EFI_RNG_PROTOCOL` before
+    // `ExitBootServices` and leaves the sample at physical `0x80000`.
+    // A crates.io install of the same version stays in `OUT_DIR` unless
+    // `--force` replaces it, and Cargo only reruns this script for paths
+    // named here — a new `uefi/` directory is invisible otherwise.
+    let local = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("uefi");
+    if local.join("src/main.rs").is_file() {
+        cmd.arg("--path").arg(&local);
+        cmd.arg("--force");
+        for rel in ["src/main.rs", "Cargo.toml", "Cargo.lock"] {
+            println!("cargo:rerun-if-changed={}", local.join(rel).display());
+        }
+        cmd.env("CARGO_TARGET_DIR", out_dir.join("uefi-target"));
     } else {
         cmd.arg("--version").arg(BOOTLOADER_VERSION);
     }
