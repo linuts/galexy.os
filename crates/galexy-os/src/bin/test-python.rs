@@ -45,12 +45,12 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     run_python("py-hello", python, "hello.py");
     let hello_code = sched::user_exit_code("py-hello");
-    serial_println!("py-hello: exit {hello_code:?}");
+    serial_println!("py-hello: exit {:?}", hello_code);
     assert_eq!(hello_code, Some(0), "python hello.py failed");
 
     run_python("py-import", python, "bad.py");
     let import_code = sched::user_exit_code("py-import");
-    serial_println!("py-import: exit {import_code:?}");
+    serial_println!("py-import: exit {:?}", import_code);
     assert_ne!(import_code, Some(0), "import socket must not succeed");
     assert!(import_code.is_some(), "import socket left no exit code");
 
@@ -66,7 +66,7 @@ fn copy_file(parent: u16, name: &str, bytes: &[u8]) {
 }
 
 fn run_python(task: &str, python: &[u8], path: &str) {
-    serial_println!("[test-python] spawn {task} {path}");
+    serial_println!("[test-python] spawn {} {}", task, path);
     sched::loader::spawn_program_session(task, python, path.as_bytes())
         .unwrap_or_else(|_| panic!("spawn {task}"));
     wait_until_dead(task);
