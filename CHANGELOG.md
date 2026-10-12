@@ -8,6 +8,11 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#118](https://github.com/linuts/galexy.os/pull/118) — Auth —
+  A fresh disk has no volume passphrase until the operator chooses
+  one. The login screen then says to log in as admin and run
+  `passwd`. `volpass` re-wraps the volume key. Test kernels still
+  auto-unlock with `galfs`.
 - [#117](https://github.com/linuts/galexy.os/pull/117) — Entropy —
   Salts and volume keys prefer TPM 2.0 `GetRandom`, then a UEFI
   `EFI_RNG_PROTOCOL` sample taken before `ExitBootServices`, then
