@@ -155,9 +155,18 @@ POSIX layer beside these rules.
   reaps it (zombie); unbounded zombies are a bug.
 - **Init is userspace.** Init is the first ring-3 program and the
   orphan root — distinguished by role, not by magic “PID 1” in the ABI.
-  Policy (seats, restart, shutdown order) lives in init; the kernel
-  supplies mechanism: create init, transfer orphans, refuse kill of
-  init’s process without a kernel path, panic if init exits.
+  Policy (seats, restart, shutdown order, notices, beats) lives in
+  init; the kernel supplies mechanism: create init, transfer orphans,
+  refuse kill of init’s process without a kernel path, panic if init
+  exits.
+- **Notices are bits.** A notice name is declared in init, a row names
+  at most one, and `raise` / `drop` are edges. No payload, no bus, no
+  listener outside the table. A new notice is a row in `NOTICE_NAMES`
+  and a service field, in the same change as the wiki Services page.
+- **Beats are monotonic.** An interval arms a row whose compiled
+  `every_ms` is non-zero. No calendar until a wall clock exists. A
+  beat does not stack: a still-running program is skipped. `svc stop`
+  disarms it. Seats stay `every_ms == 0`.
 - **Seats over ambient root.** Login TTYs and services are children of
   init (Caps init retains or delegates), each with their own session —
   not permanent kernel-injected admin shells.

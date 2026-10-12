@@ -127,19 +127,22 @@ by a magic “PID 1” in the public ABI. Cap-kill of init is always
 - Fixed table, not `/etc/init`. Twelve seats (`restart`), `stamp`
   (`once`, started at boot), `probe` (`restart`, started only by
   `svc start`; a fast exit backs off 0, then 250, 500, 1000, and
-  2000 ms), `spare` (`ignore`)
+  2000 ms), `spare` (`ignore`), `bell` (notice `ring`, `once`),
+  `chime` (beat, default 1000 ms, `once`)
 - Logs `[init] ready` after autostart spawns have returned. The
   kernel has one pending spawn slot; a spawn during that window is
   `NoResource`
 - First `channel` call is the control channel. Init holds both ends.
   Seats `send` on the reserved init Cap (`0x8008`); the kernel stamps
   admin, tty, debug id, and session generation. One RPC is in flight
-- `svc status|start|stop|restart` and `shutdown` / `reboot` are that
-  RPC. Operators never receive a service Cap. `svc status` answers any
-  logged-in seat; `svc start|stop|restart`, `shutdown`, and `reboot`
-  are admin-only and a non-admin request is refused in the reply
-  (`access denied`; `init_test_passes` covers a non-admin `stop`
-  against a live seat). An admin shutdown Cap-kills every seat except
+- `svc status|start|stop|restart`, `svc raise|drop`, `svc every`,
+  and `shutdown` / `reboot` are that RPC. Operators never receive a
+  service Cap. `svc status` answers any logged-in seat; `svc
+  start|stop|restart`, `raise`, `drop`, `every`, `shutdown`, and
+  `reboot` are admin-only and a non-admin request is refused in the
+  reply (`access denied`; `init_test_passes` covers a non-admin
+  `stop`, a non-admin `raise`, a notice edge, and a beat). An admin
+  shutdown Cap-kills every seat except
   the sender's, syncs, then calls Power. The sender stays parked until
   the machine is off, or hears `the machine stayed up` if Power returns
 - Logged-in admin seats do not hold the Power grant while init is
@@ -163,10 +166,49 @@ by a magic “PID 1” in the public ABI. Cap-kill of init is always
 | Shell utility | seat/shell | shell (short wait) | n/a ( Cap-wait ) |
 | Bare app | seat/shell | shell (optional) | shell decides |
 
-Operator surface: `svc status|start|stop|restart <name>` sends on the
+Operator surface: `svc status|start|stop|restart <name>`,
+`svc raise|drop <notice>`, and `svc every <ms> <name>` send on the
 init Cap. The reply is text (`shell running`, `probe stopped`,
-`unknown`, `access denied` for a non-admin mutation). Operators do not
-receive raw Caps to every service.
+`ring up`, `chime armed`, `unknown`, `bad value`, `access denied`
+for a non-admin mutation). Operators do not receive raw Caps to
+every service.
+
+## Notices and beats (Milestone 89)
+
+There is no event bus. A **notice** is a named bit init holds: up or
+down, no payload, no subscribers outside the service table. The names
+are `NOTICE_NAMES` in `crates/userspace/init`. A row's `notice` field
+is empty or one of those names. `svc raise ring` is the rising edge:
+`bell` starts if it is stopped. Raising a notice that is already up
+does not start it again. `svc drop ring` is the falling edge: bound
+rows are stopped and held. The next raise is a new edge.
+
+A **beat** is a monotonic interval on a row whose compiled `every_ms`
+is non-zero. `Clock` is milliseconds since boot, so there is no
+calendar and no `03:00`. `svc every 250 chime` arms `chime`. The first
+run is one interval later, not immediately. If that program is still
+running, init logs `beat skip` and arms the next interval. One copy.
+`svc stop` disarms the beat and kills the program. The armed interval
+is forgotten on reboot. The compiled default (1000 ms for `chime`) is
+the only number that survives. A row with `every_ms == 0`, including
+every seat, answers `bad value`.
+
+Intervals are `250..=86_400_000` milliseconds. A beat row is `once`,
+so an exit does not restart it; the interval is the only starter.
+Both commands are admin-only, on the same stamped RPC as `svc start`.
+A service cannot raise a notice: the kernel admits the RPC from a
+logged-in seat, and init refuses a non-admin sender. The table is the
+subscription list. Adding a notice or a beat is a rebuild of init,
+the same edit as adding a service.
+
+While a beat is armed, init sleeps in slices of at most one second
+instead of parking on one child, so the interval can fire. A seat
+exit waits for the rest of that slice. With no beat armed, init parks
+on `wait` as before. `svc stop` on the beat returns it to that park.
+
+`bell` exits immediately, so a second raise is observable as a single
+`[init] start name=bell` line. `chime` sleeps one second, so a 250 ms
+arm overlaps and init must skip. `init_test_passes` covers both.
 
 F1–F12 **console switching** stays in the kernel; only task lifecycle
 moves to init.
@@ -205,7 +247,9 @@ process Cap never grants galfs rights on the child’s files.
 - `fork` + COW address spaces
 - `open_process(debug_id)`
 - Full POSIX signal set / job-control ioctl zoo
-- systemd, dbus, socket activation, cgroups
+- systemd, dbus, socket activation, cgroups. Notices and beats
+  (Milestone 89) are the substitute: a bit that starts table rows, and
+  a monotonic interval. No unit graph, no payload bus, no calendar
 - Claiming Linux ABI compatibility
 
 ## Milestone map
@@ -218,6 +262,7 @@ process Cap never grants galfs rights on the child’s files.
 | **55** ✅ | Session/job Caps; foreground Ctrl-C |
 | **66** ✅ | Capability channels (below); shell job table (`&`, `jobs`, `fg`) |
 | **67** ✅ | Ordered shutdown through init; service table with backoff; `svc` (mutations admin-only); session id on the seat Cap; ABI freeze |
+| **89** ✅ | Notices (`svc raise` / `svc drop`) and monotonic beats (`svc every`). No bus, no wall clock |
 
 `SPAWN_WAIT` remains a convenience beside Cap-wait. New code must not
 dig a deeper PID-shaped API beside this plan.

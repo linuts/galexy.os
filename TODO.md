@@ -2257,6 +2257,25 @@ The Milestone 53–54 follow-ons, finished.
       `wait` / `kill` / `send` / `recv`) are stable. `spawn` stays
       experimental. No new syscall number. `MAX_PROC_CAPS` stays 16
 
+## Milestone 89 — Notices and beats ✅
+
+A lightweight substitute for an event bus and for cron. No unit graph,
+no payload, no wall clock. Independent of Phases 10 and 13.
+
+- [x] **Notice**: `svc raise <notice>` / `svc drop <notice>` are edges
+      of a named bit. `ring` starts `bell` once per rise. A second
+      raise while it is up does not start `bell` again. Non-admin is
+      `access denied`
+- [x] **Beat**: `svc every <ms> <name>` arms a monotonic interval on a
+      row with a compiled `every_ms` (`chime`, default 1000). First run
+      is one interval later. A still-running program is skipped. `svc
+      stop` disarms it. The armed interval is forgotten on reboot.
+      Interval bounds are 250 ms through one day. A seat cannot be armed
+- [x] **Supervisor**: with no beat armed, init still parks on `wait`.
+      An armed beat sleeps in slices of at most one second
+- [x] **Test**: `init_test_passes` covers the non-admin raise, the
+      single start, the second edge, the beat line, and the skip line
+
 ### v1.0 gate
 
 - [x] Milestones 51–52 and 63–67 ✅ or waived in `THREAT.md` / `PERF.md`
