@@ -489,7 +489,7 @@ for this target, and kept off the shared ramdisk. The command is
 Plan: `docs/PYTHON.md`. Checkboxes: `TODO.md` Milestones **91–96**.
 This phase can land beside Phase 10 and Phase 13.
 
-1. **91 Pin and link** — one pinned RustPython commit, one static
+1. **91 Pin and link** ✅ — one pinned RustPython commit, one static
    ELF, the existing sysroot and target JSON. No `std::net`, no C
 2. **92 Allow-list** — `scripts/python-allow.txt` is the frozen
    stdlib. Anything else is `ImportError`. `time.time` is `Date`

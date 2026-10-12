@@ -2798,14 +2798,14 @@ This phase can land beside Phase 10 and Phase 13.
 
 ## Milestone 91 — Pin and link
 
-- [ ] `scripts/rustpython.rev` pins one RustPython commit. The
+- [x] `scripts/rustpython.rev` pins one RustPython commit. The
       checkout is not committed. Its license notices stay with it
-- [ ] One static ELF for `x86_64-unknown-galexy`, nightly from
+- [x] One static ELF for `x86_64-unknown-galexy`, nightly from
       `rust-toolchain.toml`, existing sysroot. No `std::net`, no C,
       no libc. The target JSON is unchanged
-- [ ] The ELF passes the same loader check as
+- [x] The ELF passes the same loader check as
       `cargo xtask sysroot --check`. It does not have to boot
-- [ ] Host build does not pass `--sysroot` of this repository
+- [x] Host build does not pass `--sysroot` of this repository
 
 ## Milestone 92 — Allow-list
 

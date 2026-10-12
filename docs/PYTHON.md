@@ -124,6 +124,20 @@ Prove: the ELF is a Galexy executable under the same check
 The revision and the license of that checkout are recorded in
 this file. The checkout itself is not committed.
 
+The pin is `85d5956dbbc17b359b103f9988276589b126a08a` (RustPython
+0.6.1, MIT). `scripts/build-galexy-python.sh` clones that commit,
+applies `scripts/galexy-rustpython.patch`, and links with the
+`galexy` sysroot. Codegen is Cranelift, the same backend as the
+sysroot: LLVM 23 cannot legalize an f16 operation in `half` for
+this soft-float target. The host build does not pass `--sysroot`
+of this repository, and `targets/x86_64-unknown-galexy.json` is
+unchanged. There is no C library and no `std::net`. The Rust
+`libc` crate inside the sysroot is the same empty one every
+other `std` program already links. The ELF lands at
+`target/galexy-python/python`. `cargo test -p xtask
+python_elf::pinned_python_elf_is_loadable` is the check. CI
+skips it when the file is absent.
+
 ### 92 Allow-list
 
 `scripts/python-allow.txt` is the frozen set. The host test

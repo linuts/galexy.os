@@ -689,3 +689,32 @@ fn loadable(bytes: &[u8]) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Milestone 91. `scripts/build-galexy-python.sh` writes
+/// `target/galexy-python/python`. CI does not fetch RustPython, so a
+/// missing file is a skip. When the file is there it has to pass the
+/// same check as `cargo xtask sysroot --check`.
+#[cfg(test)]
+mod python_elf {
+    use super::loadable;
+
+    #[test]
+    fn pinned_python_elf_is_loadable() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/galexy-python/python");
+        if !path.exists() {
+            eprintln!(
+                "pinned_python_elf_is_loadable: skipped (no {})",
+                path.display()
+            );
+            return;
+        }
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        loadable(&bytes).unwrap_or_else(|detail| {
+            panic!(
+                "{} is not a loadable Galexy image: {detail}",
+                path.display()
+            )
+        });
+    }
+}

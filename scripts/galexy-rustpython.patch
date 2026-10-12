@@ -1,0 +1,508 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index cf5e0f9..63cd421 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1593,6 +1593,18 @@ dependencies = [
+  "slab",
+ ]
+ 
++[[package]]
++name = "galexy-libcalls"
++version = "0.1.0"
++
++[[package]]
++name = "galexy-python"
++version = "0.6.1"
++dependencies = [
++ "galexy-libcalls",
++ "rustpython-vm",
++]
++
+ [[package]]
+ name = "generic-array"
+ version = "0.14.7"
+@@ -4539,15 +4551,6 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+ [[package]]
+ name = "stacker"
+ version = "0.1.25"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "707f49d46706bacf8a2b00d51dace3f9de527c13eec3778f570c411f89e69967"
+-dependencies = [
+- "cc",
+- "cfg-if",
+- "libc",
+- "psm",
+- "windows-sys 0.61.2",
+-]
+ 
+ [[package]]
+ name = "static_assertions"
+diff --git a/Cargo.toml b/Cargo.toml
+index 0b55f2e..6454379 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -130,6 +130,7 @@ panic = "abort"
+ 
+ [patch.crates-io]
+ parking_lot_core = { git = "https://github.com/youknowone/parking_lot", branch = "rustpython" }
++stacker = { path = "galexy/stacker" }
+ # REDOX START, Uncomment when you want to compile/check with redoxer
+ # REDOX END
+ 
+diff --git a/crates/common/src/str.rs b/crates/common/src/str.rs
+index be1086b..5c7b7c6 100644
+--- a/crates/common/src/str.rs
++++ b/crates/common/src/str.rs
+@@ -11,7 +11,7 @@ use core::sync::atomic::Ordering::Relaxed;
+ 
+ #[allow(non_camel_case_types)]
+ pub type wchar_t = cfg_select! {
+-    target_arch = "wasm32" => u32,
++    any(target_arch = "wasm32", target_os = "galexy") => u32,
+     _ => libc::wchar_t,
+ };
+ 
+diff --git a/crates/galexy-python/Cargo.toml b/crates/galexy-python/Cargo.toml
+new file mode 100644
+index 0000000..af84f05
+--- /dev/null
++++ b/crates/galexy-python/Cargo.toml
+@@ -0,0 +1,17 @@
++[package]
++name = "galexy-python"
++version = "0.6.1"
++edition = "2024"
++publish = false
++description = "Galexy entry for the pinned RustPython VM."
++
++[[bin]]
++name = "python"
++path = "src/main.rs"
++
++[dependencies]
++rustpython-vm = { workspace = true, features = ["compiler", "gc", "stdio"] }
++galexy-libcalls = { path = "../../galexy/libcalls" }
++
++[lints]
++workspace = true
+diff --git a/crates/galexy-python/src/main.rs b/crates/galexy-python/src/main.rs
+new file mode 100644
+index 0000000..0e883f5
+--- /dev/null
++++ b/crates/galexy-python/src/main.rs
+@@ -0,0 +1,45 @@
++//! Run one Python file on the Galexy RustPython VM.
++//!
++//! `python PATH` reads the file and executes it with builtins and `sys`.
++//! There is no REPL and no network.
++
++use rustpython_vm::{Interpreter, Settings, compiler};
++
++fn main() {
++    galexy_libcalls::keep();
++    let mut argv: Vec<String> = std::env::args().collect();
++    if argv.len() < 2 {
++        eprintln!("usage: python FILE");
++        std::process::exit(2);
++    }
++    let path = argv[1].clone();
++    let source = match std::fs::read_to_string(&path) {
++        Ok(text) => text,
++        Err(err) => {
++            eprintln!("python: {path}: {err}");
++            std::process::exit(1);
++        }
++    };
++    // sys.argv is the script and whatever followed it.
++    argv.remove(0);
++
++    let mut settings = Settings::default();
++    settings.argv = argv;
++    let interp = Interpreter::without_stdlib(settings);
++    let code = interp.enter(|vm| {
++        let scope = vm.new_scope_with_builtins();
++        let code = match vm.compile(&source, compiler::Mode::Exec, path) {
++            Ok(code) => code,
++            Err(err) => {
++                let exc = err.into_pyexception(vm, Some(&source));
++                vm.print_exception(&exc);
++                std::process::exit(1);
++            }
++        };
++        if let Err(exc) = vm.run_code_obj(code, scope) {
++            vm.print_exception(&exc);
++            std::process::exit(1);
++        }
++    });
++    let _ = code;
++}
+diff --git a/crates/host_env/Cargo.toml b/crates/host_env/Cargo.toml
+index 7f96342..0106bb1 100644
+--- a/crates/host_env/Cargo.toml
++++ b/crates/host_env/Cargo.toml
+@@ -52,13 +52,13 @@ nix = { workspace = true }
+ [target.'cfg(any(unix, target_os = "macos", target_os = "redox", target_os = "wasi"))'.dependencies]
+ rustix = { workspace = true }
+ 
+-[target.'cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))'.dependencies]
++[target.'cfg(all(any(not(target_arch = "wasm32"), target_os = "wasi"), not(target_os = "galexy")))'.dependencies]
+ num_cpus = { workspace = true }
+ 
+-[target.'cfg(not(any(target_os = "ios", target_os = "android", target_os = "windows", target_arch = "wasm32", target_os = "redox")))'.dependencies]
++[target.'cfg(not(any(target_os = "ios", target_os = "android", target_os = "windows", target_arch = "wasm32", target_os = "redox", target_os = "galexy")))'.dependencies]
+ mac_address = { workspace = true }
+ 
+-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
++[target.'cfg(not(any(target_arch = "wasm32", target_os = "galexy")))'.dependencies]
+ dns-lookup = { workspace = true }
+ gethostname = { workspace = true }
+ rustyline = { workspace = true }
+diff --git a/crates/host_env/src/fs.rs b/crates/host_env/src/fs.rs
+index d6516c7..d7d89e2 100644
+--- a/crates/host_env/src/fs.rs
++++ b/crates/host_env/src/fs.rs
+@@ -64,11 +64,16 @@ pub fn canonicalize(path: impl AsRef<Path>) -> io::Result<PathBuf> {
+ }
+ 
+ /// Resolve `binary_name` to an absolute path by searching `PATH` (and `PATHEXT` on Windows).
+-#[cfg(not(target_arch = "wasm32"))]
++#[cfg(not(any(target_arch = "wasm32", target_os = "galexy")))]
+ pub fn which<T: AsRef<std::ffi::OsStr>>(binary_name: T) -> Option<PathBuf> {
+     ::which::which(binary_name).ok()
+ }
+ 
++#[cfg(target_os = "galexy")]
++pub fn which<T: AsRef<std::ffi::OsStr>>(_binary_name: T) -> Option<PathBuf> {
++    None
++}
++
+ #[cfg(windows)]
+ pub fn open_write_with_custom_flags(path: impl AsRef<Path>, flags: u32) -> io::Result<File> {
+     use std::os::windows::fs::OpenOptionsExt;
+diff --git a/crates/host_env/src/lib.rs b/crates/host_env/src/lib.rs
+index 33b5ad6..97d06d4 100644
+--- a/crates/host_env/src/lib.rs
++++ b/crates/host_env/src/lib.rs
+@@ -10,12 +10,12 @@ pub use macros::*;
+ pub mod ctypes;
+ #[cfg(any(unix, windows, target_os = "wasi"))]
+ pub mod errno;
+-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
++#[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), target_os = "galexy"))]
+ #[path = "errno_wasm.rs"]
+ pub mod errno;
+ #[cfg(any(unix, windows, target_os = "wasi"))]
+ pub mod io;
+-#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
++#[cfg(any(all(target_arch = "wasm32", not(target_os = "wasi")), target_os = "galexy"))]
+ #[path = "io_unsupported.rs"]
+ pub mod io;
+ pub mod os;
+@@ -24,11 +24,11 @@ pub mod thread;
+ 
+ #[cfg(any(unix, windows, target_os = "wasi"))]
+ pub mod crt_fd;
+-#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
++#[cfg(any(all(target_arch = "wasm32", not(target_os = "wasi")), target_os = "galexy"))]
+ #[path = "crt_fd_unsupported.rs"]
+ pub mod crt_fd;
+ 
+-#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
++#[cfg(all(any(not(target_arch = "wasm32"), target_os = "wasi"), not(target_os = "galexy")))]
+ pub mod fileutils;
+ pub mod fs;
+ #[cfg(any(unix, windows))]
+@@ -48,7 +48,7 @@ pub mod fcntl;
+ pub mod select;
+ #[cfg(any(unix, windows))]
+ pub mod socket;
+-#[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), target_os = "wasi"))]
++#[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), target_os = "wasi", target_os = "galexy"))]
+ #[path = "socket_wasm.rs"]
+ pub mod socket;
+ #[cfg(unix)]
+diff --git a/crates/host_env/src/os.rs b/crates/host_env/src/os.rs
+index f6bd04d..3b95e63 100644
+--- a/crates/host_env/src/os.rs
++++ b/crates/host_env/src/os.rs
+@@ -152,7 +152,7 @@ pub use libc::O_SYMLINK;
+ #[cfg(windows)]
+ pub use libc::{O_BINARY, O_NOINHERIT, O_RANDOM, O_SEQUENTIAL, O_TEMPORARY, O_TEXT};
+ 
+-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
++#[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), target_os = "galexy"))]
+ mod wasm_oflag {
+     pub const O_RDONLY: i32 = 0x0000;
+     pub const O_WRONLY: i32 = 0x0001;
+@@ -170,7 +170,7 @@ mod wasm_oflag {
+     pub const O_NDELAY: i32 = O_NONBLOCK;
+ }
+ 
+-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
++#[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), target_os = "galexy"))]
+ pub use wasm_oflag::*;
+ 
+ bitflagset::bitflag! {
+@@ -423,12 +423,12 @@ pub fn process_id() -> u32 {
+     std::process::id()
+ }
+ 
+-#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
++#[cfg(all(any(not(target_arch = "wasm32"), target_os = "wasi"), not(target_os = "galexy")))]
+ pub fn cpu_count() -> usize {
+     num_cpus::get()
+ }
+ 
+-#[cfg(not(any(not(target_arch = "wasm32"), target_os = "wasi")))]
++#[cfg(any(not(any(not(target_arch = "wasm32"), target_os = "wasi")), target_os = "galexy"))]
+ pub fn cpu_count() -> usize {
+     1
+ }
+@@ -444,6 +444,11 @@ pub const fn page_size() -> usize {
+     1024 * 64
+ }
+ 
++#[cfg(target_os = "galexy")]
++pub const fn page_size() -> usize {
++    4096
++}
++
+ #[cfg(windows)]
+ pub fn page_size() -> usize {
+     let mut info = SYSTEM_INFO::default();
+@@ -460,9 +465,8 @@ pub fn alloc_granularity() -> usize {
+     page_size()
+ }
+ 
+-#[cfg(target_arch = "wasm32")]
++#[cfg(any(target_arch = "wasm32", target_os = "galexy"))]
+ pub const fn alloc_granularity() -> usize {
+-    // Like Unix, WebAssembly doesn't separate page size and alloc granularity.
+     page_size()
+ }
+ 
+@@ -479,6 +483,7 @@ pub fn device_encoding(_fd: i32) -> Option<String> {
+     #[cfg(any(
+         target_os = "android",
+         target_os = "redox",
++        target_os = "galexy",
+         all(target_arch = "wasm32", not(target_os = "wasi"))
+     ))]
+     {
+@@ -500,6 +505,7 @@ pub fn device_encoding(_fd: i32) -> Option<String> {
+     #[cfg(not(any(
+         target_os = "android",
+         target_os = "redox",
++        target_os = "galexy",
+         windows,
+         all(target_arch = "wasm32", not(target_os = "wasi"))
+     )))]
+@@ -708,7 +714,7 @@ pub fn io_error_from_errno(errno: i32) -> io::Error {
+     io::Error::new(kind, CrtErrno(errno))
+ }
+ 
+-#[cfg(all(not(windows), not(target_arch = "wasm32")))]
++#[cfg(all(not(windows), not(target_arch = "wasm32"), not(target_os = "galexy")))]
+ impl ErrorExt for rustix::io::Errno {
+     fn posix_errno(&self) -> i32 {
+         self.raw_os_error()
+diff --git a/crates/host_env/src/readline.rs b/crates/host_env/src/readline.rs
+index f3f468c..3165256 100644
+--- a/crates/host_env/src/readline.rs
++++ b/crates/host_env/src/readline.rs
+@@ -69,7 +69,7 @@ pub mod basic_readline {
+     }
+ }
+ 
+-#[cfg(not(target_arch = "wasm32"))]
++#[cfg(not(any(target_arch = "wasm32", target_os = "galexy")))]
+ pub mod rustyline_readline {
+     use super::*;
+ 
+@@ -166,9 +166,9 @@ pub mod rustyline_readline {
+     }
+ }
+ 
+-#[cfg(target_arch = "wasm32")]
++#[cfg(any(target_arch = "wasm32", target_os = "galexy"))]
+ use basic_readline as readline_inner;
+-#[cfg(not(target_arch = "wasm32"))]
++#[cfg(not(any(target_arch = "wasm32", target_os = "galexy")))]
+ use rustyline_readline as readline_inner;
+ 
+ pub use readline_inner::Helper;
+diff --git a/crates/host_env/src/time.rs b/crates/host_env/src/time.rs
+index 94448a8..d0a8ffb 100644
+--- a/crates/host_env/src/time.rs
++++ b/crates/host_env/src/time.rs
+@@ -20,7 +20,7 @@ pub const NS_TO_US: i64 = 1000;
+ ///
+ /// Not available under MSVC (which exposes these only via the
+ /// `_get_tzname`-style helpers) or on `wasm32` (no libc tz state).
+-#[cfg(all(not(target_env = "msvc"), not(target_arch = "wasm32")))]
++#[cfg(all(not(target_env = "msvc"), not(target_arch = "wasm32"), not(target_os = "galexy")))]
+ pub mod tz {
+     unsafe extern "C" {
+         #[cfg(not(target_os = "freebsd"))]
+@@ -83,6 +83,32 @@ pub mod tz {
+     }
+ }
+ 
++/// UTC, with no C timezone globals to link.
++#[cfg(target_os = "galexy")]
++pub mod tz {
++    pub fn tzset() {}
++
++    #[must_use]
++    pub const fn timezone() -> core::ffi::c_long {
++        0
++    }
++
++    #[must_use]
++    pub const fn altzone() -> core::ffi::c_long {
++        0
++    }
++
++    #[must_use]
++    pub const fn daylight() -> core::ffi::c_int {
++        0
++    }
++
++    #[must_use]
++    pub fn tzname_strings() -> (String, String) {
++        ("UTC".to_owned(), "UTC".to_owned())
++    }
++}
++
+ pub fn duration_since_system_now() -> Result<Duration, SystemTimeError> {
+     SystemTime::now().duration_since(UNIX_EPOCH)
+ }
+diff --git a/crates/vm/src/exceptions.rs b/crates/vm/src/exceptions.rs
+index f7869fc..aee2a58 100644
+--- a/crates/vm/src/exceptions.rs
++++ b/crates/vm/src/exceptions.rs
+@@ -1341,7 +1341,7 @@ impl<C> ToPyException for widestring::error::NulError<C> {
+     }
+ }
+ 
+-#[cfg(any(unix, windows, target_os = "wasi"))]
++#[cfg(any(unix, windows, target_os = "wasi", target_os = "galexy"))]
+ pub(crate) fn errno_to_exc_type(errno: i32, vm: &VirtualMachine) -> Option<&'static Py<PyType>> {
+     use crate::stdlib::errno::errors;
+     let excs = &vm.ctx.exceptions;
+diff --git a/crates/vm/src/stdlib/_io.rs b/crates/vm/src/stdlib/_io.rs
+index 9bf3b3c..2aafdd3 100644
+--- a/crates/vm/src/stdlib/_io.rs
++++ b/crates/vm/src/stdlib/_io.rs
+@@ -7,7 +7,7 @@ pub(crate) use _io::module_def;
+ pub(crate) use _io::reinit_std_streams_after_fork;
+ 
+ cfg_select! {
+-    any(not(target_arch = "wasm32"), target_os = "wasi") => {
++    all(any(not(target_arch = "wasm32"), target_os = "wasi"), not(target_os = "galexy")) => {
+         use rustpython_host_env::crt_fd::Offset;
+         // EAGAIN constant for BlockingIOError
+         const EAGAIN: i32 = libc::EAGAIN;
+diff --git a/galexy/libcalls/Cargo.toml b/galexy/libcalls/Cargo.toml
+new file mode 100644
+index 0000000..f84c013
+--- /dev/null
++++ b/galexy/libcalls/Cargo.toml
+@@ -0,0 +1,8 @@
++[package]
++name = "galexy-libcalls"
++version = "0.1.0"
++edition = "2021"
++publish = false
++description = "Soft-float libcalls the Galexy target does not get from a C libm."
++
++[dependencies]
+diff --git a/galexy/libcalls/src/lib.rs b/galexy/libcalls/src/lib.rs
+new file mode 100644
+index 0000000..e6cea2e
+--- /dev/null
++++ b/galexy/libcalls/src/lib.rs
+@@ -0,0 +1,52 @@
++//! Cranelift lowers some f64 rounding to the C libcall `nearbyint`.
++//! This target has no C library, so the symbol is defined here.
++//! Rounding is ties-to-even, which is the default IEEE mode.
++
++/// Referenced from the interpreter so this crate stays on the link line.
++pub fn keep() {}
++
++#[no_mangle]
++pub extern "C" fn nearbyint(x: f64) -> f64 {
++    soft_nearbyint(x)
++}
++
++#[no_mangle]
++pub extern "C" fn rint(x: f64) -> f64 {
++    soft_nearbyint(x)
++}
++
++fn soft_nearbyint(x: f64) -> f64 {
++    if !x.is_finite() {
++        return x;
++    }
++    let bits = x.to_bits();
++    let neg = bits >> 63 != 0;
++    let exp = ((bits >> 52) & 0x7ff) as i32;
++    let frac = bits & ((1u64 << 52) - 1);
++    let unbiased = exp - 1023;
++    let apply = |mag: f64| -> f64 {
++        let mut out = mag.to_bits();
++        if neg {
++            out |= 1u64 << 63;
++        }
++        f64::from_bits(out)
++    };
++    if unbiased >= 52 {
++        return x;
++    }
++    if unbiased < -1 {
++        return apply(0.0);
++    }
++    if unbiased == -1 {
++        return if frac == 0 { apply(0.0) } else { apply(1.0) };
++    }
++    let shift = (52 - unbiased) as u32;
++    let significand = (1u64 << 52) | frac;
++    let half = 1u64 << (shift - 1);
++    let frac_bits = significand & ((1u64 << shift) - 1);
++    let mut integer = significand >> shift;
++    if frac_bits > half || (frac_bits == half && (integer & 1) == 1) {
++        integer += 1;
++    }
++    apply(integer as f64)
++}
+diff --git a/galexy/stacker/Cargo.toml b/galexy/stacker/Cargo.toml
+new file mode 100644
+index 0000000..a2c032e
+--- /dev/null
++++ b/galexy/stacker/Cargo.toml
+@@ -0,0 +1,8 @@
++[package]
++name = "stacker"
++version = "0.1.25"
++edition = "2021"
++description = "Galexy stand-in: run the closure on the current stack."
++license = "MIT"
++
++[dependencies]
+diff --git a/galexy/stacker/src/lib.rs b/galexy/stacker/src/lib.rs
+new file mode 100644
+index 0000000..b91300b
+--- /dev/null
++++ b/galexy/stacker/src/lib.rs
+@@ -0,0 +1,11 @@
++//! Segmented stacks need `mmap`. Galexy tasks already have a fixed stack,
++//! so the parser just runs the closure where it is.
++
++#[inline(always)]
++pub fn maybe_grow<R, F: FnOnce() -> R>(_red_zone: usize, _stack_size: usize, callback: F) -> R {
++    callback()
++}
++
++pub fn grow<R, F: FnOnce() -> R>(_stack_size: usize, callback: F) -> R {
++    callback()
++}
