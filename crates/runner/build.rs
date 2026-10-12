@@ -133,11 +133,23 @@ fn main() {
         if have_rustc { "1" } else { "0" }
     );
 
+    // Milestone 93: `python` is ~64 MiB. It rides only on `test-python`,
+    // the same way `rustc` stays off the shared ramdisk. Absent ELF means
+    // CI still builds the image; the boot test skips.
+    let python_ramdisk = out_dir.join("ramdisk-python.tar");
+    let have_python = write_python_ramdisk(&python_ramdisk);
+    println!(
+        "cargo:rustc-env=GALEXY_HAVE_PYTHON={}",
+        if have_python { "1" } else { "0" }
+    );
+
     for (name, kernel) in &bins {
         let bios_path = out_dir.join(format!("{}-bios.img", name));
         let uefi_path = out_dir.join(format!("{}-uefi.img", name));
         let ramdisk = if have_rustc && (name == "test-rustc" || name == "test-rustc-hello") {
             &rustc_ramdisk
+        } else if have_python && name == "test-python" {
+            &python_ramdisk
         } else {
             &ramdisk_path
         };
@@ -290,6 +302,29 @@ fn write_rustc_ramdisk(dest: &Path) -> bool {
         header.set_cksum();
         tar.append_data(&mut header, name, bytes as &[u8]).unwrap();
     }
+    tar.finish().unwrap();
+    true
+}
+
+/// Packs `target/galexy-python/python` for `test-python` only.
+///
+/// Returns false when the ELF is absent so CI can build the image
+/// without fetching RustPython.
+fn write_python_ramdisk(dest: &Path) -> bool {
+    let bin = repo_root().join("target/galexy-python/python");
+    println!("cargo:rerun-if-changed={}", bin.display());
+    if !bin.is_file() {
+        return false;
+    }
+    let elf = std::fs::read(&bin).unwrap_or_else(|e| panic!("read {}: {e}", bin.display()));
+    assert!(elf.starts_with(b"\x7fELF"), "galexy python is not an ELF");
+    let mut tar = tar::Builder::new(std::fs::File::create(dest).unwrap());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(elf.len() as u64);
+    header.set_mode(0o755);
+    header.set_cksum();
+    tar.append_data(&mut header, "python", elf.as_slice())
+        .unwrap();
     tar.finish().unwrap();
     true
 }

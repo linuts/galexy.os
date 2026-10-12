@@ -2010,6 +2010,55 @@ fn rustc_obj_matches_host() {
     );
 }
 
+/// Milestone 93: ring 3 `python hello.py` prints the hello line and
+/// exits 0. `import socket` exits non-zero and the kernel stays up.
+/// Skipped when `target/galexy-python/python` was absent at build
+/// (CI does not fetch RustPython).
+#[test]
+fn python_hello_runs() {
+    if env!("GALEXY_HAVE_PYTHON") != "1" {
+        eprintln!("python_hello_runs: skipped (no target/galexy-python/python)");
+        return;
+    }
+    let (code, serial) = boot_for(&image("test-python"), Duration::from_secs(30 * 60));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-python should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-python] passed"),
+        "test-python success marker missing; serial:\n{serial}"
+    );
+    for line in [
+        "hello from python on galexy",
+        "py-hello: exit Some(0)",
+        "py-import: exit ",
+    ] {
+        assert!(serial.contains(line), "missing {line:?}; serial:\n{serial}");
+    }
+    assert!(
+        !serial.contains("py-import: exit Some(0)"),
+        "import socket succeeded; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("ImportError") || serial.contains("not allowed"),
+        "refused import did not surface; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("should-not-run"),
+        "bad.py ran past the refused import; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[pf]"),
+        "ring-3 fault (a guard-page fault still exits 0); serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+}
+
 /// Milestone 73: host `rust-lld` and `gxld` images of a cg_clif hello both
 /// boot, then ring 3 `rustc hello.rs -o hello` links with on-OS `gxld`
 /// and runs. A second program uses `std::fs` and `std::thread`.

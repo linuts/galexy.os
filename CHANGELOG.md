@@ -8,6 +8,13 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#111](https://github.com/linuts/galexy.os/pull/111) — Milestone 93 —
+  `bin/test-python` prints `hello from python on galexy` and exits 0.
+  `import socket` exits non-zero and the kernel stays up. The
+  interpreter switches onto a 17 MiB heap stack after the 4-page
+  leader wrote its guard page. Guest RAM stays 2 GiB. Hash seeding
+  mixes `Clock` because this guest has no `RDRAND`. CI skips the
+  boot when the ELF is absent.
 - [#110](https://github.com/linuts/galexy.os/pull/110) — Milestone 92 —
   `scripts/python-allow.txt` is the frozen set, starting with
   `builtins`, `sys`, and `io`. Anything else is `ImportError`.

@@ -101,8 +101,8 @@ the runner.
 
 | Budget | Value |
 | --- | --- |
-| Guest RAM | 2 GiB, the current QEMU `-m`. A larger number is a Milestone 93 edit of this row and of `PERF.md`, after a boot shows the fault. |
-| Stack | The normal user stack. A raise cites the fault, the way `rustc`'s 17 MiB stack did. |
+| Guest RAM | 2 GiB, the current QEMU `-m`. The fault below did not ask for more. |
+| Stack | Leader stays 4 pages. Before it reads the file, the interpreter switches onto a 17 MiB heap buffer (the same size as `THREAD_STACK_PAGES_MAX`). Milestone 93: `py-hello` wrote the unmapped guard under the leader (`err=0x6`, `rip=0xc8001ac8472`, `cr2=0xc803ffffa70`, 1424 bytes below the stack at image+1GiB) and the kernel recorded exit 0. A `thread::Builder` request for 17 MiB came up as 64 pages. |
 | Argv | `SPAWN_ARG_MAX` (4 KiB), already the shell's limit. |
 | Source file | One galfs file inside the existing file cap. |
 | Stdlib | Frozen in the ELF. No `Lib/` directory on the disk. |
@@ -155,10 +155,12 @@ uptime. `os` is not on the list. `open` is `_io`, which uses
 
 `bin/test-python` boots the ELF. A fixed program prints
 `hello from python on galexy` on the console and exits 0.
-A failed import does not panic the kernel. If the process
-faults for stack or heap, this milestone writes the new
-budget in the table above and in `PERF.md`, then retries.
-`DISK_VERSION` and the target JSON stay put.
+A failed import does not panic the kernel. The first boot
+faulted on the 4-page leader stack; the budget table and
+`PERF.md` record that fault, and the interpreter retries on
+a 17 MiB heap stack. `DISK_VERSION` and the target JSON stay put.
+Guest RAM stays 2 GiB. A guard-page fault exits 0, so the
+boot test also rejects `[pf]`.
 
 ### 94 Files
 
