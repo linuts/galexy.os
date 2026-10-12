@@ -205,6 +205,31 @@ machines: ACPI, x2APIC, PCIe, virtio 1.x, UEFI + GOP.
   1`, debug assertions on in tests). The `dev` profile is for
   compile-edit loops, not for claims about speed.
 
+## Network (lanes)
+
+Rules for Phase 10 (`docs/NET.md`; Milestones **78–84**). Binding
+once the first of those milestones lands; the plan is binding now.
+
+- **A lane is the application object.** One TLS 1.3 session, one peer,
+  `READ` and `WRITE`. No `socket`, `bind`, `listen`, `accept`,
+  `connect`, or `setsockopt`. `std::net` stays unsupported.
+- **The kernel moves frames.** virtio-net DMA follows the virtio-blk
+  rule: one descriptor per physically contiguous run. The interrupt
+  handler does not parse IP. TCP, UDP, and TLS live in the ring-3
+  `net` service.
+- **Only `net` holds the wire** (Cap `0x8009`) and only `net` may call
+  `Syscall::Lane` (34). A dial right is a grant on a name, checked
+  before any handshake.
+- **Names, not ports.** Locators stay inside `net`. They are not a
+  general syscall argument.
+- **Pinned keys, TLS 1.3 only.** No WebPKI default, no TLS 1.2, no
+  compression, no renegotiation, no 0-RTT in this phase. The handshake
+  is a maintained Rust crate, not a private implementation. Session
+  keys and private keys stay off serial, `dmesg`, and the console.
+- **Budgets are the ones in `NET.md`.** 32 lanes, 16 KiB each way, 8
+  gates, a fixed frame pool. A flood must not stop a seat from
+  answering `svc status`.
+
 ## Secrets and passwords
 
 - **Never log, serial-mirror, or `write_console` cleartext passwords.**
@@ -278,7 +303,7 @@ machines: ACPI, x2APIC, PCIe, virtio 1.x, UEFI + GOP.
 
 - When behavior changes, update in this order: code → doc comment →
   `TODO.md` checkbox → `README.md` feature list → relevant deep doc
-  (`DESIGN.md`, `AUTH.md`, `GALFS.md`, `PROCESS.md`, later `THREAT.md`).
+  (`DESIGN.md`, `AUTH.md`, `GALFS.md`, `PROCESS.md`, `NET.md`, later `THREAT.md`).
 - `ROADMAP.md` only for direction shifts or new phases.
 - `TODO.md` checkboxes are only checked after the item is *verified
   working* (e.g. seen in QEMU), never when "written".

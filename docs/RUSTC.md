@@ -168,7 +168,7 @@ after a PAL change should `rm target/.rustc_info.json` too.
 | `thread` + `thread_local_key` | `ThreadSpawn` (new slot, same CR3, fresh user stack, kernel stack); per-thread pointer in the FS base via user-mode `wrfsbase` (CR4.FSGSBASE is already on; the kernel never touches FS in ring 3). Join is process-Cap `Wait` |
 | `sync` | `std`'s generic futex implementations over `Futex` |
 | `random` | `rdrand` in the PAL |
-| `net` | `unsupported` until Phase 10 |
+| `net` | `unsupported`. Phase 10 does not grow `std::net`. A program holds a lane Cap (`docs/NET.md`) |
 
 Key-based TLS stays. `has-thread-local` is still false, so compiled
 code does not emit `#[thread_local]`. `gxld` does link `.tdata`/`.tbss`
@@ -392,5 +392,7 @@ Phase 9). Stage 3 depends on Milestone 66 (`Map`, `Clock`, argv) and
 adds `ThreadSpawn` + `Futex`, which should be designed in `PROCESS.md`
 beside `Channel` so the Milestone 67 ABI freeze covers them. Stages 4–6
 come after `v1.0`; they need KVM in the runner (Milestone 64) to be
-testable in reasonable time. Nothing here blocks Phase 10; `net` in the
-PAL is the Phase 10 hook.
+testable in reasonable time. Those stages have since landed (Milestones
+68–73). Phase 10 (`docs/NET.md`, Milestones 78–84) is required before
+the `v1.0` tag. `std::net` stays unsupported; a lane is not a
+`TcpStream`.

@@ -8,6 +8,11 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- Phase 10 plan — networking is Milestones 78–84 and is required
+  before the `v1.0` tag. The application object is a lane: one
+  TLS 1.3 session, granted by name. The kernel moves virtio-net
+  frames. A ring-3 `net` service speaks IP and TLS. No socket API.
+  Plan: `docs/NET.md`.
 - [#103](https://github.com/linuts/galexy.os/pull/103) — Scorecard —
   Phases 11 and 12 are marked done. Milestones 68–77 were already
   merged. The roadmap counts 124 runner tests and the login command
