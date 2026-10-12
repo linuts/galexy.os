@@ -497,8 +497,9 @@ This phase can land beside Phase 10 and Phase 13.
 3. **93 Ring 3** ✅ — `bin/test-python` prints
    `hello from python on galexy`. The 4-page leader overflowed;
    the interpreter uses a 17 MiB heap stack. Guest RAM stays 2 GiB
-4. **94 Files** — the same kernel reads and writes a galfs file
-   with the task's token. A missing token is a Python exception
+4. **94 Files** ✅ — the same kernel reads and writes a galfs file
+   with the task's token. `builtins.open` is `std::fs` (`_io.FileIO`
+   needs host_env). A missing token is a Python exception
 5. **95 Image** — `galexy-os-python`, `cargo run --release -- --python`.
    `cargo run` stays small. No REPL
 6. **96 Run it** — typed login: `python hello.py`, then a program
