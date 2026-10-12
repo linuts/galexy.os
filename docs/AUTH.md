@@ -219,9 +219,10 @@ through init; `svc status` is open to any logged-in seat
 Login and logout bump a session generation (`[auth] session login
 user=… gen=N tty=K`). It is an audit counter, not a capability. A
 logged-in F-key shell with no keystrokes for 60 s (`IDLE_LOGOUT_MS` on
-`timer_ticks`) is exited; init respawns a logged-out seat
-(`[auth] idle logout`). A shell Cap-waiting on a foreground child
-pauses that clock. The pause ends when the child exits (the 60 s
+`timer_ticks`) is exited with status 137 (`[auth] idle logout`). That
+exit wakes the Cap-waiter — init, parked in `wait` — so the seat is
+reaped and a logged-out shell is drawn. A shell Cap-waiting on a
+foreground child pauses that clock. The pause ends when the child exits (the 60 s
 window starts then) or after 15 min with no keys
 (`FOREGROUND_IDLE_MS`). Keys during the wait, such as `nano`, move
 that 15 min window. A `rustc` compile longer than a minute is not

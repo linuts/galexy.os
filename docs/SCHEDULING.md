@@ -71,6 +71,10 @@ system is the preemptive thread/user-task rotation.
 - Cap-kill wakes Cap-waiters with exit status `137`; a kill of a
   sleep / keyboard / pipe waiter clears the park with
   `SysError::Interrupted` before the slot goes `EXITED`.
+- Idle logout uses that same wake. The seat is `EXITED` / `137` and
+  whoever Cap-waits it (init) is resumed. A keyboard or sleep park on
+  the seat itself is cancelled first, so it is not mistaken for the
+  Cap-wait.
 - **`sleep(ms)`** (Milestone 56): park until monotonic `timer_ticks`
   reaches a deadline; no Cap. Idle LAPIC arm is
   `min(next second, next sleeper)`. Busy IRQ path still re-arms a

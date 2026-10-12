@@ -2159,10 +2159,14 @@ pub fn note_tty_input(tty: u8) {
 }
 
 /// Logged-in console shells with no keys for [`IDLE_LOGOUT_MS`] are exited
-/// (init respawns a logged-out seat). A shell Cap-waiting on a foreground
-/// child pauses that clock until the child exits, or until
-/// [`FOREGROUND_IDLE_MS`] with no keys. Test kernels pass `all_tasks` so a
-/// blob can trip the same path.
+/// with [`EXIT_KILLED`]. That exit wakes whoever Cap-waits the seat (init),
+/// the same way [`task_kill`] does, so the seat can be reaped and a
+/// logged-out shell drawn. Leaving the slot `EXITED` without the wake
+/// strands init in `wait` and the old prompt stays on the glass.
+///
+/// A shell Cap-waiting on a foreground child pauses that clock until the
+/// child exits, or until [`FOREGROUND_IDLE_MS`] with no keys. Test kernels
+/// pass `all_tasks` so a blob can trip the same path.
 pub(in crate::sched) fn idle_scan(all_tasks: bool) {
     let now = crate::arch::timer_ticks();
     let seal = interrupts::without_interrupts(|| {
@@ -2220,6 +2224,9 @@ pub(in crate::sched) fn idle_scan(all_tasks: bool) {
             }
             threads[i].exit_code.store(EXIT_KILLED, Ordering::Release);
             threads[i].state.store(STATE_EXITED, Ordering::Release);
+            // Keyboard and sleep parks were cancelled above. A Cap-wait
+            // on this seat (init) is still parked and must see 137.
+            wake_exit_waiters(&mut threads, (i + 1) as u8, EXIT_KILLED);
             if threads[i].leader_slot == 0 {
                 exit_siblings(&mut threads, i + 1, EXIT_KILLED);
             }
@@ -2239,6 +2246,84 @@ pub fn poll_idle_logouts() {
 /// Same scan, including non-shell tasks. Test kernels only.
 pub fn test_poll_idle_all() {
     idle_scan(true);
+}
+
+/// True when `name` is a user task parked in [`STATE_WAITING`].
+pub fn test_task_waiting(name: &str) -> bool {
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        threads.iter().any(|t| {
+            t.is_user && t.name() == name && t.state.load(Ordering::Acquire) == STATE_WAITING
+        })
+    })
+}
+
+/// Parks `waiter` on `child` the way init's Cap-wait does.
+///
+/// `waiter` must already be [`STATE_WAITING`] (a sleep is enough) and
+/// have a saved frame. The sleep is dropped without an `Interrupted`
+/// resume. A process Cap is installed and `wait_proc_index` points at
+/// it, so the exit wake clears that slot. Test kernels only.
+pub fn test_arm_exit_wait(waiter: &str, child: &str) -> bool {
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let child_at = threads.iter().position(|t| {
+            let state = t.state.load(Ordering::Acquire);
+            t.is_user && t.name() == child && (state == STATE_RUNNING || state == STATE_WAITING)
+        });
+        let Some(ci) = child_at else {
+            return false;
+        };
+        let waiter_at = threads.iter().position(|t| t.is_user && t.name() == waiter);
+        let Some(wi) = waiter_at else {
+            return false;
+        };
+        if wi == ci || threads[wi].state.load(Ordering::Acquire) != STATE_WAITING {
+            return false;
+        }
+        if threads[wi].ctx.load(Ordering::Acquire) == 0 {
+            return false;
+        }
+        let child_slot = (ci + 1) as u8;
+        let waiter_slot = (wi + 1) as u8;
+        if install_proc_cap(&mut threads, waiter_slot, child_slot).is_none() {
+            return false;
+        }
+        let Some(pi) = threads[wi]
+            .procs
+            .iter()
+            .position(|p| p.is_some_and(|h| h.child_slot == child_slot))
+        else {
+            return false;
+        };
+        let gen = threads[ci].cap_gen.load(Ordering::Acquire);
+        let w = &mut threads[wi];
+        w.sleep_deadline.store(0, Ordering::Relaxed);
+        w.io_kind.store(IO_NONE, Ordering::Relaxed);
+        w.wait_child_slot.store(child_slot, Ordering::Release);
+        w.wait_proc_index.store(pi as u8, Ordering::Release);
+        w.wait_child_gen.store(gen, Ordering::Release);
+        w.wait_for_exit.store(true, Ordering::Release);
+        w.state.store(STATE_WAITING, Ordering::Release);
+        true
+    })
+}
+
+/// True when `waiter` still holds a process Cap on `child`.
+pub fn test_holds_child(waiter: &str, child: &str) -> bool {
+    interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
+        let Some(ci) = threads.iter().position(|t| t.is_user && t.name() == child) else {
+            return false;
+        };
+        let child_slot = (ci + 1) as u8;
+        let Some(w) = threads.iter().find(|t| t.is_user && t.name() == waiter) else {
+            return false;
+        };
+        w.procs
+            .iter()
+            .any(|p| p.is_some_and(|h| h.child_slot == child_slot))
+    })
 }
 
 /// Moves `name`'s last keystroke `ticks` into the past (test tick injection).

@@ -15,6 +15,7 @@ use galexy_os::{
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
 const TRIPPED: u64 = 0x10C0_1D1E;
+const SEEN: u64 = 2;
 const POLL_LIMIT: u64 = 80_000;
 
 fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
@@ -59,6 +60,34 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         }
     }
 
+    // A second blob sleeps, then the kernel retargets that park into a
+    // Cap-wait on idle1 — the shape of init blocked in `wait`. Idle
+    // logout must resume it with 137 and drop the process Cap. Pin it
+    // to the BSP so this loop is the one that runs the resume.
+    let (watch_region, watch_owner) = sched::spawn_user_task_on("watch", 0, |gr| {
+        unsafe {
+            core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
+        }
+        build_watch(gr.scratch.as_u64())
+    });
+    assert_eq!(watch_owner, 0, "watcher stays on the BSP");
+    let watch_base = mm::frame_virt(watch_region.scratch_phys);
+    elapsed = 0;
+    loop {
+        x86_64::instructions::hlt();
+        if sched::test_task_waiting("watch") {
+            break;
+        }
+        elapsed += 1;
+        if elapsed > POLL_LIMIT {
+            panic!("watcher never parked");
+        }
+    }
+    assert!(
+        sched::test_arm_exit_wait("watch", "idle1"),
+        "Cap-wait on the logged-in seat"
+    );
+
     // Boot is only a few seconds in, so a 60 s backdate saturates to 0
     // and the scan treats that as "no sample". Shrink the window instead.
     sched::test_set_idle_limit(1);
@@ -68,6 +97,32 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         sched::test_auth_flags("idle1").is_none(),
         "idle logout must exit the seat"
     );
+    assert!(
+        !sched::test_task_waiting("watch"),
+        "idle logout must resume the Cap-waiter"
+    );
+    assert!(
+        !sched::test_holds_child("watch", "idle1"),
+        "exit wake drops the process Cap"
+    );
+
+    elapsed = 0;
+    loop {
+        x86_64::instructions::hlt();
+        let phase = unsafe { core::ptr::read_volatile(watch_base.as_ptr::<u64>()) };
+        if phase == SEEN {
+            break;
+        }
+        elapsed += 1;
+        if elapsed > POLL_LIMIT {
+            panic!("waiter never observed the exit");
+        }
+    }
+    let stamped = unsafe { core::ptr::read_volatile(watch_base.as_ptr::<u64>().add(1)) };
+    let ok = unsafe { core::ptr::read_volatile(watch_base.as_ptr::<u64>().add(2)) };
+    assert_eq!(stamped, 137, "Cap-waiter sees exit 137");
+    assert_eq!(ok, 1, "exit wake is a successful syscall");
+    serial_println!("[test-idle] waiter saw 137");
 
     loop {
         x86_64::instructions::hlt();
@@ -110,6 +165,23 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     mov_r64_imm(&mut code, 7, 30_000);
     code.extend_from_slice(&[0x0F, 0x05]);
 
+    mov_eax(&mut code, Syscall::Exit as u32);
+    code.extend_from_slice(&[0x31, 0xFF, 0x0F, 0x05]);
+    code
+}
+
+/// Sleep, then publish the syscall result. The kernel turns the sleep
+/// into a Cap-wait before the deadline, so `rax`/`rdx` are the exit wake.
+fn build_watch(scratch: u64) -> alloc::vec::Vec<u8> {
+    let mut code = alloc::vec::Vec::new();
+    mov_r64_imm(&mut code, 15, scratch);
+    mov_eax(&mut code, Syscall::Sleep as u32);
+    mov_r64_imm(&mut code, 7, 30_000);
+    code.extend_from_slice(&[0x0F, 0x05]);
+    store(&mut code, 0, 0x08);
+    store(&mut code, 2, 0x10);
+    mov_r64_imm(&mut code, 0, SEEN);
+    store(&mut code, 0, 0x00);
     mov_eax(&mut code, Syscall::Exit as u32);
     code.extend_from_slice(&[0x31, 0xFF, 0x0F, 0x05]);
     code

@@ -1647,6 +1647,10 @@ fn idle_test_passes() {
         "idle logout line missing; serial:\n{serial}"
     );
     assert!(
+        serial.contains("[test-idle] waiter saw 137"),
+        "Cap-waiter was not resumed; serial:\n{serial}"
+    );
+    assert!(
         serial.contains("[test-idle] passed"),
         "test-idle success marker missing; serial:\n{serial}"
     );
