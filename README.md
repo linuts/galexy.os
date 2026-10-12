@@ -76,8 +76,6 @@ sudo pacman -S --needed qemu-desktop ovmf
 cargo run --release                 # BIOS, headless; type on this terminal
 cargo run --release -- --display    # also open the framebuffer window (F1–F12)
 cargo run --release -- --uefi       # UEFI — set OVMF_FD if the default path is missing
-cargo run --release -- --rustc      # login image with rustc (needs target/galexy-rustc/rustc)
-cargo run --release -- --python     # login image with python (needs target/galexy-python/python)
 ```
 
 `cargo run --release` attaches a persistent `galfs.img` as **virtio-blk-pci**
@@ -226,11 +224,16 @@ OVMF image for UEFI. Nothing else.
 cargo build -p runner                       # every image under target/
 cargo run --release                         # BIOS, headless, -smp 2; KVM if a vCPU can be created, else TCG
 cargo run --release -- --display            # same, plus the framebuffer window
-cargo run --release -- --rustc              # galexy-os-rustc, when the compiler ELF was built
-cargo run --release -- --python             # galexy-os-python, when the interpreter ELF was built
 OVMF_FD=/usr/share/ovmf/OVMF.fd cargo run --release -- --uefi   # UEFI; path varies per distro
 scripts/review-smoke.sh                     # focused subset: host suites + 11 boots (~10 min TCG)
 ```
+
+When `target/galexy-rustc/rustc` or `target/galexy-python/python` is
+present, `cargo run` boots that login image with no extra flag. Both
+ELFs means one image: `rustc` already has its sysroot, and `python`
+with no file is the REPL. The shared ramdisk used by the test kernels
+stays without them, and CI skips those boots when the ELFs were not
+built.
 
 **Disk.** `cargo run --release` creates and attaches `galfs.img` in the repo root
 (gitignored, virtio-blk). Fresh image ⇒ fresh format ⇒ the shell asks
@@ -306,7 +309,7 @@ crates/
   (bench, KVM, LTO, IRQ completion), modern (q35, ECAM, virtio 1.x,
   MSI-X, TSC-deadline), full userland (heap, argv, clock, channels,
   jobs), init-owned shutdown. The `v1.0` tag is not this phase; it
-  waits on Phase 10, Phase 13, Phase 14, and the KVM cells
+  waits on Phase 10, Phase 13, and the KVM cells
 - **Phase 10** — network, before `v1.0`. virtio-net in the kernel, DHCP
   and one datagram, then a ring-3 `net` service and TLS 1.3 lanes
   granted by name. The record is a file in the admin tree. No sockets.
@@ -315,9 +318,10 @@ crates/
   of devices, and one driver table. No vendor drivers. Milestones
   86–88. Plan: [`docs/USB.md`](docs/USB.md). Inventory:
   [`docs/DEVICES.md`](docs/DEVICES.md)
-- **Phase 14** — RustPython, before `v1.0`, beside Phase 10 and
-  Phase 13. `python hello.py` on `galexy-os-python`. No new syscall,
-  no `pip`, no sockets. Milestones 91–96. Plan:
+- **Phase 14** ✅ — RustPython at the login shell. `cargo run` carries
+  `python` and, when the compiler ELF was built, `rustc` with its
+  sysroot. `python hello.py`, a file copy, and a REPL (`>>>`).
+  No new syscall, no `pip`, no sockets. Milestones 91–96. Plan:
   [`docs/PYTHON.md`](docs/PYTHON.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
   static linker (LINKER.md, ✅ Milestone 69), `std` PAL (✅ Milestone

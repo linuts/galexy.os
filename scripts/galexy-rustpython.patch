@@ -142,12 +142,13 @@ new file mode 100644
 index 0000000..05dd80e
 --- /dev/null
 +++ b/crates/galexy-python/src/main.rs
-@@ -0,0 +1,196 @@
+@@ -0,0 +1,322 @@
 +//! Run one Python file on the Galexy RustPython VM.
 +//!
 +//! `python PATH` reads the file and executes it with builtins and `sys`.
-+//! There is no REPL and no network. An import whose top-level name is
-+//! not in `allow.txt` is `ImportError`. The process prints it and exits.
++//! `python` with no path is a REPL: `>>> `, one statement at a time,
++//! `exit()` or Ctrl-D leaves. An import whose top-level name is not in
++//! `allow.txt` is `ImportError`. The process prints it and stays up.
 +
 +use rustpython_vm::builtins::PyStrRef;
 +use rustpython_vm::{Interpreter, PyResult, Settings, VirtualMachine, compiler};
@@ -217,8 +218,7 @@ index 0000000..05dd80e
 +fn python_main() -> i32 {
 +    let mut argv: Vec<String> = std::env::args().collect();
 +    if argv.len() < 2 {
-+        eprintln!("usage: python FILE");
-+        return 2;
++        return repl_main(argv);
 +    }
 +    let path = argv[1].clone();
 +    let source = match std::fs::read_to_string(&path) {
@@ -254,6 +254,130 @@ index 0000000..05dd80e
 +        }
 +    });
 +    status
++}
++
++fn repl_main(argv: Vec<String>) -> i32 {
++    let mut settings = Settings::default();
++    settings.argv = argv;
++    let interp = Interpreter::without_stdlib(settings);
++    let mut status = 0;
++    interp.enter(|vm| {
++        let scope = vm.new_scope_with_builtins();
++        if let Err(exc) = install_open(vm) {
++            vm.print_exception(&exc);
++            status = 1;
++            return;
++        }
++        let prelude = allow_prelude();
++        if let Err(exc) = run(vm, &prelude, scope.clone(), "<galexy>") {
++            vm.print_exception(&exc);
++            status = 1;
++            return;
++        }
++        repl(vm, scope);
++    });
++    status
++}
++
++/// Read a line, compile it as one interactive statement, print the
++/// exception, and keep going. `exit()` and Ctrl-D return to the shell.
++fn repl(vm: &VirtualMachine, scope: rustpython_vm::scope::Scope) {
++    println!("galexy python");
++    let mut pending = String::new();
++    loop {
++        let prompt = if pending.is_empty() { ">>> " } else { "... " };
++        print!("{prompt}");
++        let _ = std::io::Write::flush(&mut std::io::stdout());
++        let Some(line) = read_console_line() else {
++            println!();
++            return;
++        };
++        if pending.is_empty() && (line == "exit" || line == "exit()") {
++            return;
++        }
++        pending.push_str(&line);
++        pending.push('\n');
++        if needs_more(&pending) {
++            continue;
++        }
++        let source = std::mem::take(&mut pending);
++        if let Err(exc) = run_interactive(vm, &source, scope.clone()) {
++            vm.print_exception(&exc);
++        }
++    }
++}
++
++fn run_interactive(
++    vm: &VirtualMachine,
++    source: &str,
++    scope: rustpython_vm::scope::Scope,
++) -> rustpython_vm::PyResult {
++    let code = vm
++        .compile(source, compiler::Mode::Single, "<stdin>".to_owned())
++        .map_err(|err| err.into_pyexception(vm, Some(source)))?;
++    vm.run_code_obj(code, scope)
++}
++
++/// A line that ends with `:`, or still has an open bracket or quote,
++/// waits for the `...` continuation. This is not the full Python grammar.
++fn needs_more(src: &str) -> bool {
++    let mut paren = 0i32;
++    let mut bracket = 0i32;
++    let mut brace = 0i32;
++    let mut quote: Option<char> = None;
++    for c in src.chars() {
++        if let Some(q) = quote {
++            if c == q {
++                quote = None;
++            }
++            continue;
++        }
++        match c {
++            '\'' | '"' => quote = Some(c),
++            '(' => paren += 1,
++            ')' => paren -= 1,
++            '[' => bracket += 1,
++            ']' => bracket -= 1,
++            '{' => brace += 1,
++            '}' => brace -= 1,
++            _ => {}
++        }
++    }
++    paren > 0 || bracket > 0 || brace > 0 || quote.is_some() || src.trim_end().ends_with(':')
++}
++
++/// Echoed line from the seat keyboard. `None` is Ctrl-D on an empty line.
++fn read_console_line() -> Option<String> {
++    use std::io::{Read, Write};
++    let mut line = String::new();
++    let mut byte = [0u8; 1];
++    let mut input = std::io::stdin();
++    let mut output = std::io::stdout();
++    loop {
++        if input.read(&mut byte).ok()? == 0 {
++            return None;
++        }
++        match byte[0] {
++            b'\n' | b'\r' => {
++                let _ = output.write_all(b"\n");
++                let _ = output.flush();
++                return Some(line);
++            }
++            0x04 if line.is_empty() => return None,
++            0x08 | 0x7f => {
++                if line.pop().is_some() {
++                    let _ = output.write_all(b"\x08 \x08");
++                    let _ = output.flush();
++                }
++            }
++            b if b.is_ascii_graphic() || b == b' ' => {
++                line.push(b as char);
++                let _ = output.write_all(&[b]);
++                let _ = output.flush();
++            }
++            _ => {}
++        }
++    }
 +}
 +
 +fn install_open(vm: &VirtualMachine) -> PyResult<()> {
@@ -326,6 +450,8 @@ index 0000000..05dd80e
 +         \t\treturn self._buf\n\
 +         \tdef write(self, data):\n\
 +         \t\tself._buf += data\n\
++         \t\tif 'w' in self._mode or 'a' in self._mode:\n\
++         \t\t\t_galexy_write(self._path, self._buf)\n\
 +         \t\treturn len(data)\n\
 +         \tdef __enter__(self):\n\
 +         \t\treturn self\n\

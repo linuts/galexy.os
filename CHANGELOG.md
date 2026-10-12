@@ -8,6 +8,11 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#114](https://github.com/linuts/galexy.os/pull/114) — Milestone 96 —
+  `cargo run` boots `rustc` and `python` when those ELFs were built.
+  No extra flag. `python hello.py` prints `hello from python on galexy`,
+  a second program copies a galfs file, and `tasks` shows no child.
+  `python` with no file is the REPL. The test ramdisk stays small.
 - [#113](https://github.com/linuts/galexy.os/pull/113) — Milestone 95 —
   `galexy-os-python` carries `python`. `cargo run --release --
   --python` boots it. `cargo run` stays the small image. The

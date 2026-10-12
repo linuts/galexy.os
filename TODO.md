@@ -2320,10 +2320,11 @@ unset.
 - [ ] Phase 13 — Milestones 86–88 (`docs/USB.md`). The bus lists a
       QEMU USB device, and a driver that is not in the table does
       not run. Vendor rows in `docs/DEVICES.md` stay `unwritten`
-- [ ] Phase 14 — Milestones 91–96 (`docs/PYTHON.md`). A typed login
-      on `galexy-os-python` runs `python hello.py` and a program
-      that reads and writes a galfs file. No new syscall. `socket`
-      stays off the allow-list
+- [x] Phase 14 — Milestones 91–96 (`docs/PYTHON.md`). A typed login
+      on the image `cargo run` boots runs `python hello.py` and a
+      program that reads and writes a galfs file. No new syscall.
+      `socket` stays off the allow-list. `python` with no file is
+      the REPL
 - [ ] Suite green on BIOS + UEFI, TCG + KVM, `q35` + the `pc` legacy
       case (BIOS + UEFI, TCG, `q35` + `pc` are green at 124 tests. The
       KVM pass needs a host where `KVM_CREATE_VCPU` succeeds. On the
@@ -2847,20 +2848,20 @@ This phase can land beside Phase 10 and Phase 13.
       --python` boots it. `cargo run` stays the small image
 - [x] The runner skips the image when the ELF was absent at build.
       CI does not download RustPython
-- [x] `python` with no arguments prints a usage line and returns to
-      the prompt. There is no REPL
+- [x] `python` with no arguments is the REPL. `exit()` returns to
+      the prompt
 
 ## Milestone 96 — Run it (Phase 14 gate)
 
-- [ ] `python_hello_typing_e2e` on `galexy-os-python` (TCG, skipped
+- [x] `python_hello_typing_e2e` on `galexy-os-desk` (TCG, skipped
       when the ELF was absent): log in, `echo` a `hello.py`, run
       `python hello.py`, see `hello from python on galexy`
-- [ ] The same login runs a program that reads one galfs file and
+- [x] The same login runs a program that reads one galfs file and
       writes another. The prompt returns after each command
-- [ ] That run leaves no child task
-- [ ] Non-goals stay non-goals: CPython, `pip`, a REPL, sockets, a
-      Python service, and a copy of the RustPython tree in this
-      repository
+- [x] That run leaves no child task
+- [x] Non-goals stay non-goals: CPython, `pip`, sockets, a Python
+      service, and a copy of the RustPython tree in this repository.
+      `python` with no file is the REPL (`>>>`, `exit()`)
 
 ---
 
@@ -2961,10 +2962,11 @@ items stay here with rationale.
 - [ ] No USB stack — **Phase 13**, Milestones 86–88, after Phase 10
       and before the `v1.0` tag (`docs/USB.md`). Seeing a device and
       the driver table are the gate. Vendor drivers stay unnumbered
-- [ ] No Python interpreter — **Phase 14**, Milestones 91–96, before
-      the `v1.0` tag and beside Phases 10 and 13 (`docs/PYTHON.md`).
-      `python hello.py` is the gate. No new syscall. `socket` stays
-      off the allow-list
+- [x] ~~No Python interpreter~~ — **Phase 14**, Milestones 91–96.
+      `cargo run` boots `python` and, when the compiler ELF was
+      built, `rustc` with its sysroot. `python hello.py` and a file
+      copy are `python_hello_typing_e2e`. No new syscall. `socket`
+      stays off the allow-list. `python` with no file is the REPL
 - [x] ~~`passwd` on a sealed-disk boot hung the machine
       (galexy.os#86)~~ — CLOSED by PR #88. Two IF=0 deadlocks: a lock
       holder's heap growth waited on a shootdown ack from a CPU spinning

@@ -24,28 +24,25 @@ fn image_path(name: &str, kind: &str) -> String {
 fn main() {
     let uefi = std::env::args().any(|arg| arg == "--uefi");
     let display = std::env::args().any(|arg| arg == "--display");
+    // `--rustc` and `--python` are accepted so older commands still boot.
+    // They do not select a different image: `cargo run` already carries
+    // whichever of those ELFs was built.
     let rustc = std::env::args().any(|arg| arg == "--rustc");
     let python = std::env::args().any(|arg| arg == "--python");
-    if rustc && python {
-        eprintln!("[runner] pass only one of --rustc and --python");
-        std::process::exit(1);
-    }
     if rustc && env!("GALEXY_HAVE_RUSTC") != "1" {
         eprintln!(
-            "[runner] --rustc needs target/galexy-rustc/rustc. Build it with scripts/build-galexy-rustc.sh. The small image does not contain a compiler."
+            "[runner] --rustc needs target/galexy-rustc/rustc. Build it with scripts/build-galexy-rustc.sh."
         );
         std::process::exit(1);
     }
     if python && env!("GALEXY_HAVE_PYTHON") != "1" {
         eprintln!(
-            "[runner] --python needs target/galexy-python/python. Build it with scripts/build-galexy-python.sh. The small image does not contain an interpreter."
+            "[runner] --python needs target/galexy-python/python. Build it with scripts/build-galexy-python.sh."
         );
         std::process::exit(1);
     }
-    let image = if python {
-        "galexy-os-python"
-    } else if rustc {
-        "galexy-os-rustc"
+    let image = if env!("GALEXY_HAVE_DESK") == "1" {
+        "galexy-os-desk"
     } else {
         "galexy-os"
     };
