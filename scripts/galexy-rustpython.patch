@@ -142,7 +142,7 @@ new file mode 100644
 index 0000000..05dd80e
 --- /dev/null
 +++ b/crates/galexy-python/src/main.rs
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,145 @@
 +//! Run one Python file on the Galexy RustPython VM.
 +//!
 +//! `python PATH` reads the file and executes it with builtins and `sys`.
@@ -159,19 +159,58 @@ index 0000000..05dd80e
 +    galexy_libcalls::keep();
 +    // The leader stack is four pages at image+1GiB. Milestone 93 wrote
 +    // the guard under it (`err=0x6`, `rip=0xc8001ac8472`,
-+    // `cr2=0xc803ffffa70`). Hop to the 17 MiB thread cap first.
++    // `cr2=0xc803ffffa70`). A `thread::Builder` request for 17 MiB came
++    // up as 64 pages, so switch RSP onto a heap buffer of that size.
 +    #[cfg(target_os = "galexy")]
 +    {
-+        let code = std::thread::Builder::new()
-+            .stack_size(17 * 1024 * 1024)
-+            .spawn(python_main)
-+            .expect("python thread")
-+            .join()
-+            .unwrap_or(101);
++        const STACK: usize = 17 * 1024 * 1024;
++        let layout = std::alloc::Layout::from_size_align(STACK, 16).expect("stack layout");
++        let ptr = unsafe { std::alloc::alloc(layout) };
++        if ptr.is_null() {
++            eprintln!("python: stack allocation failed");
++            std::process::exit(1);
++        }
++        let top = (ptr as usize).saturating_add(STACK) & !0xF;
++        let code = unsafe { call_on_stack(top, python_main) };
++        unsafe { std::alloc::dealloc(ptr, layout) };
 +        std::process::exit(code);
 +    }
 +    #[cfg(not(target_os = "galexy"))]
 +    std::process::exit(python_main());
++}
++
++/// Call `f` with RSP at `top` (`top` is 16-byte aligned).
++///
++/// # Safety
++///
++/// `top` addresses a writable buffer that extends at least as far down as
++/// `f` will grow the stack.
++#[cfg(target_os = "galexy")]
++unsafe fn call_on_stack(top: usize, f: fn() -> i32) -> i32 {
++    let code: i32;
++    // SAFETY: caller guarantees `top`. The callee is a Rust `fn` and
++    // returns in `eax`.
++    unsafe {
++        core::arch::asm!(
++            "mov {saved}, rsp",
++            "mov rsp, {top}",
++            "call {func}",
++            "mov rsp, {saved}",
++            saved = out(reg) _,
++            top = in(reg) top,
++            func = in(reg) f,
++            lateout("rax") code,
++            lateout("rcx") _,
++            lateout("rdx") _,
++            lateout("rsi") _,
++            lateout("rdi") _,
++            lateout("r8") _,
++            lateout("r9") _,
++            lateout("r10") _,
++            lateout("r11") _,
++        );
++    }
++    code
 +}
 +
 +fn python_main() -> i32 {
@@ -248,6 +287,62 @@ index 0000000..05dd80e
 +         import _io as io\n\
 +         _sys.modules['io'] = io\n"
 +    )
++}
+diff --git a/crates/common/src/rand.rs b/crates/common/src/rand.rs
+index e497049..0e27a8e 100644
+--- a/crates/common/src/rand.rs
++++ b/crates/common/src/rand.rs
+@@ -9,6 +9,50 @@
+ #[must_use]
+ pub fn os_random<const N: usize>() -> [u8; N] {
+     let mut buf = [0u8; N];
+-    getrandom::fill(&mut buf).unwrap();
++    #[cfg(target_os = "galexy")]
++    {
++        // `getrandom`'s rdrand backend returns NO_RDRAND on this guest
++        // ("instruction not supported"). A hash seed is not a secret.
++        // Mix `Clock` (syscall 27) the way the PAL's fallback does.
++        fill_from_clock(&mut buf);
++    }
++    #[cfg(not(target_os = "galexy"))]
++    {
++        getrandom::fill(&mut buf).unwrap();
++    }
+     buf
+ }
++
++#[cfg(target_os = "galexy")]
++fn fill_from_clock(buf: &mut [u8]) {
++    let ticks = clock_ms().unwrap_or(0);
++    let mut state = ticks ^ (buf.as_ptr().addr() as u64) ^ 0x9E37_79B9_7F4A_7C15;
++    for chunk in buf.chunks_mut(8) {
++        state ^= state >> 12;
++        state ^= state << 25;
++        state ^= state >> 27;
++        state = state.wrapping_mul(0x2545_F491_4F6C_DD1D);
++        let bytes = state.to_ne_bytes();
++        chunk.copy_from_slice(&bytes[..chunk.len()]);
++    }
++}
++
++#[cfg(target_os = "galexy")]
++fn clock_ms() -> Result<u64, ()> {
++    let value: u64;
++    let ok: u64;
++    // SAFETY: syscall 27 is `Clock`. rcx and r11 are clobbered.
++    unsafe {
++        core::arch::asm!(
++            "syscall",
++            inlateout("rax") 27u64 => value,
++            inlateout("rdx") 0u64 => ok,
++            in("rdi") 0u64,
++            in("rsi") 0u64,
++            lateout("rcx") _,
++            lateout("r11") _,
++            options(nostack),
++        );
++    }
++    if ok != 0 { Ok(value) } else { Err(()) }
 +}
 diff --git a/crates/host_env/Cargo.toml b/crates/host_env/Cargo.toml
 index 7f96342..0106bb1 100644

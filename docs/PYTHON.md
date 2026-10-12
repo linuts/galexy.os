@@ -102,7 +102,7 @@ the runner.
 | Budget | Value |
 | --- | --- |
 | Guest RAM | 2 GiB, the current QEMU `-m`. The fault below did not ask for more. |
-| Stack | Leader stays 4 pages. The interpreter hops to a 17 MiB thread (`THREAD_STACK_PAGES_MAX`) before it reads the file. Milestone 93: `py-hello` wrote the unmapped guard under that leader (`err=0x6`, `rip=0xc8001ac8472`, `cr2=0xc803ffffa70`, 1424 bytes below the stack at image+1GiB) and the kernel recorded exit 0. |
+| Stack | Leader stays 4 pages. Before it reads the file, the interpreter switches onto a 17 MiB heap buffer (the same size as `THREAD_STACK_PAGES_MAX`). Milestone 93: `py-hello` wrote the unmapped guard under the leader (`err=0x6`, `rip=0xc8001ac8472`, `cr2=0xc803ffffa70`, 1424 bytes below the stack at image+1GiB) and the kernel recorded exit 0. A `thread::Builder` request for 17 MiB came up as 64 pages. |
 | Argv | `SPAWN_ARG_MAX` (4 KiB), already the shell's limit. |
 | Source file | One galfs file inside the existing file cap. |
 | Stdlib | Frozen in the ELF. No `Lib/` directory on the disk. |
@@ -158,7 +158,7 @@ uptime. `os` is not on the list. `open` is `_io`, which uses
 A failed import does not panic the kernel. The first boot
 faulted on the 4-page leader stack; the budget table and
 `PERF.md` record that fault, and the interpreter retries on
-a 17 MiB thread. `DISK_VERSION` and the target JSON stay put.
+a 17 MiB heap stack. `DISK_VERSION` and the target JSON stay put.
 Guest RAM stays 2 GiB. A guard-page fault exits 0, so the
 boot test also rejects `[pf]`.
 
