@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#115](https://github.com/linuts/galexy.os/pull/115) — Docs —
+  The status pages match the desk image. `cargo run` carries `rustc`
+  and `python` when those ELFs were built. `python` with no file is
+  the REPL. The wiki is the reading copy of the same contract.
 - [#114](https://github.com/linuts/galexy.os/pull/114) — Milestone 96 —
   `cargo run` boots `rustc` and `python` when those ELFs were built.
   No extra flag. `python hello.py` prints `hello from python on galexy`,
