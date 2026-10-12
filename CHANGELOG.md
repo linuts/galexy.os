@@ -8,6 +8,14 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#104](https://github.com/linuts/galexy.os/pull/104) — Phase 10 and
+  Phase 13 plans — networking is Milestones 78–85 and is required
+  before the `v1.0` tag. Milestone 80 acquires an address (DHCP or a
+  fixed locator in `/net`) and sends one datagram before TCP. The
+  application object is a lane: one TLS 1.3 session, granted by name.
+  USB is Milestones 86–88, after the network and before the tag: see
+  devices, and one driver table. Linux drivers are an index in
+  `docs/DEVICES.md`, not source we import. No socket API.
 - [#103](https://github.com/linuts/galexy.os/pull/103) — Scorecard —
   Phases 11 and 12 are marked done. Milestones 68–77 were already
   merged. The roadmap counts 124 runner tests and the login command

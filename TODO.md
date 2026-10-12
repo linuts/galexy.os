@@ -2201,8 +2201,10 @@ legacy paths kept only where the platform has nothing else.
 - [x] **PC speaker**: stays the only audio path (no virtio-sound);
       feature `pc-speaker` default on; documented as the one remaining
       PIT user
-- [x] **Stated non-goals**: 5-level paging, huge user pages, USB, GPU
-      beyond the GOP framebuffer, network (Phase 10)
+- [x] **Stated non-goals for Milestone 65**: 5-level paging, huge
+      user pages, GPU beyond the GOP framebuffer. Network is Phase 10
+      (Milestones 78–85, `docs/NET.md`). USB is Phase 13 (Milestones
+      86–88, `docs/USB.md`). Both are required before the `v1.0` tag
 
 ## Milestone 66 — Userland completeness ✅
 
@@ -2261,6 +2263,13 @@ The Milestone 53–54 follow-ons, finished.
       (readiness audit after #87: every box under those headers is
       checked or carries a written waiver; the `review-rc1` tag is the
       one owner-deferred item)
+- [ ] Phase 10 — Milestones 78–85 (`docs/NET.md`). An address via
+      DHCP, one datagram the host receives, a granted seat can
+      `fetch` a name, and a handshake flood still leaves `svc status
+      shell` answering
+- [ ] Phase 13 — Milestones 86–88 (`docs/USB.md`). The bus lists a
+      QEMU USB device, and a driver that is not in the table does
+      not run. Vendor rows in `docs/DEVICES.md` stay `unwritten`
 - [ ] Suite green on BIOS + UEFI, TCG + KVM, `q35` + the `pc` legacy
       case (BIOS + UEFI, TCG, `q35` + `pc` are green at 124 tests. The
       KVM pass needs a host where `KVM_CREATE_VCPU` succeeds. On the
@@ -2581,6 +2590,150 @@ bytes. A longer source is `nano`.
       `rustc` or `std` on Galexy, `panic=unwind`, incremental
       compilation, and the compiler on the shared ramdisk
 
+## Phase 10 — Network (before `v1.0`)
+
+Plan: `docs/NET.md`. A lane is the application object. The kernel
+moves frames. `net` speaks the protocols. Milestone 80 gets an
+address and sends one datagram before any TCP. No `socket`.
+
+## Milestone 78 — Wire
+
+virtio-net on the modern PCI path. No IP in the kernel.
+
+- [ ] **Device**: virtio-net 1.x + MSI-X, driver beside `virtio_blk`,
+      q35. The runner attaches `virtio-net-pci` to QEMU user
+      networking. Link comes up. The MAC is read from the device
+      config and logged
+- [ ] **Cap `0x8009`**: the test kernel holds it. Transmit is consumed
+      and the interrupt fires. A second task that reads the Cap is
+      `AccessDenied`
+- [ ] **DMA**: one descriptor per physically contiguous run. A buffer
+      that straddles two non-adjacent frames leaves a sentinel in the
+      next frame untouched (`dmasplit` shape)
+- [ ] No IP header parse. A peer's reply waits for Milestone 80
+- [ ] Row in `docs/DEVICES.md` stays `planned` until this box is
+      checked, then `landed`
+
+## Milestone 79 — Service
+
+- [ ] Ramdisk `net`, init row `restart` + autostart. It is the only
+      holder of `0x8009`. `MAX_PROC_CAPS` stays 16
+- [ ] The service counts frames and drops them. Serial logs link up
+      and the MAC
+- [ ] `svc status net` answers `net running`
+- [ ] The kernel still has no IP. The record waits for Milestone 80
+
+## Milestone 80 — Address
+
+- [ ] `crates/galexy-netcfg`: version-1 record. Host tests round-trip
+      it. A different version is an error. `DISK_VERSION` stays 12
+- [ ] Init creates `/net` in the admin tree when missing (mode `ask`,
+      no names) and gives `net` one token, `READ|WRITE` on that file
+      only
+- [ ] DHCP client: discover, offer, request, ack. QEMU user networking
+      acks `10.0.2.15/24`, gateway `10.0.2.2`. No DHCP server in
+      Galexy
+- [ ] ARP for the gateway (8-entry cache). Then one UDP datagram,
+      payload `galexy`, which the host receives
+- [ ] `link` answers `up` and that locator to any logged-in seat
+- [ ] Mode `fixed` skips DHCP. The lease is written back with its
+      expiry. IPv6 and neighbor solicitation are host tests
+- [ ] No application Cap yet
+
+## Milestone 81 — Carriers
+
+TCP on the address from Milestone 80.
+
+- [ ] Host tests for the TCP machine. Software checksums
+- [ ] Guest smoke: `net` completes a TCP handshake with a host
+      listener through QEMU user networking
+- [ ] No application Cap yet
+
+## Milestone 82 — Lane
+
+- [ ] TLS 1.3 in `net`, rustls-class, pure-Rust crypto, pinned 32-byte
+      key. Suites `TLS_AES_128_GCM_SHA256` and
+      `TLS_CHACHA20_POLY1305_SHA256`. No TLS 1.2, no compression, no
+      renegotiation, no 0-RTT, no WebPKI bundle
+- [ ] `Syscall::Lane` is number 34. Only the task named `net` may call
+      it. Everyone else is `AccessDenied`. `read` / `write` move
+      plaintext. 32 lanes, 16 KiB each direction
+- [ ] Host fixture: a known key finishes, a different key is rejected
+- [ ] Guest: a test task reads `lane ok` from the lane Cap. Session
+      keys do not appear on serial or `dmesg`
+- [ ] `docs/ABI.md`: syscall 34 and control index `0x800A` experimental
+
+## Milestone 83 — Names and gates
+
+- [ ] Directory: name → locator + pinned key + who may dial. Name
+      charset matches a galfs component, ≤ 64 bytes. `allow`, `grant`,
+      and `revoke` rewrite `/net`, and a restart of `net` keeps them
+- [ ] Opcodes on `0x800A`: `link`, `dial`, `allow`, `grant`, `revoke`,
+      `serve`. Header matches the init stamp. Logged-out is
+      `AccessDenied`. Admin bit is the kernel's
+- [ ] Dial of a name this seat was not granted does not open TCP.
+      Reply is `access denied`
+- [ ] After `grant`, dial's reply carries the app end of a lane
+- [ ] `serve` attaches a gate (8 gates, 4 pending lanes). The next
+      lane is delivered to that listener and to nobody else
+- [ ] Locators and ports are not a general `galexy-abi` argument.
+      A name with no literal locator and no pinned resolver fails
+      closed
+
+## Milestone 84 — Fetch
+
+- [ ] Shell `fetch <name>` dials, reads the lane to EOF, prints the
+      body, returns the prompt
+- [ ] Typed e2e: a granted seat prints the host peer's body. A seat
+      without the grant sees `access denied` and the host sees no
+      handshake
+- [ ] `std::net` stays `unsupported`
+
+## Milestone 85 — Solid (Phase 10 gate)
+
+- [ ] A peer that opens handshakes and never finishes them is capped
+      by the 5 s deadline and the lane budget. `svc status shell`
+      still answers
+- [ ] Audit line: actor, name, first eight hex bytes of the key
+      fingerprint, result. No key, no session secret, no plaintext
+- [ ] `THREAT.md` A6 moves from planned to defended, with these tests
+      named
+- [ ] ABI note: syscall 34 and the net opcodes do not change shape
+      after this milestone without an ABI entry
+
+## Phase 13 — USB (after Phase 10, before `v1.0`)
+
+Plan: `docs/USB.md`. Inventory: `docs/DEVICES.md`. See devices. Lock
+the driver table. No vendor modules in this phase.
+
+## Milestone 86 — Controller
+
+- [ ] xHCI on q35, QEMU `qemu-xhci`. Cap `0x800B`. A second task that
+      reads it is `AccessDenied`
+- [ ] DMA splits at a physical discontinuity; a sentinel stays
+      untouched
+- [ ] The interrupt fires. No descriptor walk yet
+
+## Milestone 87 — Devices
+
+- [ ] Ramdisk `usb` under init is the only holder of `0x800B`.
+      `svc status usb` answers `usb running`. `MAX_PROC_CAPS` stays 16
+- [ ] Device and configuration descriptors, inside the budgets in
+      `USB.md`. A hostile length is `BadValue` and the bus stays up
+- [ ] The runner attaches one QEMU USB device with a known ID. `list`
+      on `0x800C` prints it. The device does not become the keyboard
+- [ ] Any logged-in seat may list. A logged-out send is `AccessDenied`
+
+## Milestone 88 — Contract (Phase 13 gate)
+
+- [ ] Driver table at `crates/userspace/usb/src/drivers/mod.rs` names
+      no vendor module. An unmatched device is listed and not claimed
+- [ ] A test row claims a fake device; removing the row means the
+      module is not called
+- [ ] `docs/DEVICES.md` matches the code. The e1000e and CDC-NCM rows
+      stay `unwritten`
+- [ ] A driver outside the table is not reachable
+
 ---
 
 ## Known limitations / follow-ups
@@ -2675,7 +2828,11 @@ items stay here with rationale.
       at a whole-second boundary) is the window this closes. The
       stale-serial-log harness bug from that close stays fixed
       (`serial_log_path` removes the file before QEMU starts)
-- [ ] No network stack, no USB — **Phase 10** (after `v1.0`)
+- [ ] No network stack — **Phase 10**, Milestones 78–85, required
+      before the `v1.0` tag (`docs/NET.md`)
+- [ ] No USB stack — **Phase 13**, Milestones 86–88, after Phase 10
+      and before the `v1.0` tag (`docs/USB.md`). Seeing a device and
+      the driver table are the gate. Vendor drivers stay unnumbered
 - [x] ~~`passwd` on a sealed-disk boot hung the machine
       (galexy.os#86)~~ — CLOSED by PR #88. Two IF=0 deadlocks: a lock
       holder's heap growth waited on a shootdown ack from a CPU spinning

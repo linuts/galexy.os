@@ -110,6 +110,11 @@ Unknown codes decode to `Unsupported`. New codes append.
 | `map` | `1..=USER_HEAP_PAGES (262_144)` pages, starting 512 MiB above the task image base | stable (ceiling raised to 1 GiB in Milestone 71) |
 | `channel` message | `CHAN_MSG_MAX = 256` bytes, up to two file Caps; 8 channels | stable |
 | init RPC header | 20 bytes: admin u8, tty u8, pad 2, debug id u64, session gen u64, then the user payload (`op`, `name_len`, name). User payload max 236. Ops: status 1, start 2, stop 3, restart 4, shutdown 5, reboot 6 | stable |
+| Wire Cap | index `0x8009`. Frame read/write. Only the task named `net` | **reserved** — Milestone 78. Not implemented |
+| Net control Cap | index `0x800A`. `send` parks for a reply. Same 20-byte stamped header as init. Ops, when they exist: link 1, dial 2, allow 3, grant 4, revoke 5, serve 6. `link` may include our locator after Milestone 80 | **reserved** — Milestone 83. Not implemented |
+| `lane` | syscall **34**. Mints a pair of lane Caps. Only `net` may call it. `read` / `write` are the plaintext of one TLS 1.3 session | **reserved** — Milestone 82. Not implemented. No `socket` / `bind` / `connect` row will be added |
+| USB controller Cap | index `0x800B`. Transfer rings. Only the task named `usb` | **reserved** — Milestone 86. Not implemented |
+| USB control Cap | index `0x800C`. `send` parks for a reply. Same 20-byte stamped header as init. Op 1 is `list` | **reserved** — Milestone 87. Not implemented |
 | `USER_IMAGE_BASE` | `0x0000_0C80_0000_0000`; every ELF links here; the loader accepts PT_LOADs inside `[base, base + 512 MiB)` | stable (no user ASLR — `THREAT.md`) |
 | Exit status of a killed task | `137` to Cap-waiters; the cancelled waiter's own syscall returns `Interrupted` | stable (M58) |
 | `OS_VERSION` | `"0.1.0"` banner string | informational |
@@ -122,3 +127,5 @@ Unknown codes decode to `Unsupported`. New codes append.
   programs must not.
 - The ramdisk tar layout and the GALF on-disk format (`GALFS.md` owns
   that version number; the kernel refuses mismatches).
+- Locators and transport ports. They live in the `net` service
+  directory (`NET.md`). A program dials a name.
