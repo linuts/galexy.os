@@ -393,6 +393,6 @@ adds `ThreadSpawn` + `Futex`, which should be designed in `PROCESS.md`
 beside `Channel` so the Milestone 67 ABI freeze covers them. Stages 4–6
 come after `v1.0`; they need KVM in the runner (Milestone 64) to be
 testable in reasonable time. Those stages have since landed (Milestones
-68–73). Phase 10 (`docs/NET.md`, Milestones 78–84) is required before
-the `v1.0` tag. `std::net` stays unsupported; a lane is not a
-`TcpStream`.
+68–73). Phase 10 (`docs/NET.md`, Milestones 78–85) and Phase 13
+(`docs/USB.md`, Milestones 86–88) are required before the `v1.0`
+tag. `std::net` stays unsupported; a lane is not a `TcpStream`.

@@ -60,6 +60,10 @@ fixed in a milestone PR with a changelog line.
 - Remote attacks: there is no network stack in this tree. Phase 10
   (`docs/NET.md`) is the plan, and it is required before `v1.0`.
   Until it lands, a packet has nowhere to arrive.
+- USB devices: there is no xHCI driver. Phase 13 (`docs/USB.md`)
+  lists devices and locks the driver table before `v1.0`. Until it
+  lands, a plugged-in device is invisible. Vendor drivers are not
+  part of that phase.
 - Denial of service by the operator at the keyboard (the console budget
   and quotas are fairness, not security, mechanisms).
 

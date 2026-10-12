@@ -27,13 +27,17 @@ The QEMU suite is 124 runner tests plus host tests (`test-big` boots
 only under KVM; `rustc_obj_matches_host` and `rustc_hello_runs` run
 when the compiler ELF was present at image build). The Milestone 52 review checklist is complete except
 the `review-rc1` tag, which is the owner's call. The `v1.0` tag waits
-on Phase 10 (Milestones 78–84, a lane you can `fetch`;
-[`docs/NET.md`](docs/NET.md)) and on a KVM pass (BIOS+UEFI, TCG+KVM,
+on Phase 10 (Milestones 78–85, an address, a datagram, and a lane
+you can `fetch`; [`docs/NET.md`](docs/NET.md)), on Phase 13
+(Milestones 86–88, a listed USB device and the driver table;
+[`docs/USB.md`](docs/USB.md)), and on a KVM pass (BIOS+UEFI, TCG+KVM,
 q35+pc, `PERF.md`).
 The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md) → Where
-we stand. Known gap today: there is no network device and no lane.
-The plan is a ring-3 `net` service and a granted TLS 1.3 lane, not a
-socket API. Legacy device paths
+we stand. Known gap today: there is no network device, no lane, and
+no USB controller. The network plan is a ring-3 `net` service, DHCP,
+and a granted TLS 1.3 lane, not a socket API. The USB plan sees
+devices and stops there. The inventory is
+[`docs/DEVICES.md`](docs/DEVICES.md). Legacy device paths
 (PIT, 8259, PS/2, PIO IDE, legacy virtio) remain as named fallbacks.
 KPTI, IBRS, MDS, and CET are waived for this single-tenant guest
 (`docs/THREAT.md`). PCID and a new kernel heap allocator stay waived
@@ -46,6 +50,7 @@ stays experimental.
 | galfs trees, tokens, sealed disk | [`docs/GALFS.md`](docs/GALFS.md) |
 | Process Caps, init, seats | [`docs/PROCESS.md`](docs/PROCESS.md) |
 | Lanes and the network plan | [`docs/NET.md`](docs/NET.md) |
+| USB, and the device inventory | [`docs/USB.md`](docs/USB.md), [`docs/DEVICES.md`](docs/DEVICES.md) |
 | Scheduler, time, block/wake (frozen v1) | [`docs/SCHEDULING.md`](docs/SCHEDULING.md) |
 | `gxc` (removed) | [`docs/COMPILER.md`](docs/COMPILER.md) |
 | Rust target + upstream `rustc` on Galexy | [`docs/RUSTC.md`](docs/RUSTC.md) |
@@ -290,10 +295,15 @@ crates/
   (bench, KVM, LTO, IRQ completion), modern (q35, ECAM, virtio 1.x,
   MSI-X, TSC-deadline), full userland (heap, argv, clock, channels,
   jobs), init-owned shutdown. The `v1.0` tag is not this phase; it
-  waits on Phase 10 and the KVM cells
-- **Phase 10** — network, before `v1.0`. virtio-net in the kernel, a
-  ring-3 `net` service, TLS 1.3 lanes granted by name. No sockets.
-  Milestones 78–84. Plan: [`docs/NET.md`](docs/NET.md)
+  waits on Phase 10, Phase 13, and the KVM cells
+- **Phase 10** — network, before `v1.0`. virtio-net in the kernel, DHCP
+  and one datagram, then a ring-3 `net` service and TLS 1.3 lanes
+  granted by name. The record is a file in the admin tree. No sockets.
+  Milestones 78–85. Plan: [`docs/NET.md`](docs/NET.md)
+- **Phase 13** — USB, after Phase 10 and before `v1.0`. xHCI, a list
+  of devices, and one driver table. No vendor drivers. Milestones
+  86–88. Plan: [`docs/USB.md`](docs/USB.md). Inventory:
+  [`docs/DEVICES.md`](docs/DEVICES.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
   static linker (LINKER.md, ✅ Milestone 69), `std` PAL (✅ Milestone
   70), compiler-sized limits and ring-3 `gxld` (✅ Milestone 71),

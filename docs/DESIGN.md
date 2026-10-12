@@ -1392,9 +1392,10 @@ pinned in `galexy-abi` tests.
   `legacy IO BAR`). The PC speaker (`pc-speaker`, default on) is the
   only audio device and the only PIT user after boot.
 - Stated non-goals for this platform pass: 5-level paging, huge user
-  pages, USB, and a GPU beyond the GOP framebuffer. The network is
-  Phase 10 (`docs/NET.md`), Milestones 78–84, required before the
-  `v1.0` tag. USB stays after that tag.
+  pages, and a GPU beyond the GOP framebuffer. The network is
+  Phase 10 (`docs/NET.md`), Milestones 78–85. USB is Phase 13
+  (`docs/USB.md`), Milestones 86–88, after the network and before
+  the `v1.0` tag. The device inventory is `docs/DEVICES.md`.
 - The measured path is `cargo run --release` and
   `cargo test -p runner --test boot --release`. The runner picks
   `-accel kvm -cpu host` when `KVM_CREATE_VCPU` succeeds, else

@@ -207,7 +207,7 @@ machines: ACPI, x2APIC, PCIe, virtio 1.x, UEFI + GOP.
 
 ## Network (lanes)
 
-Rules for Phase 10 (`docs/NET.md`; Milestones **78–84**). Binding
+Rules for Phase 10 (`docs/NET.md`; Milestones **78–85**). Binding
 once the first of those milestones lands; the plan is binding now.
 
 - **A lane is the application object.** One TLS 1.3 session, one peer,
@@ -229,6 +229,43 @@ once the first of those milestones lands; the plan is binding now.
 - **Budgets are the ones in `NET.md`.** 32 lanes, 16 KiB each way, 8
   gates, a fixed frame pool. A flood must not stop a seat from
   answering `svc status`.
+- **The address lives in one file.** `/net` in the admin tree,
+  versioned by `crates/galexy-netcfg`. `net` holds a token for that
+  file and for nothing else. `DISK_VERSION` does not move because a
+  file was added. A record version the service does not know is
+  refused.
+
+## USB (see, then a table)
+
+Rules for Phase 13 (`docs/USB.md`; Milestones **86–88**). Binding
+now, the same way the network rules are.
+
+- **One inventory.** `docs/DEVICES.md` is the list. A driver module
+  without a row, or a row without a module once status is `landed`,
+  is a review failure.
+- **Linux is an index, not a source tree.** The path in the matrix
+  names an open driver so we know the IDs. Galexy code is written
+  from the public contract column. GPL driver text does not enter
+  this MIT tree.
+- **The kernel moves rings.** xHCI DMA follows the virtio rule: one
+  descriptor per physically contiguous run. Descriptors are
+  interpreted by the `usb` service. A bad length is `BadValue`.
+- **Only `usb` holds the controller** (Cap `0x800B`). Listing
+  (Cap `0x800C`) is any logged-in seat. Listing does not attach a
+  driver and does not inject keys.
+- **One driver table.** `crates/userspace/usb/src/drivers/mod.rs` is
+  the only registration. A NIC driver delivers Ethernet frames to
+  `net` and does not speak TCP.
+- **Budgets are the ones in `USB.md`.** 32 devices, 8 interfaces,
+  4096-byte configuration, 64-byte strings.
+
+## Subsystem docs
+
+A bus or a protocol gets one deep doc before its first milestone
+lands code (`NET.md`, `USB.md`). The wiki page is the reading copy
+and stays in step. Device rows live only in `DEVICES.md`. A new
+opcode appends. A new on-disk record version is refused when unknown,
+and it is not a GALF version bump unless the slot layout changes.
 
 ## Secrets and passwords
 
@@ -303,7 +340,7 @@ once the first of those milestones lands; the plan is binding now.
 
 - When behavior changes, update in this order: code → doc comment →
   `TODO.md` checkbox → `README.md` feature list → relevant deep doc
-  (`DESIGN.md`, `AUTH.md`, `GALFS.md`, `PROCESS.md`, `NET.md`, later `THREAT.md`).
+  (`DESIGN.md`, `AUTH.md`, `GALFS.md`, `PROCESS.md`, `NET.md`, `USB.md`, `DEVICES.md`, later `THREAT.md`).
 - `ROADMAP.md` only for direction shifts or new phases.
 - `TODO.md` checkboxes are only checked after the item is *verified
   working* (e.g. seen in QEMU), never when "written".
