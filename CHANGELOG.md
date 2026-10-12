@@ -8,6 +8,13 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#112](https://github.com/linuts/galexy.os/pull/112) — Milestone 94 —
+  `bin/test-python` reads a galfs file the task holds a token for
+  and writes a second file. `builtins.open` is `std::fs` because
+  `_io.FileIO` needs host_env. A path with no token is `OSError`
+  and a non-zero exit. `time.time` raises while `Date` is unset
+  and agrees with it after `set_secs`. `time.monotonic` follows
+  `Clock`.
 - [#111](https://github.com/linuts/galexy.os/pull/111) — Milestone 93 —
   `bin/test-python` prints `hello from python on galexy` and exits 0.
   `import socket` exits non-zero and the kernel stays up. The

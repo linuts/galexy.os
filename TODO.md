@@ -2834,11 +2834,11 @@ This phase can land beside Phase 10 and Phase 13.
 
 ## Milestone 94 — Files
 
-- [ ] The test kernel reads a galfs file the task has a token for
+- [x] The test kernel reads a galfs file the task has a token for
       and writes a second file
-- [ ] A path with no token is a Python exception and a non-zero
+- [x] A path with no token is a Python exception and a non-zero
       exit. The kernel does not panic
-- [ ] `time.time` raises while `Date` is unset, and agrees with
+- [x] `time.time` raises while `Date` is unset, and agrees with
       `Date` after it is set. `time.monotonic` still follows `Clock`
 
 ## Milestone 95 — Image

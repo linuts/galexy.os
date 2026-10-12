@@ -148,8 +148,11 @@ that is not listed is `ImportError` (the interpreter installs a
 exception and stays up; it does not panic. `time.monotonic` is
 syscall `Clock` (27). `time.time` is syscall `Date` (34) and
 raises `OSError` when the date is unset, not the monotonic
-uptime. `os` is not on the list. `open` is `_io`, which uses
-`std::fs`. The guest test of an unset date waits for Milestone 94.
+uptime. `os` is not on the list. `_io.FileIO` exists only with
+the host_env feature, which this build does not enable, so
+`builtins.open` is a small `std::fs` wrapper. `io.open` stays
+unsupported. A missing token is `OSError`. The guest test of an
+unset date waits for Milestone 94.
 
 ### 93 Ring 3
 
@@ -166,7 +169,8 @@ boot test also rejects `[pf]`.
 
 The same test kernel runs a second program. It reads a galfs
 file the task holds a token for, writes a second file, and
-exits 0. A path with no token raises a Python exception and
+exits 0. `open` is the `builtins` wrapper from section 92, not
+`_io.FileIO`. A path with no token raises a Python exception and
 exits non-zero. The kernel does not panic. `time.time` with
 the date unset raises. After `Date` is set, `time.time` agrees
 with that civil time, and `time.monotonic` still moves like

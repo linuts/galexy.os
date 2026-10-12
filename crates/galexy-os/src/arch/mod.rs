@@ -29,7 +29,7 @@ use crate::serial_println;
 pub use acpi::madt;
 pub use gdt::{set_tss_rsp0, syscall_selectors, tss_rsp0, user_cs_ss};
 pub use idt::set_page_fault_handler;
-pub use rtc::{now_secs, set_secs};
+pub use rtc::{clear_secs, now_secs, set_secs};
 pub use timer::tick as timer_tick;
 pub use timer::ticks as timer_ticks;
 

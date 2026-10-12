@@ -2049,6 +2049,36 @@ fn python_hello_runs() {
         !serial.contains("should-not-run"),
         "bad.py ran past the refused import; serial:\n{serial}"
     );
+    for line in [
+        "time-unset",
+        "files-ok",
+        "out: alpha",
+        "py-files: exit Some(0)",
+        "py-time: exit Some(0)",
+    ] {
+        assert!(serial.contains(line), "missing {line:?}; serial:\n{serial}");
+    }
+    assert!(
+        !serial.contains("py-deny: exit Some(0)"),
+        "open without a token succeeded; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("token-unexpected") && !serial.contains("time-unexpected"),
+        "a refused path or an unset date continued; serial:\n{serial}"
+    );
+    let wall = serial_u64(&serial, "wall ");
+    let when = 1_791_817_440u64;
+    assert!(
+        wall >= when && wall < when + 300,
+        "time.time {wall} is not the civil date {when}; serial:\n{serial}"
+    );
+    let before = serial_u64(&serial, "clock-before ");
+    let after = serial_u64(&serial, "clock-after ");
+    let mono = serial_u64(&serial, "mono-ms ");
+    assert!(
+        mono + 1000 >= before && mono <= after.saturating_add(2000),
+        "time.monotonic {mono} left Clock {before}..{after}; serial:\n{serial}"
+    );
     assert!(
         !serial.contains("[pf]"),
         "ring-3 fault (a guard-page fault still exits 0); serial:\n{serial}"
@@ -2091,6 +2121,20 @@ fn rustc_hello_runs() {
     ] {
         assert!(serial.contains(line), "missing {line:?}; serial:\n{serial}");
     }
+}
+
+fn serial_u64(serial: &str, key: &str) -> u64 {
+    serial
+        .lines()
+        .find_map(|line| {
+            let idx = line.find(key)?;
+            line[idx + key.len()..]
+                .split_whitespace()
+                .next()?
+                .parse()
+                .ok()
+        })
+        .unwrap_or_else(|| panic!("missing {key} in serial:\n{serial}"))
 }
 
 /// Host Cranelift object for the same `hello.rs` the guest compiles.

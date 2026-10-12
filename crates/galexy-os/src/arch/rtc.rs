@@ -69,6 +69,13 @@ pub fn now_secs() -> Option<u64> {
     None
 }
 
+/// Drops the civil anchor. `Clock` is not written. The next `now_secs`
+/// is `None` until [`set_secs`].
+pub fn clear_secs() {
+    SEQ.store(0, Ordering::Release);
+    serial_println!("[date] unset");
+}
+
 /// Anchors `secs` and copies the civil fields into the CMOS clock.
 ///
 /// `false` means the seconds are not a civil time this kernel accepts.

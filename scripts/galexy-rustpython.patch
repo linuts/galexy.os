@@ -142,14 +142,15 @@ new file mode 100644
 index 0000000..05dd80e
 --- /dev/null
 +++ b/crates/galexy-python/src/main.rs
-@@ -0,0 +1,145 @@
+@@ -0,0 +1,196 @@
 +//! Run one Python file on the Galexy RustPython VM.
 +//!
 +//! `python PATH` reads the file and executes it with builtins and `sys`.
 +//! There is no REPL and no network. An import whose top-level name is
 +//! not in `allow.txt` is `ImportError`. The process prints it and exits.
 +
-+use rustpython_vm::{Interpreter, Settings, compiler};
++use rustpython_vm::builtins::PyStrRef;
++use rustpython_vm::{Interpreter, PyResult, Settings, VirtualMachine, compiler};
 +
 +/// Same names as `scripts/python-allow.txt`. The build copies that file
 +/// over this one before it links.
@@ -236,6 +237,11 @@ index 0000000..05dd80e
 +    let mut status = 0;
 +    interp.enter(|vm| {
 +        let scope = vm.new_scope_with_builtins();
++        if let Err(exc) = install_open(vm) {
++            vm.print_exception(&exc);
++            status = 1;
++            return;
++        }
 +        let prelude = allow_prelude();
 +        if let Err(exc) = run(vm, &prelude, scope.clone(), "<galexy>") {
 +            vm.print_exception(&exc);
@@ -248,6 +254,29 @@ index 0000000..05dd80e
 +        }
 +    });
 +    status
++}
++
++fn install_open(vm: &VirtualMachine) -> PyResult<()> {
++    let read = vm.new_function("_galexy_read", galexy_read);
++    let write = vm.new_function("_galexy_write", galexy_write);
++    vm.builtins.set_attr("_galexy_read", read, vm)?;
++    vm.builtins.set_attr("_galexy_write", write, vm)?;
++    Ok(())
++}
++
++/// `_io.FileIO` is the host_env POSIX path. Galexy has no file
++/// descriptors, so `open` is `std::fs` and a missing token is `OSError`.
++fn galexy_read(path: PyStrRef, vm: &VirtualMachine) -> PyResult<String> {
++    let path = path.to_string_lossy();
++    std::fs::read_to_string(path.as_ref()).map_err(|err| vm.new_os_error(err.to_string()))
++}
++
++fn galexy_write(path: PyStrRef, data: PyStrRef, vm: &VirtualMachine) -> PyResult<usize> {
++    let path = path.to_string_lossy();
++    let data = data.to_string_lossy();
++    std::fs::write(path.as_ref(), data.as_bytes())
++        .map_err(|err| vm.new_os_error(err.to_string()))?;
++    Ok(data.len())
 +}
 +
 +fn run(
@@ -285,7 +314,29 @@ index 0000000..05dd80e
 +         \t\treturn None\n\
 +         _sys.meta_path.insert(0, _Allow())\n\
 +         import _io as io\n\
-+         _sys.modules['io'] = io\n"
++         _sys.modules['io'] = io\n\
++         class _GalexyFile:\n\
++         \tdef __init__(self, path, mode):\n\
++         \t\tself._path = path\n\
++         \t\tself._mode = mode\n\
++         \t\tself._buf = ''\n\
++         \t\tif 'w' not in mode and 'a' not in mode:\n\
++         \t\t\tself._buf = _galexy_read(path)\n\
++         \tdef read(self, n=-1):\n\
++         \t\treturn self._buf\n\
++         \tdef write(self, data):\n\
++         \t\tself._buf += data\n\
++         \t\treturn len(data)\n\
++         \tdef __enter__(self):\n\
++         \t\treturn self\n\
++         \tdef __exit__(self, exc_type, exc, tb):\n\
++         \t\tif 'w' in self._mode or 'a' in self._mode:\n\
++         \t\t\t_galexy_write(self._path, self._buf)\n\
++         \t\treturn False\n\
++         import builtins as _builtins\n\
++         def open(file, mode='r', *args, **kwargs):\n\
++         \treturn _GalexyFile(file, mode)\n\
++         _builtins.open = open\n"
 +    )
 +}
 diff --git a/crates/common/src/rand.rs b/crates/common/src/rand.rs
