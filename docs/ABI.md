@@ -116,6 +116,7 @@ Unknown codes decode to `Unsupported`. New codes append.
 | `lane` | syscall **35**. Mints a pair of lane Caps. Only `net` may call it. `read` / `write` are the plaintext of one TLS 1.3 session | **reserved** — Milestone 82. Not implemented. No `socket` / `bind` / `connect` row will be added. `date` took 34; the table stays dense |
 | USB controller Cap | index `0x800B`. Transfer rings. Only the task named `usb` | **reserved** — Milestone 86. Not implemented |
 | USB control Cap | index `0x800C`. `send` parks for a reply. Same 20-byte stamped header as init. Op 1 is `list` | **reserved** — Milestone 87. Not implemented |
+| Python | no syscall and no reserved index. RustPython is a ring-3 program (`docs/PYTHON.md`) | **planned** — Milestones 91–96. Not implemented |
 | `USER_IMAGE_BASE` | `0x0000_0C80_0000_0000`; every ELF links here; the loader accepts PT_LOADs inside `[base, base + 512 MiB)` | stable (no user ASLR — `THREAT.md`) |
 | Exit status of a killed task | `137` to Cap-waiters; the cancelled waiter's own syscall returns `Interrupted` | stable (M58) |
 | `OS_VERSION` | `"0.1.0"` banner string | informational |

@@ -30,13 +30,16 @@ the `review-rc1` tag, which is the owner's call. The `v1.0` tag waits
 on Phase 10 (Milestones 78–85, an address, a datagram, and a lane
 you can `fetch`; [`docs/NET.md`](docs/NET.md)), on Phase 13
 (Milestones 86–88, a listed USB device and the driver table;
-[`docs/USB.md`](docs/USB.md)), and on a KVM pass (BIOS+UEFI, TCG+KVM,
-q35+pc, `PERF.md`).
+[`docs/USB.md`](docs/USB.md)), on Phase 14 (Milestones 91–96,
+RustPython as `python hello.py`; [`docs/PYTHON.md`](docs/PYTHON.md)),
+and on a KVM pass (BIOS+UEFI, TCG+KVM, q35+pc, `PERF.md`).
 The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md) → Where
-we stand. Known gap today: there is no network device, no lane, and
-no USB controller. The network plan is a ring-3 `net` service, DHCP,
+we stand. Known gap today: there is no network device, no lane, no USB
+controller, and no Python interpreter. The network plan is a ring-3 `net` service, DHCP,
 and a granted TLS 1.3 lane, not a socket API. The USB plan sees
-devices and stops there. The inventory is
+devices and stops there. The Python plan is upstream RustPython
+as a login-shell command, not CPython and not a socket module.
+The inventory is
 [`docs/DEVICES.md`](docs/DEVICES.md). Legacy device paths
 (PIT, 8259, PS/2, PIO IDE, legacy virtio) remain as named fallbacks.
 KPTI, IBRS, MDS, and CET are waived for this single-tenant guest
@@ -54,6 +57,7 @@ stays experimental.
 | Scheduler, time, block/wake (frozen v1) | [`docs/SCHEDULING.md`](docs/SCHEDULING.md) |
 | `gxc` (removed) | [`docs/COMPILER.md`](docs/COMPILER.md) |
 | Rust target + upstream `rustc` on Galexy | [`docs/RUSTC.md`](docs/RUSTC.md) |
+| RustPython as `python` | [`docs/PYTHON.md`](docs/PYTHON.md) |
 | `gxld` static linker | [`docs/LINKER.md`](docs/LINKER.md) |
 | How the kernel is wired | [`docs/DESIGN.md`](docs/DESIGN.md) |
 | Coding rules | [`docs/STYLE.md`](docs/STYLE.md) |
@@ -300,7 +304,7 @@ crates/
   (bench, KVM, LTO, IRQ completion), modern (q35, ECAM, virtio 1.x,
   MSI-X, TSC-deadline), full userland (heap, argv, clock, channels,
   jobs), init-owned shutdown. The `v1.0` tag is not this phase; it
-  waits on Phase 10, Phase 13, and the KVM cells
+  waits on Phase 10, Phase 13, Phase 14, and the KVM cells
 - **Phase 10** — network, before `v1.0`. virtio-net in the kernel, DHCP
   and one datagram, then a ring-3 `net` service and TLS 1.3 lanes
   granted by name. The record is a file in the admin tree. No sockets.
@@ -309,6 +313,10 @@ crates/
   of devices, and one driver table. No vendor drivers. Milestones
   86–88. Plan: [`docs/USB.md`](docs/USB.md). Inventory:
   [`docs/DEVICES.md`](docs/DEVICES.md)
+- **Phase 14** — RustPython, before `v1.0`, beside Phase 10 and
+  Phase 13. `python hello.py` on `galexy-os-python`. No new syscall,
+  no `pip`, no sockets. Milestones 91–96. Plan:
+  [`docs/PYTHON.md`](docs/PYTHON.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
   static linker (LINKER.md, ✅ Milestone 69), `std` PAL (✅ Milestone
   70), compiler-sized limits and ring-3 `gxld` (✅ Milestone 71),

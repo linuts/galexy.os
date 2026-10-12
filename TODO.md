@@ -2205,7 +2205,9 @@ legacy paths kept only where the platform has nothing else.
 - [x] **Stated non-goals for Milestone 65**: 5-level paging, huge
       user pages, GPU beyond the GOP framebuffer. Network is Phase 10
       (Milestones 78–85, `docs/NET.md`). USB is Phase 13 (Milestones
-      86–88, `docs/USB.md`). Both are required before the `v1.0` tag
+      86–88, `docs/USB.md`). RustPython is Phase 14 (Milestones
+      91–96, `docs/PYTHON.md`). All three are required before the
+      `v1.0` tag
 
 ## Milestone 66 — Userland completeness ✅
 
@@ -2318,6 +2320,10 @@ unset.
 - [ ] Phase 13 — Milestones 86–88 (`docs/USB.md`). The bus lists a
       QEMU USB device, and a driver that is not in the table does
       not run. Vendor rows in `docs/DEVICES.md` stay `unwritten`
+- [ ] Phase 14 — Milestones 91–96 (`docs/PYTHON.md`). A typed login
+      on `galexy-os-python` runs `python hello.py` and a program
+      that reads and writes a galfs file. No new syscall. `socket`
+      stays off the allow-list
 - [ ] Suite green on BIOS + UEFI, TCG + KVM, `q35` + the `pc` legacy
       case (BIOS + UEFI, TCG, `q35` + `pc` are green at 124 tests. The
       KVM pass needs a host where `KVM_CREATE_VCPU` succeeds. On the
@@ -2784,6 +2790,80 @@ the driver table. No vendor modules in this phase.
 
 ---
 
+## Phase 14 — RustPython (before `v1.0`)
+
+Plan: `docs/PYTHON.md`. Upstream RustPython, command `python`, on
+`galexy-os-python`. No new syscall. The allow-list is the stdlib.
+This phase can land beside Phase 10 and Phase 13.
+
+## Milestone 91 — Pin and link
+
+- [ ] `scripts/rustpython.rev` pins one RustPython commit. The
+      checkout is not committed. Its license notices stay with it
+- [ ] One static ELF for `x86_64-unknown-galexy`, nightly from
+      `rust-toolchain.toml`, existing sysroot. No `std::net`, no C,
+      no libc. The target JSON is unchanged
+- [ ] The ELF passes the same loader check as
+      `cargo xtask sysroot --check`. It does not have to boot
+- [ ] Host build does not pass `--sysroot` of this repository
+
+## Milestone 92 — Allow-list
+
+- [ ] `scripts/python-allow.txt` is the frozen set, starting with
+      `builtins`, `sys`, and `io`. A host test fails when the build
+      freezes a name that is not listed
+- [ ] An import outside the list is `ImportError`. The process stays
+      up
+- [ ] `socket`, `ssl`, `pip`, `venv`, `subprocess`, `ctypes`,
+      `sqlite3`, `os.fork`, `os.exec`, `os.system`, and `os.environ`
+      are not on the list
+- [ ] `time.monotonic` is `Clock`. `time.time` is `Date` and raises
+      when the date is unset. The PAL's uptime fallback is not what
+      Python reports
+- [ ] If `open` needs `os`, that module is only the path and flag
+      surface `std::fs` already has. Every other `os` function raises
+
+## Milestone 93 — Ring 3
+
+- [ ] `bin/test-python` prints `hello from python on galexy` and
+      exits 0
+- [ ] A failed import does not panic the kernel
+- [ ] A stack or heap fault updates the budget table in `PYTHON.md`
+      and `PERF.md` before the runner changes. `DISK_VERSION` stays
+      12. Guest RAM stays 2 GiB unless that table says otherwise
+
+## Milestone 94 — Files
+
+- [ ] The test kernel reads a galfs file the task has a token for
+      and writes a second file
+- [ ] A path with no token is a Python exception and a non-zero
+      exit. The kernel does not panic
+- [ ] `time.time` raises while `Date` is unset, and agrees with
+      `Date` after it is set. `time.monotonic` still follows `Clock`
+
+## Milestone 95 — Image
+
+- [ ] `galexy-os-python` carries `python`. `cargo run --release --
+      --python` boots it. `cargo run` stays the small image
+- [ ] The runner skips the image when the ELF was absent at build.
+      CI does not download RustPython
+- [ ] `python` with no arguments prints a usage line and returns to
+      the prompt. There is no REPL
+
+## Milestone 96 — Run it (Phase 14 gate)
+
+- [ ] `python_hello_typing_e2e` on `galexy-os-python` (TCG, skipped
+      when the ELF was absent): log in, `echo` a `hello.py`, run
+      `python hello.py`, see `hello from python on galexy`
+- [ ] The same login runs a program that reads one galfs file and
+      writes another. The prompt returns after each command
+- [ ] That run leaves no child task
+- [ ] Non-goals stay non-goals: CPython, `pip`, a REPL, sockets, a
+      Python service, and a copy of the RustPython tree in this
+      repository
+
+---
+
 ## Known limitations / follow-ups
 
 Open bullets below are tracked by milestone id where planned. Waived
@@ -2881,6 +2961,10 @@ items stay here with rationale.
 - [ ] No USB stack — **Phase 13**, Milestones 86–88, after Phase 10
       and before the `v1.0` tag (`docs/USB.md`). Seeing a device and
       the driver table are the gate. Vendor drivers stay unnumbered
+- [ ] No Python interpreter — **Phase 14**, Milestones 91–96, before
+      the `v1.0` tag and beside Phases 10 and 13 (`docs/PYTHON.md`).
+      `python hello.py` is the gate. No new syscall. `socket` stays
+      off the allow-list
 - [x] ~~`passwd` on a sealed-disk boot hung the machine
       (galexy.os#86)~~ — CLOSED by PR #88. Two IF=0 deadlocks: a lock
       holder's heap growth waited on a shootdown ack from a CPU spinning

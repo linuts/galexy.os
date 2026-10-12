@@ -319,6 +319,11 @@ the driver table. It does not implement vendor drivers, and it does
 not carry IP. A future NIC that is not virtio delivers Ethernet
 frames to this service. It does not grow its own stack.
 
+RustPython is Phase 14 (`docs/PYTHON.md`), Milestones **91–96**,
+also before the tag. It can land beside this phase. Its `socket`
+module stays refused. A later Python milestone that wants a peer
+uses a lane.
+
 QUIC, 0-RTT, device checksum offload, and a CA bundle are later
 carriers and later rights. They attach to the lane. They do not add
 `socket`.

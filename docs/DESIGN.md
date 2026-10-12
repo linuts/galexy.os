@@ -1412,7 +1412,9 @@ pinned in `galexy-abi` tests.
   pages, and a GPU beyond the GOP framebuffer. The network is
   Phase 10 (`docs/NET.md`), Milestones 78–85. USB is Phase 13
   (`docs/USB.md`), Milestones 86–88, after the network and before
-  the `v1.0` tag. The device inventory is `docs/DEVICES.md`.
+  the `v1.0` tag. RustPython is Phase 14 (`docs/PYTHON.md`),
+  Milestones 91–96, also before the tag, and it adds no device
+  and no syscall. The device inventory is `docs/DEVICES.md`.
 - The measured path is `cargo run --release` and
   `cargo test -p runner --test boot --release`. The runner picks
   `-accel kvm -cpu host` when `KVM_CREATE_VCPU` succeeds, else
