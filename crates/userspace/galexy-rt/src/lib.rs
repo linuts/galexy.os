@@ -666,6 +666,19 @@ pub fn clock_ms() -> u64 {
     }
 }
 
+/// Civil UTC seconds since 1970-01-01 00:00:00.
+///
+/// [`galexy_abi::SysError::NoResource`] means the date has never been
+/// anchored. This is not [`clock_ms`]. Setting it does not move sleep.
+pub fn date() -> SyscallResult {
+    syscall(Syscall::Date as u64, galexy_abi::DATE_READ, 0, 0)
+}
+
+/// Anchors civil UTC at `secs`. The admin actor only.
+pub fn date_set(secs: u64) -> SyscallResult {
+    syscall(Syscall::Date as u64, galexy_abi::DATE_SET, secs, 0)
+}
+
 /// Creates a capability channel. On success, `out` is `[end0, end1]`.
 ///
 /// Stable since Milestone 67. Init's first channel is the control channel.
@@ -730,6 +743,11 @@ pub fn init_rpc(op: u8, name: &[u8], reply: &mut [u8]) -> SyscallResult {
 /// use the row's compiled default.
 pub fn init_rpc_every(ms: u64, name: &[u8], reply: &mut [u8]) -> SyscallResult {
     init_rpc_bytes(galexy_abi::INIT_OP_EVERY, name, &ms.to_le_bytes(), reply)
+}
+
+/// [`galexy_abi::INIT_OP_AT`]. `hour` and `minute` are civil UTC.
+pub fn init_rpc_at(hour: u8, minute: u8, name: &[u8], reply: &mut [u8]) -> SyscallResult {
+    init_rpc_bytes(galexy_abi::INIT_OP_AT, name, &[hour, minute], reply)
 }
 
 fn init_rpc_bytes(op: u8, name: &[u8], tail: &[u8], reply: &mut [u8]) -> SyscallResult {

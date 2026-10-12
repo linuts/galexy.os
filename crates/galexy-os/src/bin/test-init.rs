@@ -337,7 +337,117 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     wait_dmesg("[init] beat name=chime");
     wait_dmesg("[init] beat skip name=chime");
 
+    // The beat leaves chime running. Stop it so the civil fire is not a skip.
+    let (_chime_stop, chime_stop_reply) = run_rpc_reply(
+        "rpc-stop-chime",
+        galexy_os::sched::galfs::admin_cred(),
+        &[galexy_abi::INIT_OP_STOP, 5, b'c', b'h', b'i', b'm', b'e'],
+    );
+    sched::reap();
+    assert!(
+        chime_stop_reply.starts_with(b"chime stopped"),
+        "stop chime: {:?}",
+        core::str::from_utf8(&chime_stop_reply).unwrap_or("?")
+    );
+
+    // 2026-10-12 15:04:00 UTC. Clock must not move with it.
+    const WHEN: u64 = 1_791_817_440;
+    let eve_set = run_date("date-eve", eve, galexy_abi::DATE_SET, WHEN);
+    sched::reap();
+    assert_eq!(eve_set.rdx, 0, "non-admin date set must fail");
+    assert_eq!(eve_set.rax, SysError::AccessDenied as u64);
+
+    let logged_out = run_date(
+        "date-out",
+        galexy_os::sched::galfs::unauth_cred(),
+        galexy_abi::DATE_SET,
+        WHEN,
+    );
+    sched::reap();
+    assert_eq!(logged_out.rdx, 0, "logged-out date set must fail");
+    assert_eq!(logged_out.rax, SysError::AccessDenied as u64);
+
+    let ticks_before = galexy_os::arch::timer_ticks();
+    let set = run_date(
+        "date-set",
+        galexy_os::sched::galfs::admin_cred(),
+        galexy_abi::DATE_SET,
+        WHEN,
+    );
+    sched::reap();
+    let ticks_after = galexy_os::arch::timer_ticks();
+    assert_eq!(set.rdx, 1, "admin date set must succeed, rax={}", set.rax);
+    assert_eq!(set.rax, WHEN);
+    let now = galexy_os::arch::now_secs().expect("date anchored");
+    assert!(
+        (WHEN..WHEN + 5).contains(&now),
+        "civil seconds drifted, now={now}"
+    );
+    assert!(ticks_after >= ticks_before, "timer went backwards");
+    assert!(
+        ticks_after - ticks_before < 10_000,
+        "timer jumped {ticks_before} -> {ticks_after}"
+    );
+
+    let (shown, shown_reply) = run_rpc_reply(
+        "rpc-date",
+        galexy_os::sched::galfs::admin_cred(),
+        &[galexy_abi::INIT_OP_DATE, 0],
+    );
+    sched::reap();
+    assert_eq!(shown.rdx, 1, "date read must reach init");
+    assert!(
+        shown_reply.starts_with(b"2026-10-12 15:04:"),
+        "date reply: {:?}",
+        core::str::from_utf8(&shown_reply).unwrap_or("?")
+    );
+
+    let (eve_shown, eve_shown_reply) =
+        run_rpc_reply("rpc-eve-date", eve, &[galexy_abi::INIT_OP_DATE, 0]);
+    sched::reap();
+    assert_eq!(eve_shown.rdx, 1, "non-admin date read must reach init");
+    assert!(
+        !eve_shown_reply.starts_with(b"access denied"),
+        "non-admin date read: {:?}",
+        core::str::from_utf8(&eve_shown_reply).unwrap_or("?")
+    );
+
+    // Second 0 of the same minute, so the fire is this minute and not the next.
+    let refresh = run_date(
+        "date-refresh",
+        galexy_os::sched::galfs::admin_cred(),
+        galexy_abi::DATE_SET,
+        WHEN,
+    );
+    sched::reap();
+    assert_eq!(refresh.rdx, 1, "refresh date set must succeed");
+
+    let (at, at_reply) = run_rpc_reply(
+        "rpc-at",
+        galexy_os::sched::galfs::admin_cred(),
+        &[
+            galexy_abi::INIT_OP_AT,
+            5,
+            b'c',
+            b'h',
+            b'i',
+            b'm',
+            b'e',
+            15,
+            4,
+        ],
+    );
+    sched::reap();
+    assert_eq!(at.rdx, 1, "admin at must be accepted");
+    assert!(
+        at_reply.starts_with(b"chime at"),
+        "at reply: {:?}",
+        core::str::from_utf8(&at_reply).unwrap_or("?")
+    );
+    wait_dmesg("[init] at name=chime");
+
     serial_println!("[test-init] notices and beats");
+    serial_println!("[test-init] civil date");
     serial_println!("[test-init] passed");
     exit_qemu(QemuExitCode::Success);
 }
@@ -381,6 +491,45 @@ fn wait_dmesg_count(needle: &str, want: usize) {
             panic!("dmesg never reached {want} of {needle}; dmesg:\n{text}");
         }
     }
+}
+
+fn run_date(name: &str, fs: galexy_os::sched::galfs::FsCred, op: u64, secs: u64) -> RpcReport {
+    let (region, _) = sched::spawn_user_launcher_with(name, fs, |gr| {
+        unsafe {
+            core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
+        }
+        build_date_blob(gr.scratch.as_u64(), op, secs)
+    });
+    let scratch: *const RpcReport = mm::frame_virt(region.scratch_phys).as_ptr();
+    let mut elapsed = 0u64;
+    loop {
+        x86_64::instructions::hlt();
+        sched::drain_spawn();
+        let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*scratch).done)) };
+        if done == DONE {
+            return unsafe { core::ptr::read_volatile(scratch) };
+        }
+        elapsed += 1;
+        if elapsed > TICK_TIMEOUT {
+            panic!("{name} never finished the date syscall");
+        }
+    }
+}
+
+fn build_date_blob(scratch: u64, op: u64, secs: u64) -> alloc::vec::Vec<u8> {
+    let mut code = alloc::vec::Vec::new();
+    mov_r64_imm(&mut code, 15, scratch);
+    mov_eax(&mut code, Syscall::Date as u32);
+    mov_r64_imm(&mut code, 7, op);
+    mov_r64_imm(&mut code, 6, secs);
+    code.extend_from_slice(&[0x0F, 0x05]);
+    store(&mut code, 0, 0x08);
+    store(&mut code, 2, 0x10);
+    mov_r64_imm(&mut code, 0, DONE);
+    store(&mut code, 0, 0x00);
+    mov_eax(&mut code, Syscall::Exit as u32);
+    code.extend_from_slice(&[0x31, 0xFF, 0x0F, 0x05]);
+    code
 }
 
 fn run_rpc(name: &str, fs: galexy_os::sched::galfs::FsCred, payload: &[u8]) -> RpcReport {

@@ -193,7 +193,7 @@ lock-order table remains Milestone 48; do not invent a second story here.
 | Concern | Doc |
 | --- | --- |
 | Who may wait/kill a task | `PROCESS.md` (process Cap) |
-| Login cool-down / idle logout clock | monotonic `timer_ticks` (lockout + idle logout, M43). No wall clock |
+| Login cool-down / idle logout clock | monotonic `timer_ticks` (lockout + idle logout, M43). `Date` is civil UTC and does not move this |
 | Seat restart / Cap-wait supervision | `PROCESS.md` Phase 6; wake primitives here |
 | galfs tokens on a task | `AUTH.md` / `GALFS.md` |
 
@@ -203,8 +203,8 @@ no Cap and no galfs card.
 ## Explicit non-goals (v1)
 
 - POSIX `nanosleep` / `clock_gettime` / `timer_create` surface (a
-  Galexy `Clock` read of monotonic ms is Milestone 66; it is not a
-  POSIX clock API)
+  Galexy `Clock` read of monotonic ms is Milestone 66; `Date` is civil
+  UTC seconds, Milestone 90; neither is a POSIX clock API)
 - CFS, MLFQ, weighted fair queueing
 - POSIX `nice` / realtime priority classes
 - Per-task CPU affinity Caps (unless a later phase adds them)

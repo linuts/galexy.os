@@ -134,7 +134,10 @@ frames). Up/down arrows recall session history (written to
 | `hello` / `linger` / `nap` | Sample user programs |
 | `svc status\|start\|stop\|restart <name>` | Service table, through init |
 | `svc raise\|drop <notice>` | Rising or falling edge of a notice. Starts or stops the rows bound to it |
-| `svc every <ms> <name>` | Arm a monotonic beat. First run is one interval later. No wall clock |
+| `svc every <ms> <name>` | Arm a monotonic beat. First run is one interval later |
+| `svc date` | Civil UTC (`YYYY-MM-DD HH:MM:SS utc`), or `unset` |
+| `svc date <utc>` | Set that UTC time (admin). Does not move uptime |
+| `svc at <hh:mm> <name>` | Fire once per UTC day |
 | `shutdown` / `reboot` | Ask init to power off or reset (admin) |
 
 Typing `shell` is refused — seats are F-keys, not programs you spawn.

@@ -133,6 +133,11 @@ pub fn clock_ms() -> u64 {
     syscall(Syscall::Clock, 0, 0, 0).unwrap_or(0)
 }
 
+/// Civil UTC seconds, or `None` when the date has never been anchored.
+pub fn date_secs() -> Option<u64> {
+    syscall(Syscall::Date, super::abi::DATE_READ, 0, 0).ok()
+}
+
 /// Grows the heap by `pages` 4 KiB frames; returns their base address.
 pub fn map_pages(pages: u64) -> Result<u64, SysError> {
     syscall(Syscall::Map, pages, 0, 0)

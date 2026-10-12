@@ -266,6 +266,10 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
         }
         n if n == Syscall::ThreadExit as u64 => Outcome::ThreadExit,
         n if n == Syscall::Futex as u64 => syscall_futex(frame),
+        n if n == Syscall::Date as u64 => {
+            stamp(frame, syscall_date(frame.rdi, frame.rsi));
+            Outcome::Resume
+        }
         // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));
@@ -279,6 +283,43 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
 fn stamp(frame: &mut Context, result: SyscallResult) {
     frame.rax = result.value;
     frame.rdx = if result.ok { 1 } else { 0 };
+}
+
+fn syscall_date(op: u64, secs: u64) -> SyscallResult {
+    match op {
+        galexy_abi::DATE_READ => match crate::arch::now_secs() {
+            Some(now) => SyscallResult::ok(now),
+            None => SyscallResult::err(SysError::NoResource),
+        },
+        galexy_abi::DATE_SET => {
+            if !caller_is_admin() {
+                return SyscallResult::err(SysError::AccessDenied);
+            }
+            if crate::arch::set_secs(secs) {
+                SyscallResult::ok(secs)
+            } else {
+                SyscallResult::err(SysError::BadValue)
+            }
+        }
+        _ => SyscallResult::err(SysError::BadValue),
+    }
+}
+
+/// The calling task's galfs root is the admin actor. A logged-out task
+/// is not admin. The lock is dropped before any CMOS access.
+fn caller_is_admin() -> bool {
+    let slot = super::current_slot();
+    if slot == 0 {
+        return false;
+    }
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let threads = super::thread::THREADS.lock();
+        let Ok(owner) = super::thread::running_proc_index(&threads, slot) else {
+            return false;
+        };
+        let root = threads[owner].fs_root;
+        root != super::galfs::NO_OBJECT && super::galfs::is_admin_root(root)
+    })
 }
 
 fn syscall_cap_info(cap: Cap) -> SyscallResult {

@@ -86,9 +86,15 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(INIT_OP_RAISE, 7);
     assert_eq!(INIT_OP_DROP, 8);
     assert_eq!(INIT_OP_EVERY, 9);
+    assert_eq!(INIT_OP_DATE, 10);
+    assert_eq!(INIT_OP_DATE_SET, 11);
+    assert_eq!(INIT_OP_AT, 12);
+    assert_eq!(DATE_READ, 0);
+    assert_eq!(DATE_SET, 1);
     assert_eq!(RECV_POLL, 1);
     assert_eq!(WAIT_POLL, 1);
-    assert_eq!(MAX_SYSCALL, 33);
+    assert_eq!(MAX_SYSCALL, 34);
+    assert!(matches!(SYSCALLS[34], Syscall::Date));
     assert_eq!(POWER_SHUTDOWN, 0);
     assert_eq!(POWER_REBOOT, 1);
     assert_eq!(CapRights::POWER.bits(), 1 << 5);

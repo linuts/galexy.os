@@ -2276,6 +2276,34 @@ no payload, no wall clock. Independent of Phases 10 and 13.
 - [x] **Test**: `init_test_passes` covers the non-admin raise, the
       single start, the second edge, the beat line, and the skip line
 
+## Milestone 90 — Civil date
+
+Two clocks. `Clock`, `Sleep`, lockout, idle logout, and `svc every`
+stay on monotonic `timer_ticks`. Setting the date does not move them.
+`Date` is UTC seconds since 1970-01-01 00:00:00. No timezone and no
+leap second. Unset is `NoResource`. Set is admin-only. The CMOS clock
+seeds the anchor at boot and is written on set. A set accepts
+1970..=2099. A boot seed trusts 2000..=2099, so a zeroed chip stays
+unset.
+
+- [ ] **Syscall**: `Date` is 34 (`DATE_READ` / `DATE_SET`). `Lane`
+      moves to 35. `MAX_SYSCALL` is 34. The table stays dense
+- [ ] **Operator**: `svc date` reads (any logged-in seat). `svc date
+      YYYY-MM-DD HH:MM:SS` sets (admin). `svc at HH:MM <name>` fires
+      once per civil UTC day on a row with `every_ms != 0`. The
+      current minute may fire. A running program is skipped. `svc
+      stop` disarms the monotonic beat and the civil beat. The armed
+      time is forgotten on reboot
+- [ ] **Supervisor**: an armed civil beat sleeps in slices of at most
+      one second. With no beat armed, init still parks on `wait`. An
+      unset date logs `[init] date unset` once and does not fire
+- [ ] **std**: `Instant` stays `Clock`. `SystemTime::now` uses `Date`
+      when anchored, and uptime when unset
+- [ ] **Test**: `init_test_passes` sets 2026-10-12 15:04:00, checks
+      the monotonic counter did not jump, refuses a non-admin set and
+      a logged-out set, and `svc at 15:04 chime` logs
+      `[init] at name=chime`
+
 ### v1.0 gate
 
 - [x] Milestones 51–52 and 63–67 ✅ or waived in `THREAT.md` / `PERF.md`
@@ -2674,13 +2702,13 @@ TCP on the address from Milestone 80.
       key. Suites `TLS_AES_128_GCM_SHA256` and
       `TLS_CHACHA20_POLY1305_SHA256`. No TLS 1.2, no compression, no
       renegotiation, no 0-RTT, no WebPKI bundle
-- [ ] `Syscall::Lane` is number 34. Only the task named `net` may call
+- [ ] `Syscall::Lane` is number 35. Only the task named `net` may call
       it. Everyone else is `AccessDenied`. `read` / `write` move
       plaintext. 32 lanes, 16 KiB each direction
 - [ ] Host fixture: a known key finishes, a different key is rejected
 - [ ] Guest: a test task reads `lane ok` from the lane Cap. Session
       keys do not appear on serial or `dmesg`
-- [ ] `docs/ABI.md`: syscall 34 and control index `0x800A` experimental
+- [ ] `docs/ABI.md`: syscall 35 and control index `0x800A` experimental
 
 ## Milestone 83 — Names and gates
 
@@ -2717,7 +2745,7 @@ TCP on the address from Milestone 80.
       fingerprint, result. No key, no session secret, no plaintext
 - [ ] `THREAT.md` A6 moves from planned to defended, with these tests
       named
-- [ ] ABI note: syscall 34 and the net opcodes do not change shape
+- [ ] ABI note: syscall 35 and the net opcodes do not change shape
       after this milestone without an ABI entry
 
 ## Phase 13 — USB (after Phase 10, before `v1.0`)

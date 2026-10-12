@@ -5,8 +5,9 @@
 //! started until `svc start`, then a fast exit backs off (250, 500, 1000,
 //! then 2000 ms). `spare` is ignore: not started, and a later start does
 //! not restart it. `bell` starts when the notice `ring` rises. `chime`
-//! is a beat: `svc every` arms a monotonic interval. Operators talk to
-//! this program over the init Cap. They never receive a service Cap.
+//! is a beat: `svc every` arms a monotonic interval, and `svc at` arms
+//! one civil UTC minute per day. `Clock` is not that clock. Operators
+//! talk to this program over the init Cap. They never receive a service Cap.
 //!
 //! Silent on the console on purpose. Init shares TTY 0 with the F1 seat, so
 //! log lines go out through the console Cap and the kernel writes them to
@@ -15,12 +16,13 @@
 #![no_std]
 #![no_main]
 
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 use galexy_abi::{Cap, SysError};
+use galexy_core::{format_utc, parse_utc, utc_to_civil};
 use galexy_rt::{
-    chan_recv_poll, chan_send, channel, clock_ms, entry, kill, reboot, shutdown, sleep_ms,
-    spawn_with, sync, wait, wait_poll, write_console,
+    chan_recv_poll, chan_send, channel, clock_ms, date, date_set, entry, kill, reboot, shutdown,
+    sleep_ms, spawn_with, sync, wait, wait_poll, write_console,
 };
 
 entry!(main);
@@ -65,7 +67,16 @@ struct Live {
     armed_ms: AtomicU64,
     /// Monotonic deadline. `0` means disarmed.
     next_ms: AtomicU64,
+    /// Civil hour, or [`CIVIL_OFF`] when `svc at` is not armed.
+    civil_hour: AtomicU8,
+    /// Civil minute. Ignored while [`Live::civil_hour`] is [`CIVIL_OFF`].
+    civil_minute: AtomicU8,
+    /// UTC day (`secs / 86400`) already fired, or `u32::MAX` if not yet.
+    civil_day: AtomicU32,
 }
+
+/// `civil_hour` value that means this row has no civil beat.
+const CIVIL_OFF: u8 = 0xFF;
 
 const fn live() -> Live {
     Live {
@@ -76,12 +87,15 @@ const fn live() -> Live {
         spawned_ms: AtomicU64::new(0),
         armed_ms: AtomicU64::new(0),
         next_ms: AtomicU64::new(0),
+        civil_hour: AtomicU8::new(CIVIL_OFF),
+        civil_minute: AtomicU8::new(0),
+        civil_day: AtomicU32::new(u32::MAX),
     }
 }
 
 /// Shortest beat. Matches the first restart-backoff step.
 const BEAT_MIN_MS: u64 = 250;
-/// Longest beat: one day. There is no calendar behind this.
+/// Longest monotonic beat: one day.
 const BEAT_MAX_MS: u64 = 86_400_000;
 
 /// Twelve seats, one once-service, the backoff fixture, one ignore
@@ -144,7 +158,7 @@ const fn notices_declared() -> bool {
     let mut i = 0;
     while i < SERVICES.len() {
         let n = SERVICES[i].notice;
-        if n.len() != 0 {
+        if !n.is_empty() {
             let mut found = false;
             let mut j = 0;
             while j < NOTICE_NAMES.len() {
@@ -172,6 +186,8 @@ static PENDING_RESTART: AtomicU8 = AtomicU8::new(NONE);
 /// Service index to wait next, so a fast exit is not hidden behind a seat.
 static WATCH: AtomicU8 = AtomicU8::new(NONE);
 static RX: AtomicU64 = AtomicU64::new(0);
+/// One `[init] date unset` line per boot, not one per slice.
+static DATE_UNSET_LOGGED: AtomicBool = AtomicBool::new(false);
 
 fn main() -> i32 {
     let mut ends = [0u64; 2];
@@ -215,11 +231,14 @@ fn main() -> i32 {
         if fire_due_beats() {
             continue;
         }
+        if fire_due_civil() {
+            continue;
+        }
         // A beat cannot share a blocking Cap-wait: that park returns
         // only when the child exits or a control message arrives. Sleep
         // in short slices so the interval can fire. No armed beat means
-        // the park below is unchanged.
-        if let Some(delay) = next_beat_delay() {
+        // the park below is unchanged. A civil beat uses the same slices.
+        if let Some(delay) = supervisor_delay() {
             let slice = delay.clamp(1, 1_000);
             let _ = sleep_ms(slice);
             continue;
@@ -366,18 +385,22 @@ fn handle(msg: &[u8]) {
     let name = &msg[start..start + name_len];
     // The kernel stamps `msg[0]` from the sender's session (admin root or
     // not); the sender cannot forge it. Any logged-in seat may ask
-    // `status`. Everything that changes service state — start, stop,
-    // restart, raise, drop, every, power — is the operator's: a non-admin seat must not be
+    // `status` or read `date`. Everything that changes service state or
+    // the civil date — start, stop, restart, raise, drop, every, at,
+    // date set, power — is the operator's: a non-admin seat must not be
     // able to kill another user's seat or churn the service table.
     let admin = msg[0] != 0;
     match op {
         galexy_abi::INIT_OP_STATUS => status(name),
+        galexy_abi::INIT_OP_DATE => date_show(),
         galexy_abi::INIT_OP_START
         | galexy_abi::INIT_OP_STOP
         | galexy_abi::INIT_OP_RESTART
         | galexy_abi::INIT_OP_RAISE
         | galexy_abi::INIT_OP_DROP
         | galexy_abi::INIT_OP_EVERY
+        | galexy_abi::INIT_OP_DATE_SET
+        | galexy_abi::INIT_OP_AT
             if !admin =>
         {
             reply(b"access denied\n")
@@ -388,6 +411,19 @@ fn handle(msg: &[u8]) {
         galexy_abi::INIT_OP_RAISE => raise_notice(name),
         galexy_abi::INIT_OP_DROP => drop_notice(name),
         galexy_abi::INIT_OP_EVERY => every_svc(name, payload_u64(msg, start + name_len)),
+        galexy_abi::INIT_OP_DATE_SET => date_set_cmd(name),
+        galexy_abi::INIT_OP_AT => {
+            let at = start + name_len;
+            let Some(hour) = msg.get(at).copied() else {
+                reply(b"bad value\n");
+                return;
+            };
+            let Some(minute) = msg.get(at + 1).copied() else {
+                reply(b"bad value\n");
+                return;
+            };
+            at_svc(name, hour, minute);
+        }
         galexy_abi::INIT_OP_SHUTDOWN => ordered_power(msg, false),
         galexy_abi::INIT_OP_REBOOT => ordered_power(msg, true),
         _ => reply(b"bad value\n"),
@@ -429,6 +465,7 @@ fn stop_svc(name: &[u8]) {
     };
     LIVE[i].hold.store(true, Ordering::Release);
     disarm_beat(i);
+    disarm_civil(i);
     if LIVE[i].running.load(Ordering::Acquire) {
         let cap = LIVE[i].cap.load(Ordering::Acquire);
         if cap != 0 {
@@ -600,6 +637,7 @@ fn drop_notice(name: &[u8]) {
         }
         LIVE[i].hold.store(true, Ordering::Release);
         disarm_beat(i);
+        disarm_civil(i);
         if LIVE[i].running.load(Ordering::Acquire) {
             let cap = LIVE[i].cap.load(Ordering::Acquire);
             if cap != 0 {
@@ -670,6 +708,127 @@ fn fire_due_beats() -> bool {
         }
     }
     spawned
+}
+
+fn at_svc(name: &[u8], hour: u8, minute: u8) {
+    let Some(i) = find(name) else {
+        reply(b"unknown\n");
+        return;
+    };
+    if SERVICES[i].every_ms == 0 || hour > 23 || minute > 59 {
+        reply(b"bad value\n");
+        return;
+    }
+    LIVE[i].hold.store(false, Ordering::Release);
+    LIVE[i].civil_hour.store(hour, Ordering::Release);
+    LIVE[i].civil_minute.store(minute, Ordering::Release);
+    LIVE[i].civil_day.store(u32::MAX, Ordering::Release);
+    let mut buf = [0u8; 48];
+    let n = push_name(&mut buf, SERVICES[i].name, b" at\n");
+    reply(&buf[..n]);
+}
+
+fn disarm_civil(i: usize) {
+    LIVE[i].civil_hour.store(CIVIL_OFF, Ordering::Release);
+    LIVE[i].civil_day.store(u32::MAX, Ordering::Release);
+}
+
+fn date_show() {
+    let got = date();
+    if !got.ok {
+        reply(b"unset\n");
+        return;
+    }
+    let mut text = [0u8; 19];
+    if format_utc(got.value, &mut text) != Some(19) {
+        reply(b"unset\n");
+        return;
+    }
+    let mut buf = [0u8; 24];
+    buf[..19].copy_from_slice(&text);
+    buf[19..24].copy_from_slice(b" utc\n");
+    reply(&buf);
+}
+
+fn date_set_cmd(text: &[u8]) {
+    let Some(secs) = parse_utc(text) else {
+        reply(b"bad value\n");
+        return;
+    };
+    if !date_set(secs).ok {
+        reply(b"bad value\n");
+        return;
+    }
+    date_show();
+}
+
+/// Fire civil beats whose UTC minute matches. A still-running program
+/// is skipped. The day is stored either way so the minute fires once.
+fn fire_due_civil() -> bool {
+    if !civil_armed() {
+        return false;
+    }
+    let got = date();
+    if !got.ok {
+        if DATE_UNSET_LOGGED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            log(b"[init] date unset\n");
+        }
+        return false;
+    }
+    let Some(civil) = utc_to_civil(got.value) else {
+        return false;
+    };
+    let Ok(day) = u32::try_from(got.value / 86_400) else {
+        return false;
+    };
+    let mut spawned = false;
+    for (i, svc) in SERVICES.iter().enumerate() {
+        let hour = LIVE[i].civil_hour.load(Ordering::Acquire);
+        if hour == CIVIL_OFF {
+            continue;
+        }
+        let minute = LIVE[i].civil_minute.load(Ordering::Acquire);
+        if civil.hour != hour || civil.minute != minute {
+            continue;
+        }
+        if LIVE[i].civil_day.load(Ordering::Acquire) == day {
+            continue;
+        }
+        if LIVE[i].hold.load(Ordering::Acquire) {
+            LIVE[i].civil_day.store(day, Ordering::Release);
+            continue;
+        }
+        if LIVE[i].running.load(Ordering::Acquire) {
+            LIVE[i].civil_day.store(day, Ordering::Release);
+            log_kv(b"[init] at skip name=", svc.name);
+            continue;
+        }
+        if spawn_svc(i) {
+            LIVE[i].civil_day.store(day, Ordering::Release);
+            log_kv(b"[init] at name=", svc.name);
+            spawned = true;
+        }
+    }
+    spawned
+}
+
+fn civil_armed() -> bool {
+    LIVE.iter()
+        .any(|live| live.civil_hour.load(Ordering::Acquire) != CIVIL_OFF)
+}
+
+/// Delay until the next monotonic beat. A civil beat caps that at one
+/// second, and sleeps even when no monotonic beat is armed.
+fn supervisor_delay() -> Option<u64> {
+    let beat = next_beat_delay();
+    if civil_armed() {
+        Some(beat.unwrap_or(1_000).min(1_000))
+    } else {
+        beat
+    }
 }
 
 fn next_beat_delay() -> Option<u64> {

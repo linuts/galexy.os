@@ -22,7 +22,8 @@ on a kernel that already has SMAP on and a loader that returns errors.
 64 measured before 65 modernizes, so the device rewrite has a
 baseline. **68 → 77** have landed (Phase 11 and Phase 12).
 **89** has landed: notices and monotonic beats (`docs/PROCESS.md`),
-beside the service table, with no bus and no wall clock. **78 → 85**
+beside the service table, with no bus. **90** has landed: civil UTC
+is `Date` and `svc at`, and `Clock` stays monotonic. **78 → 85**
 are the network (`docs/NET.md`): an address and a datagram before
 the lane. **86 → 88** are USB (`docs/USB.md`): see devices, then
 the driver table. The `v1.0` tag waits on both phases and on the
@@ -434,7 +435,7 @@ row: `docs/DEVICES.md`. Checkboxes: `TODO.md` Milestones **78–85**.
 4. **81 Carriers** — TCP inside `net` on that address. One QEMU
    handshake. Still no application Cap
 5. **82 Lane** — TLS 1.3, a pinned key, a maintained Rust handshake
-   crate. `Syscall::Lane` (34) is callable only by `net`. `read` /
+   crate. `Syscall::Lane` (35) is callable only by `net`. `read` /
    `write` are the plaintext. A test task reads `lane ok`
 6. **83 Names and gates** — the directory lives in the record and
    survives a restart. `dial` works after `grant`. A gate delivers

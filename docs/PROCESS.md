@@ -136,7 +136,8 @@ by a magic “PID 1” in the public ABI. Cap-kill of init is always
   Seats `send` on the reserved init Cap (`0x8008`); the kernel stamps
   admin, tty, debug id, and session generation. One RPC is in flight
 - `svc status|start|stop|restart`, `svc raise|drop`, `svc every`,
-  and `shutdown` / `reboot` are that RPC. Operators never receive a
+  `svc date`, `svc at`, and `shutdown` / `reboot` are that RPC.
+  Operators never receive a
   service Cap. `svc status` answers any logged-in seat; `svc
   start|stop|restart`, `raise`, `drop`, `every`, `shutdown`, and
   `reboot` are admin-only and a non-admin request is refused in the
@@ -167,11 +168,12 @@ by a magic “PID 1” in the public ABI. Cap-kill of init is always
 | Bare app | seat/shell | shell (optional) | shell decides |
 
 Operator surface: `svc status|start|stop|restart <name>`,
-`svc raise|drop <notice>`, and `svc every <ms> <name>` send on the
-init Cap. The reply is text (`shell running`, `probe stopped`,
-`ring up`, `chime armed`, `unknown`, `bad value`, `access denied`
-for a non-admin mutation). Operators do not receive raw Caps to
-every service.
+`svc raise|drop <notice>`, `svc every <ms> <name>`, `svc date`, and
+`svc at <hh:mm> <name>` send on the init Cap. The reply is text
+(`shell running`, `probe stopped`, `ring up`, `chime armed`,
+`2026-10-12 15:04:00 utc`, `unset`, `chime at`, `unknown`,
+`bad value`, `access denied` for a non-admin mutation). Operators
+do not receive raw Caps to every service.
 
 ## Notices and beats (Milestone 89)
 
@@ -209,6 +211,32 @@ on `wait` as before. `svc stop` on the beat returns it to that park.
 `bell` exits immediately, so a second raise is observable as a single
 `[init] start name=bell` line. `chime` sleeps one second, so a 250 ms
 arm overlaps and init must skip. `init_test_passes` covers both.
+
+## Civil date (Milestone 90)
+
+`Clock` stays milliseconds since boot. `Date` is a second clock: UTC
+seconds since 1970-01-01 00:00:00. There is no timezone and no leap
+second. A day is 86400 seconds. Years outside 1970..=2099 are refused.
+Unset is a real state (`NoResource`), not the epoch.
+
+The CMOS clock seeds the anchor at boot when the chip holds a year in
+2000..=2099. A zeroed chip stays unset. An admin set writes the
+anchor and the chip. A read adds elapsed monotonic seconds to that
+anchor, so it does not touch the ports, and setting the date does not
+move `Sleep`, lockout, idle logout, or `svc every`.
+
+`svc date` replies `YYYY-MM-DD HH:MM:SS utc` or `unset`. Any logged-in
+seat may read. The set form is admin-only and the name is that
+19-byte text. `svc at HH:MM <name>` arms one fire per civil UTC day
+on a row that can be a beat. The current minute may fire. A
+still-running program logs `[init] at skip name=` and is not stacked.
+The fire line is `[init] at name=`. `svc stop` disarms both. The
+armed civil time is forgotten on reboot. The chip keeps the date.
+
+While a civil beat is armed, init sleeps in slices of at most one
+second, the same as a monotonic beat. With neither armed, it parks
+on `wait`. If the date is unset, init logs `[init] date unset` once
+and does not fire.
 
 F1–F12 **console switching** stays in the kernel; only task lifecycle
 moves to init.
@@ -248,8 +276,10 @@ process Cap never grants galfs rights on the child’s files.
 - `open_process(debug_id)`
 - Full POSIX signal set / job-control ioctl zoo
 - systemd, dbus, socket activation, cgroups. Notices and beats
-  (Milestone 89) are the substitute: a bit that starts table rows, and
-  a monotonic interval. No unit graph, no payload bus, no calendar
+  (Milestone 89) and civil UTC (Milestone 90) are the substitute: a
+  bit that starts table rows, a monotonic interval, and one minute
+  per UTC day. No unit graph, no payload bus, no cron string, no
+  timezone
 - Claiming Linux ABI compatibility
 
 ## Milestone map
@@ -263,6 +293,7 @@ process Cap never grants galfs rights on the child’s files.
 | **66** ✅ | Capability channels (below); shell job table (`&`, `jobs`, `fg`) |
 | **67** ✅ | Ordered shutdown through init; service table with backoff; `svc` (mutations admin-only); session id on the seat Cap; ABI freeze |
 | **89** ✅ | Notices (`svc raise` / `svc drop`) and monotonic beats (`svc every`). No bus, no wall clock |
+| **90** ✅ | Civil UTC (`Date`, `svc date`, `svc at`). `Clock` stays monotonic. `Lane` is syscall 35 |
 
 `SPAWN_WAIT` remains a convenience beside Cap-wait. New code must not
 dig a deeper PID-shaped API beside this plan.

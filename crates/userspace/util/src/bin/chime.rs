@@ -1,4 +1,5 @@
-//! chime — beat target. Init does not start it. `svc every` arms it.
+//! chime — beat target. Init does not start it. `svc every` arms a
+//! monotonic interval. `svc at` arms one civil UTC minute per day.
 //!
 //! Trust: ramdisk code, no galfs cards. The sleep is longer than the
 //! short interval the init test arms, so the next tick overlaps and

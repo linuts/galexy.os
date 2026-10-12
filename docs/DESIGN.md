@@ -95,7 +95,8 @@ dashboard.
    syscall numbers (exit=0, yield=1, write=2, cap_info=3, open=4, read=5,
    close=6, spawn=7, power=8, create=9, remove=10), error codes (BadCap=1, AccessDenied=2, BadBuffer=3,
    Unsupported=4, BadValue=5, NotFound=6, NoResource=7, Interrupted=8, Locked=9) — are permanent.
-   New syscalls APPEND;
+   New syscalls APPEND (the live table, including `date` = 34, is
+   `docs/ABI.md`);
    renumbering/renaming = ABI major bump. NO file descriptors at this ABI
    level: resources are capabilities kernel-side, validated on every call,
    revoked easily. Files/ports/handles-to-come all become caps.
@@ -1289,6 +1290,22 @@ file Caps, `Recv` parks. Milestone 67 marks `Map`, `Clock`,
 `Channel`, `Send`, and `Recv` stable. `spawn` stays experimental.
 `SPAWN_NO_FG` (r10 bit 5) keeps a background spawn off the TTY's Ctrl-C
 slot until `fg` Cap-waits it.
+
+## Civil date (Milestone 90)
+
+`Clock` remains `timer_ticks`. `Date` (syscall 34) is UTC seconds
+since 1970-01-01 00:00:00, or `NoResource` when no anchor exists.
+Set is the admin actor. The anchor is `(utc seconds, timer_ticks)`.
+Elapsed seconds come from the monotonic counter, so a set does not
+move sleep or a monotonic beat. CMOS (ports `0x70`/`0x71`, NMI held
+off) seeds the anchor at boot and is written on set. A halted clock,
+a stuck update-in-progress bit, or a year outside 2000..=2099 leaves
+boot unset. Admin set accepts 1970..=2099. No timezone, no leap
+second. `Syscall::Lane` is reserved at 35 so the table stays dense.
+
+`svc date` and `svc at HH:MM` are init RPCs (opcodes 10–12). `at`
+fires once per civil day on a row with a compiled interval. The
+armed minute is RAM-only. The chip keeps the date across reboot.
 
 ## Init control (Milestone 67)
 

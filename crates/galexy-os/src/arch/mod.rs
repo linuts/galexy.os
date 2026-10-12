@@ -16,6 +16,7 @@ pub mod mm;
 mod pics;
 pub mod power;
 pub mod rand;
+mod rtc;
 pub mod speaker;
 pub mod syscall;
 pub mod timer;
@@ -28,6 +29,7 @@ use crate::serial_println;
 pub use acpi::madt;
 pub use gdt::{set_tss_rsp0, syscall_selectors, tss_rsp0, user_cs_ss};
 pub use idt::set_page_fault_handler;
+pub use rtc::{now_secs, set_secs};
 pub use timer::tick as timer_tick;
 pub use timer::ticks as timer_ticks;
 
@@ -75,6 +77,7 @@ pub fn init(boot_info: &BootInfo) {
     // PIC's init — the keyboard driver owns its controller now).
     crate::drivers::keyboard::init();
     timer::init();
+    rtc::init();
     // AP bring-up runs LAST, still with IRQs off: the trampoline sequence
     // waits on global clock ports (PIT delays) and IPIs from the BSP.
     cpu::boot_aps();
