@@ -86,6 +86,10 @@ pub(in crate::sched) static IDLE_LIMIT_OVERRIDE: AtomicU64 = AtomicU64::new(0);
 /// Logged-in console with no keystrokes for this long is logged out.
 /// Same clock as lockout (`timer_ticks`, ~1 ms).
 pub const IDLE_LOGOUT_MS: u64 = 60_000;
+/// Cap-wait on a foreground child pauses [`IDLE_LOGOUT_MS`] for this long
+/// after the last key. A compile does not read the keyboard; a command
+/// left running with nobody there still logs the seat out.
+pub const FOREGROUND_IDLE_MS: u64 = 15 * 60_000;
 
 /// Init's control channel. `0xFF` until init's first `channel` call.
 pub(in crate::sched) static INIT_CTRL: AtomicU8 = AtomicU8::new(0xFF);
@@ -362,6 +366,9 @@ pub(in crate::sched) struct Thread {
     pub(in crate::sched) session_gen: u64,
     /// `timer_ticks` of the last key delivered to this TTY, or 0 if none.
     pub(in crate::sched) last_input_tick: u64,
+    /// Idle logout is paused for a Cap-waited foreground child. The next
+    /// scan after that wait clears it and restarts the 60 s clock.
+    pub(in crate::sched) idle_hold: bool,
     /// Timer tick when [`console_budget_used`] was last reset.
     pub(in crate::sched) console_budget_tick: u64,
     /// Console bytes written during [`console_budget_tick`].
@@ -950,6 +957,7 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
             must_change: false,
             session_gen: 0,
             last_input_tick: 0,
+            idle_hold: false,
             console_budget_tick: 0,
             console_budget_used: 0,
             heap_pages: 0,
@@ -1085,6 +1093,7 @@ pub(in crate::sched) fn register_thread(leader: &LeaderSnapshot, kstack: Vec<u8>
             must_change: false,
             session_gen: leader.session_gen,
             last_input_tick: 0,
+            idle_hold: false,
             console_budget_tick: 0,
             console_budget_used: 0,
             heap_pages: 0,
@@ -1161,6 +1170,7 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             must_change: false,
             session_gen: 0,
             last_input_tick: 0,
+            idle_hold: false,
             console_budget_tick: 0,
             console_budget_used: 0,
             heap_pages: 0,
@@ -1487,6 +1497,7 @@ pub(crate) fn spawn_user_with_grants(
             must_change: false,
             session_gen: 0,
             last_input_tick: 0,
+            idle_hold: false,
             console_budget_tick: 0,
             console_budget_used: 0,
             heap_pages: 0,

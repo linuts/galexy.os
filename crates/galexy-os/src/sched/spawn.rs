@@ -2159,7 +2159,9 @@ pub fn note_tty_input(tty: u8) {
 }
 
 /// Logged-in console shells with no keys for [`IDLE_LOGOUT_MS`] are exited
-/// (init respawns a logged-out seat). Test kernels pass `all_tasks` so a
+/// (init respawns a logged-out seat). A shell Cap-waiting on a foreground
+/// child pauses that clock until the child exits, or until
+/// [`FOREGROUND_IDLE_MS`] with no keys. Test kernels pass `all_tasks` so a
 /// blob can trip the same path.
 pub(in crate::sched) fn idle_scan(all_tasks: bool) {
     let now = crate::arch::timer_ticks();
@@ -2180,6 +2182,22 @@ pub(in crate::sched) fn idle_scan(all_tasks: bool) {
             }
             if !all_tasks && !is_console_shell_name(threads[i].name()) {
                 continue;
+            }
+            // A foreground child (`rustc`, `nano`) keeps the seat, up to
+            // [`FOREGROUND_IDLE_MS`] after the last key. The clock
+            // restarts when the Cap-wait ends, so the prompt is not
+            // already inside the 60 s window. Keys during the wait
+            // (nano) move `last_input_tick` and extend the pause.
+            let holding =
+                state == STATE_WAITING && threads[i].wait_for_exit.load(Ordering::Acquire);
+            if holding {
+                if !foreground_idle_due(threads[i].last_input_tick, now) {
+                    threads[i].idle_hold = true;
+                    continue;
+                }
+            } else if threads[i].idle_hold {
+                threads[i].idle_hold = false;
+                threads[i].last_input_tick = now;
             }
             let last = threads[i].last_input_tick;
             if !idle_due(last, now) {
@@ -2266,6 +2284,14 @@ pub fn test_set_idle_limit(ms: u64) {
 /// True when `last` is set and `now` is at least the idle limit later.
 pub fn idle_due(last: u64, now: u64) -> bool {
     last != 0 && now.saturating_sub(last) >= idle_limit()
+}
+
+/// True when a Cap-waited child has had no keys for [`FOREGROUND_IDLE_MS`].
+///
+/// This cap does not follow [`test_set_idle_limit`]. The prompt window
+/// shrinks in tests; a foreground job does not.
+fn foreground_idle_due(last: u64, now: u64) -> bool {
+    last != 0 && now.saturating_sub(last) >= FOREGROUND_IDLE_MS
 }
 
 /// Spawns `bytes` paused, installs galfs objects as file caps in order,

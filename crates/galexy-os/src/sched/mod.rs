@@ -148,6 +148,7 @@ pub(crate) use thread::OpenFile;
 pub(crate) use thread::TaskInit;
 pub use thread::UserRegion;
 pub(crate) use thread::CTX_STABLE;
+pub use thread::FOREGROUND_IDLE_MS;
 pub use thread::IDLE_LOGOUT_MS;
 pub use thread::SPAWN_FRAME_RESERVE;
 pub(crate) use thread::THREAD_STACK_SIZE;

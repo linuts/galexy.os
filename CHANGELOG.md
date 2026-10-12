@@ -8,6 +8,14 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#102](https://github.com/linuts/galexy.os/pull/102) — Follow-up to
+  Milestones 70–77 — the shell grants the loader only to a ramdisk
+  program with arguments. A galfs path with arguments inherits the
+  session and the query grant and cannot spawn. Idle logout pauses
+  while a shell Cap-waits on a foreground child, until the child exits
+  or 15 min pass with no keys. Login compile stays
+  `rustc hello.rs -o /hello` then `/hello`. The live disk is GALF v12.
+  The release boot suite is 124 passes under TCG.
 - [#101](https://github.com/linuts/galexy.os/pull/101) — Milestone 77 —
   `spawn` of a path loads an ELF from galfs under the caller's tokens.
   A bare label stays a ramdisk program. The shell rewrites `./hello`

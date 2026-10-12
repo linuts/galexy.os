@@ -2400,14 +2400,15 @@ nightly's `library/` and teaches the `cfg_select` dispatchers about
       `.tdata`/`.tbss` out as one block with `PT_TLS`. The loader still
       skips non-`PT_LOAD` headers; `has-thread-local` stays false
 
-## Milestone 71 — Capacity for a compiler process
+## Milestone 71 — Capacity for a compiler process ✅
 
 - [x] `-m 2G` in the runner and `cargo run`; frame bitmap past 512 MiB
       (the Milestone 6 open box; 4 GiB of frames); `Map` budget per
       task up to 1 GiB (`USER_HEAP_PAGES = 262_144`)
 - [x] Spawn-time user stack size (the leader stays 4 pages; a spawned
       thread defaults to 16 pages and may ask for 8 MiB,
-      `THREAD_STACK_PAGES_MAX = 2048`)
+      `THREAD_STACK_PAGES_MAX = 2048`). Milestone 72 raised that
+      ceiling to 17 MiB (`4352` pages) for compiler threads
 - [x] galfs large files: 4 KiB blocks, 32-bit lengths, double
       indirection, files of 64 MiB, behind the same file body. The
       live volume is the RAM fallback (writes past the v12 32 KiB
@@ -2431,7 +2432,7 @@ nightly's `library/` and teaches the `cfg_select` dispatchers about
 - [x] KVM-only marker for Phase 11 tests in the runner
       (`phase11_kvm_only`; `test-big` skips without KVM)
 
-## Milestone 72 — `rustc` cross-built for Galexy (Cranelift only)
+## Milestone 72 — `rustc` cross-built for Galexy (Cranelift only) ✅
 
 - [x] Stage 1 Cranelift `rustc` for the Galexy host
       (`scripts/build-galexy-rustc.sh`, `scripts/galexy-rustc.patch`,
@@ -2461,7 +2462,7 @@ nightly's `library/` and teaches the `cfg_select` dispatchers about
       the codegen coordinator. SSE is on for every CPU. The RAM store
       is 80 MiB so `core`'s metadata fits. On-OS linking is Milestone 73
 
-## Milestone 73 — Link on Galexy, run the result (Phase 11 gate)
+## Milestone 73 — Link on Galexy, run the result (Phase 11 gate) ✅
 
 - [x] `gxld` (Milestone 69 / 71) links cg_clif output: rlib archives
       with the `lib.rmeta` member skipped, `TPOFF32` for TLS (landed in
@@ -2488,7 +2489,7 @@ nightly's `library/` and teaches the `cfg_select` dispatchers about
 - [x] Stated non-goals: `cargo` on-OS, proc macros on-OS, rebuilding
       `rustc` / `std` on Galexy, LLVM / `lld` / `mrustc` / libc
 
-## Milestone 74 — A login image that carries `rustc`
+## Milestone 74 — A login image that carries `rustc` ✅
 
 The compiler is a ramdisk label, and the shell already starts a
 ramdisk program whose name is the whole line (`launch`). It is not a
@@ -2511,10 +2512,10 @@ run `x.py`.
       diagnostic, not `command not found`).
       `rustc_image_login_typing_e2e` under TCG
 
-## Milestone 75 — Install the sysroot on that boot
+## Milestone 75 — Install the sysroot on that boot ✅
 
 `rustc` reads `/x86_64-unknown-galexy.json` and
-`/lib/rustlib/x86_64-unknown-galexy-…/lib/`. The test kernels copy
+`/lib/rustlib/x86_64-unknown-galexy/lib/` (no spec-hash suffix). The test kernels copy
 those files in `install_sysroot`. The login kernel does not, so a
 ramdisk label is not enough. `core`'s `.rmeta` is ~66 MiB and a v12
 disk file is capped at 64 MiB, so the copy goes through
@@ -2534,15 +2535,17 @@ and is repeated every boot. It is not sealed to disk. Do not bump
       fails for lack of space.
       `rustc_image_login_typing_e2e` under TCG (`rustc-sysroot: 33 entries`)
 
-## Milestone 76 — Pass arguments to a ramdisk program
+## Milestone 76 — Pass arguments to a ramdisk program ✅
 
 A line with a space that is not a builtin prints `command not found`.
 `launch` starts the program with an empty argv and returns the prompt
 without waiting. `rustc hello.rs -o hello` is that shape. Pipelines
 already split stages and pass argv; a single command does not. The
 shell line is 80 bytes (`LINE_MAX`). The gate command fits. Spawn's
-argv blob is 4096 bytes. `getcwd` on Galexy is `/`, so `-o hello`
-lands at `/hello` when the login directory is `/`.
+argv blob is 4096 bytes. The shell does not rewrite the program's
+own arguments: `-o hello` is the bare name `hello`, which is the
+ramdisk program, so create refuses it. The login compile uses
+`-o /hello` (Milestone 77).
 
 - [x] If the first word is a ramdisk program, split the rest on spaces
       into a NUL-separated argv, spawn with `SPAWN_INHERIT`, and wait
@@ -2553,7 +2556,7 @@ lands at `/hello` when the login directory is `/`.
       prints `target_os="galexy"` and returns the prompt.
       `rustc_print_cfg_typing_e2e` under TCG
 
-## Milestone 77 — Run the program the compiler wrote (Phase 12 gate)
+## Milestone 77 — Run the program the compiler wrote (Phase 12 gate) ✅
 
 `spawn` loads a ramdisk label. `file_name_ok` rejects `/`. The sample
 program `hello` is already a ramdisk label, so the file `rustc` writes

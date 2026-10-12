@@ -440,9 +440,10 @@ first.
    (`ThreadSpawn`, FS-base TLS), sync (`Futex`). `cargo xtask sysroot`
    builds `library/sysroot`. `test-std` boots
 4. **71 Capacity** ✅ — QEMU `-m 2G`, frame bitmap covers 4 GiB, `Map`
-   budget 1 GiB, spawned stacks up to 8 MiB, 64 open files, 4 KiB
+   budget 1 GiB, spawned stacks up to 8 MiB (17 MiB since Milestone 72), 64 open files, 4 KiB
    argv, sysroot `.rlib`s on the ramdisk under `rust/`, ring-3
-   `gxldos`. Large files live in a RAM store (64 MiB, 4 KiB blocks);
+   `gxldos`. Large files live in a RAM store (64 MiB per file, 4 KiB
+   blocks; 80 MiB per file and a 128 MiB pool since Milestones 72–73);
    host v13 is the sealed large-volume image the kernel does not load
    yet. `test-big` (KVM) and `test-gxld`
 5. **72 `rustc` for Galexy** ✅ — one static Cranelift `rustc` for the

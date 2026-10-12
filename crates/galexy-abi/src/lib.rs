@@ -289,10 +289,11 @@ pub const SPAWN_WITH_CAPS: u64 = 16;
 pub const SPAWN_NO_FG: u64 = 32;
 /// `spawn` grant bit (`r10`, bit 6): also give the new task the loader.
 ///
-/// `rustc` needs this. It lists the sysroot with the query grant and
-/// then `spawn`s `gxld`. Power is not included. A child that does not
-/// set the bit cannot spawn, which is every utility the shell starts
-/// by name (`echo`, `ls`).
+/// A ramdisk program with arguments needs this: `rustc` lists the
+/// sysroot with the query grant and then `spawn`s `gxld`. The shell
+/// does not set the bit for a galfs path, or for a named utility
+/// (`echo`, `ls`). Power is not included. A child that does not
+/// receive the bit cannot spawn.
 pub const SPAWN_GRANT_LOADER: u64 = 64;
 /// `spawn` `r10` shift of the first moved file-slot index.
 pub const SPAWN_CAP_SHIFT: u64 = 16;

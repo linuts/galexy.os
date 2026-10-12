@@ -220,7 +220,14 @@ Login and logout bump a session generation (`[auth] session login
 user=… gen=N tty=K`). It is an audit counter, not a capability. A
 logged-in F-key shell with no keystrokes for 60 s (`IDLE_LOGOUT_MS` on
 `timer_ticks`) is exited; init respawns a logged-out seat
-(`[auth] idle logout`).
+(`[auth] idle logout`). A shell Cap-waiting on a foreground child
+pauses that clock. The pause ends when the child exits (the 60 s
+window starts then) or after 15 min with no keys
+(`FOREGROUND_IDLE_MS`). Keys during the wait, such as `nano`, move
+that 15 min window. A `rustc` compile longer than a minute is not
+logged out underneath, and a command left running with nobody at the
+keyboard still is. The shell is what logs out. A child that already
+inherited cards keeps them until that child exits.
 
 COM1 audit lines name the actor, path, rights mask, or target task.
 They never include password bytes. Rights are the raw mask
@@ -258,12 +265,15 @@ the flag because it lives in the sealed actor record.
 | Spawn kind | galfs credentials |
 | --- | --- |
 | Utility (`SPAWN_INHERIT`, or legacy `SPAWN_WAIT`) | Parent’s tokens, optionally ANDed with the `r10` rights mask (bits 8..15). Mask `0` keeps the full set |
-| Bare program (`hello`, `linger`, …) | Parent’s `fs_root`, **empty tokens** (the mask does not apply) |
+| Bare program (`hello`, `linger`, `/hello` with no arguments) | Parent’s `fs_root`, **empty tokens** (the mask does not apply). No loader |
 | `nano` | Same cards as a utility, plus `SPAWN_GRANT_KEYBOARD` (bit 3). The shell Cap-waits, so it is not reading that seat's keys at the same time |
-| Spaced command (`rustc hello.rs -o hello`) | Same cards as a utility, plus `SPAWN_GRANT_QUERY` and `SPAWN_GRANT_LOADER` (bit 6). `rustc` lists the sysroot and spawns `gxld`. Power stays with the shell. Named utilities do not get the loader |
+| Ramdisk program with arguments (`rustc hello.rs -o /hello`) | Same cards as a utility, plus `SPAWN_GRANT_QUERY` and `SPAWN_GRANT_LOADER` (bit 6). `rustc` lists the sysroot and spawns `gxld`. Power stays with the shell. Named utilities (`echo`, `ls`) do not get the loader |
+| galfs path with arguments | Same cards as a utility, plus `SPAWN_GRANT_QUERY`. No loader: a program the user wrote cannot spawn |
 
 Every `SPAWN_WAIT` / `SPAWN_INHERIT` ramdisk binary is trusted code
-running with the caller’s cards. The ramdisk is **measured, not
+running with the caller’s cards. A galfs path with arguments inherits
+those cards too, because the user named it, and it does not receive
+the loader. A path with no arguments stays bare. The ramdisk is **measured, not
 signed**: `runner/build.rs` prints the tar’s SHA-256 at build and the
 kernel re-hashes it at boot (`ramdisk_test_passes` asserts equality).
 There is no allowlist; a hostile utility is a hostile operator

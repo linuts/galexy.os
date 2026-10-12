@@ -759,10 +759,11 @@ owner, held token rights; needs LIST). Directory listing remains the
 exposes `whoami`, `users`, `useradd`, `userdel`, `su`, `truncate`, and
 `stat` (and resets cwd on `su`). Boot formats one immortal actor,
 `admin`, with Desktop. When the primary IDE slave is present,
-`galfs::init` loads the newest valid GALF **v11** sealed slot (dual
+`galfs::init` loads the newest valid GALF **v12** sealed slot (dual
 288-sector images: wrapped volume key + ChaCha20-HMAC payload of
-actors/objects/shares/bitmap/blocks + per-actor quotas + single-indirect
-pointers, generation + ciphertext CRC + structural checks) or formats
+actors/objects/shares/bitmap/blocks + per-actor quotas and PBKDF2
+counts + single-indirect pointers, generation + ciphertext CRC +
+structural checks) or formats
 that admin tree under a fresh volume key; create/remove/append/rename/
 truncate/useradd/userdel/share/unshare sync to the inactive slot and
 flush the cache; `sync()` (syscall 20) is an explicit barrier (shell
@@ -830,8 +831,8 @@ returns a **process Cap** (`PROC_CAP_BASE`…). Shell utilities set
 `SPAWN_INHERIT` (session tokens) and Cap-`wait` so the prompt returns
 after they finish; bare program names (`hello`, `linger`) drop the Cap
 (fire-and-forget). `SPAWN_WAIT` still parks until exit as a convenience
-(Cap remains installed). `r8`/`r9` are an optional argument, at most 256
-bytes, copied onto the child's stack (`rdi` is the address, `rsi` the
+(Cap remains installed). `r8`/`r9` are an optional argument, at most `SPAWN_ARG_MAX`
+(4096) bytes, copied onto the child's stack (`rdi` is the address, `rsi` the
 length). `r10` bits are `SPAWN_GRANT_QUERY`, `SPAWN_WAIT`,
 `SPAWN_INHERIT`, `SPAWN_GRANT_KEYBOARD` (bit 3), `SPAWN_WITH_CAPS`,
 `SPAWN_NO_FG`, and `SPAWN_GRANT_LOADER` (bit 6). Any other bit
@@ -843,9 +844,10 @@ always receives the console, and it writes the console of the task that
 spawned it. `SPAWN_GRANT_KEYBOARD` also gives the child the keyboard
 so an interactive program (`nano`) can read keys while the shell
 Cap-waits. The loader stays with the shell except when the spawn
-sets `SPAWN_GRANT_LOADER`: a spaced command (`rustc hello.rs -o hello`)
-receives it so the compiler can start `gxld`. Named utilities (`echo`,
-`ls`) do not. Power stays on init while init is alive. Boot starts one shell on each F-key, pinned to the BSP,
+sets `SPAWN_GRANT_LOADER`: a ramdisk program with arguments
+(`rustc hello.rs -o /hello`) receives it so the compiler can start
+`gxld`. A galfs path does not, and neither do named utilities (`echo`,
+`ls`). Power stays on init while init is alive. Boot starts one shell on each F-key, pinned to the BSP,
 logged out (pre-login grants, no tokens, login banner with 1-based TTY).
 Password login restores loader/query. An admin login receives Power
 only when init is not running. F1's shell

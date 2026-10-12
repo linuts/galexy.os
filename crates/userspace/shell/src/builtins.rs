@@ -419,12 +419,14 @@ pub(crate) fn dispatch(
         };
         let mut path = [0u8; PATH_MAX];
         let program = program_name(cwd, name, &mut path);
-        // Query so `read_dir` sees the sysroot. Loader so `rustc` can
-        // spawn `gxld`. Echo, ls, and the other named utilities return
-        // above and do not receive the loader.
-        let grants = galexy_abi::SPAWN_INHERIT
-            | galexy_abi::SPAWN_GRANT_QUERY
-            | galexy_abi::SPAWN_GRANT_LOADER;
+        // Query so `read_dir` sees the sysroot. The loader is only for a
+        // ramdisk program (`rustc` spawns `gxld`). A galfs path is the
+        // user's ELF: it may inherit the session, and it cannot spawn.
+        // Echo, ls, and the other named utilities return above.
+        let mut grants = galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_QUERY;
+        if !program.contains(&b'/') {
+            grants |= galexy_abi::SPAWN_GRANT_LOADER;
+        }
         spawn_and_prompt(cwd, program, &arg[..n], grants, true);
         return None;
     }
