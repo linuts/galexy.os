@@ -2809,18 +2809,18 @@ This phase can land beside Phase 10 and Phase 13.
 
 ## Milestone 92 — Allow-list
 
-- [ ] `scripts/python-allow.txt` is the frozen set, starting with
+- [x] `scripts/python-allow.txt` is the frozen set, starting with
       `builtins`, `sys`, and `io`. A host test fails when the build
       freezes a name that is not listed
-- [ ] An import outside the list is `ImportError`. The process stays
+- [x] An import outside the list is `ImportError`. The process stays
       up
-- [ ] `socket`, `ssl`, `pip`, `venv`, `subprocess`, `ctypes`,
+- [x] `socket`, `ssl`, `pip`, `venv`, `subprocess`, `ctypes`,
       `sqlite3`, `os.fork`, `os.exec`, `os.system`, and `os.environ`
       are not on the list
-- [ ] `time.monotonic` is `Clock`. `time.time` is `Date` and raises
+- [x] `time.monotonic` is `Clock`. `time.time` is `Date` and raises
       when the date is unset. The PAL's uptime fallback is not what
       Python reports
-- [ ] If `open` needs `os`, that module is only the path and flag
+- [x] If `open` needs `os`, that module is only the path and flag
       surface `std::fs` already has. Every other `os` function raises
 
 ## Milestone 93 — Ring 3

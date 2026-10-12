@@ -8,6 +8,11 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#110](https://github.com/linuts/galexy.os/pull/110) — Milestone 92 —
+  `scripts/python-allow.txt` is the frozen set, starting with
+  `builtins`, `sys`, and `io`. Anything else is `ImportError`.
+  `time.monotonic` is `Clock`. `time.time` is `Date` and raises
+  when the date is unset. `os` is not on the list.
 - [#109](https://github.com/linuts/galexy.os/pull/109) — Milestone 91 —
   Pin RustPython `85d5956` (MIT) and link one static ELF with the
   galexy sysroot. Cranelift, no C library, no `std::net`. The target

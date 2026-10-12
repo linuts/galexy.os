@@ -85,18 +85,75 @@ index 0000000..af84f05
 +
 +[lints]
 +workspace = true
+diff --git a/crates/galexy-python/allow.txt b/crates/galexy-python/allow.txt
+new file mode 100644
+index 0000000..652cd72
+--- /dev/null
++++ b/crates/galexy-python/allow.txt
+@@ -0,0 +1,46 @@
++# Modules a Galexy Python program may import.
++# The first three are the public surface. The rest are the VM's own
++# frozen and builtin modules at the pin in scripts/rustpython.rev.
++# socket, ssl, pip, venv, subprocess, ctypes, sqlite3, and os are absent.
++builtins
++sys
++io
++__hello__
++__hello_alias__
++__phello_alias__
++_abc
++_ast
++_codecs
++_collections
++_frozen_importlib
++_frozen_importlib_external
++_functools
++_imp
++_interpchannels
++_interpqueues
++_interpreters
++_io
++_operator
++_sre
++_stat
++_string
++_symtable
++_sysconfig
++_sysconfigdata
++_testinternalcapi
++_thread
++_types
++_typing
++_warnings
++_weakref
++atexit
++codecs
++copyreg
++encodings_ascii
++encodings_latin_1
++encodings_utf_8
++errno
++gc
++itertools
++marshal
++time
 diff --git a/crates/galexy-python/src/main.rs b/crates/galexy-python/src/main.rs
 new file mode 100644
-index 0000000..0e883f5
+index 0000000..05dd80e
 --- /dev/null
 +++ b/crates/galexy-python/src/main.rs
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,85 @@
 +//! Run one Python file on the Galexy RustPython VM.
 +//!
 +//! `python PATH` reads the file and executes it with builtins and `sys`.
-+//! There is no REPL and no network.
++//! There is no REPL and no network. An import whose top-level name is
++//! not in `allow.txt` is `ImportError`. The process keeps running.
 +
 +use rustpython_vm::{Interpreter, Settings, compiler};
++
++/// Same names as `scripts/python-allow.txt`. The build copies that file
++/// over this one before it links.
++const ALLOW: &str = include_str!("../allow.txt");
 +
 +fn main() {
 +    galexy_libcalls::keep();
@@ -119,22 +176,57 @@ index 0000000..0e883f5
 +    let mut settings = Settings::default();
 +    settings.argv = argv;
 +    let interp = Interpreter::without_stdlib(settings);
-+    let code = interp.enter(|vm| {
++    interp.enter(|vm| {
 +        let scope = vm.new_scope_with_builtins();
-+        let code = match vm.compile(&source, compiler::Mode::Exec, path) {
-+            Ok(code) => code,
-+            Err(err) => {
-+                let exc = err.into_pyexception(vm, Some(&source));
-+                vm.print_exception(&exc);
-+                std::process::exit(1);
-+            }
-+        };
-+        if let Err(exc) = vm.run_code_obj(code, scope) {
++        let prelude = allow_prelude();
++        if let Err(exc) = run(vm, &prelude, scope.clone(), "<galexy>") {
++            vm.print_exception(&exc);
++            std::process::exit(1);
++        }
++        if let Err(exc) = run(vm, &source, scope, &path) {
 +            vm.print_exception(&exc);
 +            std::process::exit(1);
 +        }
 +    });
-+    let _ = code;
++}
++
++fn run(
++    vm: &rustpython_vm::VirtualMachine,
++    source: &str,
++    scope: rustpython_vm::scope::Scope,
++    path: &str,
++) -> rustpython_vm::PyResult {
++    let code = vm
++        .compile(source, compiler::Mode::Exec, path.to_owned())
++        .map_err(|err| err.into_pyexception(vm, Some(source)))?;
++    vm.run_code_obj(code, scope)
++}
++
++/// Install the allow-list finder, then alias `io` to `_io`.
++fn allow_prelude() -> String {
++    let names: Vec<&str> = ALLOW
++        .lines()
++        .map(str::trim)
++        .filter(|line| !line.is_empty() && !line.starts_with('#'))
++        .collect();
++    let set = names
++        .iter()
++        .map(|name| format!("{name:?}"))
++        .collect::<Vec<_>>()
++        .join(", ");
++    format!(
++        "import sys as _sys\n\
++         _ALLOW = {{{set}}}\n\
++         class _Allow:\n\
++         \tdef find_spec(self, fullname, path=None, target=None):\n\
++         \t\ttop = fullname.split('.')[0]\n\
++         \t\tif top not in _ALLOW:\n\
++         \t\t\traise ImportError('module %r is not allowed' % (fullname,))\n\
++         \t\treturn None\n\
++         _sys.meta_path.insert(0, _Allow())\n\
++         import _io as io\n\
++         _sys.modules['io'] = io\n"
++    )
 +}
 diff --git a/crates/host_env/Cargo.toml b/crates/host_env/Cargo.toml
 index 7f96342..0106bb1 100644
@@ -403,6 +495,87 @@ index 9bf3b3c..2aafdd3 100644
          use rustpython_host_env::crt_fd::Offset;
          // EAGAIN constant for BlockingIOError
          const EAGAIN: i32 = libc::EAGAIN;
+diff --git a/crates/vm/src/stdlib/time.rs b/crates/vm/src/stdlib/time.rs
+index 867891e..2f34670 100644
+--- a/crates/vm/src/stdlib/time.rs
++++ b/crates/vm/src/stdlib/time.rs
+@@ -57,8 +57,42 @@ mod decl {
+     pub(super) const NS_TO_US: i64 = host_time::NS_TO_US;
+ 
+     fn duration_since_system_now(vm: &VirtualMachine) -> PyResult<Duration> {
+-        host_time::duration_since_system_now()
+-            .map_err(|e| vm.new_value_error(format!("Time error: {e:?}")))
++        // Galexy has no C clock. `time.time` is the Date syscall
++        // (number 34, op 0). An unset date is an error, not the
++        // monotonic uptime the PAL would otherwise report.
++        #[cfg(target_os = "galexy")]
++        {
++            let secs = galexy_syscall(34, 0).map_err(|_| vm.new_os_error("civil date is unset"))?;
++            return Ok(Duration::from_secs(secs));
++        }
++        #[cfg(not(target_os = "galexy"))]
++        {
++            host_time::duration_since_system_now()
++                .map_err(|e| vm.new_value_error(format!("Time error: {e:?}")))
++        }
++    }
++
++    /// One Galexy syscall. `ok` in rdx is the success flag. Clock is
++    /// number 27. Date read is number 34 with op 0 in rdi.
++    #[cfg(target_os = "galexy")]
++    fn galexy_syscall(number: u64, a0: u64) -> Result<u64, ()> {
++        let value: u64;
++        let ok: u64;
++        // SAFETY: the kernel syscall entry is uniform. rcx and r11 are
++        // clobbered by the instruction.
++        unsafe {
++            core::arch::asm!(
++                "syscall",
++                inlateout("rax") number => value,
++                inlateout("rdx") 0u64 => ok,
++                in("rdi") a0,
++                in("rsi") 0u64,
++                lateout("rcx") _,
++                lateout("r11") _,
++                options(nostack),
++            );
++        }
++        if ok != 0 { Ok(value) } else { Err(()) }
+     }
+ 
+     #[pyattr]
+@@ -113,16 +147,29 @@ mod decl {
+         }))
+     }
+ 
+-    #[cfg(not(any(unix, windows, target_os = "wasi")))]
++    #[cfg(all(not(any(unix, windows, target_os = "wasi")), not(target_os = "galexy")))]
+     fn get_monotonic_time(vm: &VirtualMachine) -> PyResult<Duration> {
+         duration_since_system_now(vm)
+     }
+ 
+-    #[cfg(not(any(unix, windows, target_os = "wasi")))]
++    #[cfg(all(not(any(unix, windows, target_os = "wasi")), not(target_os = "galexy")))]
+     fn get_perf_time(vm: &VirtualMachine) -> PyResult<Duration> {
+         duration_since_system_now(vm)
+     }
+ 
++    /// `time.monotonic` is the Clock syscall (number 27), milliseconds
++    /// since boot. It is not the civil date and not an uptime fallback
++    /// of `time.time`.
++    #[cfg(target_os = "galexy")]
++    fn get_monotonic_time(_vm: &VirtualMachine) -> PyResult<Duration> {
++        Ok(Duration::from_millis(galexy_syscall(27, 0).unwrap_or(0)))
++    }
++
++    #[cfg(target_os = "galexy")]
++    fn get_perf_time(vm: &VirtualMachine) -> PyResult<Duration> {
++        get_monotonic_time(vm)
++    }
++
+     #[pyfunction]
+     fn sleep(object: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+         vm.audit("time.sleep", || (object.clone(),))?;
 diff --git a/galexy/libcalls/Cargo.toml b/galexy/libcalls/Cargo.toml
 new file mode 100644
 index 0000000..f84c013
