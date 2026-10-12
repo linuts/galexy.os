@@ -636,6 +636,65 @@ pub fn boot_for(image: &Image, timeout: Duration) -> (Option<i32>, String) {
     (code, serial)
 }
 
+/// Boots `image` with a TPM 2.0 CRB device backed by `swtpm`.
+///
+/// The socket and state directory are removed before return. `swtpm`
+/// must be on `PATH`.
+pub fn boot_with_tpm(image: &Image) -> (Option<i32>, String) {
+    let dir = scratch_path("swtpm", "dir");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("swtpm state dir");
+    let sock = dir.join("swtpm.sock");
+    let mut swtpm = Command::new("swtpm")
+        .arg("socket")
+        .arg("--tpm2")
+        .arg("--tpmstate")
+        .arg(format!("dir={}", dir.display()))
+        .arg("--ctrl")
+        .arg(format!("type=unixio,path={}", sock.display()))
+        .arg("--flags")
+        .arg("startup-clear")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("swtpm socket");
+    let ready = Instant::now() + Duration::from_secs(5);
+    while !sock.exists() {
+        if Instant::now() > ready {
+            let _ = swtpm.kill();
+            panic!("swtpm socket did not appear at {}", sock.display());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let serial_path = serial_log_path(&format!("{}-tpm", image.name));
+    let mut cmd = qemu_command(&image.bios, &serial_path);
+    cmd.arg("-chardev")
+        .arg(format!("socket,id=chrtpm,path={}", sock.display()))
+        .arg("-tpmdev")
+        .arg("emulator,id=tpm0,chardev=chrtpm")
+        .arg("-device")
+        .arg("tpm-crb,tpmdev=tpm0");
+    let mut child = cmd.spawn().expect("qemu with tpm-crb");
+    let deadline = Instant::now() + TEST_TIMEOUT;
+    let code = loop {
+        match child.try_wait().expect("try_wait failed") {
+            Some(status) => break status.code(),
+            None if Instant::now() > deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            None => std::thread::sleep(Duration::from_millis(100)),
+        }
+    };
+    let _ = swtpm.kill();
+    let _ = swtpm.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+    let serial = std::fs::read_to_string(&serial_path).unwrap_or_default();
+    (code, serial)
+}
+
 /// Boots the main image with COM1 on a Unix socket and types a login.
 ///
 /// No data disk, so the seat comes up RAM-only and asks `Login as:`
@@ -782,6 +841,80 @@ pub fn boot_uefi_until(image: &Image, timeout: Duration, ready: impl Fn(&str) ->
     cmd.arg("-bios").arg(ovmf_fd);
     let child = cmd.spawn().expect("failed to launch qemu-system-x86_64");
     run_until(child, &serial_path, timeout, &ready)
+}
+
+/// UEFI boot on firmware that publishes `EFI_RNG_PROTOCOL`.
+///
+/// The distro OVMF used by [`boot_uefi`] (Ubuntu 2024.02) does not build
+/// that driver, so a `-bios` boot logs `firmware rng protocol absent`
+/// and the kernel falls through to `RDSEED`. This helper uses the
+/// edk2-stable202605 prebuilt, which does publish the protocol.
+/// `OVMF_CODE` and `OVMF_VARS` override the download.
+pub fn boot_uefi_rng(image: &Image, timeout: Duration) -> String {
+    let (code, vars_src) = rng_ovmf();
+    let vars = scratch_path("ovmf-vars", "fd");
+    std::fs::copy(&vars_src, &vars).expect("copy OVMF vars");
+    let serial_path = serial_log_path(&image.name);
+    let mut cmd = qemu_command(&image.uefi, &serial_path);
+    cmd.arg("-drive").arg(format!(
+        "if=pflash,format=raw,readonly=on,file={}",
+        code.display()
+    ));
+    cmd.arg("-drive")
+        .arg(format!("if=pflash,format=raw,file={}", vars.display()));
+    let child = cmd.spawn().expect("failed to launch qemu-system-x86_64");
+    let serial = run_until(child, &serial_path, timeout, &|_| false);
+    let _ = std::fs::remove_file(&vars);
+    serial
+}
+
+/// edk2-stable202605 x64 code and vars. Split images, not a combined `-bios` ROM.
+const OVMF_RNG_URL: &str = "https://github.com/rust-osdev/ovmf-prebuilt/releases/download/edk2-stable202605-r1/edk2-stable202605-r1-bin.tar.xz";
+const OVMF_CODE_LEN: u64 = 3_653_632;
+const OVMF_VARS_LEN: u64 = 540_672;
+
+fn rng_ovmf() -> (PathBuf, PathBuf) {
+    if let (Ok(code), Ok(vars)) = (std::env::var("OVMF_CODE"), std::env::var("OVMF_VARS")) {
+        return (PathBuf::from(code), PathBuf::from(vars));
+    }
+    let dir = std::env::var("CARGO_TARGET_DIR").map_or_else(
+        |_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ovmf-rng"),
+        |dir| PathBuf::from(dir).join("ovmf-rng"),
+    );
+    let code = dir.join("code.fd");
+    let vars = dir.join("vars.fd");
+    if file_len(&code) == Some(OVMF_CODE_LEN) && file_len(&vars) == Some(OVMF_VARS_LEN) {
+        return (code, vars);
+    }
+    std::fs::create_dir_all(&dir).expect("ovmf cache dir");
+    let tar = dir.join("ovmf.tar.xz");
+    let status = Command::new("curl")
+        .arg("-fsSL")
+        .arg("-o")
+        .arg(&tar)
+        .arg(OVMF_RNG_URL)
+        .status()
+        .expect("curl ovmf-prebuilt");
+    assert!(status.success(), "curl ovmf-prebuilt exited {status}");
+    let status = Command::new("tar")
+        .arg("-xJf")
+        .arg(&tar)
+        .arg("-C")
+        .arg(&dir)
+        .arg("--strip-components=2")
+        .arg("edk2-stable202605-r1-bin/x64/code.fd")
+        .arg("edk2-stable202605-r1-bin/x64/vars.fd")
+        .status()
+        .expect("tar ovmf-prebuilt");
+    assert!(status.success(), "tar ovmf-prebuilt exited {status}");
+    let _ = std::fs::remove_file(&tar);
+    assert_eq!(file_len(&code), Some(OVMF_CODE_LEN), "OVMF code.fd size");
+    assert_eq!(file_len(&vars), Some(OVMF_VARS_LEN), "OVMF vars.fd size");
+    (code, vars)
+}
+
+fn file_len(path: &Path) -> Option<u64> {
+    std::fs::metadata(path).ok().map(|meta| meta.len())
 }
 
 /// Boots `image` and kills the guest after `timeout`, or sooner when

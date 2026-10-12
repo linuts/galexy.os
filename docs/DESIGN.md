@@ -1134,7 +1134,8 @@ IRQ that already has IF=0) around the acquire.
 | Lock | May hold while taking | IRQ-gate |
 | --- | --- | --- |
 | `THREADS` | galfs `TABLE` (then large-file `STORE`), then `VOLUME_KEY`, then `VOLUME_PASS`, then `CHANS`. Snapshots still copy into fixed arrays and allocate after the drop. A galfs write may allocate the RAM large-file store while `THREADS` is held (Milestone 71): heap growth drops `INNER` before the shootdown, and every spin lock acks (`arch/mm/heap.rs`) | yes |
-| galfs `TABLE` | large-file `STORE`; `DISK_BUF` only while encoding; not `THREADS`. The PBKDF2 for `login` / `passwd` / `useradd` runs before the lock is taken (`PasswordCred`) | yes. Syscalls arrive IF=0; the main-loop entries (`sync_to_disk`, `wipe_volume_key`, `seal_and_lock`) gate themselves — a preempted main-loop holder on the BSP deadlocked the shell's next galfs syscall on the same CPU (galexy.os#86) |
+| galfs `TABLE` | large-file `STORE`; `DISK_BUF` only while encoding; `arch::rand` while sealing; not `THREADS`. The PBKDF2 for `login` / `passwd` / `useradd` runs before the lock is taken (`PasswordCred`) | yes. Syscalls arrive IF=0; the main-loop entries (`sync_to_disk`, `wipe_volume_key`, `seal_and_lock`) gate themselves — a preempted main-loop holder on the BSP deadlocked the shell's next galfs syscall on the same CPU (galexy.os#86) |
+| `arch::rand` | nothing else. Never takes `TABLE` | with the caller (`TABLE` may already be held inside `encode_table`) |
 | large-file `STORE` | nothing else. Never take `TABLE` or `THREADS` while holding it | with the caller (`TABLE`, already IF=0 on the syscall path) |
 | `VOLUME_KEY` | `VOLUME_PASS` | with the caller |
 | `LOCKOUT` | nothing above | yes; never under `THREADS` or `TABLE` |
@@ -1213,6 +1214,7 @@ them on; `audit_strings` and the e2e boots run against that image.
 | Inline `login user pass` | shell command form | `userspace/shell` | password on the command line (no masked prompt) | scripted typing e2e; production UX is the masked prompt (`AUTH.md`) |
 | `GALEXY_GALFS_IMG`, `GALEXY_GALFS_IDE`, `GALEXY_ACCEL` | runner env | `runner/src/main.rs`, `runner/tests/common` | disk path / IDE-slave attach / `kvm` or `tcg` accel for `cargo run` and the suite | the developer; CI logs `[runner] accel=` |
 | `OVMF_FD` | runner env | `runner` | UEFI firmware path | CI (`/usr/share/ovmf/OVMF.fd`), developers on non-Arch distros |
+| `OVMF_CODE`, `OVMF_VARS` | runner env | `runner` tests | split OVMF images for `rand_uefi_uses_firmware` (firmware must publish `EFI_RNG_PROTOCOL`) | unset: the test downloads edk2-stable202605 into `target/ovmf-rng` |
 | `pub fn test_*` seams | public kernel functions | `keyboard::test_inject` / `test_drain`; `screen::test_cursor_bar_lit` / `_clear` / `fill_shown_for_bench` / `repaint_shown`; `sched::test_push_token` / `test_revoke_token` / `test_auth_flags` / `test_backdate_input` / `test_poll_idle_all` / `test_set_idle_limit` / `test_session_locked`; `ramdisk::measure` | expose or poke internals a test kernel asserts on; never called by the main kernel | `bin/test-audit`, `test-galfs`, `test-cards`, `test-idle`, `test-mustchange`, `test-ramdisk`, `test-bench` |
 
 Not seams: `ramdisk-gxld.tar` is the same userspace linked by `gxld`

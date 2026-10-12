@@ -5,11 +5,11 @@ mod common;
 
 use common::{
     boot, boot_and_type, boot_and_type_ps2, boot_and_type_uefi, boot_for, boot_galfs_once,
-    boot_galfs_once_virtio, boot_liveness_until, boot_uefi, boot_uefi_until, boot_with_galfs,
-    boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
+    boot_galfs_once_virtio, boot_liveness_until, boot_uefi, boot_uefi_rng, boot_uefi_until,
+    boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
     boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio,
-    boot_with_galfs_virtio_legacy, image, uart_login_serial, use_kvm, GalfsDiskCache,
-    GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
+    boot_with_galfs_virtio_legacy, boot_with_tpm, image, uart_login_serial, use_kvm,
+    GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
 };
 use std::time::Duration;
 
@@ -570,6 +570,57 @@ fn umip_test_passes() {
     assert!(
         serial.contains("[test-umip] passed"),
         "test-umip success marker missing; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn rand_source_boots() {
+    let (code, serial) = boot(&image("test-rand"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-rand should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-rand] passed"),
+        "test-rand success marker missing; serial:\n{serial}"
+    );
+    let source = serial
+        .lines()
+        .find_map(|line| line.split("[test-rand] source=").nth(1))
+        .unwrap_or_else(|| panic!("rand source missing; serial:\n{serial}"));
+    assert!(
+        matches!(source, "rdseed" | "rdrand" | "software" | "bios"),
+        "unexpected rand source {source}; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn rand_prefers_tpm() {
+    let (code, serial) = boot_with_tpm(&image("test-rand"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-rand with TPM should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-rand] source=tpm"),
+        "TPM was not the rand source; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn rand_uefi_uses_firmware() {
+    // Distro OVMF from 2024.02 has no `EFI_RNG_PROTOCOL`. This boot uses
+    // firmware that publishes it.
+    let serial = boot_uefi_rng(&image("test-rand"), Duration::from_secs(90));
+    assert!(
+        serial.contains("[test-rand] source=bios"),
+        "UEFI firmware rng was not the rand source; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-rand] passed"),
+        "test-rand UEFI success marker missing; serial:\n{serial}"
     );
 }
 

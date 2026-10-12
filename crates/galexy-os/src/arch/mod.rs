@@ -20,6 +20,7 @@ mod rtc;
 pub mod speaker;
 pub mod syscall;
 pub mod timer;
+mod tpm;
 pub mod user_copy;
 
 use bootloader_api::info::BootInfo;
@@ -54,6 +55,7 @@ pub fn init(boot_info: &BootInfo) {
         boot_info.kernel_image_offset
     );
     acpi::init(boot_info.rsdp_addr.into_option(), phys_offset);
+    rand::init(phys_offset);
 
     gdt::init();
     // Per-CPU substrate AFTER gdt::init (the GS selector load resets the

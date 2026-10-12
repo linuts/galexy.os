@@ -12,10 +12,16 @@
 #![deny(missing_docs)]
 
 mod aead;
+mod drbg;
 mod sha256;
+mod tpm2;
 
 pub use aead::{open, seal, KEY_LEN, NONCE_LEN, TAG_LEN};
+pub use drbg::Drbg;
 pub use sha256::hash as sha256;
+pub use tpm2::{
+    get_random_command, parse_get_random, startup_clear_command, startup_ok, RandomReply,
+};
 
 /// Salt length stored on each actor (CSPRNG-filled at set-password).
 pub const SALT_LEN: usize = 8;

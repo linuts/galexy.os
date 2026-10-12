@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#117](https://github.com/linuts/galexy.os/pull/117) — Entropy —
+  Salts and volume keys prefer TPM 2.0 `GetRandom`, then a UEFI
+  `EFI_RNG_PROTOCOL` sample taken before `ExitBootServices`, then
+  `RDSEED` / `RDRAND`, then a weak ChaCha20 stream. No new syscall.
 - [#116](https://github.com/linuts/galexy.os/pull/116) — Python —
   `open` and `io.open` are `_io.open`. The raw file is `_io.FileIO`
   over `std::fs`. The prelude file class is gone. Text mode is UTF-8.
