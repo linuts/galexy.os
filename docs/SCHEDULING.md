@@ -73,7 +73,8 @@ system is the preemptive thread/user-task rotation.
   `SysError::Interrupted` before the slot goes `EXITED`.
 - Idle lock freezes the seat after 5 min at the prompt. A keyboard
   read in progress returns `Locked`. The task is not exited, and a
-  Cap-wait is left parked.
+  Cap-wait is left parked. The scan names console shells only, so
+  init and the other services keep running.
 - **`sleep(ms)`** (Milestone 56): park until monotonic `timer_ticks`
   reaches a deadline; no Cap. Idle LAPIC arm is
   `min(next second, next sleeper)`. Busy IRQ path still re-arms a

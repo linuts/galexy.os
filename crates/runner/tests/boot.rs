@@ -1655,6 +1655,10 @@ fn idle_test_passes() {
         "unlock line missing; serial:\n{serial}"
     );
     assert!(
+        serial.contains("[test-idle] service ran"),
+        "service-keeps-running marker missing; serial:\n{serial}"
+    );
+    assert!(
         serial.contains("[test-idle] locked"),
         "lock marker missing; serial:\n{serial}"
     );

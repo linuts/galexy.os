@@ -135,6 +135,12 @@ session. A child that already inherited cards keeps them until that
 child exits, same as logout. Five failed unlock guesses use the same
 cool-down as login.
 
+Init and the other services are other tasks. Locking this seat does
+not stop them, and it does not seal the volume, so a service that
+uses the disk keeps the key. The production idle scan only freezes
+logged-in console shells (`shell` through `shell12`). The locked
+shell cannot `svc` until the password opens it. Init keeps the table.
+
 ### Login lockout
 
 Five failed guesses against **one actor** or **one TTY** start a

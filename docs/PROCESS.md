@@ -167,6 +167,10 @@ by a magic “PID 1” in the public ABI. Cap-kill of init is always
 | Shell utility | seat/shell | shell (short wait) | n/a ( Cap-wait ) |
 | Bare app | seat/shell | shell (optional) | shell decides |
 
+Locking a seat freezes that shell only. Init, `stamp`, `probe`,
+`bell`, `chime`, and the other seats keep running. The volume stays
+open. The locked shell cannot `svc` until the password opens it.
+
 Operator surface: `svc status|start|stop|restart <name>`,
 `svc raise|drop <notice>`, `svc every <ms> <name>`, `svc date`, and
 `svc at <hh:mm> <name>` send on the init Cap. The reply is text
