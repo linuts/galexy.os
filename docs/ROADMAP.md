@@ -20,7 +20,9 @@ Order of work: **51 → 52** (`review-rc1`), then **63 → 64 → 65 → 66 →
 67**. Security first because every later change should land
 on a kernel that already has SMAP on and a loader that returns errors.
 64 measured before 65 modernizes, so the device rewrite has a
-baseline. **68 → 77** have landed (Phase 11 and Phase 12). **78 → 85**
+baseline. **68 → 77** have landed (Phase 11 and Phase 12).
+**89** has landed: notices and monotonic beats (`docs/PROCESS.md`),
+beside the service table, with no bus and no wall clock. **78 → 85**
 are the network (`docs/NET.md`): an address and a datagram before
 the lane. **86 → 88** are USB (`docs/USB.md`): see devices, then
 the driver table. The `v1.0` tag waits on both phases and on the

@@ -84,6 +84,14 @@ path = "src/bin/probe.rs"
 name = "spare"
 path = "src/bin/spare.rs"
 
+[[bin]]
+name = "bell"
+path = "src/bin/bell.rs"
+
+[[bin]]
+name = "chime"
+path = "src/bin/chime.rs"
+
 [dependencies]
 galexy-rt = { path = "../galexy-rt" }
 galexy-abi = { path = "../../galexy-abi" }

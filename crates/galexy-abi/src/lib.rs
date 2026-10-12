@@ -818,6 +818,16 @@ pub const INIT_OP_RESTART: u8 = 4;
 pub const INIT_OP_SHUTDOWN: u8 = 5;
 /// Init RPC: ordered reboot. Non-admin is refused in the reply.
 pub const INIT_OP_REBOOT: u8 = 6;
+/// Init RPC: rising edge of a notice. Payload is `op`, `name_len`,
+/// notice bytes. Admin only. An up notice stays up and does not spawn.
+pub const INIT_OP_RAISE: u8 = 7;
+/// Init RPC: falling edge of a notice. Same payload as [`INIT_OP_RAISE`].
+/// Admin only. Rows bound to the notice are stopped and held.
+pub const INIT_OP_DROP: u8 = 8;
+/// Init RPC: arm a monotonic beat. Payload is `op`, `name_len`, service
+/// name, then a little-endian `u64` millisecond interval (`0` uses the
+/// row default). Admin only. A missing interval word means `0`.
+pub const INIT_OP_EVERY: u8 = 9;
 
 /// `recv` `R9` bit 0: an empty queue returns [`SysError::NoResource`]
 /// instead of parking. EOF (peer closed) is still `0`.

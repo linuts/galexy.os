@@ -8,9 +8,9 @@ use core::sync::atomic::Ordering;
 
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
-    close, dmesg_cap, grant, init_rpc, read, reboot, revoke, share, shutdown, spawn_with,
-    stats_cap, sync, tasks_cap, threads_cap, unshare, user, user_login, user_logout, user_name,
-    user_name_pass, user_passwd, user_quota, user_setquota, wait, write_console,
+    close, dmesg_cap, grant, init_rpc, init_rpc_every, read, reboot, revoke, share, shutdown,
+    spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, user, user_login, user_logout,
+    user_name, user_name_pass, user_passwd, user_quota, user_setquota, wait, write_console,
 };
 
 /// Sectioned help — short command column + one-line blurb.
@@ -75,6 +75,9 @@ pub(crate) fn show_help() {
     help_row(b"clear", b"clear screen");
     help_row(b"svc status <name>", b"service state");
     help_row(b"svc start|stop|restart <name>", b"ask init");
+    help_row(b"svc raise <notice>", b"notice rising edge");
+    help_row(b"svc drop <notice>", b"notice falling edge");
+    help_row(b"svc every <ms> <name>", b"arm a monotonic beat");
     help_row(b"shutdown", b"ask init to power off");
     help_row(b"reboot", b"ask init to reset");
     write_console(b"\n");
@@ -1244,17 +1247,24 @@ pub(crate) fn ask_init_power(cwd: &Cwd, reboot_flag: bool) {
     prompt(cwd);
 }
 
+const SVC_USAGE: &[u8] =
+    b"svc: usage: svc status|start|stop|restart <name> | raise|drop <notice> | every <ms> <name>\n";
+
 pub(crate) fn svc_cmd(cwd: &Cwd, rest: &[u8]) {
     let rest = trim(rest);
     let Some(sp) = rest.iter().position(|b| *b == b' ') else {
-        write_console(b"svc: usage: svc status|start|stop|restart <name>\n");
+        write_console(SVC_USAGE);
         prompt(cwd);
         return;
     };
     let verb = &rest[..sp];
     let name = trim(&rest[sp + 1..]);
+    if verb == b"every" {
+        svc_every(cwd, name);
+        return;
+    }
     if name.is_empty() || name.contains(&b' ') {
-        write_console(b"svc: usage: svc status|start|stop|restart <name>\n");
+        write_console(SVC_USAGE);
         prompt(cwd);
         return;
     }
@@ -1263,14 +1273,43 @@ pub(crate) fn svc_cmd(cwd: &Cwd, rest: &[u8]) {
         b"start" => galexy_abi::INIT_OP_START,
         b"stop" => galexy_abi::INIT_OP_STOP,
         b"restart" => galexy_abi::INIT_OP_RESTART,
+        b"raise" => galexy_abi::INIT_OP_RAISE,
+        b"drop" => galexy_abi::INIT_OP_DROP,
         _ => {
-            write_console(b"svc: usage: svc status|start|stop|restart <name>\n");
+            write_console(SVC_USAGE);
             prompt(cwd);
             return;
         }
     };
     let mut reply = [0u8; 96];
     let got = init_rpc(op, name, &mut reply);
+    svc_show(cwd, got, &reply);
+}
+
+fn svc_every(cwd: &Cwd, rest: &[u8]) {
+    let rest = trim(rest);
+    let Some(sp) = rest.iter().position(|b| *b == b' ') else {
+        write_console(SVC_USAGE);
+        prompt(cwd);
+        return;
+    };
+    let Some(ms) = parse_u32(trim(&rest[..sp])) else {
+        write_console(SVC_USAGE);
+        prompt(cwd);
+        return;
+    };
+    let name = trim(&rest[sp + 1..]);
+    if name.is_empty() || name.contains(&b' ') {
+        write_console(SVC_USAGE);
+        prompt(cwd);
+        return;
+    }
+    let mut reply = [0u8; 96];
+    let got = init_rpc_every(u64::from(ms), name, &mut reply);
+    svc_show(cwd, got, &reply);
+}
+
+fn svc_show(cwd: &Cwd, got: SyscallResult, reply: &[u8]) {
     if !got.ok {
         write_console(b"svc: ");
         match SysError::from_code(got.value) {

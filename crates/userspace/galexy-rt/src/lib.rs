@@ -723,18 +723,30 @@ pub fn chan_recv_poll(cap: Cap, buf: &mut [u8]) -> SyscallResult {
 /// Parks until init replies. `value` is the number of reply bytes written.
 /// `Unsupported` means init has no control channel.
 pub fn init_rpc(op: u8, name: &[u8], reply: &mut [u8]) -> SyscallResult {
-    if name.len() > 62 {
+    init_rpc_bytes(op, name, &[], reply)
+}
+
+/// [`galexy_abi::INIT_OP_EVERY`]. `ms` is the interval. `0` asks init to
+/// use the row's compiled default.
+pub fn init_rpc_every(ms: u64, name: &[u8], reply: &mut [u8]) -> SyscallResult {
+    init_rpc_bytes(galexy_abi::INIT_OP_EVERY, name, &ms.to_le_bytes(), reply)
+}
+
+fn init_rpc_bytes(op: u8, name: &[u8], tail: &[u8], reply: &mut [u8]) -> SyscallResult {
+    if name.len() > 62 || tail.len() > 8 {
         return SyscallResult::err(galexy_abi::SysError::BadValue);
     }
-    let mut payload = [0u8; 64];
+    let mut payload = [0u8; 72];
     payload[0] = op;
     payload[1] = name.len() as u8;
     payload[2..2 + name.len()].copy_from_slice(name);
+    let n = 2 + name.len();
+    payload[n..n + tail.len()].copy_from_slice(tail);
     syscall_r8r9(
         Syscall::Send as u64,
         init_cap().bits(),
         payload.as_ptr() as u64,
-        (2 + name.len()) as u64,
+        (n + tail.len()) as u64,
         reply.as_mut_ptr() as u64,
         reply.len() as u64,
     )

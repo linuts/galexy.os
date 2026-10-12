@@ -245,6 +245,99 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     }
 
     println!("[test-init] service backoff works");
+
+    // Stop the storm so its backoff lines do not push the notice and
+    // beat markers out of the 32-line dmesg ring.
+    let stopped = run_rpc(
+        "rpc-stop-probe",
+        galexy_os::sched::galfs::admin_cred(),
+        &[galexy_abi::INIT_OP_STOP, 5, b'p', b'r', b'o', b'b', b'e'],
+    );
+    sched::reap();
+    assert_eq!(stopped.rdx, 1, "admin stop probe must be accepted");
+
+    let (eve_raise, eve_raise_reply) = run_rpc_reply(
+        "rpc-eve-raise",
+        eve,
+        &[galexy_abi::INIT_OP_RAISE, 4, b'r', b'i', b'n', b'g'],
+    );
+    sched::reap();
+    assert_eq!(eve_raise.rdx, 1, "non-admin raise reaches init");
+    assert!(
+        eve_raise_reply.starts_with(b"access denied"),
+        "non-admin raise must be refused, got {:?}",
+        core::str::from_utf8(&eve_raise_reply).unwrap_or("?")
+    );
+
+    let (raised, raised_reply) = run_rpc_reply(
+        "rpc-raise",
+        galexy_os::sched::galfs::admin_cred(),
+        &[galexy_abi::INIT_OP_RAISE, 4, b'r', b'i', b'n', b'g'],
+    );
+    sched::reap();
+    assert_eq!(raised.rdx, 1, "admin raise must be accepted");
+    assert!(
+        raised_reply.starts_with(b"ring up"),
+        "raise reply: {:?}",
+        core::str::from_utf8(&raised_reply).unwrap_or("?")
+    );
+    wait_dmesg("[init] start name=bell");
+
+    let (_again, again_reply) = run_rpc_reply(
+        "rpc-raise-again",
+        galexy_os::sched::galfs::admin_cred(),
+        &[galexy_abi::INIT_OP_RAISE, 4, b'r', b'i', b'n', b'g'],
+    );
+    sched::reap();
+    assert!(
+        again_reply.starts_with(b"ring up"),
+        "second raise reply: {:?}",
+        core::str::from_utf8(&again_reply).unwrap_or("?")
+    );
+    assert_eq!(
+        dmesg_count("[init] start name=bell"),
+        1,
+        "a second raise of an up notice must not start bell again"
+    );
+
+    let (_dropped, drop_reply) = run_rpc_reply(
+        "rpc-drop",
+        galexy_os::sched::galfs::admin_cred(),
+        &[galexy_abi::INIT_OP_DROP, 4, b'r', b'i', b'n', b'g'],
+    );
+    sched::reap();
+    assert!(
+        drop_reply.starts_with(b"ring down"),
+        "drop reply: {:?}",
+        core::str::from_utf8(&drop_reply).unwrap_or("?")
+    );
+
+    let _ = run_rpc(
+        "rpc-raise-edge",
+        galexy_os::sched::galfs::admin_cred(),
+        &[galexy_abi::INIT_OP_RAISE, 4, b'r', b'i', b'n', b'g'],
+    );
+    sched::reap();
+    wait_dmesg_count("[init] start name=bell", 2);
+
+    let mut every = [0u8; 15];
+    every[0] = galexy_abi::INIT_OP_EVERY;
+    every[1] = 5;
+    every[2..7].copy_from_slice(b"chime");
+    every[7..15].copy_from_slice(&250u64.to_le_bytes());
+    let (armed, armed_reply) =
+        run_rpc_reply("rpc-every", galexy_os::sched::galfs::admin_cred(), &every);
+    sched::reap();
+    assert_eq!(armed.rdx, 1, "admin every must be accepted");
+    assert!(
+        armed_reply.starts_with(b"chime armed"),
+        "every reply: {:?}",
+        core::str::from_utf8(&armed_reply).unwrap_or("?")
+    );
+    wait_dmesg("[init] beat name=chime");
+    wait_dmesg("[init] beat skip name=chime");
+
+    serial_println!("[test-init] notices and beats");
     serial_println!("[test-init] passed");
     exit_qemu(QemuExitCode::Success);
 }
@@ -254,6 +347,40 @@ struct RpcReport {
     done: u64,
     rax: u64,
     rdx: u64,
+}
+
+fn dmesg_text(buf: &mut [u8]) -> usize {
+    galexy_os::drivers::dmesg::snapshot(buf)
+}
+
+fn dmesg_count(needle: &str) -> usize {
+    let mut log = [0u8; 4096];
+    let n = dmesg_text(&mut log);
+    let text = core::str::from_utf8(&log[..n]).unwrap_or("");
+    text.matches(needle).count()
+}
+
+fn wait_dmesg(needle: &str) {
+    wait_dmesg_count(needle, 1);
+}
+
+fn wait_dmesg_count(needle: &str, want: usize) {
+    let mut log = [0u8; 4096];
+    let mut elapsed = 0u64;
+    loop {
+        x86_64::instructions::hlt();
+        sched::drain_spawn();
+        sched::reap();
+        let n = dmesg_text(&mut log);
+        let text = core::str::from_utf8(&log[..n]).unwrap_or("");
+        if text.matches(needle).count() >= want {
+            return;
+        }
+        elapsed += 1;
+        if elapsed > TICK_TIMEOUT {
+            panic!("dmesg never reached {want} of {needle}; dmesg:\n{text}");
+        }
+    }
 }
 
 fn run_rpc(name: &str, fs: galexy_os::sched::galfs::FsCred, payload: &[u8]) -> RpcReport {

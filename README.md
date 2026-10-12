@@ -133,6 +133,8 @@ frames). Up/down arrows recall session history (written to
 | `logout` | Back to the login screen |
 | `hello` / `linger` / `nap` | Sample user programs |
 | `svc status\|start\|stop\|restart <name>` | Service table, through init |
+| `svc raise\|drop <notice>` | Rising or falling edge of a notice. Starts or stops the rows bound to it |
+| `svc every <ms> <name>` | Arm a monotonic beat. First run is one interval later. No wall clock |
 | `shutdown` / `reboot` | Ask init to power off or reset (admin) |
 
 Typing `shell` is refused — seats are F-keys, not programs you spawn.

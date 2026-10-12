@@ -67,7 +67,7 @@ gaps or duplicates). Appending is allowed; inserting is not.
 | 26 | `map` | stable | per-task heap, `USER_HEAP_PAGES` (262_144, 1 GiB) as of Milestone 71 |
 | 27 | `clock` | stable | monotonic ms (`timer_ticks`); `sleep` stays stable beside it |
 | 28 | `channel` | stable | two endpoint Caps. Init's first channel is the control channel |
-| 29 | `send` | stable | one queued message, up to 256 bytes and two file Caps. `send` on init index `0x8008` parks for a reply (`R8`/`R9` = reply buffer/len); the kernel stamps a 20-byte header |
+| 29 | `send` | stable | one queued message, up to 256 bytes and two file Caps. `send` on init index `0x8008` parks for a reply (`R8`/`R9` = reply buffer/len); the kernel stamps a 20-byte header. Opcodes 1–6 are status, start, stop, restart, shutdown, reboot. Opcodes 7–9 are raise, drop, and every (Milestone 89) |
 | 30 | `recv` | stable | parks when empty and the peer is open. `R9` bit 0 = `RECV_POLL` returns `NoResource` instead of parking |
 | 31 | `thread_spawn` | stable (M70) | `RDI` entry, `RSI` arg, `RDX` stack pages (`0` = 16 pages, at most `THREAD_STACK_PAGES_MAX` = 4352 / 17 MiB as of Milestone 72). Returns a process Cap with `PROC_PARENT` on the shared table; `wait` is join. Same CR3, file table, heap budget. Entry outside the image window is `BadValue` |
 | 32 | `thread_exit` | stable (M70) | `RDI` = exit code. The calling thread only. From the process leader this is `exit` |

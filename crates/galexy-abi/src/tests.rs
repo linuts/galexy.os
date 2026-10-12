@@ -83,6 +83,9 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(INIT_OP_STATUS, 1);
     assert_eq!(INIT_OP_SHUTDOWN, 5);
     assert_eq!(INIT_OP_REBOOT, 6);
+    assert_eq!(INIT_OP_RAISE, 7);
+    assert_eq!(INIT_OP_DROP, 8);
+    assert_eq!(INIT_OP_EVERY, 9);
     assert_eq!(RECV_POLL, 1);
     assert_eq!(WAIT_POLL, 1);
     assert_eq!(MAX_SYSCALL, 33);

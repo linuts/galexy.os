@@ -4,8 +4,9 @@
 //! runs once at boot. `probe` is the restart-storm fixture: it is not
 //! started until `svc start`, then a fast exit backs off (250, 500, 1000,
 //! then 2000 ms). `spare` is ignore: not started, and a later start does
-//! not restart it. Operators talk to this program over the init Cap. They
-//! never receive a service Cap.
+//! not restart it. `bell` starts when the notice `ring` rises. `chime`
+//! is a beat: `svc every` arms a monotonic interval. Operators talk to
+//! this program over the init Cap. They never receive a service Cap.
 //!
 //! Silent on the console on purpose. Init shares TTY 0 with the F1 seat, so
 //! log lines go out through the console Cap and the kernel writes them to
@@ -37,6 +38,21 @@ struct Svc {
     arg: u8,
     policy: u8,
     autostart: bool,
+    /// Empty: this row is not tied to a notice.
+    notice: &'static [u8],
+    /// `0`: this row cannot be a beat. Otherwise the default interval.
+    every_ms: u64,
+}
+
+const fn row(name: &'static [u8], arg: u8, policy: u8, autostart: bool) -> Svc {
+    Svc {
+        name,
+        arg,
+        policy,
+        autostart,
+        notice: b"",
+        every_ms: 0,
+    }
 }
 
 struct Live {
@@ -45,6 +61,10 @@ struct Live {
     running: AtomicBool,
     storm: AtomicU8,
     spawned_ms: AtomicU64,
+    /// Armed interval. `0` means this row is not a beat right now.
+    armed_ms: AtomicU64,
+    /// Monotonic deadline. `0` means disarmed.
+    next_ms: AtomicU64,
 }
 
 const fn live() -> Live {
@@ -54,106 +74,99 @@ const fn live() -> Live {
         running: AtomicBool::new(false),
         storm: AtomicU8::new(0),
         spawned_ms: AtomicU64::new(0),
+        armed_ms: AtomicU64::new(0),
+        next_ms: AtomicU64::new(0),
     }
 }
 
-/// Twelve seats, one once-service, the backoff fixture, and one ignore
-/// service. Fifteen names. A boot holds twelve seat Caps; stamp exits
-/// and frees its Cap. That stays under the sixteen-Cap ceiling.
-const SERVICES: [Svc; 15] = [
+/// Shortest beat. Matches the first restart-backoff step.
+const BEAT_MIN_MS: u64 = 250;
+/// Longest beat: one day. There is no calendar behind this.
+const BEAT_MAX_MS: u64 = 86_400_000;
+
+/// Twelve seats, one once-service, the backoff fixture, one ignore
+/// service, one notice target, and one beat target. Seventeen names.
+/// A boot holds twelve seat Caps; stamp exits and frees its Cap. `bell`
+/// and `chime` are not started at boot. That stays under the sixteen-Cap
+/// ceiling.
+const SERVICES: [Svc; 17] = [
+    row(b"shell", 1, RESTART, true),
+    row(b"shell2", 2, RESTART, true),
+    row(b"shell3", 3, RESTART, true),
+    row(b"shell4", 4, RESTART, true),
+    row(b"shell5", 5, RESTART, true),
+    row(b"shell6", 6, RESTART, true),
+    row(b"shell7", 7, RESTART, true),
+    row(b"shell8", 8, RESTART, true),
+    row(b"shell9", 9, RESTART, true),
+    row(b"shell10", 10, RESTART, true),
+    row(b"shell11", 11, RESTART, true),
+    row(b"shell12", 12, RESTART, true),
+    row(b"stamp", 0, ONCE, true),
+    row(b"probe", 0, RESTART, false),
+    row(b"spare", 0, IGNORE, false),
     Svc {
-        name: b"shell",
-        arg: 1,
-        policy: RESTART,
-        autostart: true,
-    },
-    Svc {
-        name: b"shell2",
-        arg: 2,
-        policy: RESTART,
-        autostart: true,
-    },
-    Svc {
-        name: b"shell3",
-        arg: 3,
-        policy: RESTART,
-        autostart: true,
-    },
-    Svc {
-        name: b"shell4",
-        arg: 4,
-        policy: RESTART,
-        autostart: true,
-    },
-    Svc {
-        name: b"shell5",
-        arg: 5,
-        policy: RESTART,
-        autostart: true,
-    },
-    Svc {
-        name: b"shell6",
-        arg: 6,
-        policy: RESTART,
-        autostart: true,
-    },
-    Svc {
-        name: b"shell7",
-        arg: 7,
-        policy: RESTART,
-        autostart: true,
-    },
-    Svc {
-        name: b"shell8",
-        arg: 8,
-        policy: RESTART,
-        autostart: true,
-    },
-    Svc {
-        name: b"shell9",
-        arg: 9,
-        policy: RESTART,
-        autostart: true,
-    },
-    Svc {
-        name: b"shell10",
-        arg: 10,
-        policy: RESTART,
-        autostart: true,
-    },
-    Svc {
-        name: b"shell11",
-        arg: 11,
-        policy: RESTART,
-        autostart: true,
-    },
-    Svc {
-        name: b"shell12",
-        arg: 12,
-        policy: RESTART,
-        autostart: true,
-    },
-    Svc {
-        name: b"stamp",
+        name: b"bell",
         arg: 0,
         policy: ONCE,
-        autostart: true,
+        autostart: false,
+        notice: b"ring",
+        every_ms: 0,
     },
     Svc {
-        name: b"probe",
+        name: b"chime",
         arg: 0,
-        policy: RESTART,
+        policy: ONCE,
         autostart: false,
-    },
-    Svc {
-        name: b"spare",
-        arg: 0,
-        policy: IGNORE,
-        autostart: false,
+        notice: b"",
+        every_ms: 1_000,
     },
 ];
 
-static LIVE: [Live; 15] = [const { live() }; 15];
+/// Notice names a row may name. A raise of anything else is `unknown`.
+const NOTICE_NAMES: [&[u8]; 1] = [b"ring"];
+
+const fn same(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+const fn notices_declared() -> bool {
+    let mut i = 0;
+    while i < SERVICES.len() {
+        let n = SERVICES[i].notice;
+        if n.len() != 0 {
+            let mut found = false;
+            let mut j = 0;
+            while j < NOTICE_NAMES.len() {
+                if same(n, NOTICE_NAMES[j]) {
+                    found = true;
+                }
+                j += 1;
+            }
+            if !found {
+                return false;
+            }
+        }
+        i += 1;
+    }
+    true
+}
+
+const _: () = assert!(notices_declared());
+
+static LIVE: [Live; 17] = [const { live() }; 17];
+static NOTICE_UP: [AtomicBool; NOTICE_NAMES.len()] =
+    [const { AtomicBool::new(false) }; NOTICE_NAMES.len()];
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 static PENDING_RESTART: AtomicU8 = AtomicU8::new(NONE);
 /// Service index to wait next, so a fast exit is not hidden behind a seat.
@@ -197,6 +210,18 @@ fn main() -> i32 {
             }
         }
         if reap_exited() {
+            continue;
+        }
+        if fire_due_beats() {
+            continue;
+        }
+        // A beat cannot share a blocking Cap-wait: that park returns
+        // only when the child exits or a control message arrives. Sleep
+        // in short slices so the interval can fire. No armed beat means
+        // the park below is unchanged.
+        if let Some(delay) = next_beat_delay() {
+            let slice = delay.clamp(1, 1_000);
+            let _ = sleep_ms(slice);
             continue;
         }
         let watch = WATCH.swap(NONE, Ordering::AcqRel);
@@ -342,12 +367,17 @@ fn handle(msg: &[u8]) {
     // The kernel stamps `msg[0]` from the sender's session (admin root or
     // not); the sender cannot forge it. Any logged-in seat may ask
     // `status`. Everything that changes service state — start, stop,
-    // restart, power — is the operator's: a non-admin seat must not be
+    // restart, raise, drop, every, power — is the operator's: a non-admin seat must not be
     // able to kill another user's seat or churn the service table.
     let admin = msg[0] != 0;
     match op {
         galexy_abi::INIT_OP_STATUS => status(name),
-        galexy_abi::INIT_OP_START | galexy_abi::INIT_OP_STOP | galexy_abi::INIT_OP_RESTART
+        galexy_abi::INIT_OP_START
+        | galexy_abi::INIT_OP_STOP
+        | galexy_abi::INIT_OP_RESTART
+        | galexy_abi::INIT_OP_RAISE
+        | galexy_abi::INIT_OP_DROP
+        | galexy_abi::INIT_OP_EVERY
             if !admin =>
         {
             reply(b"access denied\n")
@@ -355,6 +385,9 @@ fn handle(msg: &[u8]) {
         galexy_abi::INIT_OP_START => start_svc(name),
         galexy_abi::INIT_OP_STOP => stop_svc(name),
         galexy_abi::INIT_OP_RESTART => restart_svc(name),
+        galexy_abi::INIT_OP_RAISE => raise_notice(name),
+        galexy_abi::INIT_OP_DROP => drop_notice(name),
+        galexy_abi::INIT_OP_EVERY => every_svc(name, payload_u64(msg, start + name_len)),
         galexy_abi::INIT_OP_SHUTDOWN => ordered_power(msg, false),
         galexy_abi::INIT_OP_REBOOT => ordered_power(msg, true),
         _ => reply(b"bad value\n"),
@@ -379,6 +412,9 @@ fn start_svc(name: &[u8]) {
         return;
     };
     LIVE[i].hold.store(false, Ordering::Release);
+    if SERVICES[i].every_ms != 0 && LIVE[i].armed_ms.load(Ordering::Acquire) == 0 {
+        arm_beat(i, SERVICES[i].every_ms);
+    }
     if LIVE[i].running.load(Ordering::Acquire) || spawn_svc(i) {
         reply_state(i);
     } else {
@@ -392,6 +428,7 @@ fn stop_svc(name: &[u8]) {
         return;
     };
     LIVE[i].hold.store(true, Ordering::Release);
+    disarm_beat(i);
     if LIVE[i].running.load(Ordering::Acquire) {
         let cap = LIVE[i].cap.load(Ordering::Acquire);
         if cap != 0 {
@@ -424,6 +461,9 @@ fn restart_svc(name: &[u8]) {
     // Crash policy and backoff apply to unexpected exits, not to this
     // command.
     LIVE[i].storm.store(0, Ordering::Release);
+    if SERVICES[i].every_ms != 0 && LIVE[i].armed_ms.load(Ordering::Acquire) == 0 {
+        arm_beat(i, SERVICES[i].every_ms);
+    }
     if spawn_svc(i) {
         reply_state(i);
     } else {
@@ -504,6 +544,172 @@ fn ordered_power(msg: &[u8], reboot_flag: bool) {
 fn spared(i: usize, tty: u8) -> bool {
     let arg = SERVICES[i].arg;
     arg != 0 && arg - 1 == tty
+}
+
+fn notice_slot(name: &[u8]) -> Option<usize> {
+    NOTICE_NAMES.iter().position(|n| *n == name)
+}
+
+fn payload_u64(msg: &[u8], at: usize) -> u64 {
+    let Some(bytes) = msg.get(at..at + 8) else {
+        return 0;
+    };
+    let mut raw = [0u8; 8];
+    raw.copy_from_slice(bytes);
+    u64::from_le_bytes(raw)
+}
+
+fn raise_notice(name: &[u8]) {
+    let Some(slot) = notice_slot(name) else {
+        reply(b"unknown\n");
+        return;
+    };
+    if NOTICE_UP[slot].swap(true, Ordering::AcqRel) {
+        reply_notice(name, b" up\n");
+        return;
+    }
+    log_notice(name, b" up");
+    for (i, svc) in SERVICES.iter().enumerate() {
+        if svc.notice != name {
+            continue;
+        }
+        LIVE[i].hold.store(false, Ordering::Release);
+        if LIVE[i].running.load(Ordering::Acquire) {
+            continue;
+        }
+        if spawn_svc(i) {
+            log_kv(b"[init] start name=", svc.name);
+        }
+    }
+    reply_notice(name, b" up\n");
+}
+
+fn drop_notice(name: &[u8]) {
+    let Some(slot) = notice_slot(name) else {
+        reply(b"unknown\n");
+        return;
+    };
+    if !NOTICE_UP[slot].swap(false, Ordering::AcqRel) {
+        reply_notice(name, b" down\n");
+        return;
+    }
+    log_notice(name, b" down");
+    for (i, svc) in SERVICES.iter().enumerate() {
+        if svc.notice != name {
+            continue;
+        }
+        LIVE[i].hold.store(true, Ordering::Release);
+        disarm_beat(i);
+        if LIVE[i].running.load(Ordering::Acquire) {
+            let cap = LIVE[i].cap.load(Ordering::Acquire);
+            if cap != 0 {
+                let _ = kill(Cap::from_bits(cap));
+            }
+            reap_cap(i);
+        }
+    }
+    reply_notice(name, b" down\n");
+}
+
+fn every_svc(name: &[u8], ms: u64) {
+    let Some(i) = find(name) else {
+        reply(b"unknown\n");
+        return;
+    };
+    if SERVICES[i].every_ms == 0 {
+        reply(b"bad value\n");
+        return;
+    }
+    let interval = if ms == 0 { SERVICES[i].every_ms } else { ms };
+    if !(BEAT_MIN_MS..=BEAT_MAX_MS).contains(&interval) {
+        reply(b"bad value\n");
+        return;
+    }
+    LIVE[i].hold.store(false, Ordering::Release);
+    arm_beat(i, interval);
+    let mut buf = [0u8; 48];
+    let n = push_name(&mut buf, SERVICES[i].name, b" armed\n");
+    reply(&buf[..n]);
+}
+
+fn arm_beat(i: usize, ms: u64) {
+    LIVE[i].armed_ms.store(ms, Ordering::Release);
+    LIVE[i]
+        .next_ms
+        .store(clock_ms().saturating_add(ms), Ordering::Release);
+}
+
+fn disarm_beat(i: usize) {
+    LIVE[i].armed_ms.store(0, Ordering::Release);
+    LIVE[i].next_ms.store(0, Ordering::Release);
+}
+
+/// Start due beats. A row that is still running is skipped, not stacked.
+fn fire_due_beats() -> bool {
+    let now = clock_ms();
+    let mut spawned = false;
+    for (i, svc) in SERVICES.iter().enumerate() {
+        let next = LIVE[i].next_ms.load(Ordering::Acquire);
+        if next == 0 || now < next {
+            continue;
+        }
+        let every = LIVE[i].armed_ms.load(Ordering::Acquire).max(BEAT_MIN_MS);
+        LIVE[i]
+            .next_ms
+            .store(now.saturating_add(every), Ordering::Release);
+        if LIVE[i].hold.load(Ordering::Acquire) {
+            continue;
+        }
+        if LIVE[i].running.load(Ordering::Acquire) {
+            log_kv(b"[init] beat skip name=", svc.name);
+            continue;
+        }
+        log_kv(b"[init] beat name=", svc.name);
+        if spawn_svc(i) {
+            spawned = true;
+        }
+    }
+    spawned
+}
+
+fn next_beat_delay() -> Option<u64> {
+    let now = clock_ms();
+    let mut best: Option<u64> = None;
+    for live in &LIVE {
+        let next = live.next_ms.load(Ordering::Acquire);
+        if next == 0 {
+            continue;
+        }
+        let delay = next.saturating_sub(now);
+        best = Some(match best {
+            Some(so_far) => delay.min(so_far),
+            None => delay,
+        });
+    }
+    best
+}
+
+fn reply_notice(name: &[u8], tail: &[u8]) {
+    let mut buf = [0u8; 48];
+    let n = push_name(&mut buf, name, tail);
+    reply(&buf[..n]);
+}
+
+fn log_kv(prefix: &[u8], name: &[u8]) {
+    let mut buf = [0u8; 64];
+    let mut n = append(&mut buf, 0, prefix);
+    n = append(&mut buf, n, name);
+    n = append(&mut buf, n, b"\n");
+    log(&buf[..n]);
+}
+
+fn log_notice(name: &[u8], tail: &[u8]) {
+    let mut buf = [0u8; 64];
+    let mut n = append(&mut buf, 0, b"[init] notice name=");
+    n = append(&mut buf, n, name);
+    n = append(&mut buf, n, tail);
+    n = append(&mut buf, n, b"\n");
+    log(&buf[..n]);
 }
 
 fn reply_state(i: usize) {

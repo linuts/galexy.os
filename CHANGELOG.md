@@ -8,6 +8,13 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#105](https://github.com/linuts/galexy.os/pull/105) — Milestone 89 —
+  Notices and beats. `svc raise` / `svc drop` are the
+  edges of a named bit (`ring` starts `bell` once per rise). `svc every
+  <ms> <name>` arms a monotonic interval on a row that has one
+  (`chime`). No event bus, no payload, no wall clock, no calendar. A
+  beat that is still running is skipped. The armed interval is
+  forgotten on reboot. Non-admin mutations stay `access denied`.
 - [#104](https://github.com/linuts/galexy.os/pull/104) — Phase 10 and
   Phase 13 plans — networking is Milestones 78–85 and is required
   before the `v1.0` tag. Milestone 80 acquires an address (DHCP or a
