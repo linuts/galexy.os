@@ -8,10 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- [#107](https://github.com/linuts/galexy.os/pull/107) — Idle logout —
-  the prompt window is 5 min (`IDLE_LOGOUT_MS`). Exiting a seat wakes
-  its Cap-waiter with status 137, so init can reap the shell and draw
-  the login line again.
+- [#107](https://github.com/linuts/galexy.os/pull/107) — Session lock —
+  `lock`, and 5 min at the prompt, freeze the seat. The password
+  opens the same session. `logout` still drops it. File, spawn, and
+  power return `Locked` until then.
 - [#106](https://github.com/linuts/galexy.os/pull/106) — Milestone 90 —
   Civil UTC. `Date` (syscall 34) is seconds since 1970-01-01 00:00:00,
   or unset. `Clock`, `Sleep`, and `svc every` stay monotonic. `svc date`

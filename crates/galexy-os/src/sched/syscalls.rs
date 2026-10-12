@@ -56,6 +56,12 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
     // Spectre v1: the compare above is a branch. Mask the number so a
     // speculated out-of-range value cannot index past the dispatch arms.
     let sysno = crate::arch::cpu::spectre_mask(sysno, MAX_SYSCALL + 1);
+    // A locked seat can still read the keyboard, draw the lock screen,
+    // and offer the password. Everything else waits.
+    if caller_locked() && !locked_syscall_ok(frame, sysno) {
+        stamp(frame, SyscallResult::err(SysError::Locked));
+        return Outcome::Resume;
+    }
     match sysno {
         n if n == Syscall::Exit as u64 => {
             // Exit code (a0) is informational this early in the OS; the
@@ -283,6 +289,46 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
 fn stamp(frame: &mut Context, result: SyscallResult) {
     frame.rax = result.value;
     frame.rdx = if result.ok { 1 } else { 0 };
+}
+
+/// True when the calling session is frozen.
+fn caller_locked() -> bool {
+    matches!(crate::sched::task_locked(), Ok(1))
+}
+
+/// Syscalls a locked seat may still make. Keyboard and console so the
+/// lock screen can be drawn; whoami, lock, unlock, and logout so the
+/// password path and an explicit end of session still work.
+fn locked_syscall_ok(frame: &Context, sysno: u64) -> bool {
+    if sysno == Syscall::Exit as u64
+        || sysno == Syscall::Yield as u64
+        || sysno == Syscall::Sleep as u64
+        || sysno == Syscall::Clock as u64
+        || sysno == Syscall::Wait as u64
+        || sysno == Syscall::Kill as u64
+    {
+        return true;
+    }
+    if sysno == Syscall::Date as u64 {
+        return frame.rdi == galexy_abi::DATE_READ;
+    }
+    if sysno == Syscall::Read as u64 {
+        return Cap::from_bits(frame.rdi).index() == galexy_abi::reserved::KEYBOARD_INDEX;
+    }
+    if sysno == Syscall::Write as u64 {
+        return Cap::from_bits(frame.rdi).index() == galexy_abi::reserved::CONSOLE_INDEX;
+    }
+    if sysno == Syscall::User as u64 {
+        return matches!(
+            frame.rdx,
+            galexy_abi::USER_WHOAMI
+                | galexy_abi::USER_LOCK
+                | galexy_abi::USER_UNLOCK_SESSION
+                | galexy_abi::USER_LOCKED
+                | galexy_abi::USER_LOGOUT
+        );
+    }
+    false
 }
 
 fn syscall_date(op: u64, secs: u64) -> SyscallResult {
@@ -819,6 +865,27 @@ fn syscall_user(frame: &Context) -> SyscallResult {
             Ok(()) => SyscallResult::ok(0),
             Err(err) => SyscallResult::err(err),
         },
+        galexy_abi::USER_LOCK => match crate::sched::task_lock() {
+            Ok(()) => SyscallResult::ok(0),
+            Err(err) => SyscallResult::err(err),
+        },
+        galexy_abi::USER_LOCKED => match crate::sched::task_locked() {
+            Ok(n) => SyscallResult::ok(n),
+            Err(err) => SyscallResult::err(err),
+        },
+        galexy_abi::USER_UNLOCK_SESSION => {
+            let mut pass = [0u8; 64];
+            let Some(p) = copy_user_str(frame.r8, frame.r9, &mut pass, false) else {
+                galexy_crypto::wipe_bytes(&mut pass);
+                return SyscallResult::err(SysError::BadValue);
+            };
+            let result = crate::sched::task_unlock_session(&pass[..p]);
+            galexy_crypto::wipe_bytes(&mut pass);
+            match result {
+                Ok(()) => SyscallResult::ok(0),
+                Err(err) => SyscallResult::err(err),
+            }
+        }
         galexy_abi::USER_UNLOCK => {
             if frame.r9 == 0 {
                 return SyscallResult::ok(u64::from(crate::sched::galfs::volume_locked()));

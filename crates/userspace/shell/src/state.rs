@@ -34,6 +34,8 @@ pub(crate) struct History {
 
 pub(crate) enum ReplEnd {
     Logout,
+    /// Session frozen. Cwd and history stay; the password resumes them.
+    Locked,
     Die(i32),
 }
 pub(crate) fn wipe(buf: &mut [u8]) {

@@ -360,6 +360,18 @@ pub const USER_SETQUOTA: u64 = 10;
 /// disk volume is locked). Otherwise `R8`/`R9` are the passphrase; a
 /// wrong passphrase leaves the RAM table and refuses disk sync.
 pub const USER_UNLOCK: u64 = 11;
+/// `user` op: freeze this session. The actor, tokens, and cwd stay.
+/// File, spawn, and power calls return [`SysError::Locked`] until
+/// [`USER_UNLOCK_SESSION`]. Idempotent when already locked.
+pub const USER_LOCK: u64 = 12;
+/// `user` op: resume a locked session. `R8`/`R9` are the password of
+/// the actor already on the seat. A cool-down is [`SysError::Locked`]
+/// and does not check the password. A wrong password is
+/// [`SysError::AccessDenied`].
+pub const USER_UNLOCK_SESSION: u64 = 13;
+/// `user` op: `rax = 1` when this session is locked, `0` when it is
+/// open. Logged out is [`SysError::AccessDenied`].
+pub const USER_LOCKED: u64 = 14;
 
 /// Bytes written by [`USER_QUOTA`]: four little-endian `u32` fields —
 /// objects_used, objects_max, bytes_used, bytes_max.
@@ -558,12 +570,15 @@ pub enum Syscall {
     /// Args: `RDI`/`RSI` = name or buffer, `RDX` = op ([`USER_WHOAMI`],
     /// [`USER_USERS`], [`USER_ADD`], [`USER_DEL`], [`USER_SU`],
     /// [`USER_LOGIN`], [`USER_PASSWD`], [`USER_LOGOUT`], [`USER_TOKENS`],
-    /// [`USER_QUOTA`], [`USER_SETQUOTA`], [`USER_UNLOCK`]). Login/add/passwd
-    /// take a password in `R8`/`R9`; quota get takes an optional actor name
+    /// [`USER_QUOTA`], [`USER_SETQUOTA`], [`USER_UNLOCK`], [`USER_LOCK`],
+    /// [`USER_UNLOCK_SESSION`], [`USER_LOCKED`]). Login/add/passwd take a
+    /// password in `R8`/`R9`; quota get takes an optional actor name
     /// there; setquota takes max_objects/max_bytes. [`USER_UNLOCK`] with
     /// `R9 = 0` reports whether the volume is locked; a passphrase in
-    /// `R8`/`R9` tries to mount. Whoami/users/tokens/quota write into the
-    /// buffer. Passwords authenticate identity;
+    /// `R8`/`R9` tries to mount. [`USER_LOCK`] freezes the seat.
+    /// [`USER_UNLOCK_SESSION`] resumes it with the same actor's password.
+    /// [`USER_LOCKED`] reports the freeze. Whoami/users/tokens/quota write
+    /// into the buffer. Passwords authenticate identity;
     /// tokens authorize object access (see `docs/AUTH.md`). A login
     /// inside a cool-down is `Locked` and does not check the password.
     /// Deleting admin, a non-empty tree, or an actor a live task still

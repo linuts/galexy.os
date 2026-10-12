@@ -251,6 +251,22 @@ pub fn user_logout() -> SyscallResult {
     user_name_pass(&[], &[], galexy_abi::USER_LOGOUT)
 }
 
+/// Freeze the current session. The actor and tokens stay.
+pub fn user_lock() -> SyscallResult {
+    user_name_pass(&[], &[], galexy_abi::USER_LOCK)
+}
+
+/// Resume a locked session with the actor's password.
+pub fn user_unlock_session(password: &[u8]) -> SyscallResult {
+    user_name_pass(&[], password, galexy_abi::USER_UNLOCK_SESSION)
+}
+
+/// True when this seat's session is frozen.
+pub fn session_locked() -> bool {
+    let got = user_name_pass(&[], &[], galexy_abi::USER_LOCKED);
+    got.ok && got.value == 1
+}
+
 /// True when the disk volume is locked and waiting for [`user_unlock`].
 pub fn volume_locked() -> bool {
     let got = user_name_pass(&[], &[], galexy_abi::USER_UNLOCK);

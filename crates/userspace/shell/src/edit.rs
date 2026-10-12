@@ -4,8 +4,8 @@ use super::builtins::*;
 use super::jobs::*;
 use super::state::*;
 
-use galexy_abi::Cap;
-use galexy_rt::{files_cap, read, write_console, yield_now};
+use galexy_abi::{Cap, SysError};
+use galexy_rt::{files_cap, read, session_locked, write_console, yield_now};
 
 /// ESC / CSI parser while editing a line (arrow keys → history).
 pub(crate) enum KeyParse {
@@ -98,9 +98,15 @@ pub(crate) fn repl(
     let mut pos = 0usize;
     prompt(cwd);
     loop {
+        if session_locked() {
+            return ReplEnd::Locked;
+        }
         let mut buf = [0u8; 8];
         let got = read(kbd, &mut buf);
         if !got.ok {
+            if got.value == SysError::Locked as u64 {
+                return ReplEnd::Locked;
+            }
             write_console(b"\nread: keyboard denied\n");
             return ReplEnd::Die(1);
         }

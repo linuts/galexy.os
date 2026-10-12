@@ -1,5 +1,7 @@
-//! Idle logout uses `timer_ticks`. The test backdates the last keystroke
+//! Idle lock uses `timer_ticks`. The test backdates the last keystroke
 //! (tick injection) instead of waiting out [`sched::IDLE_LOGOUT_MS`].
+//! The blob also locks itself, proves `sync` returns `Locked`, then
+//! unlocks before the idle scan freezes the seat again.
 
 #![no_std]
 #![no_main]
@@ -7,7 +9,7 @@
 extern crate alloc;
 
 use bootloader_api::{entry_point, BootInfo};
-use galexy_abi::{Syscall, USER_LOGIN};
+use galexy_abi::{SysError, Syscall, USER_LOCK, USER_LOCKED, USER_LOGIN, USER_UNLOCK_SESSION};
 use galexy_os::{
     arch::mm, drivers::screen, exit_qemu, println, sched, serial_println, QemuExitCode,
 };
@@ -15,7 +17,6 @@ use galexy_os::{
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
 const TRIPPED: u64 = 0x10C0_1D1E;
-const SEEN: u64 = 2;
 const POLL_LIMIT: u64 = 80_000;
 
 fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
@@ -60,32 +61,17 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         }
     }
 
-    // A second blob sleeps, then the kernel retargets that park into a
-    // Cap-wait on idle1 — the shape of init blocked in `wait`. Idle
-    // logout must resume it with 137 and drop the process Cap. Pin it
-    // to the BSP so this loop is the one that runs the resume.
-    let (watch_region, watch_owner) = sched::spawn_user_task_on("watch", 0, |gr| {
-        unsafe {
-            core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
-        }
-        build_watch(gr.scratch.as_u64())
-    });
-    assert_eq!(watch_owner, 0, "watcher stays on the BSP");
-    let watch_base = mm::frame_virt(watch_region.scratch_phys);
-    elapsed = 0;
-    loop {
-        x86_64::instructions::hlt();
-        if sched::test_task_waiting("watch") {
-            break;
-        }
-        elapsed += 1;
-        if elapsed > POLL_LIMIT {
-            panic!("watcher never parked");
-        }
-    }
+    let queried = unsafe { core::ptr::read_volatile(base.as_ptr::<u64>().add(2)) };
+    let denied = unsafe { core::ptr::read_volatile(base.as_ptr::<u64>().add(3)) };
+    assert_eq!(queried, 1, "USER_LOCKED reports the freeze");
+    assert_eq!(
+        denied,
+        SysError::Locked as u64,
+        "sync is refused while the session is locked"
+    );
     assert!(
-        sched::test_arm_exit_wait("watch", "idle1"),
-        "Cap-wait on the logged-in seat"
+        !sched::test_session_locked("idle1"),
+        "unlock opens the same seat"
     );
 
     // Boot is only a few seconds in, so backdating a full idle window
@@ -95,35 +81,14 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     sched::test_backdate_input("idle1", 5);
     sched::test_poll_idle_all();
     assert!(
-        sched::test_auth_flags("idle1").is_none(),
-        "idle logout must exit the seat"
+        sched::test_session_locked("idle1"),
+        "idle lock freezes the seat"
     );
     assert!(
-        !sched::test_task_waiting("watch"),
-        "idle logout must resume the Cap-waiter"
+        sched::test_auth_flags("idle1").is_some(),
+        "idle lock keeps the session"
     );
-    assert!(
-        !sched::test_holds_child("watch", "idle1"),
-        "exit wake drops the process Cap"
-    );
-
-    elapsed = 0;
-    loop {
-        x86_64::instructions::hlt();
-        let phase = unsafe { core::ptr::read_volatile(watch_base.as_ptr::<u64>()) };
-        if phase == SEEN {
-            break;
-        }
-        elapsed += 1;
-        if elapsed > POLL_LIMIT {
-            panic!("waiter never observed the exit");
-        }
-    }
-    let stamped = unsafe { core::ptr::read_volatile(watch_base.as_ptr::<u64>().add(1)) };
-    let ok = unsafe { core::ptr::read_volatile(watch_base.as_ptr::<u64>().add(2)) };
-    assert_eq!(stamped, 137, "Cap-waiter sees exit 137");
-    assert_eq!(ok, 1, "exit wake is a successful syscall");
-    serial_println!("[test-idle] waiter saw 137");
+    serial_println!("[test-idle] locked");
 
     loop {
         x86_64::instructions::hlt();
@@ -133,7 +98,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         }
     }
 
-    println!("[test-idle] logged out");
+    println!("[test-idle] locked");
     serial_println!("[test-idle] passed");
     exit_qemu(QemuExitCode::Success);
 }
@@ -158,31 +123,40 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     mov_r64_imm(&mut code, 9, admin.len() as u64);
     code.extend_from_slice(&[0x0F, 0x05]);
 
+    // Lock, prove a non-console syscall is refused, then unlock.
+    mov_eax(&mut code, Syscall::User as u32);
+    mov_r64_imm(&mut code, 7, 0);
+    mov_r64_imm(&mut code, 6, 0);
+    mov_r64_imm(&mut code, 2, USER_LOCK);
+    mov_r64_imm(&mut code, 8, 0);
+    mov_r64_imm(&mut code, 9, 0);
+    code.extend_from_slice(&[0x0F, 0x05]);
+
+    mov_eax(&mut code, Syscall::User as u32);
+    mov_r64_imm(&mut code, 2, USER_LOCKED);
+    code.extend_from_slice(&[0x0F, 0x05]);
+    store(&mut code, 0, 0x10);
+
+    mov_eax(&mut code, Syscall::Sync as u32);
+    code.extend_from_slice(&[0x0F, 0x05]);
+    store(&mut code, 0, 0x18);
+
+    mov_eax(&mut code, Syscall::User as u32);
+    mov_r64_imm(&mut code, 7, 0);
+    mov_r64_imm(&mut code, 6, 0);
+    mov_r64_imm(&mut code, 2, USER_UNLOCK_SESSION);
+    mov_r64_imm(&mut code, 8, pass_addr);
+    mov_r64_imm(&mut code, 9, admin.len() as u64);
+    code.extend_from_slice(&[0x0F, 0x05]);
+
     mov_r64_imm(&mut code, 0, TRIPPED);
     store(&mut code, 0, 0x08);
 
-    // Park so the BSP can observe TRIPPED and idle-exit this task.
+    // Park so the BSP can idle-lock this task without it exiting.
     mov_eax(&mut code, Syscall::Sleep as u32);
     mov_r64_imm(&mut code, 7, 30_000);
     code.extend_from_slice(&[0x0F, 0x05]);
 
-    mov_eax(&mut code, Syscall::Exit as u32);
-    code.extend_from_slice(&[0x31, 0xFF, 0x0F, 0x05]);
-    code
-}
-
-/// Sleep, then publish the syscall result. The kernel turns the sleep
-/// into a Cap-wait before the deadline, so `rax`/`rdx` are the exit wake.
-fn build_watch(scratch: u64) -> alloc::vec::Vec<u8> {
-    let mut code = alloc::vec::Vec::new();
-    mov_r64_imm(&mut code, 15, scratch);
-    mov_eax(&mut code, Syscall::Sleep as u32);
-    mov_r64_imm(&mut code, 7, 30_000);
-    code.extend_from_slice(&[0x0F, 0x05]);
-    store(&mut code, 0, 0x08);
-    store(&mut code, 2, 0x10);
-    mov_r64_imm(&mut code, 0, SEEN);
-    store(&mut code, 0, 0x00);
     mov_eax(&mut code, Syscall::Exit as u32);
     code.extend_from_slice(&[0x31, 0xFF, 0x0F, 0x05]);
     code

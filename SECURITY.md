@@ -43,7 +43,7 @@ fixed in a milestone PR with a changelog line.
   (sealed GALF, `docs/GALFS.md`).
 - Passwords or key material in serial, console, `dmesg`, or a reaped
   page (`docs/STYLE.md` → Secrets and passwords).
-- Login lockout, idle logout, or must-change being bypassable.
+- Login lockout, session lock, or must-change being bypassable.
 - A pre-login seat or a bare (`SPAWN` without inherit) program reaching
   galfs or the loader.
 

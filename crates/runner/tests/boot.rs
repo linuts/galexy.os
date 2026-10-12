@@ -1643,12 +1643,20 @@ fn idle_test_passes() {
         "test-idle should exit with Success; serial:\n{serial}"
     );
     assert!(
-        serial.contains("[auth] idle logout user=idle1 tty=1"),
-        "idle logout line missing; serial:\n{serial}"
+        serial.contains("[auth] idle lock user=admin tty=1"),
+        "idle lock line missing; serial:\n{serial}"
     );
     assert!(
-        serial.contains("[test-idle] waiter saw 137"),
-        "Cap-waiter was not resumed; serial:\n{serial}"
+        serial.contains("[auth] session lock user=admin tty=1"),
+        "explicit lock line missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[auth] session unlock user=admin tty=1"),
+        "unlock line missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-idle] locked"),
+        "lock marker missing; serial:\n{serial}"
     );
     assert!(
         serial.contains("[test-idle] passed"),

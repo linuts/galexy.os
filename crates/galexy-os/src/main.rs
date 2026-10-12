@@ -78,7 +78,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         // in-kernel editor only consumes keys when no ring-3 shell owns them.
         // F1–F12 only record a switch; this loop paints it.
         sched::drain_spawn();
-        sched::poll_idle_logouts();
+        sched::poll_idle_locks();
         screen::apply_tty_switch();
         screen::apply_scrollback();
         if user_shell && !have_init {
