@@ -8,6 +8,12 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#113](https://github.com/linuts/galexy.os/pull/113) — Milestone 95 —
+  `galexy-os-python` carries `python`. `cargo run --release --
+  --python` boots it. `cargo run` stays the small image. The
+  runner skips the image when the ELF was absent at build.
+  `python` with no arguments prints a usage line and returns to
+  the prompt. There is no REPL.
 - [#112](https://github.com/linuts/galexy.os/pull/112) — Milestone 94 —
   `bin/test-python` reads a galfs file the task holds a token for
   and writes a second file. `builtins.open` is `std::fs` because
