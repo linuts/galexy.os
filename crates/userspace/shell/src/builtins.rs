@@ -1685,6 +1685,16 @@ pub(crate) fn launch_util(cwd: &Cwd, program: &[u8], arg: &[u8], query: bool) {
     spawn_and_prompt(cwd, program, arg, grants, true);
 }
 
+/// Host script that produces this ramdisk program, when the small
+/// image is allowed to boot without it.
+fn compiler_build_script(program: &[u8]) -> Option<&'static [u8]> {
+    match program {
+        b"python" => Some(b"scripts/build-galexy-python.sh\n"),
+        b"rustc" => Some(b"scripts/build-galexy-rustc.sh\n"),
+        _ => None,
+    }
+}
+
 pub(crate) fn spawn_and_prompt(
     cwd: &Cwd,
     program: &[u8],
@@ -1706,7 +1716,12 @@ pub(crate) fn spawn_and_prompt(
             SysError::NoResource => write_console(b"busy\n"),
             SysError::Unsupported => write_console(b"reserved\n"),
             SysError::NotFound => {
-                write_console(b"command not found\n");
+                if let Some(script) = compiler_build_script(program) {
+                    write_console(b"not in this image\n");
+                    write_console(script);
+                } else {
+                    write_console(b"command not found\n");
+                }
                 write_console(b"\x07")
             }
             _ => write_console(b"failed\n"),

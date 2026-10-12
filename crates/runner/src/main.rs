@@ -21,6 +21,32 @@ fn image_path(name: &str, kind: &str) -> String {
         .unwrap_or_else(|| panic!("no {name} {kind} image built"))
 }
 
+/// Says whether this boot's ramdisk contains `python` and `rustc`.
+///
+/// Those ELFs are host builds. A tree that has not run the scripts
+/// boots the small image, and the shell then reports each name as
+/// missing instead of pretending the command does not exist.
+fn report_compilers(image: &str) {
+    let python = env!("GALEXY_HAVE_PYTHON") == "1";
+    let rustc = env!("GALEXY_HAVE_RUSTC") == "1";
+    match (python, rustc) {
+        (true, true) => eprintln!("[runner] {image}: python and rustc"),
+        (true, false) => {
+            eprintln!("[runner] {image}: python, no rustc");
+            eprintln!("[runner] scripts/build-galexy-rustc.sh");
+        }
+        (false, true) => {
+            eprintln!("[runner] {image}: rustc, no python");
+            eprintln!("[runner] scripts/build-galexy-python.sh");
+        }
+        (false, false) => {
+            eprintln!("[runner] {image}: no python or rustc");
+            eprintln!("[runner] scripts/build-galexy-python.sh");
+            eprintln!("[runner] scripts/build-galexy-rustc.sh");
+        }
+    }
+}
+
 fn main() {
     let uefi = std::env::args().any(|arg| arg == "--uefi");
     let display = std::env::args().any(|arg| arg == "--display");
@@ -46,6 +72,7 @@ fn main() {
     } else {
         "galexy-os"
     };
+    report_compilers(image);
     let img_path = if uefi {
         image_path(image, "uefi")
     } else {
