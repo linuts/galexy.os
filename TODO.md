@@ -1126,7 +1126,8 @@ Make seats behave like accounts, not permanent admin shells.
       `galexy-os-crashseam` (same kernel, shell rebuilt with the feature)
 - [x] **Idle timeout**: 5 min (`IDLE_LOGOUT_MS`) with no keys on a
       logged-in F-key shell locks the seat (the password opens it).
-      `bin/test-idle` backdates `last_input_tick`
+      Other tasks keep running. `bin/test-idle` backdates
+      `last_input_tick` and checks a logged-in `probe` still syncs
 - [x] **Session id / generation**: `NEXT_SESSION` bumps on login, `su`,
       and logout. Serial: `[auth] session login user=… gen=N tty=K`
 - [x] Tests: lockout trips (`bin/test-lockout`, host `LoginLockout`)
