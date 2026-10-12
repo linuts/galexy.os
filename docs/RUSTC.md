@@ -347,9 +347,17 @@ reads the linker pipe to EOF before `Wait`.
 - `spawn` of a path loads that galfs ELF (Milestone 77). The typed
   gate is `rustc hello.rs -o /hello` and then `/hello`, which prints
   `hello from rustc on galexy`. The bare label `hello` stays the
-  ramdisk program, so `-o hello` is `Unsupported`. A spaced command
+  ramdisk program, so `-o hello` is `Unsupported`. The shell does not
+  rewrite `rustc`'s arguments. A ramdisk program with arguments
   receives the query grant (`read_dir` of the sysroot) and the loader
-  grant (`rustc` spawns `gxld`).
+  grant (`rustc` spawns `gxld`). A galfs path does not receive the
+  loader. A pipeline stage does not either, so `rustc` is the command
+  itself. The sysroot is imported into the admin tree, so another
+  account does not see those libraries. `read_dir` is one 8192-byte
+  snapshot. The login image's ramdisk names plus the sysroot paths
+  fit; many extra files before `rustc` starts can drop a library from
+  that list. A shell Cap-waiting on `rustc` does not idle-logout until
+  the compile finishes or 15 min pass with no keys.
 
 ## Explicit non-goals
 

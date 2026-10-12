@@ -13,15 +13,16 @@ wake scheduling, and an on-OS Cranelift `rustc`.
 Not a Linux clone. No POSIX claim. Authority is **capabilities** (and
 galfs access cards), not global file descriptors or PIDs.
 
-**Status (October 2026):** Milestones 1–61 and 63–73 are in this tree
+**Status (October 2026):** Milestones 1–61 and 63–77 are in this tree
 (62 was superseded); `nano` is in the ramdisk. Milestone 67 gives init
 shutdown, `svc`, and the ABI freeze (`spawn` stays experimental).
 Milestone 71 raises the guest to 2 GiB, the per-task `Map` budget to
 1 GiB, open files to 64, and argv to 4 KiB, and adds ring-3 `gxld`.
 Milestone 72 runs a Cranelift `rustc` on Galexy and checks its object
 output against the host. Milestone 73 links that object with `gxld`
-and runs it inside the `test-rustc-hello` kernel. Typing `rustc` at
-a login shell is Milestones 74–77.
+and runs it inside the `test-rustc-hello` kernel. Milestones 74–77
+put `rustc` on the login image: `rustc hello.rs -o /hello`, then
+`/hello`.
 The QEMU suite is 124 runner tests plus host tests (`test-big` boots
 only under KVM; `rustc_obj_matches_host` and `rustc_hello_runs` run
 when the compiler ELF was present at image build). The Milestone 52 review checklist is complete except
@@ -131,19 +132,19 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 - **SMP kernel** — two CPUs, per-CPU deadline timers, tickless idle, work-stealing idle, TLB shootdown
 - **Ring-3 userland** — ELF from a tar ramdisk, per-task address spaces, W^X maps, SYSCALL ABI in `galexy-abi` (26 syscalls)
 - **Capabilities day one** — keyboard, console, loader, files, power, queries, dmesg; process Caps for wait / kill / give; no fd table, no PIDs
-- **galfs** — sealed dual-slot GALF v11 on virtio-blk or IDE; 32 actors, quotas, durable shares, rename / truncate / stat, host `fsck`
+- **galfs** — sealed dual-slot GALF v12 on virtio-blk or IDE; 32 actors, quotas, durable shares, rename / truncate / stat, host `fsck`
 - **Auth** — PBKDF2 passwords, lockout, idle logout, forced first `passwd`; every seat boots logged out; audit lines carry no secrets
 - **Init and seats** — userspace `init` is the orphan root and respawns F-key seats; Ctrl-C kills the TTY foreground job
 - **Scheduling** — RR + pin-at-spawn + idle steal; `sleep`; blocking keyboard and pipe reads park and wake (`docs/SCHEDULING.md`)
 - **gxld** — the static ELF64 linker: `no_std` library + GNU-ld-compatible CLI; `rustc -Clinker=gxld` links every userspace program and the `galexy-os-gxld` image passes the same tests as the `rust-lld` one (`docs/LINKER.md`)
-- **rustc** — upstream Cranelift `rustc`. On Galexy, `rustc hello.rs -o hello` links with `gxld` and the program runs (`docs/RUSTC.md`)
+- **rustc** — upstream Cranelift `rustc`. On the login image, `rustc hello.rs -o /hello` links with `gxld` and `/hello` runs. The bare name `hello` stays the ramdisk program (`docs/RUSTC.md`)
 
 ## Tests
 
 ```sh
 cargo test -p galexy-core -p galexy-abi -p galexy-crypto -p galexy-galf -p gxld   # host suites
 cargo test -p runner --test audit_strings   # no "password" in any serial line
-cargo test -p runner --test boot --release   # QEMU suite (114 boots, -smp 2, release profile)
+cargo test -p runner --test boot --release   # QEMU suite (124 tests, -smp 2, release profile)
 ```
 
 UEFI cases need `OVMF_FD` if the default firmware path is absent. The
