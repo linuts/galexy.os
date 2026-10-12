@@ -2286,20 +2286,20 @@ seeds the anchor at boot and is written on set. A set accepts
 1970..=2099. A boot seed trusts 2000..=2099, so a zeroed chip stays
 unset.
 
-- [ ] **Syscall**: `Date` is 34 (`DATE_READ` / `DATE_SET`). `Lane`
+- [x] **Syscall**: `Date` is 34 (`DATE_READ` / `DATE_SET`). `Lane`
       moves to 35. `MAX_SYSCALL` is 34. The table stays dense
-- [ ] **Operator**: `svc date` reads (any logged-in seat). `svc date
+- [x] **Operator**: `svc date` reads (any logged-in seat). `svc date
       YYYY-MM-DD HH:MM:SS` sets (admin). `svc at HH:MM <name>` fires
       once per civil UTC day on a row with `every_ms != 0`. The
       current minute may fire. A running program is skipped. `svc
       stop` disarms the monotonic beat and the civil beat. The armed
       time is forgotten on reboot
-- [ ] **Supervisor**: an armed civil beat sleeps in slices of at most
+- [x] **Supervisor**: an armed civil beat sleeps in slices of at most
       one second. With no beat armed, init still parks on `wait`. An
       unset date logs `[init] date unset` once and does not fire
-- [ ] **std**: `Instant` stays `Clock`. `SystemTime::now` uses `Date`
+- [x] **std**: `Instant` stays `Clock`. `SystemTime::now` uses `Date`
       when anchored, and uptime when unset
-- [ ] **Test**: `init_test_passes` sets 2026-10-12 15:04:00, checks
+- [x] **Test**: `init_test_passes` sets 2026-10-12 15:04:00, checks
       the monotonic counter did not jump, refuses a non-admin set and
       a logged-out set, and `svc at 15:04 chime` logs
       `[init] at name=chime`

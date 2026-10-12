@@ -1262,7 +1262,7 @@ main image and are listed at the end.
 | `test-big`, `test-gxld` | `big_test_passes`, `gxld_ring3_test_passes` | M71 300 MiB map and a 20 MiB file (KVM only); ring-3 `gxldos` links two objects |
 | `test-rustc` | `rustc_obj_matches_host` | M72 on-OS Cranelift `rustc`: `--print cfg`, a `mismatched types` diagnostic, and `--emit=obj` matching the host. Skipped when the ELF was absent at image build |
 | `test-proccap`, `test-selfcap`, `test-procgive`, `test-procbudget`, `test-capforge`, `test-orphan` | `proccap_test_passes`, `selfcap_test_passes`, `procgive_test_passes`, `procbudget_test_passes`, `capforge_test_passes`, `orphan_test_passes` | M47 process Caps and forge battery |
-| `test-init`, `test-jobcap` | `init_test_passes`, `jobcap_test_passes` | M53 init orphan root, M55 job Cap / Ctrl-C |
+| `test-init`, `test-jobcap` | `init_test_passes`, `jobcap_test_passes` | M53 init orphan root, M55 job Cap / Ctrl-C, M89 notices and beats, M90 civil date and `svc at` |
 | `test-sleep`, `test-idle` | `sleep_test_passes`, `idle_test_passes` | M56 time and deadlines, M58 policy freeze |
 | `test-rustc-hello` | `rustc_hello_runs` | M73 on-OS `rustc` links with `gxld` and the program runs |
 | `galexy-os-rustc` | `rustc_image_login_typing_e2e`, `rustc_print_cfg_typing_e2e`, `rustc_hello_typing_e2e` | M74/M75 login image carries `rustc` and imports the sysroot. M76: `rustc --print cfg`. M77: `echo` a one-line hello, `rustc hello.rs -o /hello`, `/hello` prints `hello from rustc on galexy`. Skipped when the ELF was absent at image build |
