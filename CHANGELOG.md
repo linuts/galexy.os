@@ -8,7 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Milestone 89 — Notices and beats. `svc raise` / `svc drop` are the
+- [#105](https://github.com/linuts/galexy.os/pull/105) — Milestone 89 —
+  Notices and beats. `svc raise` / `svc drop` are the
   edges of a named bit (`ring` starts `bell` once per rise). `svc every
   <ms> <name>` arms a monotonic interval on a row that has one
   (`chime`). No event bus, no payload, no wall clock, no calendar. A
