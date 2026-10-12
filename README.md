@@ -309,7 +309,7 @@ crates/
   (bench, KVM, LTO, IRQ completion), modern (q35, ECAM, virtio 1.x,
   MSI-X, TSC-deadline), full userland (heap, argv, clock, channels,
   jobs), init-owned shutdown. The `v1.0` tag is not this phase; it
-  waits on Phase 10, Phase 13, Phase 14, and the KVM cells
+  waits on Phase 10, Phase 13, and the KVM cells
 - **Phase 10** — network, before `v1.0`. virtio-net in the kernel, DHCP
   and one datagram, then a ring-3 `net` service and TLS 1.3 lanes
   granted by name. The record is a file in the admin tree. No sockets.
@@ -318,9 +318,10 @@ crates/
   of devices, and one driver table. No vendor drivers. Milestones
   86–88. Plan: [`docs/USB.md`](docs/USB.md). Inventory:
   [`docs/DEVICES.md`](docs/DEVICES.md)
-- **Phase 14** — RustPython, before `v1.0`, beside Phase 10 and
-  Phase 13. `python hello.py` on `galexy-os-python`. No new syscall,
-  no `pip`, no sockets. Milestones 91–96. Plan:
+- **Phase 14** ✅ — RustPython at the login shell. `cargo run` carries
+  `python` and, when the compiler ELF was built, `rustc` with its
+  sysroot. `python hello.py`, a file copy, and a REPL (`>>>`).
+  No new syscall, no `pip`, no sockets. Milestones 91–96. Plan:
   [`docs/PYTHON.md`](docs/PYTHON.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
   static linker (LINKER.md, ✅ Milestone 69), `std` PAL (✅ Milestone
