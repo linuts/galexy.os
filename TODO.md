@@ -2276,7 +2276,7 @@ no payload, no wall clock. Independent of Phases 10 and 13.
 - [x] **Test**: `init_test_passes` covers the non-admin raise, the
       single start, the second edge, the beat line, and the skip line
 
-## Milestone 90 — Civil date
+## Milestone 90 — Civil date ✅
 
 Two clocks. `Clock`, `Sleep`, lockout, idle logout, and `svc every`
 stay on monotonic `timer_ticks`. Setting the date does not move them.
