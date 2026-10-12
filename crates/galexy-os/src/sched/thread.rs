@@ -84,8 +84,8 @@ pub(in crate::sched) static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 /// Test kernels shrink the idle window. `0` means [`IDLE_LOGOUT_MS`].
 pub(in crate::sched) static IDLE_LIMIT_OVERRIDE: AtomicU64 = AtomicU64::new(0);
 /// Logged-in console with no keystrokes for this long is logged out.
-/// Same clock as lockout (`timer_ticks`, ~1 ms).
-pub const IDLE_LOGOUT_MS: u64 = 60_000;
+/// Five minutes at the prompt. Same clock as lockout (`timer_ticks`, ~1 ms).
+pub const IDLE_LOGOUT_MS: u64 = 5 * 60_000;
 /// Cap-wait on a foreground child pauses [`IDLE_LOGOUT_MS`] for this long
 /// after the last key. A compile does not read the keyboard; a command
 /// left running with nobody there still logs the seat out.
@@ -367,7 +367,7 @@ pub(in crate::sched) struct Thread {
     /// `timer_ticks` of the last key delivered to this TTY, or 0 if none.
     pub(in crate::sched) last_input_tick: u64,
     /// Idle logout is paused for a Cap-waited foreground child. The next
-    /// scan after that wait clears it and restarts the 60 s clock.
+    /// scan after that wait clears it and restarts the [`IDLE_LOGOUT_MS`] clock.
     pub(in crate::sched) idle_hold: bool,
     /// Timer tick when [`console_budget_used`] was last reset.
     pub(in crate::sched) console_budget_tick: u64,

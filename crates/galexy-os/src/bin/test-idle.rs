@@ -88,8 +88,9 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         "Cap-wait on the logged-in seat"
     );
 
-    // Boot is only a few seconds in, so a 60 s backdate saturates to 0
-    // and the scan treats that as "no sample". Shrink the window instead.
+    // Boot is only a few seconds in, so backdating a full idle window
+    // saturates to 0 and the scan treats that as "no sample". Shrink the
+    // window instead.
     sched::test_set_idle_limit(1);
     sched::test_backdate_input("idle1", 5);
     sched::test_poll_idle_all();
