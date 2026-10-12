@@ -2290,6 +2290,7 @@ fn type_line(line: &str, marker: &str) -> Vec<(String, String)> {
 fn keystroke(c: char) -> (String, String) {
     let code = match c {
         'a'..='z' | '0'..='9' => c.to_string(),
+        'A'..='Z' => format!("shift+{}", c.to_ascii_lowercase()),
         ' ' => "spc".to_string(),
         '(' => "shift+9".to_string(),
         ')' => "shift+0".to_string(),
@@ -2298,6 +2299,8 @@ fn keystroke(c: char) -> (String, String) {
         '.' => "dot".to_string(),
         ',' => "comma".to_string(),
         '-' => "minus".to_string(),
+        '/' => "slash".to_string(),
+        '@' => "shift+2".to_string(),
         _ => panic!("no qcode for {c:?}"),
     };
     (code, c.to_string())
@@ -4285,6 +4288,99 @@ fn passwd_on_sealed_disk_typing_e2e() {
     assert!(
         serial2.contains("[auth] session login user=admin"),
         "boot 2 login with the new password failed; serial:\n{serial2}"
+    );
+}
+
+/// The reviewer tour: a fresh disk, two seats, and a card that makes
+/// admin's Desktop visible to eve. `ls` lists the current directory
+/// only. The foreign path is `/admin@Desktop`.
+#[test]
+fn reviewer_demo_typing_e2e() {
+    let disk = common::fresh_galfs_image("demo");
+    let mut owned: Vec<(String, String)> = Vec::new();
+    for pairs in [
+        CREATE_VOLUME_KEYS,
+        LOGIN_ADMIN_KEYS,
+        CLEAR_DEFAULT_PASSWD,
+        VOLPASS_KEYS,
+    ] {
+        for (code, echo) in pairs {
+            owned.push(((*code).to_string(), (*echo).to_string()));
+        }
+    }
+    owned.extend(type_line("cd Desktop", "admin@galexy:/Desktop> "));
+    owned.extend(type_line("echo hi > note", "admin@galexy:/Desktop> "));
+    owned.extend(type_line("cd /", "admin@galexy> "));
+    owned.extend(type_line("useradd eve", "Password: "));
+    owned.extend([
+        ("e".to_string(), "*".to_string()),
+        ("v".to_string(), "*".to_string()),
+        ("e".to_string(), "*".to_string()),
+        ("ret".to_string(), "admin@galexy> ".to_string()),
+        ("f2".to_string(), "[tty] 2".to_string()),
+        // tty2 asked for a passphrase at boot, before tty1 chose one.
+        // Enter continues; the volume is already open.
+        ("ret".to_string(), "Login as: ".to_string()),
+    ]);
+    owned.extend(type_line("eve", "Password: "));
+    owned.extend([
+        ("e".to_string(), "*".to_string()),
+        ("v".to_string(), "*".to_string()),
+        ("e".to_string(), "*".to_string()),
+        ("ret".to_string(), "eve@galexy> ".to_string()),
+    ]);
+    owned.extend(type_line("cd /admin@Desktop", "cd: no such directory"));
+    owned.push(("f1".to_string(), "[tty] 1".to_string()));
+    owned.extend(type_line("grant lr /Desktop shell2", "admin@galexy> "));
+    owned.push(("f2".to_string(), "[tty] 2".to_string()));
+    owned.extend(type_line(
+        "cd /admin@Desktop",
+        "eve@galexy:/admin@Desktop> ",
+    ));
+    owned.extend(type_line("ls", "note\n"));
+    owned.extend(type_line("cat note", "hi\n"));
+    owned.push(("f1".to_string(), "[tty] 1".to_string()));
+    owned.extend(type_line("revoke lr /Desktop shell2", "admin@galexy> "));
+    owned.push(("f2".to_string(), "[tty] 2".to_string()));
+    owned.extend(type_line("cd ..", "eve@galexy> "));
+    owned.extend(type_line("cd /admin@Desktop", "cd: no such directory"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &keys,
+        "New passphrase: ",
+        "",
+        Duration::from_millis(30),
+        Duration::from_secs(240),
+    );
+    let _ = std::fs::remove_file(&disk);
+    assert_passwords_masked(&serial);
+    assert!(
+        !serial.contains("[PANIC]"),
+        "demo panicked; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("grant: not found") && !serial.contains("grant: failed"),
+        "grant did not reach the parked seat; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[auth] grant actor=admin path=Desktop rights=0x5 target=shell2"),
+        "grant audit line missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[auth] revoke actor=admin path=Desktop rights=0x5 target=shell2"),
+        "revoke audit line missing; serial:\n{serial}"
+    );
+    let revoked = serial
+        .rfind("[auth] revoke actor=admin path=Desktop")
+        .expect("revoke line");
+    assert!(
+        serial[revoked..].contains("cd: no such directory"),
+        "the card was still visible after revoke; serial:\n{serial}"
     );
 }
 

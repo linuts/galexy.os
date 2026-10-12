@@ -1304,6 +1304,21 @@ pub fn test_revoke_token(target: &str, object: u16, rights: u8) -> Result<(), Sy
     })
 }
 
+/// Process record for a live user task named `target`.
+///
+/// A seat at its prompt is parked on the keyboard (`STATE_WAITING`).
+/// That seat can still receive a card. An exited task cannot.
+fn live_named_proc(threads: &[Thread], target: &str) -> Option<usize> {
+    let ti = threads.iter().position(|t| {
+        if !t.is_user || t.name() != target {
+            return false;
+        }
+        let state = t.state.load(Ordering::Acquire);
+        state == STATE_RUNNING || state == STATE_WAITING
+    })?;
+    proc_index(threads, ti + 1)
+}
+
 /// Installs a galfs token on a live user task named `target`.
 ///
 /// The current task must already hold every bit in `rights` on the
@@ -1328,12 +1343,9 @@ pub(crate) fn task_grant(path: &str, rights: u8, target: &str) -> Result<(), Sys
             return Err(SysError::BadValue);
         }
         let object = galfs::resolve_and_check(fs_root, &fs_tokens, path, need)?;
-        let Some(ti) = threads.iter().position(|t| {
-            t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
-        }) else {
+        let Some(ti) = live_named_proc(&threads, target) else {
             return Err(SysError::NotFound);
         };
-        let ti = proc_index(&threads, ti + 1).ok_or(SysError::NotFound)?;
         galfs::push_token(&mut threads[ti].fs_tokens, object, rights)
     });
     log_token(
@@ -1363,12 +1375,9 @@ pub(crate) fn task_revoke(path: &str, rights: u8, target: &str) -> Result<(), Sy
             return Err(SysError::BadValue);
         }
         let object = galfs::resolve_and_check(fs_root, &fs_tokens, path, need)?;
-        let Some(ti) = threads.iter().position(|t| {
-            t.is_user && t.state.load(Ordering::Acquire) == STATE_RUNNING && t.name() == target
-        }) else {
+        let Some(ti) = live_named_proc(&threads, target) else {
             return Err(SysError::NotFound);
         };
-        let ti = proc_index(&threads, ti + 1).ok_or(SysError::NotFound)?;
         galfs::revoke_token(&mut threads[ti].fs_tokens, object, rights)
     });
     log_token(
