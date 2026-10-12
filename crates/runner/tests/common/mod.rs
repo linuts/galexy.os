@@ -636,6 +636,65 @@ pub fn boot_for(image: &Image, timeout: Duration) -> (Option<i32>, String) {
     (code, serial)
 }
 
+/// Boots `image` with a TPM 2.0 CRB device backed by `swtpm`.
+///
+/// The socket and state directory are removed before return. `swtpm`
+/// must be on `PATH`.
+pub fn boot_with_tpm(image: &Image) -> (Option<i32>, String) {
+    let dir = scratch_path("swtpm", "dir");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("swtpm state dir");
+    let sock = dir.join("swtpm.sock");
+    let mut swtpm = Command::new("swtpm")
+        .arg("socket")
+        .arg("--tpm2")
+        .arg("--tpmstate")
+        .arg(format!("dir={}", dir.display()))
+        .arg("--ctrl")
+        .arg(format!("type=unixio,path={}", sock.display()))
+        .arg("--flags")
+        .arg("startup-clear")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("swtpm socket");
+    let ready = Instant::now() + Duration::from_secs(5);
+    while !sock.exists() {
+        if Instant::now() > ready {
+            let _ = swtpm.kill();
+            panic!("swtpm socket did not appear at {}", sock.display());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let serial_path = serial_log_path(&format!("{}-tpm", image.name));
+    let mut cmd = qemu_command(&image.bios, &serial_path);
+    cmd.arg("-chardev")
+        .arg(format!("socket,id=chrtpm,path={}", sock.display()))
+        .arg("-tpmdev")
+        .arg("emulator,id=tpm0,chardev=chrtpm")
+        .arg("-device")
+        .arg("tpm-crb,tpmdev=tpm0");
+    let mut child = cmd.spawn().expect("qemu with tpm-crb");
+    let deadline = Instant::now() + TEST_TIMEOUT;
+    let code = loop {
+        match child.try_wait().expect("try_wait failed") {
+            Some(status) => break status.code(),
+            None if Instant::now() > deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            None => std::thread::sleep(Duration::from_millis(100)),
+        }
+    };
+    let _ = swtpm.kill();
+    let _ = swtpm.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+    let serial = std::fs::read_to_string(&serial_path).unwrap_or_default();
+    (code, serial)
+}
+
 /// Boots the main image with COM1 on a Unix socket and types a login.
 ///
 /// No data disk, so the seat comes up RAM-only and asks `Login as:`

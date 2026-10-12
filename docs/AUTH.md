@@ -20,8 +20,9 @@ Passwords use **PBKDF2-HMAC-SHA256** with an 8-byte CSPRNG salt and a
 (GALF v12). `format` and `passwd` write 10 000 on a test kernel or
 under TCG, and 100 000 on a `--release` kernel that detects KVM.
 `check_password` uses the stored count (0 or above 1 000 000 is a
-reject). Salts come from `arch::rand` (RDRAND, with a tick-mixed
-fallback). Empty passwords are rejected. Syscall staging buffers are
+reject). Salts come from `arch::rand`: TPM 2.0 `GetRandom` when the
+firmware published a TPM, otherwise the UEFI RNG sample, otherwise
+`RDSEED` / `RDRAND`, otherwise a software stream. Empty passwords are rejected. Syscall staging buffers are
 wiped after login / useradd / passwd / volume unlock, including the
 error path. `check_password` wipes its digest, and PBKDF2 wipes HMAC
 key blocks. The volume KEK stays at 10 000. Argon2id stays waived.

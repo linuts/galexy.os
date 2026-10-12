@@ -101,7 +101,7 @@ fn chacha20_xor(key: &[u8; 32], nonce: &[u8; 12], mut counter: u32, buf: &mut [u
     }
 }
 
-fn chacha20_block(key: &[u8; 32], nonce: &[u8; 12], counter: u32, out: &mut [u8; 64]) {
+pub(crate) fn chacha20_block(key: &[u8; 32], nonce: &[u8; 12], counter: u32, out: &mut [u8; 64]) {
     let mut state = [
         0x6170_7865,
         0x3320_646e,

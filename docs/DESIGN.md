@@ -1134,7 +1134,8 @@ IRQ that already has IF=0) around the acquire.
 | Lock | May hold while taking | IRQ-gate |
 | --- | --- | --- |
 | `THREADS` | galfs `TABLE` (then large-file `STORE`), then `VOLUME_KEY`, then `VOLUME_PASS`, then `CHANS`. Snapshots still copy into fixed arrays and allocate after the drop. A galfs write may allocate the RAM large-file store while `THREADS` is held (Milestone 71): heap growth drops `INNER` before the shootdown, and every spin lock acks (`arch/mm/heap.rs`) | yes |
-| galfs `TABLE` | large-file `STORE`; `DISK_BUF` only while encoding; not `THREADS`. The PBKDF2 for `login` / `passwd` / `useradd` runs before the lock is taken (`PasswordCred`) | yes. Syscalls arrive IF=0; the main-loop entries (`sync_to_disk`, `wipe_volume_key`, `seal_and_lock`) gate themselves — a preempted main-loop holder on the BSP deadlocked the shell's next galfs syscall on the same CPU (galexy.os#86) |
+| galfs `TABLE` | large-file `STORE`; `DISK_BUF` only while encoding; `arch::rand` while sealing; not `THREADS`. The PBKDF2 for `login` / `passwd` / `useradd` runs before the lock is taken (`PasswordCred`) | yes. Syscalls arrive IF=0; the main-loop entries (`sync_to_disk`, `wipe_volume_key`, `seal_and_lock`) gate themselves — a preempted main-loop holder on the BSP deadlocked the shell's next galfs syscall on the same CPU (galexy.os#86) |
+| `arch::rand` | nothing else. Never takes `TABLE` | with the caller (`TABLE` may already be held inside `encode_table`) |
 | large-file `STORE` | nothing else. Never take `TABLE` or `THREADS` while holding it | with the caller (`TABLE`, already IF=0 on the syscall path) |
 | `VOLUME_KEY` | `VOLUME_PASS` | with the caller |
 | `LOCKOUT` | nothing above | yes; never under `THREADS` or `TABLE` |

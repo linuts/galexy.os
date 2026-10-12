@@ -61,6 +61,10 @@ pub fn init(boot_info: &BootInfo) {
         .into_option()
         .expect("physical memory must be mapped (see BOOTLOADER_CONFIG)");
 
+    // Before any frame is handed out: the firmware sample sits in a low
+    // page the allocator is allowed to reuse.
+    super::rand::capture_firmware(phys_offset);
+
     paging::init(phys_offset);
 
     // Lock order: USED before USABLE (the only nested locking in this module).

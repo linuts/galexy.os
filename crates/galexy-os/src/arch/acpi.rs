@@ -141,6 +141,18 @@ static MCFG: Once<Option<McfgWindow>> = Once::new();
 /// HPET register-block physical address, or `None` when the table is absent.
 static HPET_BASE: Once<Option<u64>> = Once::new();
 
+/// TPM 2.0 interface the firmware published in the `TPM2` ACPI table.
+#[derive(Debug, Clone, Copy)]
+pub struct Tpm2 {
+    /// Physical base of the control area (CRB) or locality 0 (TIS).
+    pub control: u64,
+    /// ACPI start method. 6 is TIS, 7 and 8 are CRB.
+    pub start_method: u32,
+}
+
+/// `TPM2` table, or `None` when the firmware did not publish one.
+static TPM2: Once<Option<Tpm2>> = Once::new();
+
 /// FADT `IAPC_BOOT_ARCH`, or `None` when the table is too short to carry it.
 ///
 /// Bit 0 set means a legacy 8259 pair is present.
@@ -165,6 +177,11 @@ pub fn mcfg() -> Option<&'static McfgWindow> {
 /// HPET MMIO base, if the firmware published an `HPET` table in system memory.
 pub fn hpet_base() -> Option<u64> {
     HPET_BASE.get().copied().flatten()
+}
+
+/// TPM 2.0 control area, if the firmware published a `TPM2` table.
+pub fn tpm2() -> Option<Tpm2> {
+    TPM2.get().copied().flatten()
 }
 
 /// True when the FADT boot-arch flags report an 8259, or when the flags
@@ -237,6 +254,17 @@ pub fn init(rsdp_phys: Option<u64>, phys_offset: u64) {
     } else {
         serial_println!("[acpi] no HPET");
     }
+    let tpm = find_table(root_phys, phys_offset, entry_size, root_sig, b"TPM2")
+        .and_then(|phys| parse_tpm2(phys, phys_offset));
+    if let Some(info) = tpm {
+        serial_println!(
+            "[acpi] tpm2 {:#x} start {}",
+            info.control,
+            info.start_method
+        );
+    } else {
+        serial_println!("[acpi] no TPM2");
+    }
     if let Some(info) = power {
         serial_println!(
             "[acpi] power: pm1a {:#x}, pm1b {:#x}, s5 {}, reset {:#x}",
@@ -259,6 +287,7 @@ pub fn init(rsdp_phys: Option<u64>, phys_offset: u64) {
     BOOT_ARCH.call_once(|| boot_arch);
     MCFG.call_once(|| mcfg);
     HPET_BASE.call_once(|| hpet);
+    TPM2.call_once(|| tpm);
 }
 
 struct Rsdp {
@@ -511,6 +540,24 @@ fn parse_hpet(phys: u64, phys_offset: u64) -> Option<u64> {
     }
     let base = le(bytes, 44, 8);
     (base != 0).then_some(base)
+}
+
+/// Control address and start method from a `TPM2` table of at least 52 bytes.
+fn parse_tpm2(phys: u64, phys_offset: u64) -> Option<Tpm2> {
+    // SAFETY: the address came from the validated root table.
+    let bytes = unsafe { table_bytes(phys, phys_offset) };
+    if &bytes[0..4] != b"TPM2" || bytes.len() < 52 {
+        return None;
+    }
+    let control = le(bytes, 40, 8);
+    let start_method = le(bytes, 48, 4) as u32;
+    if control == 0 || !control.is_multiple_of(4) {
+        return None;
+    }
+    Some(Tpm2 {
+        control,
+        start_method,
+    })
 }
 
 /// Reads the FADT's power and reset registers, and `_S5_` out of its DSDT.

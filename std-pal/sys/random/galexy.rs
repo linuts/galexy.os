@@ -1,8 +1,12 @@
-//! Randomness from `RDRAND`. Every x86-64 machine Galexy.OS boots on has
-//! it (the kernel's own entropy comes from the same instruction), and it
-//! needs no syscall. `RDRAND` may report "no data" under load; retry a
-//! bounded number of times, then fall back to mixing the clock in so the
-//! call never spins forever.
+//! Ring-3 randomness for `std` (`HashMap` keys and the `rdrand` getrandom
+//! backend).
+//!
+//! There is no random syscall. `Syscall::Lane` stays reserved at 35, and
+//! a user task cannot touch the TPM. `RDRAND` is the hardware source.
+//! When it is absent or stuck, the monotonic clock is mixed in so the
+//! call returns. Kernel salts and volume keys use `arch::rand`, which
+//! prefers the TPM, then the firmware sample, then this same instruction,
+//! then a software stream.
 
 use crate::sync::atomic::Ordering::Relaxed;
 use crate::sync::atomic::{Atomic, AtomicU8, AtomicU64};
