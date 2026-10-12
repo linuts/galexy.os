@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#116](https://github.com/linuts/galexy.os/pull/116) — Python —
+  `open` and `io.open` are `_io.open`. The raw file is `_io.FileIO`
+  over `std::fs`. The prelude file class is gone. Text mode is UTF-8.
+  There is no file descriptor. `fileno` and `opener` raise.
 - [#115](https://github.com/linuts/galexy.os/pull/115) — Docs —
   The status pages match the desk image. `cargo run` carries `rustc`
   and `python` when those ELFs were built. `python` with no file is
