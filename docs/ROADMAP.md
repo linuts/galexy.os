@@ -4,7 +4,7 @@ Direction-level plan. Concrete check-off items live in `TODO.md`.
 
 ## Where we stand (October 2026)
 
-Through Milestone 77. The bar is a **secure, fast, modern-only,
+Through Milestone 96. The bar is a **secure, fast, modern-only,
 full-feature, ready** OS. Each row says what is true today and which
 milestone closes the gap.
 
@@ -408,15 +408,15 @@ the machine.
 5. **67 Init owns shutdown and services** ✅ — ordered shutdown through
    init, service table with backoff, `svc`, session id on the seat Cap,
    ABI freeze for process Caps / `Map` / `Clock` / `Channel`. The
-   **`v1.0` tag** stays a separate gate (Phase 10, Phase 13, Phase 14,
-   BIOS+UEFI, TCG+KVM, q35+pc, `PERF.md`)
+   **`v1.0` tag** stays a separate gate (Phase 10, Phase 13,
+   BIOS+UEFI, TCG+KVM, q35+pc, `PERF.md`). Phase 14 has landed
 
 Non-goals for `v1.0`: GPU beyond the GOP framebuffer,
 5-level paging, huge user pages, POSIX compatibility, SMT / MDS
 mitigations beyond the written waiver, and vendor USB or NIC
 drivers. Network is Phase 10. Seeing a USB device and locking the
-driver table are Phase 13. RustPython at the login shell is
-Phase 14. The tag waits for all three.
+driver table are Phase 13. RustPython at the login shell landed
+as Phase 14. The tag waits for the network, USB, and a KVM pass.
 
 ## Phase 10 — Network (before `v1.0`)
 
@@ -583,8 +583,15 @@ runs the ELF it writes. Checkboxes: `TODO.md` Milestones **74–77**.
    `rustc hello.rs -o /hello`, then `/hello` prints
    `hello from rustc on galexy` (`rustc_hello_typing_e2e`, TCG)
 
+Milestone 96 later made `cargo run` boot `galexy-os-desk` when
+`target/galexy-rustc/rustc` or `target/galexy-python/python`
+exists. That image carries this compiler ramdisk, and `python`
+when that ELF was built. `--rustc` still parses and only errors
+when the compiler ELF is missing. The shared test ramdisk stays
+small. CI still does not run `x.py`.
+
 Same non-goals as Phase 11. The compiler does not go on the shared
-ramdisk. `LINE_MAX` stays 80. `getcwd` stays `/`.
+test ramdisk. `LINE_MAX` stays 80. `getcwd` stays `/`.
 
 
 - Thread-slot reuse ✅ (Milestone 26: a freed slot is overwritten in

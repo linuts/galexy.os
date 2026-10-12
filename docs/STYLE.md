@@ -271,9 +271,9 @@ now, the same way the network rules are.
 
 ## Python (RustPython)
 
-Rules for Phase 14 (`docs/PYTHON.md`; Milestones **91–96**). Binding
-now, the same way the network rules are. Required before the `v1.0`
-tag. It does not wait on Phase 10, and Phase 10 does not wait on it.
+Rules for Phase 14 (`docs/PYTHON.md`; Milestones **91–96**). Binding,
+the same way the network rules are. The phase has landed. It did
+not wait on Phase 10, and Phase 10 does not wait on it.
 
 - **The interpreter is upstream RustPython.** The command is
   `python`. CPython does not enter the tree. The pin is a host
@@ -290,7 +290,9 @@ tag. It does not wait on Phase 10, and Phase 10 does not wait on it.
 - **Two clocks stay two clocks.** `time.monotonic` is `Clock`.
   `time.time` is `Date`, and it raises when the date is unset.
 - **Budgets are the ones in `PYTHON.md`.** 2 GiB until a boot shows
-  a higher number. The interpreter stays off the shared ramdisk.
+  a higher number. The interpreter stays off the shared test
+  ramdisk. `cargo run` boots `galexy-os-desk` when the ELF exists,
+  and that image carries `python`. `python` with no file is the REPL.
 
 ## Subsystem docs
 

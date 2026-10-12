@@ -1,7 +1,8 @@
 # Python — RustPython at the login shell
 
-Phase 14. Milestones **91–96**. Required before the `v1.0` tag.
-It can land beside Phase 10 and Phase 13. It does not wait on a
+Phase 14. Milestones **91–96**. Landed. It was required before the
+`v1.0` tag, and that requirement is met. The tag still waits on
+Phase 10, Phase 13, and a KVM pass. This phase did not wait on a
 lane, and a lane does not wait on it. Checkboxes live in `TODO.md`.
 
 Galexy already runs upstream `rustc` in ring 3. The same kind of
@@ -32,7 +33,7 @@ This phase does not add a syscall, a reserved Cap, or an init row.
 | --- | --- |
 | **Interpreter** | One static RustPython ELF. The stdlib it ships is frozen into that ELF. |
 | **Program** | A galfs file of Python source. The seat named it. The interpreter holds that seat's tokens and no others. |
-| **Allow-list** | The modules Milestone 92 freezes. A name that is not on it raises `ImportError`. The process stays up. |
+| **Allow-list** | The modules Milestone 92 freezes. A name that is not on it raises `ImportError` and the run exits non-zero. The kernel stays up. |
 | **Image** | `galexy-os-desk`, what `cargo run` boots when `python` or `rustc` was built. CI does not fetch RustPython. |
 
 The shell path for `python hello.py` is the existing one: inherit
@@ -144,15 +145,15 @@ skips it when the file is absent.
 compares it to `scripts/python-frozen.txt` and to the checkout's
 frozen Python files when the build script runs. Importing a name
 that is not listed is `ImportError` (the interpreter installs a
-`meta_path` finder before the program). The process prints the
-exception and stays up; it does not panic. `time.monotonic` is
+`meta_path` finder before the program). The run prints the
+exception and exits non-zero. The kernel stays up. `time.monotonic` is
 syscall `Clock` (27). `time.time` is syscall `Date` (34) and
 raises `OSError` when the date is unset, not the monotonic
 uptime. `os` is not on the list. `_io.FileIO` exists only with
 the host_env feature, which this build does not enable, so
 `builtins.open` is a small `std::fs` wrapper. `io.open` stays
 unsupported. A missing token is `OSError`. The guest test of an
-unset date waits for Milestone 94.
+unset date is Milestone 94, and it has landed.
 
 ### 93 Ring 3
 
@@ -215,17 +216,16 @@ the ELF was absent at image build.
 5. The wiki page Python stays in step with this file.
 6. A box is checked only after a run shows the behavior.
 
-## Files this phase will touch
-
-When the milestones start, not in this plan:
+## Files this phase touched
 
 | Piece | Where |
 | --- | --- |
 | Pin and patch | `scripts/rustpython.rev`, `scripts/galexy-rustpython.patch` |
 | Allow-list | `scripts/python-allow.txt` |
 | Build | `scripts/build-galexy-python.sh` |
-| Image | the runner, beside `galexy-os-rustc` |
-| Tests | `bin/test-python`, `python_hello_typing_e2e` |
+| Image | `galexy-os-desk` in the runner, beside `galexy-os-rustc` |
+| REPL | bare `python` in the shell, with the keyboard grant |
+| Tests | `bin/test-python`, `python_repl_typing_e2e`, `python_hello_typing_e2e` |
 
-No kernel file has to change for the gate. A stack or heap budget
-that does change is Milestone 93, written down first.
+The gate did not add a syscall. The stack budget that did change
+is Milestone 93: a 17 MiB heap stack, guest RAM still 2 GiB.

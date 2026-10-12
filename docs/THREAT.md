@@ -131,7 +131,7 @@ Written down so the review is about what is here. Each has a reason;
 | --- | --- |
 | **No network stack yet** | nothing in this tree is remotely reachable. Phase 10 (Milestones 78–85, `NET.md`) is required before the `v1.0` tag. The design is a lane Cap, not a socket API. A6 above is the adversary that phase adds |
 | **No USB stack yet** | no xHCI driver, so a plugged-in device has nowhere to attach. Phase 13 (Milestones 86–88, `USB.md`) sees devices and locks the driver table before the `v1.0` tag. Vendor drivers stay unwritten. A7 above is the adversary that phase adds |
-| **No Python interpreter yet** | a seat cannot run a `.py` file. Phase 14 (Milestones 91–96, `PYTHON.md`) is required before the `v1.0` tag. The interpreter is ring-3 RustPython with the seat's tokens. It adds no syscall. `socket` stays out |
+| **Python stays ring 3** | a seat runs `python` with that seat's tokens. Phase 14 has landed (Milestones 91–96, `PYTHON.md`). It adds no syscall. `socket`, `pip`, and `subprocess` stay out |
 | **No GPU / multi-framebuffer** | the console is a text grid on the bootloader's GOP framebuffer; a second display adds device code with no security content |
 | **No POSIX compatibility claim** | the ABI is Caps and `SysError`, not fds, `errno`, signals, or `waitpid`; claiming POSIX would import its ambient-authority model (`PROCESS.md` → Why not PIDs) |
 | **No ambient process namespace** | there is no kill / wait / open by a guessed global integer; you hold a Cap or you do not. This is the point of the design, not a missing feature |

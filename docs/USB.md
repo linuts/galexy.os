@@ -2,8 +2,8 @@
 
 Phase 13. Milestones **86–88**. After Phase 10, before the `v1.0`
 tag. Checkboxes live in `TODO.md`. Nothing in this phase is built
-yet. Phase 14 (RustPython, Milestones 91–96) is the other `v1.0`
-requirement. It does not use this bus.
+yet. Phase 14 (RustPython, Milestones 91–96) has landed. It does
+not use this bus.
 
 virtio-net does not need this bus. Phase 10 talks to QEMU through
 `virtio-net-pci`. USB is for a device that is actually plugged in:
