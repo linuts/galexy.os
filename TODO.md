@@ -2825,10 +2825,10 @@ This phase can land beside Phase 10 and Phase 13.
 
 ## Milestone 93 — Ring 3
 
-- [ ] `bin/test-python` prints `hello from python on galexy` and
+- [x] `bin/test-python` prints `hello from python on galexy` and
       exits 0
-- [ ] A failed import does not panic the kernel
-- [ ] A stack or heap fault updates the budget table in `PYTHON.md`
+- [x] A failed import does not panic the kernel
+- [x] A stack or heap fault updates the budget table in `PYTHON.md`
       and `PERF.md` before the runner changes. `DISK_VERSION` stays
       12. Guest RAM stays 2 GiB unless that table says otherwise
 
