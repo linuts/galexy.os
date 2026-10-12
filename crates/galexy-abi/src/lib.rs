@@ -749,7 +749,24 @@ pub enum Syscall {
     ///
     /// **Stable** (Milestone 70).
     Futex,
+    /// `date(op, secs)` — read or set civil UTC.
+    ///
+    /// Args: `RDI` = [`DATE_READ`] (0) or [`DATE_SET`] (1). On set, `RSI` =
+    /// seconds since 1970-01-01 00:00:00 UTC. No Cap. Read returns those
+    /// seconds, or [`SysError::NoResource`] when the date has never been
+    /// anchored. Set is the admin actor only ([`SysError::AccessDenied`]
+    /// otherwise) and [`SysError::BadValue`] when the seconds are not a
+    /// civil time in 1970..=2099. There is no timezone and no leap second.
+    /// `Clock` and `Sleep` stay on the monotonic counter.
+    ///
+    /// **Stable** (Milestone 90).
+    Date,
 }
+
+/// `date` op (`RDI`): read civil UTC seconds.
+pub const DATE_READ: u64 = 0;
+/// `date` op (`RDI`): anchor civil UTC to `RSI` seconds. Admin only.
+pub const DATE_SET: u64 = 1;
 
 /// `futex` op (`RDI`): park while `*addr == expected`.
 pub const FUTEX_WAIT: u64 = 0;
@@ -828,6 +845,16 @@ pub const INIT_OP_DROP: u8 = 8;
 /// name, then a little-endian `u64` millisecond interval (`0` uses the
 /// row default). Admin only. A missing interval word means `0`.
 pub const INIT_OP_EVERY: u8 = 9;
+/// Init RPC: read civil UTC. Any logged-in seat. The name is ignored.
+/// The reply is `YYYY-MM-DD HH:MM:SS utc`, or `unset`.
+pub const INIT_OP_DATE: u8 = 10;
+/// Init RPC: set civil UTC. Admin only. The name is exactly
+/// `YYYY-MM-DD HH:MM:SS` (19 bytes).
+pub const INIT_OP_DATE_SET: u8 = 11;
+/// Init RPC: arm one fire per civil UTC day. Admin only. After the
+/// name come `hour` and `minute` (`u8`, UTC). The row must have a
+/// compiled interval. The armed time is forgotten on reboot.
+pub const INIT_OP_AT: u8 = 12;
 
 /// `recv` `R9` bit 0: an empty queue returns [`SysError::NoResource`]
 /// instead of parking. EOF (peer closed) is still `0`.
@@ -840,7 +867,7 @@ pub const WAIT_POLL: u64 = 1;
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (lifting the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 34] = [
+pub const SYSCALLS: [Syscall; 35] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -875,6 +902,7 @@ pub const SYSCALLS: [Syscall; 34] = [
     Syscall::ThreadSpawn,
     Syscall::ThreadExit,
     Syscall::Futex,
+    Syscall::Date,
 ];
 
 /// Maximum `sleep(ms)` argument (one minute). Longer waits loop in userspace.

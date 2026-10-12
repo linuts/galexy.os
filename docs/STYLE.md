@@ -164,9 +164,10 @@ POSIX layer beside these rules.
   listener outside the table. A new notice is a row in `NOTICE_NAMES`
   and a service field, in the same change as the wiki Services page.
 - **Beats are monotonic.** An interval arms a row whose compiled
-  `every_ms` is non-zero. No calendar until a wall clock exists. A
-  beat does not stack: a still-running program is skipped. `svc stop`
-  disarms it. Seats stay `every_ms == 0`.
+  `every_ms` is non-zero. A civil minute is `svc at` on `Date`, and
+  setting that date does not move the interval. A beat does not
+  stack: a still-running program is skipped. `svc stop` disarms both.
+  Seats stay `every_ms == 0`.
 - **Seats over ambient root.** Login TTYs and services are children of
   init (Caps init retains or delegates), each with their own session —
   not permanent kernel-injected admin shells.
@@ -227,7 +228,7 @@ once the first of those milestones lands; the plan is binding now.
   handler does not parse IP. TCP, UDP, and TLS live in the ring-3
   `net` service.
 - **Only `net` holds the wire** (Cap `0x8009`) and only `net` may call
-  `Syscall::Lane` (34). A dial right is a grant on a name, checked
+  `Syscall::Lane` (35). A dial right is a grant on a name, checked
   before any handshake.
 - **Names, not ports.** Locators stay inside `net`. They are not a
   general syscall argument.

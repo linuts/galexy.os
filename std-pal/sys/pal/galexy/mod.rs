@@ -14,13 +14,15 @@
 //! | `env::args`           | the spawn argument blob (NUL-separated)       |
 //! | `io::stdout`/`stdin`  | console / keyboard, or the pipe spawn handed  |
 //! | `time::Instant`       | `Clock` (monotonic milliseconds since boot)   |
+//! | `time::SystemTime`    | `Date` when anchored, else uptime             |
 //! | `thread::spawn`       | `ThreadSpawn` / `ThreadExit`; join = `Wait`   |
 //! | `sync::*`             | `Futex` (std's generic futex primitives)      |
 //! | `thread_local!`       | a per-thread table behind the FS base         |
 //! | `fs::*`               | `Open`/`Create`/`Read`/`Write`/`Seek`/`Stat`… |
 //! | `process::Command`    | `Spawn` + `Pipe` + `Wait`                     |
 //!
-//! There is no environment, no wall clock, no network, and no symlinks.
+//! There is no environment, no timezone, no network, and no symlinks.
+//! Civil UTC is `Date`. `Clock` stays monotonic.
 
 #![allow(missing_debug_implementations)]
 

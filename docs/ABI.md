@@ -67,13 +67,14 @@ gaps or duplicates). Appending is allowed; inserting is not.
 | 26 | `map` | stable | per-task heap, `USER_HEAP_PAGES` (262_144, 1 GiB) as of Milestone 71 |
 | 27 | `clock` | stable | monotonic ms (`timer_ticks`); `sleep` stays stable beside it |
 | 28 | `channel` | stable | two endpoint Caps. Init's first channel is the control channel |
-| 29 | `send` | stable | one queued message, up to 256 bytes and two file Caps. `send` on init index `0x8008` parks for a reply (`R8`/`R9` = reply buffer/len); the kernel stamps a 20-byte header. Opcodes 1–6 are status, start, stop, restart, shutdown, reboot. Opcodes 7–9 are raise, drop, and every (Milestone 89) |
+| 29 | `send` | stable | one queued message, up to 256 bytes and two file Caps. `send` on init index `0x8008` parks for a reply (`R8`/`R9` = reply buffer/len); the kernel stamps a 20-byte header. Opcodes 1–6 are status, start, stop, restart, shutdown, reboot. Opcodes 7–9 are raise, drop, and every (Milestone 89). Opcodes 10–12 are date, date set, and at (Milestone 90) |
 | 30 | `recv` | stable | parks when empty and the peer is open. `R9` bit 0 = `RECV_POLL` returns `NoResource` instead of parking |
 | 31 | `thread_spawn` | stable (M70) | `RDI` entry, `RSI` arg, `RDX` stack pages (`0` = 16 pages, at most `THREAD_STACK_PAGES_MAX` = 4352 / 17 MiB as of Milestone 72). Returns a process Cap with `PROC_PARENT` on the shared table; `wait` is join. Same CR3, file table, heap budget. Entry outside the image window is `BadValue` |
 | 32 | `thread_exit` | stable (M70) | `RDI` = exit code. The calling thread only. From the process leader this is `exit` |
 | 33 | `futex` | stable (M70) | `RDI` = `FUTEX_WAIT` (0) or `FUTEX_WAKE` (1), `RSI` = aligned `u32`, `RDX` = expected or count, `R8` = timeout ms (`0` = none, clamped to `SLEEP_MS_MAX`). Wait returns `0` on wake or on a mismatched word, `TimedOut` if the timeout fires first. Wake returns how many woke. Keyed by address space and address |
+| 34 | `date` | stable (M90) | `RDI` = `DATE_READ` (0) or `DATE_SET` (1). Read returns UTC seconds since 1970-01-01 00:00:00, or `NoResource` when unset. Set takes those seconds in `RSI`, admin only (`AccessDenied` otherwise, `BadValue` outside 1970..=2099). No timezone, no leap second. `clock` and `sleep` stay monotonic |
 
-`MAX_SYSCALL = 33`. The table is capped at 64 entries until there is
+`MAX_SYSCALL = 34`. The table is capped at 64 entries until there is
 an ABI version story.
 
 ## Error codes (`SysError`) — stable
@@ -109,10 +110,10 @@ Unknown codes decode to `Unsupported`. New codes append.
 | `sleep` clamp | `1..=SLEEP_MS_MAX (60 000)` ms | stable |
 | `map` | `1..=USER_HEAP_PAGES (262_144)` pages, starting 512 MiB above the task image base | stable (ceiling raised to 1 GiB in Milestone 71) |
 | `channel` message | `CHAN_MSG_MAX = 256` bytes, up to two file Caps; 8 channels | stable |
-| init RPC header | 20 bytes: admin u8, tty u8, pad 2, debug id u64, session gen u64, then the user payload (`op`, `name_len`, name). User payload max 236. Ops: status 1, start 2, stop 3, restart 4, shutdown 5, reboot 6 | stable |
+| init RPC header | 20 bytes: admin u8, tty u8, pad 2, debug id u64, session gen u64, then the user payload (`op`, `name_len`, name). User payload max 236. Ops: status 1, start 2, stop 3, restart 4, shutdown 5, reboot 6, raise 7, drop 8, every 9, date 10, date set 11, at 12 | stable |
 | Wire Cap | index `0x8009`. Frame read/write. Only the task named `net` | **reserved** — Milestone 78. Not implemented |
 | Net control Cap | index `0x800A`. `send` parks for a reply. Same 20-byte stamped header as init. Ops, when they exist: link 1, dial 2, allow 3, grant 4, revoke 5, serve 6. `link` may include our locator after Milestone 80 | **reserved** — Milestone 83. Not implemented |
-| `lane` | syscall **34**. Mints a pair of lane Caps. Only `net` may call it. `read` / `write` are the plaintext of one TLS 1.3 session | **reserved** — Milestone 82. Not implemented. No `socket` / `bind` / `connect` row will be added |
+| `lane` | syscall **35**. Mints a pair of lane Caps. Only `net` may call it. `read` / `write` are the plaintext of one TLS 1.3 session | **reserved** — Milestone 82. Not implemented. No `socket` / `bind` / `connect` row will be added. `date` took 34; the table stays dense |
 | USB controller Cap | index `0x800B`. Transfer rings. Only the task named `usb` | **reserved** — Milestone 86. Not implemented |
 | USB control Cap | index `0x800C`. `send` parks for a reply. Same 20-byte stamped header as init. Op 1 is `list` | **reserved** — Milestone 87. Not implemented |
 | `USER_IMAGE_BASE` | `0x0000_0C80_0000_0000`; every ELF links here; the loader accepts PT_LOADs inside `[base, base + 512 MiB)` | stable (no user ASLR — `THREAT.md`) |

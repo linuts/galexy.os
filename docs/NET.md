@@ -80,7 +80,7 @@ service keeps the other end and writes plaintext into it after it
 decrypts. The application never sees records, headers, or keys.
 
 Creating that pair is the one new syscall. `Syscall::Lane` is number
-**34** (the table today is `0..=33`). Only the task named `net` may
+**35** (the table today is `0..=34`; `Date` is 34). Only the task named `net` may
 call it. Any other caller is `AccessDenied`. `read` and `write` on a
 lane Cap are the existing syscalls, dispatched on the Cap type. There
 is no `connect` to forget to check.
@@ -249,7 +249,7 @@ the lane will use. Still no application Cap.
 ### 82 Lane
 
 TLS 1.3 in `net`, pinned key, rustls-class, pure Rust crypto.
-`Syscall::Lane` (34) mints a pair; only `net` may call it. `read` /
+`Syscall::Lane` (35) mints a pair; only `net` may call it. `read` /
 `write` move plaintext. Budgets in the table above are enforced, even
 before the flood test.
 
@@ -257,7 +257,7 @@ Prove, on the host: a handshake fixture against a known key, and a
 rejected key. Prove, in the guest: the service finishes TLS with the
 host peer and a test task reads `lane ok` from the lane Cap. A shell
 task that calls `lane` is `AccessDenied`. Session keys do not appear
-on serial or `dmesg`. `docs/ABI.md` marks syscall 34 and index
+on serial or `dmesg`. `docs/ABI.md` marks syscall 35 and index
 `0x800A` experimental.
 
 ### 83 Names and gates
@@ -283,7 +283,7 @@ and the host sees no handshake. `std::net` is still unsupported.
 
 The budgets hold under a peer that opens handshakes and never
 finishes them. `svc status shell` still answers. Audit lines match
-the secrecy rule. `docs/ABI.md` may mark syscall 34 and the net
+the secrecy rule. `docs/ABI.md` may mark syscall 35 and the net
 opcodes stable in this milestone, or leave them experimental until
 the `v1.0` tag; they must not change shape after 85 without an ABI
 note. `THREAT.md` A6 moves from planned to defended, with the tests

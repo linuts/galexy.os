@@ -8,9 +8,10 @@ use core::sync::atomic::Ordering;
 
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
-    close, dmesg_cap, grant, init_rpc, init_rpc_every, read, reboot, revoke, share, shutdown,
-    spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, user, user_login, user_logout,
-    user_name, user_name_pass, user_passwd, user_quota, user_setquota, wait, write_console,
+    close, dmesg_cap, grant, init_rpc, init_rpc_at, init_rpc_every, read, reboot, revoke, share,
+    shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, user, user_login,
+    user_logout, user_name, user_name_pass, user_passwd, user_quota, user_setquota, wait,
+    write_console,
 };
 
 /// Sectioned help — short command column + one-line blurb.
@@ -78,6 +79,9 @@ pub(crate) fn show_help() {
     help_row(b"svc raise <notice>", b"notice rising edge");
     help_row(b"svc drop <notice>", b"notice falling edge");
     help_row(b"svc every <ms> <name>", b"arm a monotonic beat");
+    help_row(b"svc date", b"civil UTC, or unset");
+    help_row(b"svc date <utc>", b"set YYYY-MM-DD HH:MM:SS");
+    help_row(b"svc at <hh:mm> <name>", b"fire once a UTC day");
     help_row(b"shutdown", b"ask init to power off");
     help_row(b"reboot", b"ask init to reset");
     write_console(b"\n");
@@ -1247,11 +1251,16 @@ pub(crate) fn ask_init_power(cwd: &Cwd, reboot_flag: bool) {
     prompt(cwd);
 }
 
-const SVC_USAGE: &[u8] =
-    b"svc: usage: svc status|start|stop|restart <name> | raise|drop <notice> | every <ms> <name>\n";
+const SVC_USAGE: &[u8] = b"svc: usage: svc status|start|stop|restart <name> | raise|drop <notice> | every <ms> <name> | date [utc] | at <hh:mm> <name>\n";
 
 pub(crate) fn svc_cmd(cwd: &Cwd, rest: &[u8]) {
     let rest = trim(rest);
+    if rest == b"date" {
+        let mut reply = [0u8; 96];
+        let got = init_rpc(galexy_abi::INIT_OP_DATE, b"", &mut reply);
+        svc_show(cwd, got, &reply);
+        return;
+    }
     let Some(sp) = rest.iter().position(|b| *b == b' ') else {
         write_console(SVC_USAGE);
         prompt(cwd);
@@ -1261,6 +1270,14 @@ pub(crate) fn svc_cmd(cwd: &Cwd, rest: &[u8]) {
     let name = trim(&rest[sp + 1..]);
     if verb == b"every" {
         svc_every(cwd, name);
+        return;
+    }
+    if verb == b"date" {
+        svc_date_set(cwd, name);
+        return;
+    }
+    if verb == b"at" {
+        svc_at(cwd, name);
         return;
     }
     if name.is_empty() || name.contains(&b' ') {
@@ -1284,6 +1301,52 @@ pub(crate) fn svc_cmd(cwd: &Cwd, rest: &[u8]) {
     let mut reply = [0u8; 96];
     let got = init_rpc(op, name, &mut reply);
     svc_show(cwd, got, &reply);
+}
+
+fn svc_date_set(cwd: &Cwd, spec: &[u8]) {
+    if spec.len() != 19 {
+        write_console(SVC_USAGE);
+        prompt(cwd);
+        return;
+    }
+    let mut reply = [0u8; 96];
+    let got = init_rpc(galexy_abi::INIT_OP_DATE_SET, spec, &mut reply);
+    svc_show(cwd, got, &reply);
+}
+
+fn svc_at(cwd: &Cwd, rest: &[u8]) {
+    let rest = trim(rest);
+    if rest.len() < 7 || rest[2] != b':' || rest[5] != b' ' {
+        write_console(SVC_USAGE);
+        prompt(cwd);
+        return;
+    }
+    let Some(hour) = two_digits(&rest[0..2]) else {
+        write_console(SVC_USAGE);
+        prompt(cwd);
+        return;
+    };
+    let Some(minute) = two_digits(&rest[3..5]) else {
+        write_console(SVC_USAGE);
+        prompt(cwd);
+        return;
+    };
+    let name = trim(&rest[6..]);
+    if name.is_empty() || name.contains(&b' ') {
+        write_console(SVC_USAGE);
+        prompt(cwd);
+        return;
+    }
+    let mut reply = [0u8; 96];
+    let got = init_rpc_at(hour, minute, name, &mut reply);
+    svc_show(cwd, got, &reply);
+}
+
+fn two_digits(bytes: &[u8]) -> Option<u8> {
+    if bytes.len() != 2 || !bytes[0].is_ascii_digit() || !bytes[1].is_ascii_digit() {
+        return None;
+    }
+    Some((bytes[0] - b'0') * 10 + (bytes[1] - b'0'))
 }
 
 fn svc_every(cwd: &Cwd, rest: &[u8]) {

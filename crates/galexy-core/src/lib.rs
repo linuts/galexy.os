@@ -18,6 +18,9 @@ mod console_cut_test;
 mod crc32;
 #[cfg(test)]
 mod crc32_test;
+mod date;
+#[cfg(test)]
+mod date_test;
 mod lockout;
 #[cfg(test)]
 mod lockout_test;
@@ -35,6 +38,7 @@ mod tar_test;
 pub use bitmap::Bitmap;
 pub use console_cut::console_commit_len;
 pub use crc32::crc32;
+pub use date::{civil_to_utc, format_utc, parse_utc, utc_to_civil, Civil, YEAR_MAX, YEAR_MIN};
 pub use lockout::{
     FailNote, LoginLockout, LOCKOUT_ACTORS, LOCKOUT_COOLDOWN_MS, LOCKOUT_MAX_FAILS, LOCKOUT_NAME,
     LOCKOUT_TTYS,

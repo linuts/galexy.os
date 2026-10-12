@@ -95,7 +95,8 @@ dashboard.
    syscall numbers (exit=0, yield=1, write=2, cap_info=3, open=4, read=5,
    close=6, spawn=7, power=8, create=9, remove=10), error codes (BadCap=1, AccessDenied=2, BadBuffer=3,
    Unsupported=4, BadValue=5, NotFound=6, NoResource=7, Interrupted=8, Locked=9) — are permanent.
-   New syscalls APPEND;
+   New syscalls APPEND (the live table, including `date` = 34, is
+   `docs/ABI.md`);
    renumbering/renaming = ABI major bump. NO file descriptors at this ABI
    level: resources are capabilities kernel-side, validated on every call,
    revoked easily. Files/ports/handles-to-come all become caps.
@@ -1261,7 +1262,7 @@ main image and are listed at the end.
 | `test-big`, `test-gxld` | `big_test_passes`, `gxld_ring3_test_passes` | M71 300 MiB map and a 20 MiB file (KVM only); ring-3 `gxldos` links two objects |
 | `test-rustc` | `rustc_obj_matches_host` | M72 on-OS Cranelift `rustc`: `--print cfg`, a `mismatched types` diagnostic, and `--emit=obj` matching the host. Skipped when the ELF was absent at image build |
 | `test-proccap`, `test-selfcap`, `test-procgive`, `test-procbudget`, `test-capforge`, `test-orphan` | `proccap_test_passes`, `selfcap_test_passes`, `procgive_test_passes`, `procbudget_test_passes`, `capforge_test_passes`, `orphan_test_passes` | M47 process Caps and forge battery |
-| `test-init`, `test-jobcap` | `init_test_passes`, `jobcap_test_passes` | M53 init orphan root, M55 job Cap / Ctrl-C |
+| `test-init`, `test-jobcap` | `init_test_passes`, `jobcap_test_passes` | M53 init orphan root, M55 job Cap / Ctrl-C, M89 notices and beats, M90 civil date and `svc at` |
 | `test-sleep`, `test-idle` | `sleep_test_passes`, `idle_test_passes` | M56 time and deadlines, M58 policy freeze |
 | `test-rustc-hello` | `rustc_hello_runs` | M73 on-OS `rustc` links with `gxld` and the program runs |
 | `galexy-os-rustc` | `rustc_image_login_typing_e2e`, `rustc_print_cfg_typing_e2e`, `rustc_hello_typing_e2e` | M74/M75 login image carries `rustc` and imports the sysroot. M76: `rustc --print cfg`. M77: `echo` a one-line hello, `rustc hello.rs -o /hello`, `/hello` prints `hello from rustc on galexy`. Skipped when the ELF was absent at image build |
@@ -1289,6 +1290,22 @@ file Caps, `Recv` parks. Milestone 67 marks `Map`, `Clock`,
 `Channel`, `Send`, and `Recv` stable. `spawn` stays experimental.
 `SPAWN_NO_FG` (r10 bit 5) keeps a background spawn off the TTY's Ctrl-C
 slot until `fg` Cap-waits it.
+
+## Civil date (Milestone 90)
+
+`Clock` remains `timer_ticks`. `Date` (syscall 34) is UTC seconds
+since 1970-01-01 00:00:00, or `NoResource` when no anchor exists.
+Set is the admin actor. The anchor is `(utc seconds, timer_ticks)`.
+Elapsed seconds come from the monotonic counter, so a set does not
+move sleep or a monotonic beat. CMOS (ports `0x70`/`0x71`, NMI held
+off) seeds the anchor at boot and is written on set. A halted clock,
+a stuck update-in-progress bit, or a year outside 2000..=2099 leaves
+boot unset. Admin set accepts 1970..=2099. No timezone, no leap
+second. `Syscall::Lane` is reserved at 35 so the table stays dense.
+
+`svc date` and `svc at HH:MM` are init RPCs (opcodes 10–12). `at`
+fires once per civil day on a row with a compiled interval. The
+armed minute is RAM-only. The chip keeps the date across reboot.
 
 ## Init control (Milestone 67)
 

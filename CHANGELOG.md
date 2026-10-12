@@ -8,6 +8,12 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#106](https://github.com/linuts/galexy.os/pull/106) — Milestone 90 —
+  Civil UTC. `Date` (syscall 34) is seconds since 1970-01-01 00:00:00,
+  or unset. `Clock`, `Sleep`, and `svc every` stay monotonic. `svc date`
+  reads or sets. `svc at HH:MM <name>` fires once per UTC day. No
+  timezone, no leap second. The CMOS clock keeps the date. The armed
+  minute does not. `Lane` is reserved at syscall 35.
 - [#105](https://github.com/linuts/galexy.os/pull/105) — Milestone 89 —
   Notices and beats. `svc raise` / `svc drop` are the
   edges of a named bit (`ring` starts `bell` once per rise). `svc every

@@ -1,9 +1,8 @@
 //! `Instant` over `Clock` (monotonic milliseconds since boot).
 //!
-//! There is no wall clock syscall yet. `SystemTime::now()` is boot-relative:
-//! `UNIX_EPOCH + uptime`. It is monotonic and good for intervals; it is not
-//! a date. A later RTC syscall replaces the body of `SystemTime::now`
-//! without touching the types.
+//! `SystemTime::now()` reads `Date` when a civil UTC anchor exists, and
+//! falls back to `UNIX_EPOCH + uptime` while the date is unset. Anchoring
+//! the date does not move `Instant`.
 
 use crate::sys::pal::syscall;
 use crate::time::Duration;
@@ -44,7 +43,11 @@ impl SystemTime {
     pub const MIN: SystemTime = SystemTime(Duration::ZERO);
 
     pub fn now() -> SystemTime {
-        SystemTime(uptime())
+        if let Some(secs) = syscall::date_secs() {
+            SystemTime(Duration::from_secs(secs))
+        } else {
+            SystemTime(uptime())
+        }
     }
 
     pub fn sub_time(&self, other: &SystemTime) -> Result<Duration, Duration> {
