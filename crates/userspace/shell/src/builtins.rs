@@ -11,7 +11,7 @@ use galexy_rt::{
     close, dmesg_cap, grant, init_rpc, init_rpc_at, init_rpc_every, read, reboot, revoke, share,
     shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, user, user_lock,
     user_login, user_logout, user_name, user_name_pass, user_passwd, user_quota, user_setquota,
-    wait, write_console,
+    user_volpass, volume_query, wait, write_console,
 };
 
 /// Sectioned help — short command column + one-line blurb.
@@ -55,6 +55,7 @@ pub(crate) fn show_help() {
     help_row(b"lock", b"freeze the session");
     help_row(b"logout", b"return to login screen");
     help_row(b"passwd [name]", b"masked password + confirm prompts");
+    help_row(b"volpass", b"change the volume passphrase");
     help_row(b"useradd <name>", b"create account (optional pass)");
     help_row(b"userdel <name>", b"delete empty account");
     help_row(b"su <user>", b"switch via admin / ALL card");
@@ -105,6 +106,7 @@ pub(crate) fn show_help() {
     write_console(b"  *                  names in the current directory\n");
     write_console(b"  a bare program shares this console (no background)\n");
     write_console(b"  default admin/admin must passwd before other commands\n");
+    write_console(b"  a new disk asks for a volume passphrase before login\n");
     write_console(b"  su admin restores a born-admin seat; login always needs a password\n");
     write_console(b"  a bare program name loads it from the ramdisk\n");
 }
@@ -392,6 +394,10 @@ pub(crate) fn dispatch(
     }
     if let Some(rest) = arg_of(line, b"passwd") {
         passwd_cmd(kbd, cwd, rest, must_change);
+        return None;
+    }
+    if let Some(rest) = arg_of(line, b"volpass") {
+        volpass_cmd(kbd, cwd, rest);
         return None;
     }
     if let Some(rest) = arg_of(line, b"su") {
@@ -1171,6 +1177,99 @@ pub(crate) fn passwd_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8], must_change: &mut
         }
     }
     report_user(cwd, b"passwd", result, false);
+}
+
+pub(crate) fn volpass_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8]) {
+    if !trim(rest).is_empty() {
+        write_console(b"usage: volpass\n");
+        prompt(cwd);
+        return;
+    }
+    let mut name = [0u8; 64];
+    let got = user(&mut name, galexy_abi::USER_WHOAMI);
+    let n = if got.ok {
+        (got.value as usize).min(name.len())
+    } else {
+        0
+    };
+    if &name[..n] != b"admin" {
+        write_console(b"volpass: access denied\n");
+        prompt(cwd);
+        return;
+    }
+    let query = volume_query();
+    let fresh = query == 2;
+    if query == 1 {
+        write_console(b"volpass: unlock the volume first\n");
+        prompt(cwd);
+        return;
+    }
+    let mut current = [0u8; PASS_MAX];
+    let cur_len = if fresh {
+        0
+    } else {
+        write_console(b"Current volume passphrase: ");
+        match read_line(kbd, &mut current, true) {
+            LineRead::Line(n) if n > 0 => n,
+            LineRead::Denied => {
+                wipe(&mut current);
+                prompt(cwd);
+                return;
+            }
+            _ => {
+                wipe(&mut current);
+                prompt(cwd);
+                return;
+            }
+        }
+    };
+    let mut new_pass = [0u8; PASS_MAX];
+    write_console(b"New volume passphrase: ");
+    let new_len = match read_line(kbd, &mut new_pass, true) {
+        LineRead::Line(n) if n > 0 => n,
+        LineRead::Denied => {
+            wipe(&mut current);
+            wipe(&mut new_pass);
+            prompt(cwd);
+            return;
+        }
+        _ => {
+            wipe(&mut current);
+            wipe(&mut new_pass);
+            prompt(cwd);
+            return;
+        }
+    };
+    write_console(b"Confirm: ");
+    let mut confirm = [0u8; PASS_MAX];
+    let confirm_len = match read_line(kbd, &mut confirm, true) {
+        LineRead::Line(n) if n > 0 => n,
+        _ => {
+            wipe(&mut current);
+            wipe(&mut new_pass);
+            wipe(&mut confirm);
+            prompt(cwd);
+            return;
+        }
+    };
+    if new_len != confirm_len || new_pass[..new_len] != confirm[..confirm_len] {
+        wipe(&mut current);
+        wipe(&mut new_pass);
+        wipe(&mut confirm);
+        write_console(b"volpass: passphrases do not match\n");
+        prompt(cwd);
+        return;
+    }
+    let result = user_volpass(&current[..cur_len], &new_pass[..new_len]);
+    wipe(&mut current);
+    wipe(&mut new_pass);
+    wipe(&mut confirm);
+    if !result.ok && result.value == SysError::AccessDenied as u64 {
+        write_console(b"volpass: passphrase incorrect\n");
+        prompt(cwd);
+        return;
+    }
+    report_user(cwd, b"volpass", result, false);
 }
 
 /// Masked `Password:` then `Confirm:`; returns length when both match.

@@ -356,9 +356,11 @@ pub const USER_QUOTA: u64 = 9;
 /// `user` op: set an actor's object/byte limits (admin only).
 /// `RDI`/`RSI` name the actor; `R8 = max_objects`, `R9 = max_bytes`.
 pub const USER_SETQUOTA: u64 = 10;
-/// `user` op: volume passphrase. `R9 = 0` queries (`rax = 1` when the
-/// disk volume is locked). Otherwise `R8`/`R9` are the passphrase; a
-/// wrong passphrase leaves the RAM table and refuses disk sync.
+/// `user` op: volume passphrase. `R9 = 0` queries: `rax = 0` when the
+/// volume is open or there is no disk, `1` when a sealed volume is
+/// locked, `2` when the disk has no passphrase yet. Otherwise `R8`/`R9`
+/// are the passphrase. A wrong passphrase leaves the RAM table and
+/// refuses disk sync. An empty disk is formatted under the passphrase.
 pub const USER_UNLOCK: u64 = 11;
 /// `user` op: freeze this session. The actor, tokens, and cwd stay.
 /// File, spawn, and power calls return [`SysError::Locked`] until
@@ -372,6 +374,12 @@ pub const USER_UNLOCK_SESSION: u64 = 13;
 /// `user` op: `rax = 1` when this session is locked, `0` when it is
 /// open. Logged out is [`SysError::AccessDenied`].
 pub const USER_LOCKED: u64 = 14;
+/// `user` op: change the volume passphrase. Admin only.
+/// `RDI`/`RSI` are the current passphrase (`RSI = 0` when the disk has
+/// no passphrase yet). `R8`/`R9` are the new passphrase. A sealed volume
+/// must already be unlocked. The new passphrase is confirmed by the
+/// caller; this op stores one candidate and re-wraps the volume key.
+pub const USER_VOLPASS: u64 = 15;
 
 /// Bytes written by [`USER_QUOTA`]: four little-endian `u32` fields —
 /// objects_used, objects_max, bytes_used, bytes_max.
@@ -571,11 +579,14 @@ pub enum Syscall {
     /// [`USER_USERS`], [`USER_ADD`], [`USER_DEL`], [`USER_SU`],
     /// [`USER_LOGIN`], [`USER_PASSWD`], [`USER_LOGOUT`], [`USER_TOKENS`],
     /// [`USER_QUOTA`], [`USER_SETQUOTA`], [`USER_UNLOCK`], [`USER_LOCK`],
-    /// [`USER_UNLOCK_SESSION`], [`USER_LOCKED`]). Login/add/passwd take a
-    /// password in `R8`/`R9`; quota get takes an optional actor name
-    /// there; setquota takes max_objects/max_bytes. [`USER_UNLOCK`] with
-    /// `R9 = 0` reports whether the volume is locked; a passphrase in
-    /// `R8`/`R9` tries to mount. [`USER_LOCK`] freezes the seat.
+    /// [`USER_UNLOCK_SESSION`], [`USER_LOCKED`], [`USER_VOLPASS`]).
+    /// Login/add/passwd take a password in `R8`/`R9`; quota get takes an
+    /// optional actor name there; setquota takes max_objects/max_bytes.
+    /// [`USER_UNLOCK`] with `R9 = 0` reports the volume (`0` open, `1`
+    /// sealed and locked, `2` no passphrase yet); a passphrase in
+    /// `R8`/`R9` tries to mount. [`USER_VOLPASS`] replaces the passphrase
+    /// (`RDI`/`RSI` current, `R8`/`R9` new) and re-wraps the volume key.
+    /// [`USER_LOCK`] freezes the seat.
     /// [`USER_UNLOCK_SESSION`] resumes it with the same actor's password.
     /// [`USER_LOCKED`] reports the freeze. Whoami/users/tokens/quota write
     /// into the buffer. Passwords authenticate identity;

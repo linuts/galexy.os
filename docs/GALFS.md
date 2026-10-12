@@ -214,8 +214,11 @@ scope initially.
 5. CRC of ciphertext is a cheap reject before AEAD open.
 
 Test kernels auto-unlock with the fixed passphrase `galfs`. Production
-boot leaves the volume locked and the F1 login screen prompts before
-`Login as:`. A wrong passphrase refuses disk sync and keeps the RAM
+boot leaves the volume locked. An empty image asks the operator to
+choose a passphrase and confirm it; there is no passphrase to type
+until that choice. A sealed image prompts `Volume passphrase:` before
+`Login as:`. Admin changes it later with `volpass`, which re-wraps the
+volume key. A wrong passphrase refuses disk sync and keeps the RAM
 table (not a corrupt image). The last logout and power-off zero the
 volume key in RAM; cold-boot remanence is accepted. The MAC stays
 HMAC-SHA256 (Poly1305 needs a versioned cutover). Per-file keys,
@@ -230,10 +233,14 @@ the password hash.
 1. If a `BlockDevice` with capacity ≥ dual-slot image is present and
    auto-unlock is on → try load newest valid sealed slot with `galfs`.
    Production boot (auto-unlock off) builds a RAM admin table and waits
-   for `USER_UNLOCK` instead of reading the image.
+   for `USER_UNLOCK`. No GALF header means the seat chooses the
+   passphrase (`volume_query` returns 2). A header means the existing
+   passphrase (`volume_query` returns 1).
 2. Empty zeros (no GALF magic) → format: immortal `admin` + `Desktop/`,
    default password `admin`, new volume key, sync sealed image.
-   Interactive unlock of an empty image formats with the typed passphrase.
+   Test kernels seal with `galfs`. Interactive unlock of an empty image
+   formats with the passphrase the operator chose. `USER_VOLPASS`
+   re-wraps an unlocked volume.
 3. Both slots carry GALF magic but fail decode/validate → **refuse
    silent format**; galfs stays unavailable (`Unsupported` on sync /
    mutates that need a mount). Serial: `disk corrupt; refusing silent
@@ -332,7 +339,7 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 ### Host fsck (landed)
 
 - `crates/galexy-galf`: layout constants, sealed unlock, structural issues
-- `crates/galfs-fsck`: CLI over `galfs.img` (bring-up passphrase `galfs`)
+- `crates/galfs-fsck`: CLI over `galfs.img` (default passphrase `galfs`; `--passphrase` for one the operator chose)
 - Runner asserts host check on a guest-written image and both-corrupt
 
 ### Single-indirect (landed)

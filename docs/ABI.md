@@ -103,7 +103,7 @@ Unknown codes decode to `Unsupported`. New codes append.
 | `spawn` limits | `SPAWN_NAME_MAX = 64`, `SPAWN_ARG_MAX = 4096` | experimental with `spawn` (arg ceiling raised in Milestone 71) |
 | Token rights | READ 1, WRITE 2, LIST 4, CREATE 8, REMOVE 16, ONCE 128 (`grant`/`su` only) | stable |
 | `seek` whence | SET 0, CUR 1, END 2 | stable |
-| `user` ops | WHOAMI 0 … UNLOCK 11 (see crate) | existing ops stable; the op space is open |
+| `user` ops | WHOAMI 0 … VOLPASS 15 (see crate). `USER_UNLOCK` with `R9 = 0` returns 0 open, 1 sealed and locked, 2 no passphrase yet. `USER_VOLPASS` is admin-only: `RDI`/`RSI` current (`RSI = 0` if none yet), `R8`/`R9` new | existing ops stable; the op space is open |
 | `stat` buffer | 48 bytes: kind u8, rights u8, 2 reserved, size u32, owner len u8, owner 32 bytes, 7 reserved | stable |
 | `quota` buffer | 16 bytes: four LE `u32` — objects used, objects max, bytes used, bytes max | stable |
 | `power` ops | SHUTDOWN 0, REBOOT 1 | stable |

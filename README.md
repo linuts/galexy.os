@@ -113,13 +113,21 @@ window's keyboard still sends it). F1–F12 need the window
 log lines share this stream with the console.
 
 ```text
+This disk has no passphrase yet.
+New passphrase: *****
+Confirm: *****
+
 Galexy.OS v0.1.0 (tty1)
+
+New volume. Log in as admin with password admin, then run passwd.
 
 Login as: admin
 Password: *****
 ```
 
-Fresh format password is **`admin`** / **`admin`**. After login a
+A fresh disk has no volume passphrase until that prompt. Later boots
+ask `Volume passphrase:` for the one you chose. The account on a fresh
+format is **`admin`** / **`admin`**. After login a
 fastfetch-style **command center** dashboard prints (OS / TTY / user /
 uptime / heap / galfs / tasks), then the prompt is `admin@galexy> `.
 The bottom status bar keeps a live strip (uptime, heap, galfs, tasks,
@@ -136,7 +144,7 @@ frames). Up/down arrows recall session history (written to
 | `help` | Commands |
 | `ls` / `echo hi` / `mkdir box` / `cat` / `nano` / `cp` / `mv` / `rm` / `stat` / `truncate` | Files under your tree. `nano <path>` edits; Ctrl-O saves, Ctrl-X leaves |
 | `echo hi \| cat` · `echo *` | One pipeline (pipe + `give`); one `*` per word in the current directory |
-| `whoami` / `users` / `useradd` / `passwd` / `quota` / `tokens` | Identity, cards, limits |
+| `whoami` / `users` / `useradd` / `passwd` / `volpass` / `quota` / `tokens` | Identity, cards, limits. `volpass` changes the volume passphrase |
 | `grant` / `revoke` / `share` / `unshare` / `su` | Access cards (see AUTH.md) |
 | `stats` / `tasks` / `threads` / `dmesg` / `sync` | Queries and the kernel log (after login) |
 | `echo $?` | Exit status of the last Cap-waited program |
@@ -243,9 +251,11 @@ stays without them, and CI skips those boots when the ELFs were not
 built.
 
 **Disk.** `cargo run --release` creates and attaches `galfs.img` in the repo root
-(gitignored, virtio-blk). Fresh image ⇒ fresh format ⇒ the shell asks
-for a volume passphrase only once there is a sealed slot; the
-bring-up passphrase is `galfs`. `GALEXY_GALFS_IMG=/path` relocates it;
+(gitignored, virtio-blk). A fresh image has no volume passphrase. The
+shell asks you to choose one and confirm it, then says to log in as
+`admin` / `admin` and run `passwd`. `volpass` (admin, after `passwd`)
+changes that passphrase and re-wraps the volume key. Test kernels still
+auto-unlock with `galfs`. `GALEXY_GALFS_IMG=/path` relocates the image;
 `GALEXY_GALFS_IDE=1` attaches it as the IDE slave instead. If a boot
 refuses the disk after a GALF version bump (`[galfs] disk corrupt;
 refusing silent format`, or `fsck` reports a foreign version), delete `galfs.img`

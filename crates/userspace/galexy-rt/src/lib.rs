@@ -267,15 +267,39 @@ pub fn session_locked() -> bool {
     got.ok && got.value == 1
 }
 
-/// True when the disk volume is locked and waiting for [`user_unlock`].
-pub fn volume_locked() -> bool {
+/// Volume query: `0` open or no disk, `1` sealed and locked, `2` no
+/// passphrase yet.
+pub fn volume_query() -> u64 {
     let got = user_name_pass(&[], &[], galexy_abi::USER_UNLOCK);
-    got.ok && got.value == 1
+    if got.ok {
+        got.value
+    } else {
+        0
+    }
 }
 
-/// Mount the sealed volume. An empty slice is the locked-state query.
+/// True when the disk volume is locked and waiting for [`user_unlock`].
+pub fn volume_locked() -> bool {
+    volume_query() != 0
+}
+
+/// Mount the sealed volume, or format an empty disk under `passphrase`.
+/// An empty slice is the locked-state query.
 pub fn user_unlock(passphrase: &[u8]) -> SyscallResult {
     user_name_pass(&[], passphrase, galexy_abi::USER_UNLOCK)
+}
+
+/// Change the volume passphrase. `current` is empty when the disk has
+/// no passphrase yet. Admin only. The caller confirms `new`.
+pub fn user_volpass(current: &[u8], new: &[u8]) -> SyscallResult {
+    syscall_r8r9(
+        Syscall::User as u64,
+        current.as_ptr() as u64,
+        current.len() as u64,
+        galexy_abi::USER_VOLPASS,
+        new.as_ptr() as u64,
+        new.len() as u64,
+    )
 }
 
 /// Set password for `name` (empty name = self).

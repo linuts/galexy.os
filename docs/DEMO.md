@@ -12,12 +12,17 @@ Headless `cargo run` (the default) types the same login in this
 terminal. Steps 4–7 switch consoles with F1/F2, which are PS/2 keys, so
 they need the window.
 
-1. On tty1 the login screen asks for a name and a masked password.
-   Type `admin`, then `admin`. The password line shows stars. Quit the
+1. On a fresh disk, tty1 asks for a volume passphrase and a
+   confirmation before the login screen. Choose one. An empty line
+   leaves the disk locked. The next screen says to log in as `admin`
+   with password `admin`, then run `passwd`. Type `admin`, then
+   `admin`. The password line shows stars. A later boot asks
+   `Volume passphrase:` for the passphrase from this step. Quit the
    headless session with Ctrl-A then X.
 2. The shell requires `passwd` before other commands. Enter a new
    password twice. COM1 records `[auth] passwd user=admin` and not the
-   secret.
+   secret. `volpass` then changes the volume passphrase (current, new,
+   confirm). COM1 records `[galfs] volume passphrase changed`.
 3. `useradd eve` and set eve's password at the star prompt.
    COM1 records `[auth] useradd user=eve`.
 4. Press **F2**. tty2 is a second login. Log in as `eve` with the

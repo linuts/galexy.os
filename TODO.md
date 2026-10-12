@@ -1194,8 +1194,11 @@ Protect the ATA image at rest (password hashes and file bytes).
 - [x] **Test**: `test-galfs-disk` round-trip; host asserts `persist-ok`
       is absent from raw `galfs.img` bytes
 - [x] **Interactive unlock**: production boot leaves the volume locked
-      (`set_auto_unlock(false)`). The login screen prompts
-      `Volume passphrase:` and calls `USER_UNLOCK` before `Login as:`.
+      (`set_auto_unlock(false)`). An empty image asks the operator to
+      choose a passphrase and confirm it (`USER_UNLOCK` formats). A
+      sealed image prompts `Volume passphrase:` before `Login as:`.
+      There is no production passphrase to type on a fresh disk.
+      `volpass` (`USER_VOLPASS`, admin) re-wraps the volume key.
       A wrong passphrase logs `[galfs] unlock failed; RAM-only`, does
       not mark the disk corrupt, and `sync` returns `Unsupported`.
       RAM login still works. An empty line skips to that fallback.

@@ -888,7 +888,7 @@ fn syscall_user(frame: &Context) -> SyscallResult {
         }
         galexy_abi::USER_UNLOCK => {
             if frame.r9 == 0 {
-                return SyscallResult::ok(u64::from(crate::sched::galfs::volume_locked()));
+                return SyscallResult::ok(crate::sched::galfs::volume_query());
             }
             let mut pass = [0u8; 64];
             let Some(p) = copy_user_str(frame.r8, frame.r9, &mut pass, false) else {
@@ -958,6 +958,37 @@ fn syscall_user(frame: &Context) -> SyscallResult {
             };
             let result = crate::sched::task_passwd(name, &pass[..p]);
             galexy_crypto::wipe_bytes(&mut pass);
+            match result {
+                Ok(()) => SyscallResult::ok(0),
+                Err(err) => SyscallResult::err(err),
+            }
+        }
+        galexy_abi::USER_VOLPASS => {
+            if !caller_is_admin() {
+                return SyscallResult::err(SysError::AccessDenied);
+            }
+            let mut current = [0u8; 64];
+            let mut new_pass = [0u8; 64];
+            let cur_len = if frame.rsi == 0 {
+                0
+            } else {
+                let Some(n) = copy_user_str(frame.rdi, frame.rsi, &mut current, false) else {
+                    galexy_crypto::wipe_bytes(&mut current);
+                    return SyscallResult::err(SysError::BadValue);
+                };
+                n
+            };
+            let Some(new_len) = copy_user_str(frame.r8, frame.r9, &mut new_pass, false) else {
+                galexy_crypto::wipe_bytes(&mut current);
+                galexy_crypto::wipe_bytes(&mut new_pass);
+                return SyscallResult::err(SysError::BadValue);
+            };
+            let result = crate::sched::galfs::set_volume_passphrase(
+                &current[..cur_len],
+                &new_pass[..new_len],
+            );
+            galexy_crypto::wipe_bytes(&mut current);
+            galexy_crypto::wipe_bytes(&mut new_pass);
             match result {
                 Ok(()) => SyscallResult::ok(0),
                 Err(err) => SyscallResult::err(err),
