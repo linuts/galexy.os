@@ -69,16 +69,21 @@ The gate needs these names, and they are the ones that list starts with:
 | --- | --- |
 | `builtins` | The language, including `print` and `open`. |
 | `sys` | `argv`, `stdout`, `stderr`, `version`. No environment. |
-| `io` | File objects over `std::fs`, which is galfs. |
+| `io` | `io.open`. The raw file is `_io.FileIO` over `std::fs`. Text mode is the buffered wrapper. |
 
 Other pure modules may be added in that same milestone when they
 compile with the refused features off. Each one is a line in the
 file. An import of anything else is `ImportError`.
 
-`open` is the file API. If RustPython's `open` insists on an `os`
-module, Milestone 92 adds the smallest `os` that `open` calls
-(path strings and the flags the PAL already implements) and every
-other `os` function raises. `os.fork` is not that surface.
+`open` is `_io.open`. `import io` is that same module: the frozen
+tree has no separate `io.py`. A text `open` is a `TextIOWrapper`
+over a `BufferedReader` or `BufferedWriter` over `_io.FileIO`.
+`FileIO` reads and writes bytes through `std::fs`, which is galfs.
+There is no file descriptor, so `fileno` and `opener` raise.
+`closefd=False` raises. A missing token is `OSError`. Text mode
+is UTF-8. `close`, including the end of a `with`, flushes the
+buffer. An unreferenced file is collected at the end of the
+statement, and that collection flushes it too.
 
 Time stays two clocks, and they are not mixed:
 
@@ -149,11 +154,11 @@ that is not listed is `ImportError` (the interpreter installs a
 exception and exits non-zero. The kernel stays up. `time.monotonic` is
 syscall `Clock` (27). `time.time` is syscall `Date` (34) and
 raises `OSError` when the date is unset, not the monotonic
-uptime. `os` is not on the list. `_io.FileIO` exists only with
-the host_env feature, which this build does not enable, so
-`builtins.open` is a small `std::fs` wrapper. `io.open` stays
-unsupported. A missing token is `OSError`. The guest test of an
-unset date is Milestone 94, and it has landed.
+uptime. `os` is not on the list. `builtins.open` and `io.open`
+are `_io.open`. `_io.FileIO` is the raw file over `std::fs`.
+The POSIX `host_env` FileIO stays off: it wants file descriptors,
+and this guest has none. A missing token is `OSError`. The guest
+test of an unset date is Milestone 94, and it has landed.
 
 ### 93 Ring 3
 
@@ -170,8 +175,9 @@ boot test also rejects `[pf]`.
 
 The same test kernel runs a second program. It reads a galfs
 file the task holds a token for, writes a second file, and
-exits 0. `open` is the `builtins` wrapper from section 92, not
-`_io.FileIO`. A path with no token raises a Python exception and
+exits 0. `io.open` in text mode reads the note, and `open` in
+text mode writes it back. A binary `io.open` reads those same
+bytes. A path with no token raises a Python exception and
 exits non-zero. The kernel does not panic. `time.time` with
 the date unset raises. After `Date` is set, `time.time` agrees
 with that civil time, and `time.monotonic` still moves like
@@ -225,6 +231,7 @@ the ELF was absent at image build.
 | Build | `scripts/build-galexy-python.sh` |
 | Image | `galexy-os-desk` in the runner, beside `galexy-os-rustc` |
 | REPL | bare `python` in the shell, with the keyboard grant |
+| `io.open` | `_io.FileIO` in the RustPython patch, over `std::fs` |
 | Tests | `bin/test-python`, `python_repl_typing_e2e`, `python_hello_typing_e2e` |
 
 The gate did not add a syscall. The stack budget that did change

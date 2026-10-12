@@ -499,8 +499,9 @@ This phase can land beside Phase 10 and Phase 13.
    `hello from python on galexy`. The 4-page leader overflowed;
    the interpreter uses a 17 MiB heap stack. Guest RAM stays 2 GiB
 4. **94 Files** ✅ — the same kernel reads and writes a galfs file
-   with the task's token. `builtins.open` is `std::fs` (`_io.FileIO`
-   needs host_env). A missing token is a Python exception
+   with the task's token. `io.open` and `open` are `_io.FileIO`
+   over `std::fs`, wrapped for text. There is no descriptor.
+   A missing token is a Python exception
 5. **95 Image** ✅ — `galexy-os-python` when the ELF exists. `cargo run`
    boots `galexy-os-desk` with no flag, and that image also carries
    `rustc` and its sysroot when the compiler ELF was built. The

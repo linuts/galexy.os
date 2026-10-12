@@ -49,6 +49,62 @@ index 0b55f2e..6454379 100644
  # REDOX START, Uncomment when you want to compile/check with redoxer
  # REDOX END
  
+diff --git a/crates/common/src/rand.rs b/crates/common/src/rand.rs
+index e497049..0e27a8e 100644
+--- a/crates/common/src/rand.rs
++++ b/crates/common/src/rand.rs
+@@ -9,6 +9,50 @@
+ #[must_use]
+ pub fn os_random<const N: usize>() -> [u8; N] {
+     let mut buf = [0u8; N];
+-    getrandom::fill(&mut buf).unwrap();
++    #[cfg(target_os = "galexy")]
++    {
++        // `getrandom`'s rdrand backend returns NO_RDRAND on this guest
++        // ("instruction not supported"). A hash seed is not a secret.
++        // Mix `Clock` (syscall 27) the way the PAL's fallback does.
++        fill_from_clock(&mut buf);
++    }
++    #[cfg(not(target_os = "galexy"))]
++    {
++        getrandom::fill(&mut buf).unwrap();
++    }
+     buf
+ }
++
++#[cfg(target_os = "galexy")]
++fn fill_from_clock(buf: &mut [u8]) {
++    let ticks = clock_ms().unwrap_or(0);
++    let mut state = ticks ^ (buf.as_ptr().addr() as u64) ^ 0x9E37_79B9_7F4A_7C15;
++    for chunk in buf.chunks_mut(8) {
++        state ^= state >> 12;
++        state ^= state << 25;
++        state ^= state >> 27;
++        state = state.wrapping_mul(0x2545_F491_4F6C_DD1D);
++        let bytes = state.to_ne_bytes();
++        chunk.copy_from_slice(&bytes[..chunk.len()]);
++    }
++}
++
++#[cfg(target_os = "galexy")]
++fn clock_ms() -> Result<u64, ()> {
++    let value: u64;
++    let ok: u64;
++    // SAFETY: syscall 27 is `Clock`. rcx and r11 are clobbered.
++    unsafe {
++        core::arch::asm!(
++            "syscall",
++            inlateout("rax") 27u64 => value,
++            inlateout("rdx") 0u64 => ok,
++            in("rdi") 0u64,
++            in("rsi") 0u64,
++            lateout("rcx") _,
++            lateout("r11") _,
++            options(nostack),
++        );
++    }
++    if ok != 0 { Ok(value) } else { Err(()) }
++}
 diff --git a/crates/common/src/str.rs b/crates/common/src/str.rs
 index be1086b..5c7b7c6 100644
 --- a/crates/common/src/str.rs
@@ -139,19 +195,19 @@ index 0000000..652cd72
 +time
 diff --git a/crates/galexy-python/src/main.rs b/crates/galexy-python/src/main.rs
 new file mode 100644
-index 0000000..05dd80e
+index 0000000..7d72cf0
 --- /dev/null
 +++ b/crates/galexy-python/src/main.rs
-@@ -0,0 +1,322 @@
+@@ -0,0 +1,272 @@
 +//! Run one Python file on the Galexy RustPython VM.
 +//!
 +//! `python PATH` reads the file and executes it with builtins and `sys`.
 +//! `python` with no path is a REPL: `>>> `, one statement at a time,
 +//! `exit()` or Ctrl-D leaves. An import whose top-level name is not in
-+//! `allow.txt` is `ImportError`. The process prints it and stays up.
++//! `allow.txt` is `ImportError` and the process exits non-zero.
++//! `open` and `io.open` are `_io.open`.
 +
-+use rustpython_vm::builtins::PyStrRef;
-+use rustpython_vm::{Interpreter, PyResult, Settings, VirtualMachine, compiler};
++use rustpython_vm::{Interpreter, Settings, VirtualMachine, compiler};
 +
 +/// Same names as `scripts/python-allow.txt`. The build copies that file
 +/// over this one before it links.
@@ -233,22 +289,22 @@ index 0000000..05dd80e
 +
 +    let mut settings = Settings::default();
 +    settings.argv = argv;
++    // Text files are UTF-8. There is no locale encoding.
++    settings.utf8_mode = 1;
 +    let interp = Interpreter::without_stdlib(settings);
 +    let mut status = 0;
 +    interp.enter(|vm| {
 +        let scope = vm.new_scope_with_builtins();
-+        if let Err(exc) = install_open(vm) {
-+            vm.print_exception(&exc);
-+            status = 1;
-+            return;
-+        }
 +        let prelude = allow_prelude();
 +        if let Err(exc) = run(vm, &prelude, scope.clone(), "<galexy>") {
 +            vm.print_exception(&exc);
 +            status = 1;
 +            return;
 +        }
-+        if let Err(exc) = run(vm, &source, scope, &path) {
++        let ran = run(vm, &source, scope, &path);
++        // Unreferenced files flush here, the way a refcounted close would.
++        vm.state.gc.collect_force(2);
++        if let Err(exc) = ran {
 +            vm.print_exception(&exc);
 +            status = 1;
 +        }
@@ -259,15 +315,11 @@ index 0000000..05dd80e
 +fn repl_main(argv: Vec<String>) -> i32 {
 +    let mut settings = Settings::default();
 +    settings.argv = argv;
++    settings.utf8_mode = 1;
 +    let interp = Interpreter::without_stdlib(settings);
 +    let mut status = 0;
 +    interp.enter(|vm| {
 +        let scope = vm.new_scope_with_builtins();
-+        if let Err(exc) = install_open(vm) {
-+            vm.print_exception(&exc);
-+            status = 1;
-+            return;
-+        }
 +        let prelude = allow_prelude();
 +        if let Err(exc) = run(vm, &prelude, scope.clone(), "<galexy>") {
 +            vm.print_exception(&exc);
@@ -304,6 +356,7 @@ index 0000000..05dd80e
 +        if let Err(exc) = run_interactive(vm, &source, scope.clone()) {
 +            vm.print_exception(&exc);
 +        }
++        vm.state.gc.collect_force(2);
 +    }
 +}
 +
@@ -380,29 +433,6 @@ index 0000000..05dd80e
 +    }
 +}
 +
-+fn install_open(vm: &VirtualMachine) -> PyResult<()> {
-+    let read = vm.new_function("_galexy_read", galexy_read);
-+    let write = vm.new_function("_galexy_write", galexy_write);
-+    vm.builtins.set_attr("_galexy_read", read, vm)?;
-+    vm.builtins.set_attr("_galexy_write", write, vm)?;
-+    Ok(())
-+}
-+
-+/// `_io.FileIO` is the host_env POSIX path. Galexy has no file
-+/// descriptors, so `open` is `std::fs` and a missing token is `OSError`.
-+fn galexy_read(path: PyStrRef, vm: &VirtualMachine) -> PyResult<String> {
-+    let path = path.to_string_lossy();
-+    std::fs::read_to_string(path.as_ref()).map_err(|err| vm.new_os_error(err.to_string()))
-+}
-+
-+fn galexy_write(path: PyStrRef, data: PyStrRef, vm: &VirtualMachine) -> PyResult<usize> {
-+    let path = path.to_string_lossy();
-+    let data = data.to_string_lossy();
-+    std::fs::write(path.as_ref(), data.as_bytes())
-+        .map_err(|err| vm.new_os_error(err.to_string()))?;
-+    Ok(data.len())
-+}
-+
 +fn run(
 +    vm: &rustpython_vm::VirtualMachine,
 +    source: &str,
@@ -438,88 +468,8 @@ index 0000000..05dd80e
 +         \t\treturn None\n\
 +         _sys.meta_path.insert(0, _Allow())\n\
 +         import _io as io\n\
-+         _sys.modules['io'] = io\n\
-+         class _GalexyFile:\n\
-+         \tdef __init__(self, path, mode):\n\
-+         \t\tself._path = path\n\
-+         \t\tself._mode = mode\n\
-+         \t\tself._buf = ''\n\
-+         \t\tif 'w' not in mode and 'a' not in mode:\n\
-+         \t\t\tself._buf = _galexy_read(path)\n\
-+         \tdef read(self, n=-1):\n\
-+         \t\treturn self._buf\n\
-+         \tdef write(self, data):\n\
-+         \t\tself._buf += data\n\
-+         \t\tif 'w' in self._mode or 'a' in self._mode:\n\
-+         \t\t\t_galexy_write(self._path, self._buf)\n\
-+         \t\treturn len(data)\n\
-+         \tdef __enter__(self):\n\
-+         \t\treturn self\n\
-+         \tdef __exit__(self, exc_type, exc, tb):\n\
-+         \t\tif 'w' in self._mode or 'a' in self._mode:\n\
-+         \t\t\t_galexy_write(self._path, self._buf)\n\
-+         \t\treturn False\n\
-+         import builtins as _builtins\n\
-+         def open(file, mode='r', *args, **kwargs):\n\
-+         \treturn _GalexyFile(file, mode)\n\
-+         _builtins.open = open\n"
++         _sys.modules['io'] = io\n"
 +    )
-+}
-diff --git a/crates/common/src/rand.rs b/crates/common/src/rand.rs
-index e497049..0e27a8e 100644
---- a/crates/common/src/rand.rs
-+++ b/crates/common/src/rand.rs
-@@ -9,6 +9,50 @@
- #[must_use]
- pub fn os_random<const N: usize>() -> [u8; N] {
-     let mut buf = [0u8; N];
--    getrandom::fill(&mut buf).unwrap();
-+    #[cfg(target_os = "galexy")]
-+    {
-+        // `getrandom`'s rdrand backend returns NO_RDRAND on this guest
-+        // ("instruction not supported"). A hash seed is not a secret.
-+        // Mix `Clock` (syscall 27) the way the PAL's fallback does.
-+        fill_from_clock(&mut buf);
-+    }
-+    #[cfg(not(target_os = "galexy"))]
-+    {
-+        getrandom::fill(&mut buf).unwrap();
-+    }
-     buf
- }
-+
-+#[cfg(target_os = "galexy")]
-+fn fill_from_clock(buf: &mut [u8]) {
-+    let ticks = clock_ms().unwrap_or(0);
-+    let mut state = ticks ^ (buf.as_ptr().addr() as u64) ^ 0x9E37_79B9_7F4A_7C15;
-+    for chunk in buf.chunks_mut(8) {
-+        state ^= state >> 12;
-+        state ^= state << 25;
-+        state ^= state >> 27;
-+        state = state.wrapping_mul(0x2545_F491_4F6C_DD1D);
-+        let bytes = state.to_ne_bytes();
-+        chunk.copy_from_slice(&bytes[..chunk.len()]);
-+    }
-+}
-+
-+#[cfg(target_os = "galexy")]
-+fn clock_ms() -> Result<u64, ()> {
-+    let value: u64;
-+    let ok: u64;
-+    // SAFETY: syscall 27 is `Clock`. rcx and r11 are clobbered.
-+    unsafe {
-+        core::arch::asm!(
-+            "syscall",
-+            inlateout("rax") 27u64 => value,
-+            inlateout("rdx") 0u64 => ok,
-+            in("rdi") 0u64,
-+            in("rsi") 0u64,
-+            lateout("rcx") _,
-+            lateout("r11") _,
-+            options(nostack),
-+        );
-+    }
-+    if ok != 0 { Ok(value) } else { Err(()) }
 +}
 diff --git a/crates/host_env/Cargo.toml b/crates/host_env/Cargo.toml
 index 7f96342..0106bb1 100644
@@ -776,7 +726,7 @@ index f7869fc..aee2a58 100644
      use crate::stdlib::errno::errors;
      let excs = &vm.ctx.exceptions;
 diff --git a/crates/vm/src/stdlib/_io.rs b/crates/vm/src/stdlib/_io.rs
-index 9bf3b3c..2aafdd3 100644
+index 9bf3b3c..0d12305 100644
 --- a/crates/vm/src/stdlib/_io.rs
 +++ b/crates/vm/src/stdlib/_io.rs
 @@ -7,7 +7,7 @@ pub(crate) use _io::module_def;
@@ -788,6 +738,461 @@ index 9bf3b3c..2aafdd3 100644
          use rustpython_host_env::crt_fd::Offset;
          // EAGAIN constant for BlockingIOError
          const EAGAIN: i32 = libc::EAGAIN;
+@@ -5707,6 +5707,7 @@ mod _io {
+                     Some(super::fileio::FileIO::static_type())
+                 }
+             }
++            target_os = "galexy" => Some(super::galexy_fileio::FileIO::static_type()),
+             feature = "host_env" => Some(super::fileio::FileIO::static_type()),
+             _ => None,
+         }
+@@ -5906,17 +5907,20 @@ mod _io {
+     }
+ 
+     #[cfg_attr(
+-        not(feature = "host_env"),
++        not(any(feature = "host_env", target_os = "galexy")),
+         expect(clippy::unnecessary_wraps, reason = "Needs to comply with a signature")
+     )]
+     pub(crate) fn module_exec(vm: &VirtualMachine, module: &Py<PyModule>) -> PyResult<()> {
+         // Call auto-generated initialization first
+         __module_exec(vm, module);
+ 
+-        // Initialize FileIO types (requires host_env for filesystem access)
+-        #[cfg(feature = "host_env")]
++        // POSIX FileIO needs file descriptors. Galexy files are `std::fs`.
++        #[cfg(all(feature = "host_env", not(target_os = "galexy")))]
+         super::fileio::module_exec(vm, module)?;
+ 
++        #[cfg(target_os = "galexy")]
++        super::galexy_fileio::module_exec(vm, module)?;
++
+         // Initialize WindowsConsoleIO type (Windows only)
+         #[cfg(all(feature = "host_env", windows))]
+         super::winconsoleio::module_exec(vm, module)?;
+@@ -7000,3 +7004,422 @@ mod winconsoleio {
+         }
+     }
+ }
++
++/// Raw files on Galexy. `std::fs` is the file, so there is no descriptor,
++/// no `fileno`, and no `opener`. `io.open` still wraps this in the buffered
++/// and text classes.
++#[cfg(target_os = "galexy")]
++#[pymodule]
++mod galexy_fileio {
++    use std::io::{Read, Seek, SeekFrom, Write};
++
++    use super::{
++        _io::{
++            get_offset, iobase_close, io_closed_error, new_unsupported_operation,
++            repr_file_obj_name, HowArg, _RawIOBase,
++        },
++        iobase_finalize, Offset,
++    };
++    use crate::{
++        AsObject, Py, PyObject, PyObjectRef, PyResult, VirtualMachine,
++        builtins::PyUtf8StrRef,
++        convert::{IntoPyException, TryFromObject},
++        function::{ArgBytesLike, ArgMemoryBuffer},
++        ospath::OsPath,
++        types::{Constructor, DefaultConstructor, Destructor, Initializer, Representable},
++    };
++
++    #[derive(Debug)]
++    struct State {
++        file: Option<std::fs::File>,
++        readable: bool,
++        writable: bool,
++        append: bool,
++        mode: String,
++    }
++
++    impl Default for State {
++        fn default() -> Self {
++            Self {
++                file: None,
++                readable: false,
++                writable: false,
++                append: false,
++                mode: String::new(),
++            }
++        }
++    }
++
++    struct ParsedMode {
++        readable: bool,
++        writable: bool,
++        append: bool,
++        truncate: bool,
++        create: bool,
++        create_new: bool,
++    }
++
++    fn parse_mode(mode: &str) -> Result<ParsedMode, String> {
++        let mut saw = false;
++        let mut plus = false;
++        let mut readable = false;
++        let mut writable = false;
++        let mut append = false;
++        let mut truncate = false;
++        let mut create = false;
++        let mut create_new = false;
++        for c in mode.chars() {
++            match c {
++                'r' | 'w' | 'a' | 'x' if saw => {
++                    return Err(
++                        "Must have exactly one of create/read/write/append mode and at most one plus"
++                            .to_owned(),
++                    );
++                }
++                'r' => {
++                    saw = true;
++                    readable = true;
++                }
++                'w' => {
++                    saw = true;
++                    writable = true;
++                    create = true;
++                    truncate = true;
++                }
++                'a' => {
++                    saw = true;
++                    writable = true;
++                    append = true;
++                    create = true;
++                }
++                'x' => {
++                    saw = true;
++                    writable = true;
++                    create_new = true;
++                }
++                '+' if plus => {
++                    return Err(
++                        "Must have exactly one of create/read/write/append mode and at most one plus"
++                            .to_owned(),
++                    );
++                }
++                '+' => plus = true,
++                'b' => {}
++                _ => return Err(format!("invalid mode: {mode}")),
++            }
++        }
++        if !saw {
++            return Err(
++                "Must have exactly one of create/read/write/append mode and at most one plus"
++                    .to_owned(),
++            );
++        }
++        if plus {
++            readable = true;
++            writable = true;
++        }
++        Ok(ParsedMode {
++            readable,
++            writable,
++            append,
++            truncate,
++            create,
++            create_new,
++        })
++    }
++
++    fn io_error(
++        zelf: &Py<FileIO>,
++        error: std::io::Error,
++        vm: &VirtualMachine,
++    ) -> crate::builtins::PyBaseExceptionRef {
++        let exc = error.into_pyexception(vm);
++        if let Ok(name) = zelf.as_object().get_attr("name", vm) {
++            let _ = exc.as_object().set_attr("filename", name, vm);
++        }
++        exc
++    }
++
++    #[pyattr]
++    #[pyclass(module = "_io", name, base = _RawIOBase)]
++    #[derive(Debug)]
++    pub(super) struct FileIO {
++        _base: _RawIOBase,
++        state: std::sync::Mutex<State>,
++    }
++
++    #[derive(FromArgs)]
++    pub(super) struct FileIOArgs {
++        #[pyarg(any)]
++        file: PyObjectRef,
++        #[pyarg(any, default, py_default = "'r'")]
++        mode: Option<PyUtf8StrRef>,
++        #[pyarg(any, default = true)]
++        closefd: bool,
++        #[pyarg(any, optional)]
++        opener: Option<PyObjectRef>,
++    }
++
++    #[derive(FromArgs)]
++    struct TruncatePos {
++        #[pyarg(positional, optional)]
++        size: Option<PyObjectRef>,
++    }
++
++    impl Default for FileIO {
++        fn default() -> Self {
++            Self {
++                _base: _RawIOBase::default(),
++                state: std::sync::Mutex::new(State::default()),
++            }
++        }
++    }
++
++    impl DefaultConstructor for FileIO {}
++
++    impl Initializer for FileIO {
++        type Args = FileIOArgs;
++
++        fn init(zelf: &Py<Self>, args: Self::Args, vm: &VirtualMachine) -> PyResult<()> {
++            if args.opener.is_some() {
++                return Err(new_unsupported_operation(
++                    "opener requires a file descriptor",
++                    vm,
++                ));
++            }
++            if args.file.fast_isinstance(vm.ctx.types.int_type) {
++                return Err(vm.new_value_error("file descriptors are not supported"));
++            }
++            if !args.closefd {
++                return Err(vm.new_value_error("Cannot use closefd=False with file name"));
++            }
++            let mode = args.mode.as_ref().map(|m| m.as_str()).unwrap_or("r");
++            let parsed = parse_mode(mode).map_err(|err| vm.new_value_error(err))?;
++            let path = OsPath::try_from_object(vm, args.file.clone())?;
++            let path_str = path.to_string_lossy();
++            let mut opts = std::fs::OpenOptions::new();
++            opts.read(parsed.readable);
++            opts.write(parsed.writable);
++            if parsed.append {
++                opts.append(true);
++            }
++            if parsed.truncate {
++                opts.truncate(true);
++            }
++            if parsed.create_new {
++                opts.create_new(true);
++            } else if parsed.create {
++                opts.create(true);
++            }
++            let opened = opts.open(path_str.as_ref()).map_err(|err| {
++                let exc = err.into_pyexception(vm);
++                let _ = exc.as_object().set_attr("filename", args.file.clone(), vm);
++                exc
++            })?;
++            {
++                let mut state = zelf
++                    .state
++                    .lock()
++                    .map_err(|_| vm.new_os_error("file lock poisoned"))?;
++                state.file = Some(opened);
++                state.readable = parsed.readable;
++                state.writable = parsed.writable;
++                state.append = parsed.append;
++                state.mode = mode.to_owned();
++            }
++            zelf.as_object().set_attr("name", args.file, vm)?;
++            Ok(())
++        }
++    }
++
++    impl Representable for FileIO {
++        #[inline]
++        fn repr_str(zelf: &Py<Self>, vm: &VirtualMachine) -> PyResult<String> {
++            let type_name = zelf.class().slot_name();
++            let closed = zelf
++                .state
++                .lock()
++                .map(|state| state.file.is_none())
++                .unwrap_or(true);
++            if closed {
++                return Ok(format!("<{type_name} [closed]>"));
++            }
++            let mode = zelf
++                .state
++                .lock()
++                .map(|state| state.mode.clone())
++                .unwrap_or_default();
++            let name = repr_file_obj_name(zelf.as_object(), vm)?;
++            Ok(match name {
++                Some(name) => format!("<{type_name} name={name} mode='{mode}' closefd=True>"),
++                None => format!("<{type_name} mode='{mode}' closefd=True>"),
++            })
++        }
++    }
++
++    #[pyclass(
++        with(Constructor, Initializer, Representable, Destructor),
++        flags(BASETYPE, HAS_DICT, HAS_WEAKREF)
++    )]
++    impl Py<FileIO> {
++        fn lock(&self, vm: &VirtualMachine) -> PyResult<std::sync::MutexGuard<'_, State>> {
++            self.state
++                .lock()
++                .map_err(|_| vm.new_os_error("file lock poisoned"))
++        }
++
++        #[pygetset]
++        fn mode(&self, vm: &VirtualMachine) -> PyResult<String> {
++            Ok(self.lock(vm)?.mode.clone())
++        }
++
++        #[pymethod]
++        fn readable(&self, vm: &VirtualMachine) -> PyResult<bool> {
++            let state = self.lock(vm)?;
++            if state.file.is_none() {
++                return Err(io_closed_error(vm));
++            }
++            Ok(state.readable)
++        }
++
++        #[pymethod]
++        fn writable(&self, vm: &VirtualMachine) -> PyResult<bool> {
++            let state = self.lock(vm)?;
++            if state.file.is_none() {
++                return Err(io_closed_error(vm));
++            }
++            Ok(state.writable)
++        }
++
++        #[pymethod]
++        fn seekable(&self, vm: &VirtualMachine) -> PyResult<bool> {
++            let state = self.lock(vm)?;
++            if state.file.is_none() {
++                return Err(io_closed_error(vm));
++            }
++            Ok(true)
++        }
++
++        #[pymethod]
++        fn readinto(
++            zelf: &Self,
++            buffer: ArgMemoryBuffer,
++            vm: &VirtualMachine,
++        ) -> PyResult<usize> {
++            let mut state = zelf.lock(vm)?;
++            if state.file.is_none() {
++                return Err(io_closed_error(vm));
++            }
++            if !state.readable {
++                return Err(new_unsupported_operation(
++                    "File or stream is not readable",
++                    vm,
++                ));
++            }
++            let file = state.file.as_mut().unwrap();
++            let mut buf = buffer.borrow_buf_mut();
++            file.read(&mut buf).map_err(|err| io_error(zelf, err, vm))
++        }
++
++        #[pymethod]
++        fn write(zelf: &Self, data: ArgBytesLike, vm: &VirtualMachine) -> PyResult<usize> {
++            let bytes = data.borrow_buf();
++            let mut state = zelf.lock(vm)?;
++            if state.file.is_none() {
++                return Err(io_closed_error(vm));
++            }
++            if !state.writable {
++                return Err(new_unsupported_operation(
++                    "File or stream is not writable",
++                    vm,
++                ));
++            }
++            let append = state.append;
++            let file = state.file.as_mut().unwrap();
++            if append {
++                file.seek(SeekFrom::End(0))
++                    .map_err(|err| io_error(zelf, err, vm))?;
++            }
++            file.write_all(&bytes)
++                .map_err(|err| io_error(zelf, err, vm))?;
++            Ok(bytes.len())
++        }
++
++        #[pymethod]
++        fn seek(&self, pos: PyObjectRef, whence: HowArg, vm: &VirtualMachine) -> PyResult<Offset> {
++            let offset = get_offset(&pos, vm)?;
++            let target = match whence.whence {
++                0 => {
++                    if offset < 0 {
++                        return Err(vm.new_os_error("Invalid argument"));
++                    }
++                    SeekFrom::Start(offset as u64)
++                }
++                1 => SeekFrom::Current(offset),
++                2 => SeekFrom::End(offset),
++                _ => return Err(vm.new_os_error("Invalid argument")),
++            };
++            let mut state = self.lock(vm)?;
++            let file = state.file.as_mut().ok_or_else(|| io_closed_error(vm))?;
++            let pos = file.seek(target).map_err(|err| err.into_pyexception(vm))?;
++            Offset::try_from(pos).map_err(|_| vm.new_overflow_error("file position overflowed"))
++        }
++
++        #[pymethod]
++        fn truncate(&self, len: TruncatePos, vm: &VirtualMachine) -> PyResult<Offset> {
++            let mut state = self.lock(vm)?;
++            if state.file.is_none() {
++                return Err(io_closed_error(vm));
++            }
++            if !state.writable {
++                return Err(new_unsupported_operation(
++                    "File or stream is not writable",
++                    vm,
++                ));
++            }
++            let file = state.file.as_mut().unwrap();
++            let size = match len.size {
++                Some(obj) => get_offset(&obj, vm)?,
++                None => {
++                    file.stream_position()
++                        .map_err(|err| err.into_pyexception(vm))? as Offset
++                }
++            };
++            if size < 0 {
++                return Err(vm.new_os_error("Invalid argument"));
++            }
++            file.set_len(size as u64)
++                .map_err(|err| err.into_pyexception(vm))?;
++            Ok(size)
++        }
++
++        #[pymethod]
++        fn close(zelf: &Self, vm: &VirtualMachine) -> PyResult<()> {
++            let res = iobase_close(zelf.as_object(), vm);
++            if let Ok(mut state) = zelf.state.lock() {
++                state.file = None;
++            }
++            res
++        }
++
++        #[pymethod]
++        fn __getstate__(zelf: PyObjectRef, vm: &VirtualMachine) -> PyResult {
++            Err(vm.new_type_error(format!(
++                "cannot pickle '{}' instances",
++                zelf.class().name()
++            )))
++        }
++    }
++
++    impl Destructor for FileIO {
++        fn slot_del(zelf: &PyObject, vm: &VirtualMachine) -> PyResult<()> {
++            iobase_finalize(zelf, vm);
++            Ok(())
++        }
++
++        #[cold]
++        fn del(_zelf: &Py<Self>, _vm: &VirtualMachine) -> PyResult<()> {
++            unreachable!("slot_del is implemented")
++        }
++    }
++}
 diff --git a/crates/vm/src/stdlib/time.rs b/crates/vm/src/stdlib/time.rs
 index 867891e..2f34670 100644
 --- a/crates/vm/src/stdlib/time.rs
