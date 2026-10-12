@@ -8,10 +8,11 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Phase 14 plan — RustPython is Milestones 91–96 and is required
-  before the `v1.0` tag. The command is `python` on
-  `galexy-os-python`. The stdlib is an allow-list. `time.time` is
-  `Date`. There is no new syscall, no `pip`, and no socket module.
+- [#108](https://github.com/linuts/galexy.os/pull/108) — Phase 14
+  plan — RustPython is Milestones 91–96 and is required before the
+  `v1.0` tag. The command is `python` on `galexy-os-python`. The
+  stdlib is an allow-list. `time.time` is `Date`. There is no new
+  syscall, no `pip`, and no socket module.
 - [#107](https://github.com/linuts/galexy.os/pull/107) — Session lock —
   `lock`, and 5 min at the prompt, freeze the seat. The password
   opens the same session. `logout` still drops it. File, spawn, and
