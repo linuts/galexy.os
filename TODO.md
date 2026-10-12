@@ -2262,7 +2262,7 @@ The Milestone 53–54 follow-ons, finished.
       checked or carries a written waiver; the `review-rc1` tag is the
       one owner-deferred item)
 - [ ] Suite green on BIOS + UEFI, TCG + KVM, `q35` + the `pc` legacy
-      case (BIOS + UEFI, TCG, `q35` + `pc` are green at 114 boots. The
+      case (BIOS + UEFI, TCG, `q35` + `pc` are green at 124 tests. The
       KVM pass needs a host where `KVM_CREATE_VCPU` succeeds. On the
       landing host `/dev/kvm` opens, then `VMCLEAR` faults in
       `alloc_loaded_vmcs`: a snapshot restore dropped VMXON while
@@ -2274,7 +2274,7 @@ The Milestone 53–54 follow-ons, finished.
 
 ---
 
-## Phase 11 — Rust on Galexy (upstream `rustc` as a tenant)
+## Phase 11 — Rust on Galexy (upstream `rustc` as a tenant) ✅
 
 Goal: Galexy becomes a real Rust target, then upstream `rustc` compiles
 and links `hello.rs` in ring 3. Plan, gap analysis, rejected paths and
@@ -2285,7 +2285,7 @@ surface. Milestones 68 and 69 need no kernel change (host-only, can
 run beside Phase 9); 70 follows Milestone 66; 71–73 follow `v1.0` and
 run under KVM (Milestone 64).
 
-## Milestone 68 — `x86_64-unknown-galexy` target (no fork)
+## Milestone 68 — `x86_64-unknown-galexy` target (no fork) ✅
 
 - [x] `targets/x86_64-unknown-galexy.json`: `os = "galexy"`, no
       `target_family`, `panic-strategy = "abort"`, static relocation
@@ -2591,9 +2591,10 @@ items stay here with rationale.
 - [x] ~~`rustc` can take arguments at the login shell (Milestones 74–76).
       `spawn` still cannot load the ELF it writes. Milestone **77**~~ —
       CLOSED by Milestone 77. `rustc hello.rs -o /hello` then `/hello`
-      prints `hello from rustc on galexy`. A spaced command receives
-      the query and loader grants so `rustc` can list the sysroot and
-      spawn `gxld`. The bare label `hello` stays the ramdisk program
+      prints `hello from rustc on galexy`. A ramdisk program with
+      arguments receives the query and loader grants so `rustc` can
+      list the sysroot and spawn `gxld`. A galfs path does not receive
+      the loader. The bare label `hello` stays the ramdisk program
 
 - [x] ~~UEFI: timer + keyboard dead under UEFI~~ — CLOSED by Milestone 17
       (APIC family: LAPIC timer + I/O APIC keyboard route on every boot

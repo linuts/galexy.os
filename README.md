@@ -287,13 +287,13 @@ crates/
   jobs), init-owned shutdown → `v1.0`
 - **Phase 10** — network (virtio-net, small stack, sockets as Caps),
   after `v1.0`
-- **Phase 11** — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
+- **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
   static linker (LINKER.md, ✅ Milestone 69), `std` PAL (✅ Milestone
   70), compiler-sized limits and ring-3 `gxld` (✅ Milestone 71),
   upstream Cranelift `rustc` compiling on-OS (✅ Milestone 72),
   and `gxld` linking that object inside the test kernel (✅ Milestone 73)
   — RUSTC.md
-- **Phase 12** — `rustc` as a login-shell command: `galexy-os-rustc`
+- **Phase 12** ✅ — `rustc` as a login-shell command: `galexy-os-rustc`
   (✅ Milestone 74), the sysroot imported on that boot (✅ Milestone
   75), arguments to a ramdisk program (✅ Milestone 76), and `spawn`
   of the ELF the compiler wrote (✅ Milestone 77)
