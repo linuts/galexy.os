@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#120](https://github.com/linuts/galexy.os/pull/120) — Shell —
+  A login image built without the host ELFs says `python: not in
+  this image` and names `scripts/build-galexy-python.sh`. The same
+  for `rustc`. `cargo run` says which of the two this boot carries.
 - [#119](https://github.com/linuts/galexy.os/pull/119) — Demo —
   The reviewer tour is a real two-seat card (`grant lr /Desktop shell2`,
   path `/admin@Desktop`). A seat parked on its prompt can receive the
