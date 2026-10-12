@@ -13,8 +13,8 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use bootloader_api::{entry_point, BootInfo};
-use galexy_os::{drivers::screen, exit_qemu, println, sched, serial_println, QemuExitCode};
+use bootloader_api::{BootInfo, entry_point};
+use galexy_os::{QemuExitCode, drivers::screen, exit_qemu, println, sched, serial_println};
 use x86_64::VirtAddr;
 
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
@@ -32,12 +32,33 @@ try:
     raise SystemExit(1)
 except OSError:
     print("time-unset")
-got = open("note.txt").read()
+import io
+if open is not io.open:
+    print("open-split")
+    raise SystemExit(1)
+text = io.open("note.txt")
+if type(text).__name__ != "TextIOWrapper":
+    print("bad-text-type")
+    raise SystemExit(1)
+got = text.read()
+text.close()
 if got != "alpha\n":
     print("bad-read")
     raise SystemExit(1)
 with open("out.txt", "w") as handle:
     handle.write(got)
+raw = io.open("out.txt", "rb")
+if type(raw).__name__ != "BufferedReader":
+    print("bad-binary-type")
+    raise SystemExit(1)
+if raw.read() != b"alpha\n":
+    print("bad-binary")
+    raise SystemExit(1)
+raw.close()
+open("out2.txt","w").write(got)
+if open("out2.txt").read() != got:
+    print("bad-temp")
+    raise SystemExit(1)
 print("files-ok")
 "#;
 const DENY_PY: &[u8] = b"open(\"note.txt\").read()\nprint(\"token-unexpected\")\n";
