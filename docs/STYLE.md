@@ -269,10 +269,34 @@ now, the same way the network rules are.
 - **Budgets are the ones in `USB.md`.** 32 devices, 8 interfaces,
   4096-byte configuration, 64-byte strings.
 
+## Python (RustPython)
+
+Rules for Phase 14 (`docs/PYTHON.md`; Milestones **91–96**). Binding
+now, the same way the network rules are. Required before the `v1.0`
+tag. It does not wait on Phase 10, and Phase 10 does not wait on it.
+
+- **The interpreter is upstream RustPython.** The command is
+  `python`. CPython does not enter the tree. The pin is a host
+  checkout, not a copy of that repository.
+- **No new syscall and no new Cap.** The seat starts one run and
+  Cap-waits. Init does not supervise it. `Lane` stays 35.
+  `MAX_PROC_CAPS` stays 16. `DISK_VERSION` stays 12. The target
+  JSON stays as it is.
+- **The allow-list is `scripts/python-allow.txt`.** A module that
+  is not listed raises `ImportError`. `socket`, `ssl`, `pip`,
+  `subprocess`, `ctypes`, and `os.fork` stay off that list.
+- **`std::net` stays unsupported.** A later Python milestone that
+  wants a peer speaks a lane. It does not grow a socket module.
+- **Two clocks stay two clocks.** `time.monotonic` is `Clock`.
+  `time.time` is `Date`, and it raises when the date is unset.
+- **Budgets are the ones in `PYTHON.md`.** 2 GiB until a boot shows
+  a higher number. The interpreter stays off the shared ramdisk.
+
 ## Subsystem docs
 
-A bus or a protocol gets one deep doc before its first milestone
-lands code (`NET.md`, `USB.md`). The wiki page is the reading copy
+A bus, a protocol, or a language runtime gets one deep doc before
+its first milestone lands code (`NET.md`, `USB.md`, `PYTHON.md`).
+The wiki page is the reading copy
 and stays in step. Device rows live only in `DEVICES.md`. A new
 opcode appends. A new on-disk record version is refused when unknown,
 and it is not a GALF version bump unless the slot layout changes.
@@ -350,7 +374,7 @@ and it is not a GALF version bump unless the slot layout changes.
 
 - When behavior changes, update in this order: code → doc comment →
   `TODO.md` checkbox → `README.md` feature list → relevant deep doc
-  (`DESIGN.md`, `AUTH.md`, `GALFS.md`, `PROCESS.md`, `NET.md`, `USB.md`, `DEVICES.md`, later `THREAT.md`).
+  (`DESIGN.md`, `AUTH.md`, `GALFS.md`, `PROCESS.md`, `NET.md`, `USB.md`, `PYTHON.md`, `DEVICES.md`, later `THREAT.md`).
 - `ROADMAP.md` only for direction shifts or new phases.
 - `TODO.md` checkboxes are only checked after the item is *verified
   working* (e.g. seen in QEMU), never when "written".
