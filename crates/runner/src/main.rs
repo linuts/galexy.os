@@ -25,13 +25,26 @@ fn main() {
     let uefi = std::env::args().any(|arg| arg == "--uefi");
     let display = std::env::args().any(|arg| arg == "--display");
     let rustc = std::env::args().any(|arg| arg == "--rustc");
+    let python = std::env::args().any(|arg| arg == "--python");
+    if rustc && python {
+        eprintln!("[runner] pass only one of --rustc and --python");
+        std::process::exit(1);
+    }
     if rustc && env!("GALEXY_HAVE_RUSTC") != "1" {
         eprintln!(
             "[runner] --rustc needs target/galexy-rustc/rustc. Build it with scripts/build-galexy-rustc.sh. The small image does not contain a compiler."
         );
         std::process::exit(1);
     }
-    let image = if rustc {
+    if python && env!("GALEXY_HAVE_PYTHON") != "1" {
+        eprintln!(
+            "[runner] --python needs target/galexy-python/python. Build it with scripts/build-galexy-python.sh. The small image does not contain an interpreter."
+        );
+        std::process::exit(1);
+    }
+    let image = if python {
+        "galexy-os-python"
+    } else if rustc {
         "galexy-os-rustc"
     } else {
         "galexy-os"

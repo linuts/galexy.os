@@ -184,8 +184,9 @@ contains `python`. `cargo run --release -- --python` boots it.
 when the ELF was absent at build, the same way it skips
 `galexy-os-rustc`. CI does not download RustPython.
 
-`python` with no arguments prints a usage line and returns to
-the prompt. It does not draw a REPL.
+`python` with no arguments prints `usage: python FILE` and
+returns to the prompt. It does not draw a REPL. The proof is
+`python_usage_typing_e2e` on that image.
 
 ### 96 Run it — Phase 14 gate
 

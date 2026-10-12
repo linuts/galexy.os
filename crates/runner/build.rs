@@ -133,9 +133,10 @@ fn main() {
         if have_rustc { "1" } else { "0" }
     );
 
-    // Milestone 93: `python` is ~64 MiB. It rides only on `test-python`,
-    // the same way `rustc` stays off the shared ramdisk. Absent ELF means
-    // CI still builds the image; the boot test skips.
+    // Milestone 93: `python` is ~64 MiB. It rides on `test-python` and,
+    // when the ELF exists, on `galexy-os-python` (Milestone 95). It stays
+    // off the shared ramdisk. Absent ELF means CI still builds the small
+    // image; the Python boots skip.
     let python_ramdisk = out_dir.join("ramdisk-python.tar");
     let have_python = write_python_ramdisk(&python_ramdisk);
     println!(
@@ -181,13 +182,32 @@ fn main() {
         ];
         let login_rustc = out_dir.join("ramdisk-rustc-login.tar");
         if have_rustc {
-            append_ramdisk(&ramdisk_path, &rustc_ramdisk, &login_rustc, |name| {
-                name == "rustc"
-                    || name == "gxld"
-                    || name == "x86_64-unknown-galexy.json"
-                    || name.starts_with("srlib/")
-            });
+            append_ramdisk(
+                &ramdisk_path,
+                &rustc_ramdisk,
+                &login_rustc,
+                |name| {
+                    name == "rustc"
+                        || name == "gxld"
+                        || name == "x86_64-unknown-galexy.json"
+                        || name.starts_with("srlib/")
+                },
+                5,
+            );
             variants.push(("galexy-os-rustc", &login_rustc));
+        }
+        // Milestone 95: `python` stays off the shared ramdisk. The login
+        // image exists only when the ELF was present at this build.
+        let login_python = out_dir.join("ramdisk-python-login.tar");
+        if have_python {
+            append_ramdisk(
+                &ramdisk_path,
+                &python_ramdisk,
+                &login_python,
+                |name| name == "python",
+                1,
+            );
+            variants.push(("galexy-os-python", &login_python));
         }
         for (variant, ramdisk) in variants {
             let bios_path = out_dir.join(format!("{variant}-bios.img"));
@@ -462,11 +482,18 @@ fn link_one(src: &Path, out: &Path, libs: &Path, json: &Path, gxld: Option<&Path
     bytes
 }
 
-/// Re-pack `source` as `dest`, letting `swap(name, body)` replace entries.
 /// `base` plus the entries of `extra` that `keep` accepts. A name that
 /// already exists in `base` is a build bug: the login image must not
-/// silently replace `hello` or `shell`.
-fn append_ramdisk(base: &Path, extra: &Path, dest: &Path, keep: impl Fn(&str) -> bool) {
+/// silently replace `hello` or `shell`. `min_added` is how many extra
+/// names this image must gain (`python` is one; the compiler image is
+/// `rustc`, `gxld`, the target JSON, and the sysroot).
+fn append_ramdisk(
+    base: &Path,
+    extra: &Path,
+    dest: &Path,
+    keep: impl Fn(&str) -> bool,
+    min_added: usize,
+) {
     let mut entries = read_tar(base);
     let mut names: std::collections::BTreeSet<String> =
         entries.iter().map(|(name, _)| name.clone()).collect();
@@ -483,7 +510,11 @@ fn append_ramdisk(base: &Path, extra: &Path, dest: &Path, keep: impl Fn(&str) ->
         entries.push((name, body));
         added += 1;
     }
-    assert!(added > 4, "login rustc ramdisk added {added} entries");
+    assert!(
+        added >= min_added,
+        "login ramdisk {} added {added} entries, wanted at least {min_added}",
+        dest.display()
+    );
     let mut tar = tar::Builder::new(std::fs::File::create(dest).unwrap());
     for (name, body) in &entries {
         let mut header = tar::Header::new_gnu();
