@@ -195,6 +195,19 @@ pub fn spawn_program_session(
     bytes: &[u8],
     arg: &[u8],
 ) -> Result<ProgramRegion, galexy_abi::SysError> {
+    spawn_program_with_fs(name, bytes, arg, crate::sched::galfs::admin_cred())
+}
+
+/// Like [`spawn_program_session`], with the caller's galfs credentials.
+///
+/// An empty token set still names the actor root, so a path resolves and
+/// then fails the card check (`AccessDenied`) instead of looking missing.
+pub fn spawn_program_with_fs(
+    name: &str,
+    bytes: &[u8],
+    arg: &[u8],
+    fs: crate::sched::galfs::FsCred,
+) -> Result<ProgramRegion, galexy_abi::SysError> {
     Ok(spawn_program_placed(
         name,
         bytes,
@@ -203,7 +216,7 @@ pub fn spawn_program_session(
         Grants::session(),
         arg,
         0,
-        crate::sched::galfs::admin_cred(),
+        fs,
         0,
         false,
         false,
