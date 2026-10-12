@@ -2089,6 +2089,78 @@ fn python_hello_runs() {
     );
 }
 
+/// Milestone 95: `galexy-os-python` carries `python`. No arguments
+/// print a usage line and the prompt comes back. There is no REPL.
+/// Skipped when the ELF was absent at image build.
+#[test]
+fn python_usage_typing_e2e() {
+    if env!("GALEXY_HAVE_PYTHON") != "1" {
+        eprintln!("python_usage_typing_e2e: skipped (no target/galexy-python/python)");
+        return;
+    }
+    let keys = with_login(&[
+        ("p", "p"),
+        ("y", "y"),
+        ("t", "t"),
+        ("h", "h"),
+        ("o", "o"),
+        ("n", "n"),
+        ("ret", "usage: python FILE"),
+        ("e", "e"),
+        ("c", "c"),
+        ("h", "h"),
+        ("o", "o"),
+        ("spc", " "),
+        ("p", "p"),
+        ("y", "y"),
+        ("minus", "-"),
+        ("p", "p"),
+        ("r", "r"),
+        ("o", "o"),
+        ("m", "m"),
+        ("p", "p"),
+        ("t", "t"),
+        ("ret", "py-prompt"),
+    ]);
+    let serial = boot_and_type(
+        &image("galexy-os-python"),
+        &keys,
+        "[boot] main loop ready",
+        "py-prompt",
+        Duration::from_millis(30),
+        Duration::from_secs(360),
+    );
+    let usage = serial
+        .find("usage: python FILE")
+        .expect("python printed no usage line");
+    let marker = serial
+        .rfind("py-prompt")
+        .expect("prompt did not accept a command after python");
+    let prompt = serial
+        .rfind("admin@galexy>")
+        .expect("prompt missing after python");
+    assert!(
+        usage < marker && marker < prompt,
+        "prompt did not return after python; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("command not found"),
+        "shell rejected python; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains(">>>"),
+        "python drew a REPL; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[pf]"),
+        "python faulted; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+}
+
 /// Milestone 73: host `rust-lld` and `gxld` images of a cg_clif hello both
 /// boot, then ring 3 `rustc hello.rs -o hello` links with on-OS `gxld`
 /// and runs. A second program uses `std::fs` and `std::thread`.

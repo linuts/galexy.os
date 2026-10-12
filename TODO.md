@@ -2843,11 +2843,11 @@ This phase can land beside Phase 10 and Phase 13.
 
 ## Milestone 95 — Image
 
-- [ ] `galexy-os-python` carries `python`. `cargo run --release --
+- [x] `galexy-os-python` carries `python`. `cargo run --release --
       --python` boots it. `cargo run` stays the small image
-- [ ] The runner skips the image when the ELF was absent at build.
+- [x] The runner skips the image when the ELF was absent at build.
       CI does not download RustPython
-- [ ] `python` with no arguments prints a usage line and returns to
+- [x] `python` with no arguments prints a usage line and returns to
       the prompt. There is no REPL
 
 ## Milestone 96 — Run it (Phase 14 gate)
