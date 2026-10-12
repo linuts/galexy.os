@@ -32,7 +32,7 @@ extern crate alloc;
 use galexy_abi::{Cap, SysError};
 use galexy_rt::{
     arg, entry, keyboard_cap, read, stats_cap, tasks_cap, user, user_login, user_unlock,
-    user_unlock_session, volume_locked, write_console, yield_now,
+    user_unlock_session, volume_query, write_console, yield_now,
 };
 
 mod builtins;
@@ -101,7 +101,7 @@ fn session_logged_in() -> bool {
 /// Returns `Some(must_change)` — `must_change` is set when `admin` still
 /// uses the format default password.
 fn login_screen(kbd: Cap, tty: u8) -> Option<bool> {
-    prompt_volume(kbd);
+    let mut fresh = prompt_volume(kbd);
     loop {
         write_console(&[0x0c]);
         write_console(b"Galexy.OS v");
@@ -109,6 +109,10 @@ fn login_screen(kbd: Cap, tty: u8) -> Option<bool> {
         write_console(b" (tty");
         write_tty_digits(tty);
         write_console(b")\n\n");
+        if fresh {
+            write_console(b"New volume. Log in as admin with password admin, then run passwd.\n\n");
+            fresh = false;
+        }
         write_console(b"Login as: ");
         let mut name = [0u8; USER_MAX];
         match read_line(kbd, &mut name, false) {
@@ -195,11 +199,79 @@ fn lock_screen(kbd: Cap, tty: u8) {
 
 /// Ask for the volume passphrase when the disk is locked.
 ///
-/// An empty line skips to the RAM-only login. A wrong passphrase retries.
-fn prompt_volume(kbd: Cap) {
-    if !volume_locked() {
-        return;
+/// A disk with no passphrase yet asks the operator to choose one and
+/// confirm it. An existing seal asks for that passphrase. An empty line
+/// skips to the RAM-only login. Returns whether this call sealed a new
+/// volume, so the login screen can say what to do next.
+fn prompt_volume(kbd: Cap) -> bool {
+    match volume_query() {
+        2 => prompt_new_volume(kbd),
+        1 => {
+            prompt_existing_volume(kbd);
+            false
+        }
+        _ => false,
     }
+}
+
+fn prompt_new_volume(kbd: Cap) -> bool {
+    loop {
+        write_console(b"This disk has no passphrase yet.\n");
+        write_console(
+            b"Choose one. It seals the filesystem. An empty line leaves the disk locked.\n",
+        );
+        write_console(b"New passphrase: ");
+        let mut pass = [0u8; PASS_MAX];
+        let n = match read_line(kbd, &mut pass, true) {
+            LineRead::Denied => {
+                wipe(&mut pass);
+                return false;
+            }
+            LineRead::Cancel | LineRead::Overlong => {
+                wipe(&mut pass);
+                continue;
+            }
+            LineRead::Line(0) => {
+                wipe(&mut pass);
+                write_console(b"\nVolume stays locked (RAM-only)\n");
+                return false;
+            }
+            LineRead::Line(n) => n,
+        };
+        write_console(b"Confirm: ");
+        let mut confirm = [0u8; PASS_MAX];
+        let c = match read_line(kbd, &mut confirm, true) {
+            LineRead::Denied => {
+                wipe(&mut pass);
+                wipe(&mut confirm);
+                return false;
+            }
+            LineRead::Cancel | LineRead::Overlong | LineRead::Line(0) => {
+                wipe(&mut pass);
+                wipe(&mut confirm);
+                write_console(b"\npassphrases do not match\n");
+                continue;
+            }
+            LineRead::Line(c) => c,
+        };
+        if n != c || pass[..n] != confirm[..c] {
+            wipe(&mut pass);
+            wipe(&mut confirm);
+            write_console(b"\npassphrases do not match\n");
+            continue;
+        }
+        let result = user_unlock(&pass[..n]);
+        wipe(&mut pass);
+        wipe(&mut confirm);
+        if result.ok {
+            write_console(b"\n");
+            return true;
+        }
+        write_console(b"\nVolume unlock failed\n");
+    }
+}
+
+fn prompt_existing_volume(kbd: Cap) {
     loop {
         write_console(b"Volume passphrase: ");
         let mut pass = [0u8; PASS_MAX];

@@ -2603,7 +2603,14 @@ fn with_login<'a>(keys: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
 /// After each `Password:` / `Confirm:`, console echo must be `*` only.
 /// Kernel log lines (`Ns: …`) may interleave on COM1 and are ignored.
 fn assert_passwords_masked(serial: &str) {
-    for marker in ["Password: ", "Confirm: "] {
+    for marker in [
+        "Password: ",
+        "Confirm: ",
+        "New passphrase: ",
+        "Volume passphrase: ",
+        "Current volume passphrase: ",
+        "New volume passphrase: ",
+    ] {
         let mut from = 0;
         while let Some(rel) = serial[from..].find(marker) {
             let start = from + rel + marker.len();
@@ -2623,6 +2630,12 @@ fn assert_passwords_masked(serial: &str) {
                     || line.starts_with("Confirm:")
                     || line.starts_with("passwd:")
                     || line.starts_with("password too long")
+                    || line.starts_with("New passphrase:")
+                    || line.starts_with("New volume passphrase:")
+                    || line.starts_with("Current volume passphrase:")
+                    || line.starts_with("Volume passphrase:")
+                    || line.starts_with("volpass:")
+                    || line.starts_with("passphrases do not match")
                 {
                     break;
                 }
@@ -4096,15 +4109,60 @@ fn shell_command_center_typing_e2e() {
     );
 }
 
-/// Sealed-disk boot: the volume passphrase prompt comes before the login
-/// banner. Default bring-up passphrase, masked.
-const UNLOCK_VOLUME_KEYS: &[(&str, &str)] = &[
+/// Fresh disk: choose a passphrase and confirm it. Masked.
+const CREATE_VOLUME_KEYS: &[(&str, &str)] = &[
+    ("g", "*"),
+    ("a", "*"),
+    ("l", "*"),
+    ("f", "*"),
+    ("s", "*"),
+    ("ret", "Confirm: "),
     ("g", "*"),
     ("a", "*"),
     ("l", "*"),
     ("f", "*"),
     ("s", "*"),
     ("ret", "Login as: "),
+];
+
+/// Later boot of a volume sealed with `vault`.
+const UNLOCK_VAULT_KEYS: &[(&str, &str)] = &[
+    ("v", "*"),
+    ("a", "*"),
+    ("u", "*"),
+    ("l", "*"),
+    ("t", "*"),
+    ("ret", "Login as: "),
+];
+
+/// After the account password is changed, replace the volume passphrase.
+const VOLPASS_KEYS: &[(&str, &str)] = &[
+    ("v", "v"),
+    ("o", "o"),
+    ("l", "l"),
+    ("p", "p"),
+    ("a", "a"),
+    ("s", "s"),
+    ("s", "s"),
+    ("ret", "Current volume passphrase: "),
+    ("g", "*"),
+    ("a", "*"),
+    ("l", "*"),
+    ("f", "*"),
+    ("s", "*"),
+    ("ret", "New volume passphrase: "),
+    ("v", "*"),
+    ("a", "*"),
+    ("u", "*"),
+    ("l", "*"),
+    ("t", "*"),
+    ("ret", "Confirm: "),
+    ("v", "*"),
+    ("a", "*"),
+    ("u", "*"),
+    ("l", "*"),
+    ("t", "*"),
+    ("ret", "admin@galexy> "),
 ];
 
 /// `sync` (explicit commit, silent) then `whoami` after a `passwd`: proves
@@ -4128,19 +4186,21 @@ const SYNC_WHOAMI_KEYS: &[(&str, &str)] = &[
 fn passwd_on_sealed_disk_typing_e2e() {
     // galexy.os#86: on the production image with the data disk attached
     // (the `cargo run` shape), `passwd` froze the guest after the audit
-    // line. Boot 1 unlocks a fresh sealed disk, logs in with the default
-    // password, changes it, runs commands, and must see the commit. Boot 2
-    // reopens the same disk and logs in with the new password.
+    // line. Boot 1 chooses a volume passphrase, logs in with the default
+    // account password, changes it, changes the volume passphrase, and
+    // must see the commit. Boot 2 reopens the same disk with the new
+    // volume passphrase and the new account password.
     let disk = common::fresh_galfs_image("passwd");
-    let mut keys: Vec<(&str, &str)> = UNLOCK_VOLUME_KEYS.to_vec();
+    let mut keys: Vec<(&str, &str)> = CREATE_VOLUME_KEYS.to_vec();
     keys.extend(LOGIN_ADMIN_KEYS.iter().copied());
     keys.extend(CLEAR_DEFAULT_PASSWD.iter().copied());
     keys.extend(SYNC_WHOAMI_KEYS.iter().copied());
+    keys.extend(VOLPASS_KEYS.iter().copied());
     let serial = common::boot_and_type_galfs(
         &image("galexy-os"),
         &disk,
         &keys,
-        "Volume passphrase: ",
+        "New passphrase: ",
         "",
         Duration::from_millis(30),
         Duration::from_secs(180),
@@ -4153,6 +4213,18 @@ fn passwd_on_sealed_disk_typing_e2e() {
     assert!(
         serial.contains("[galfs] formatted sealed disk"),
         "unlock did not format the fresh disk; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("This disk has no passphrase yet."),
+        "fresh disk did not guide the passphrase choice; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("Log in as admin with password admin"),
+        "fresh volume did not guide the first login; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[galfs] volume passphrase changed"),
+        "volpass did not re-wrap the volume; serial:\n{serial}"
     );
     let audit = serial
         .find("[auth] passwd user=admin")
@@ -4175,8 +4247,8 @@ fn passwd_on_sealed_disk_typing_e2e() {
         "boot 1 must have started on the default password; serial:\n{serial}"
     );
 
-    // Boot 2: same disk, new password, no must-change gate.
-    let mut keys: Vec<(&str, &str)> = UNLOCK_VOLUME_KEYS.to_vec();
+    // Boot 2: same disk, new volume passphrase, new account password.
+    let mut keys: Vec<(&str, &str)> = UNLOCK_VAULT_KEYS.to_vec();
     keys.extend(LOGIN_ADMIN_TESTPASS_KEYS.iter().copied());
     keys.extend([
         ("w", "w"),

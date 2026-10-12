@@ -423,6 +423,9 @@ static VOLUME_PASS: Mutex<VolumePass> = Mutex::new(VolumePass {
 /// When false, [`init`] leaves a usable disk locked until [`unlock_volume`].
 /// Default true so disk tests mount with [`VOLUME_PASSPHRASE`].
 static AUTO_UNLOCK: AtomicBool = AtomicBool::new(true);
+/// A locked disk with no GALF magic. The login screen asks the operator
+/// to choose a passphrase. Cleared once that passphrase seals the disk.
+static VOLUME_FRESH: AtomicBool = AtomicBool::new(false);
 
 /// Production boot calls this before [`init`]. Test kernels leave the default.
 pub fn set_auto_unlock(on: bool) {
@@ -510,7 +513,13 @@ pub fn init() {
         );
     } else if disk_usable() && !auto_unlock() {
         format_ram_table();
-        crate::serial_println!("[galfs] volume locked; passphrase required");
+        let fresh = !disk_has_seal();
+        VOLUME_FRESH.store(fresh, Ordering::Release);
+        if fresh {
+            crate::serial_println!("[galfs] volume locked; choose a passphrase");
+        } else {
+            crate::serial_println!("[galfs] volume locked; passphrase required");
+        }
         return;
     } else if disk_usable() {
         match load_from_disk(VOLUME_PASSPHRASE) {
@@ -608,6 +617,22 @@ pub fn volume_locked() -> bool {
     disk_usable() && !disk_corrupt() && VOLUME_KEY.lock().is_none()
 }
 
+/// `0` open or no disk, `1` sealed and locked, `2` no passphrase yet.
+pub fn volume_query() -> u64 {
+    if !volume_locked() {
+        0
+    } else if VOLUME_FRESH.load(Ordering::Acquire) {
+        2
+    } else {
+        1
+    }
+}
+
+/// True when a locked disk has no GALF header yet.
+fn volume_fresh() -> bool {
+    volume_locked() && VOLUME_FRESH.load(Ordering::Acquire)
+}
+
 /// Mount the sealed disk with `passphrase`, or format an empty image with it.
 ///
 /// A wrong passphrase on a current-version GALF image does **not** set
@@ -628,6 +653,7 @@ pub fn unlock_volume(passphrase: &[u8]) -> Result<(), SysError> {
     }
     match load_from_disk(passphrase) {
         DiskLoad::Loaded { recovered } => {
+            VOLUME_FRESH.store(false, Ordering::Release);
             store_passphrase(passphrase);
             let (slot, gen) = disk_slot_info();
             if recovered {
@@ -649,12 +675,16 @@ pub fn unlock_volume(passphrase: &[u8]) -> Result<(), SysError> {
             *VOLUME_KEY.lock() = Some(vk);
             wipe_bytes(&mut vk);
             if sync_to_disk() {
+                VOLUME_FRESH.store(false, Ordering::Release);
                 crate::serial_println!(
                     "[galfs] formatted sealed disk (LBA base {})",
                     disk_lba_base()
                 );
                 Ok(())
             } else {
+                // Leave the disk fresh. A key that never reached the
+                // slot would make the next prompt look already open.
+                wipe_volume_key();
                 crate::serial_println!("[galfs] unlock format failed");
                 Err(SysError::Unsupported)
             }
@@ -664,6 +694,80 @@ pub fn unlock_volume(passphrase: &[u8]) -> Result<(), SysError> {
             Err(SysError::AccessDenied)
         }
     }
+}
+
+/// Replace the passphrase that wraps the volume key and commit the slot.
+///
+/// A fresh locked disk (`current` empty) is formatted under `new`. A
+/// sealed volume must already be unlocked, and `current` must match the
+/// passphrase from this boot. The caller has already confirmed `new`.
+pub fn set_volume_passphrase(current: &[u8], new: &[u8]) -> Result<(), SysError> {
+    if new.is_empty() || new.len() > PASSPHRASE_MAX || current.len() > PASSPHRASE_MAX {
+        return Err(SysError::BadValue);
+    }
+    if disk_corrupt() || !disk_usable() {
+        return Err(SysError::Unsupported);
+    }
+    if volume_locked() {
+        if volume_fresh() && current.is_empty() {
+            return unlock_volume(new);
+        }
+        return Err(SysError::Unsupported);
+    }
+    if !passphrase_matches(current) {
+        crate::serial_println!("[galfs] volume passphrase rejected");
+        return Err(SysError::AccessDenied);
+    }
+    let mut old = [0u8; PASSPHRASE_MAX];
+    let old_len = {
+        let slot = VOLUME_PASS.lock();
+        let n = slot.len;
+        old[..n].copy_from_slice(&slot.bytes[..n]);
+        n
+    };
+    store_passphrase(new);
+    mark_dirty();
+    if sync_to_disk() {
+        wipe_bytes(&mut old);
+        crate::serial_println!("[galfs] volume passphrase changed");
+        Ok(())
+    } else {
+        store_passphrase(&old[..old_len]);
+        wipe_bytes(&mut old);
+        crate::serial_println!("[galfs] volume passphrase change failed");
+        Err(SysError::Unsupported)
+    }
+}
+
+fn passphrase_matches(pass: &[u8]) -> bool {
+    let slot = VOLUME_PASS.lock();
+    if slot.len == 0 || slot.len > PASSPHRASE_MAX {
+        return false;
+    }
+    let stored = &slot.bytes[..slot.len];
+    let mut diff = (stored.len() ^ pass.len()) as u8;
+    let n = stored.len().max(pass.len());
+    for i in 0..n {
+        let a = stored.get(i).copied().unwrap_or(0);
+        let b = pass.get(i).copied().unwrap_or(0);
+        diff |= a ^ b;
+    }
+    diff == 0
+}
+
+/// True when either slot starts with the GALF magic. A foreign version
+/// still counts: unlock refuses it instead of offering a new passphrase.
+fn disk_has_seal() -> bool {
+    let mut buf = DISK_BUF.lock();
+    for slot in 0..DISK_SLOT_COUNT as u32 {
+        if disk().read_sectors(slot_lba(slot), &mut buf.0).is_err() {
+            continue;
+        }
+        if buf[0][0..4] == DISK_MAGIC {
+            return true;
+        }
+    }
+    false
 }
 
 /// Flush a dirty unlocked volume, then zero the key and passphrase.
@@ -1002,8 +1106,8 @@ fn encode_table(
 
     let aad = seal_aad(generation);
 
-    // Re-wrap with the passphrase that unlocked this boot (bring-up constant
-    // when nothing was stored).
+    // Re-wrap with the passphrase stored for this boot. An empty slot
+    // is the test-harness passphrase; production stores one before sealing.
     let mut kdf_salt = [0u8; SALT_LEN];
     let mut wrap_nonce = [0u8; NONCE_LEN];
     let mut data_nonce = [0u8; NONCE_LEN];

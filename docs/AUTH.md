@@ -38,30 +38,39 @@ tables, shares, bitmap, block pool, and a per-actor KDF count in one
 payload, see `GALFS.md`):
 
 1. Format creates a random 32-byte volume key.
-2. A KEK is derived from the volume passphrase (`galfs` for bring-up)
-   via PBKDF2; the volume key is wrapped with ChaCha20-HMAC-SHA256.
+2. A KEK is derived from the volume passphrase via PBKDF2; the volume
+   key is wrapped with ChaCha20-HMAC-SHA256. A production disk has no
+   passphrase until the operator chooses one. Test kernels and the
+   disk harness use `galfs`.
 3. Actor/object payload is encrypted under the volume key (same AEAD);
    AAD binds magic + version + generation so slots cannot be spliced.
-4. Test kernels and the disk harness auto-unlock with the bring-up
-   passphrase (`galfs`). Production `galexy-os` calls
-   `set_auto_unlock(false)` before `galfs::init`, so a usable disk stays
-   locked until the seat submits a passphrase (`USER_UNLOCK`, prompted
-   on the login screen as `Volume passphrase:`). An empty line skips
-   the prompt and keeps the RAM table. A wrong passphrase logs
+4. Test kernels and the disk harness auto-unlock with `galfs`.
+   Production `galexy-os` calls `set_auto_unlock(false)` before
+   `galfs::init`. An empty image (no GALF magic) stays locked until
+   the seat chooses a passphrase and confirms it; `USER_UNLOCK` then
+   formats the disk. A sealed image asks for the existing passphrase
+   (`Volume passphrase:`). An empty line skips the prompt and keeps
+   the RAM table. A wrong passphrase logs
    `[galfs] unlock failed; RAM-only`, does **not** mark the disk
    corrupt (a later passphrase can retry), and `sync` returns
    `Unsupported`. Login against the RAM admin still works; disk
-   mutates are not committed until unlock. An empty image is formatted
-   under the typed passphrase.
-5. The volume key and stored passphrase are wiped (`[galfs] volume key
+   mutates are not committed until unlock.
+5. Admin changes the passphrase with `volpass` (`USER_VOLPASS`).
+   The volume must already be unlocked. The shell confirms the new
+   passphrase, the kernel checks the current one, and the next seal
+   re-wraps the volume key. Skipping the first prompt leaves the disk
+   fresh: `volpass` with an empty current passphrase formats it.
+   Logs are `[galfs] volume passphrase changed` or
+   `[galfs] volume passphrase rejected`. Neither line carries the secret.
+6. The volume key and stored passphrase are wiped (`[galfs] volume key
    wiped`) after the last session logs out and after a power sync.
    The next login screen prompts again. Wiping the key does not
    guarantee destruction of RAM remnants: cold-boot extraction is an
    **accepted** residual risk.
-6. The v6 tag is 16 bytes, but the MAC is HMAC-SHA256, not RFC 8439
+7. The v6 tag is 16 bytes, but the MAC is HMAC-SHA256, not RFC 8439
    Poly1305. Swapping the MAC without a version bump would fail open
    on every sealed image. Poly1305 waits for a versioned cutover.
-7. Non-goals: per-file keys, secure erase, TPM seal.
+8. Non-goals: per-file keys, secure erase, TPM seal.
 
 Older images (including sealed v7) are refused (format recreates admin).
 
@@ -87,20 +96,39 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
 1. Format creates immortal `admin` with `Desktop/` and password `admin`.
 2. **Every F-key shell (F1–F12)** starts **logged out**: no root, no
    tokens, grants = console + keyboard only (no loader, no queries, no
-   power). The seat shows a login screen:
+   power). A fresh disk asks for a passphrase before the login screen:
 
    ```text
+   This disk has no passphrase yet.
+   Choose one. It seals the filesystem. An empty line leaves the disk locked.
+   New passphrase: ********
+   Confirm: ********
+
    Galexy.OS v0.1.0 (tty1)
 
-   Volume passphrase: ********
+   New volume. Log in as admin with password admin, then run passwd.
+
    Login as: _
    Password: ********
    ```
 
-   `Volume passphrase:` appears only when a disk volume is locked.
-   The bring-up passphrase is `galfs`. Wrong password prints
-   `Login incorrect` and repeats the screen.
-   A cool-down prints `Login locked` (see below).
+   A later boot of that disk:
+
+   ```text
+   Volume passphrase: ********
+
+   Galexy.OS v0.1.0 (tty1)
+
+   Login as: _
+   Password: ********
+   ```
+
+   There is no passphrase baked into the production image. Test
+   kernels still unlock with `galfs`. The fresh-disk prompt appears
+   only when the image has no GALF header. A sealed disk asks
+   `Volume passphrase:`. Wrong password prints `Login incorrect`
+   and repeats the screen. A cool-down prints `Login locked`
+   (see below).
 3. After a successful password login the prompt is `user@galexy>`.
 4. `whoami` while logged out fails (`AccessDenied`).
 5. `logout` returns to the login screen (not a shell prompt).
@@ -185,10 +213,15 @@ bypasses the shell still cannot mutate galfs until `passwd` succeeds.
 ```text
 useradd <name> [password]     # admin only; prompts if password omitted
 passwd [name]                 # always masked Password: + Confirm:
+volpass                        # admin; current + new + confirm (masked)
 ```
 
 `passwd` never takes an inline secret. Mismatched confirmations print
 `passwd: passwords do not match` and leave the hash unchanged.
+`volpass` never takes an inline secret. It is refused until `passwd`
+clears the default-password gate. A mismatch prints
+`volpass: passphrases do not match`. A wrong current passphrase prints
+`volpass: passphrase incorrect`.
 
 ## Access cards (tokens)
 
@@ -268,7 +301,7 @@ after login. Repeated `login fail` lines collapse in that ring.
 [auth] revoke actor=admin path=/Desktop rights=0x1 target=shell2
 ```
 
-A secret prompt (`login`, volume unlock, `passwd`, confirm) echoes `*`
+A secret prompt (`login`, volume unlock, `passwd`, `volpass`, confirm) echoes `*`
 and the COM1 mirror of that write is stars, not the secret. Esc or
 Ctrl-C cancels the prompt. Ctrl-D is ignored; it is not end-of-file.
 
@@ -347,12 +380,12 @@ expect to find, and where the remaining edges are:
 
 | Promise | Since | Evidence | Open edge |
 | --- | --- | --- | --- |
-| Passwords hashed with PBKDF2-HMAC-SHA256, CSPRNG salt, constant-time compare, staging wiped on every path; iteration count stored per actor | M43 / M63 | `users`, `mustchange`, `audit_strings`, `galexy_crypto` stored-count test | volume KEK stays at 10 000; bring-up passphrase `galfs` |
+| Passwords hashed with PBKDF2-HMAC-SHA256, CSPRNG salt, constant-time compare, staging wiped on every path; iteration count stored per actor | M43 / M63 | `users`, `mustchange`, `audit_strings`, `galexy_crypto` stored-count test | volume KEK stays at 10 000; test harness passphrase `galfs` |
 | No echo at any password prompt; no secret on serial, console, or `dmesg` | M43 | `assert_passwords_masked`, `shell_secret_prompt_typing_e2e`, `audit_strings` | inline `login user pass` remains for scripts (seam table in `DESIGN.md`) |
 | Lockout: five misses lock actor and TTY; `Locked` does not check the password | M43 (#62) | `lockout_test_passes` | cool-down is ticks, not wall clock (by design) |
 | Idle logout; last logout or power wipes the volume key | M43 / M44 | `idle_test_passes`, `unlock_test_passes`, `shutdown_test_powers_off` | — |
 | Kernel-enforced must-change for the default admin password | M43 | `mustchange_test_passes`, `shell_must_change_typing_e2e` | — |
-| Sealed GALF: volume key wrapped under a passphrase KEK; wrong passphrase stays RAM-only; raw image carries no plaintext | M44 | `unlock_test_passes`, `galfs_disk_*`, `galexy_galf::slots_test` | bring-up passphrase `galfs`; Poly1305 waived (HMAC tag) |
+| Sealed GALF: volume key wrapped under a passphrase KEK; wrong passphrase stays RAM-only; raw image carries no plaintext | M44 | `unlock_test_passes`, `galfs_disk_*`, `galexy_galf::slots_test`, `passwd_on_sealed_disk_typing_e2e` | test harness passphrase `galfs`; a production disk has none until first login; Poly1305 waived (HMAC tag) |
 | Authorization is tokens, never identity; grant/share need every right on the object or an ancestor; revoke is exact-object | M34–M45 | `galfs`, `cards`, `shares`, `galexy_galf::cards_test` | — |
 | Pre-login seat cannot spawn; bare spawn has empty tokens; utilities inherit, optionally masked | M41–M43, kernel rule in M51 | `negative_test_passes`, `shell_nested_spawn_refused_e2e` | no in-tree spawner sets the rights mask yet |
 | Session generation is an audit counter per login/logout/su (`[auth] session login … gen=N tty=K id=D`) | M43 / M67 | `mustchange_test_passes`, `audit_strings`, `init_test_passes` | `id` is the seat Cap's debug id, not a handle |

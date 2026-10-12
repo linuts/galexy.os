@@ -184,6 +184,7 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(USER_LOCK, 12);
     assert_eq!(USER_UNLOCK_SESSION, 13);
     assert_eq!(USER_LOCKED, 14);
+    assert_eq!(USER_VOLPASS, 15);
     assert_eq!(QUOTA_LEN, 16);
     let keyboard = reserved::keyboard(CapRights::READ);
     assert_eq!(keyboard.index(), reserved::KEYBOARD_INDEX);
