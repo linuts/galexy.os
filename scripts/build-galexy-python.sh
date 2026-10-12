@@ -41,6 +41,32 @@ git -C "$SRC" checkout --detach "$REV"
 if [[ ! -f "$SRC/crates/galexy-python/Cargo.toml" ]]; then
     patch -d "$SRC" -p1 < "$ROOT/scripts/galexy-rustpython.patch"
 fi
+# The allow-list in this repo wins over the copy the patch planted.
+cp "$ROOT/scripts/python-allow.txt" "$SRC/crates/galexy-python/allow.txt"
+python3 - "$SRC" "$ROOT/scripts/python-frozen.txt" "$ROOT/scripts/python-allow.txt" <<'PY'
+import pathlib, sys
+src, frozen_path, allow_path = map(pathlib.Path, sys.argv[1:])
+def names(path):
+    out = []
+    for line in path.read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            out.append(line)
+    return out
+frozen = set(names(frozen_path))
+allow = set(names(allow_path))
+missing = sorted(frozen - allow)
+if missing:
+    raise SystemExit(f"frozen names missing from the allow-list: {missing}")
+stems = []
+for folder in ("crates/vm/Lib/core_modules", "crates/vm/Lib/python_builtins"):
+    for path in (src / folder).glob("*.py"):
+        stems.append(path.stem)
+extra = sorted(set(stems) - frozen)
+if extra:
+    raise SystemExit(f"checkout freezes names that are not in python-frozen.txt: {extra}")
+print("build-galexy-python: allow-list covers the frozen modules")
+PY
 
 export PATH="$LLVM_BIN:$PATH"
 # Cranelift, same as the sysroot. LLVM 23 cannot legalize an f16

@@ -141,10 +141,15 @@ skips it when the file is absent.
 ### 92 Allow-list
 
 `scripts/python-allow.txt` is the frozen set. The host test
-compares it to the build. Importing a name that is not listed
-is `ImportError` on the host harness for that ELF (a small
-driver, not a guest boot). `time.time` is specified as above,
-even if the guest test of the unset date waits for Milestone 94.
+compares it to `scripts/python-frozen.txt` and to the checkout's
+frozen Python files when the build script runs. Importing a name
+that is not listed is `ImportError` (the interpreter installs a
+`meta_path` finder before the program). The process prints the
+exception and stays up; it does not panic. `time.monotonic` is
+syscall `Clock` (27). `time.time` is syscall `Date` (34) and
+raises `OSError` when the date is unset, not the monotonic
+uptime. `os` is not on the list. `open` is `_io`, which uses
+`std::fs`. The guest test of an unset date waits for Milestone 94.
 
 ### 93 Ring 3
 

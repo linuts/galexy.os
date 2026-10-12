@@ -1,0 +1,46 @@
+# Modules a Galexy Python program may import.
+# The first three are the public surface. The rest are the VM's own
+# frozen and builtin modules at the pin in scripts/rustpython.rev.
+# socket, ssl, pip, venv, subprocess, ctypes, sqlite3, and os are absent.
+builtins
+sys
+io
+__hello__
+__hello_alias__
+__phello_alias__
+_abc
+_ast
+_codecs
+_collections
+_frozen_importlib
+_frozen_importlib_external
+_functools
+_imp
+_interpchannels
+_interpqueues
+_interpreters
+_io
+_operator
+_sre
+_stat
+_string
+_symtable
+_sysconfig
+_sysconfigdata
+_testinternalcapi
+_thread
+_types
+_typing
+_warnings
+_weakref
+atexit
+codecs
+copyreg
+encodings_ascii
+encodings_latin_1
+encodings_utf_8
+errno
+gc
+itertools
+marshal
+time

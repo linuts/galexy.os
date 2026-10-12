@@ -718,3 +718,67 @@ mod python_elf {
         });
     }
 }
+
+/// Milestone 92. The allow-list is the frozen set. A name the pin
+/// freezes and that is missing from the allow file fails this test.
+/// Importing anything else is `ImportError` in the interpreter; this
+/// is the same top-level check, on the host, without a boot.
+#[cfg(test)]
+mod python_allow {
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    fn names(path: &Path) -> BTreeSet<String> {
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        text.lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn root() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    /// Top-level name, the way the interpreter's finder splits `a.b`.
+    fn allowed(allow: &BTreeSet<String>, fullname: &str) -> bool {
+        let top = fullname.split('.').next().unwrap_or(fullname);
+        allow.contains(top)
+    }
+
+    #[test]
+    fn allow_list_covers_frozen_and_blocks_the_rest() {
+        let allow = names(&root().join("scripts/python-allow.txt"));
+        let frozen = names(&root().join("scripts/python-frozen.txt"));
+        for name in ["builtins", "sys", "io"] {
+            assert!(allow.contains(name), "{name} starts the allow-list");
+        }
+        let extra: Vec<_> = frozen.difference(&allow).cloned().collect();
+        assert!(
+            extra.is_empty(),
+            "frozen modules missing from the allow-list: {extra:?}"
+        );
+        for name in [
+            "socket",
+            "ssl",
+            "pip",
+            "venv",
+            "subprocess",
+            "ctypes",
+            "sqlite3",
+            "os",
+        ] {
+            assert!(!allow.contains(name), "{name} must not be importable");
+            assert!(!allowed(&allow, &format!("{name}.anything")));
+        }
+        assert!(!allowed(&allow, "os.fork"));
+        assert!(!allowed(&allow, "os.exec"));
+        assert!(!allowed(&allow, "os.system"));
+        assert!(!allowed(&allow, "os.environ"));
+        assert!(allowed(&allow, "io"));
+        assert!(allowed(&allow, "time"));
+        assert!(allowed(&allow, "_io"));
+    }
+}
