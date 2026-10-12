@@ -330,14 +330,22 @@ ported. `.eh_frame` stays out until `panic=unwind`. `std` closes every
 file cap in `rt::cleanup`: stdio is not a `File`, and `Command::output`
 reads the linker pipe to EOF before `Wait`.
 
-### On the shell (Milestones 74–77)
+### On the shell (Milestones 74–77, and the desk image)
 
 `test-rustc-hello` is not a seat. The login shell is:
 
 - The compiler ramdisk (~214 MiB ELF, ~90 MiB sysroot) is attached
-  to `test-rustc`, `test-rustc-hello`, and `galexy-os-rustc`.
-  `cargo run --rustc` boots that image. Every other image keeps the
-  shared ~24 MiB ramdisk (Milestone 74).
+  to `test-rustc`, `test-rustc-hello`, `galexy-os-rustc`, and, when
+  the compiler ELF exists, to `galexy-os-desk`. `cargo run` boots
+  `galexy-os-desk` when `target/galexy-rustc/rustc` or
+  `target/galexy-python/python` was present at image build. Both
+  ELFs means one image: the compiler pieces and `python`. When
+  neither ELF exists, `cargo run` boots the small `galexy-os`
+  image. `--rustc` and `--python` still parse. They do not select
+  a different image. They error only when that ELF is missing.
+  The shared test ramdisk stays the small userspace set, so CI
+  does not run `x.py` or fetch RustPython (Milestone 74, then
+  Milestone 96).
 - The login kernel copies the JSON and `srlib/*` into the RAM store
   before init when the ramdisk contains `srlib/` (Milestone 75).
   A v12 disk file cannot hold `core`'s ~66 MiB `.rmeta`, so the
@@ -393,8 +401,10 @@ adds `ThreadSpawn` + `Futex`, which should be designed in `PROCESS.md`
 beside `Channel` so the Milestone 67 ABI freeze covers them. Stages 4–6
 come after `v1.0`; they need KVM in the runner (Milestone 64) to be
 testable in reasonable time. Those stages have since landed (Milestones
-68–73). Phase 10 (`docs/NET.md`, Milestones 78–85), Phase 13
-(`docs/USB.md`, Milestones 86–88), and Phase 14 (`docs/PYTHON.md`,
-Milestones 91–96) are required before the `v1.0` tag. `std::net`
-stays unsupported; a lane is not a `TcpStream`, and RustPython
-does not add a socket module.
+68–73). Phase 14 (`docs/PYTHON.md`, Milestones 91–96) has landed:
+`cargo run` carries `python`, and the compiler, when those ELFs
+were built. Phase 10 (`docs/NET.md`, Milestones 78–85) and Phase 13
+(`docs/USB.md`, Milestones 86–88) are still required before the
+`v1.0` tag, along with a KVM pass. `std::net` stays unsupported;
+a lane is not a `TcpStream`, and RustPython does not add a socket
+module.

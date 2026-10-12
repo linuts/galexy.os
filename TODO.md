@@ -2206,8 +2206,8 @@ legacy paths kept only where the platform has nothing else.
       user pages, GPU beyond the GOP framebuffer. Network is Phase 10
       (Milestones 78–85, `docs/NET.md`). USB is Phase 13 (Milestones
       86–88, `docs/USB.md`). RustPython is Phase 14 (Milestones
-      91–96, `docs/PYTHON.md`). All three are required before the
-      `v1.0` tag
+      91–96, `docs/PYTHON.md`). All three were required before the
+      `v1.0` tag. Phase 14 has since landed
 
 ## Milestone 66 — Userland completeness ✅
 
@@ -2569,7 +2569,9 @@ run `x.py`.
       including `cargo run`, keeps the small ramdisk
 - [x] `cargo run --rustc` boots that image. When the ELF is absent the
       runner says so and does not pretend the small image has a
-      compiler
+      compiler. Milestone 96 later boots `galexy-os-desk` from a
+      plain `cargo run` when the ELF exists. These boxes record
+      what Milestone 74 itself shipped
 - [x] The new boot test skips when `GALEXY_HAVE_RUSTC` is not `1`,
       same rule as `rustc_hello_runs`. It reaches the login prompt,
       and typing `rustc` with no arguments runs the compiler (a
@@ -2845,7 +2847,10 @@ This phase can land beside Phase 10 and Phase 13.
 ## Milestone 95 — Image
 
 - [x] `galexy-os-python` carries `python`. `cargo run --release --
-      --python` boots it. `cargo run` stays the small image
+      --python` boots it. `cargo run` stays the small image.
+      Milestone 96 replaced the flag: `cargo run` boots
+      `galexy-os-desk` with no flag. This box records what
+      Milestone 95 itself shipped
 - [x] The runner skips the image when the ELF was absent at build.
       CI does not download RustPython
 - [x] `python` with no arguments is the REPL. `exit()` returns to

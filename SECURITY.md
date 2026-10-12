@@ -64,10 +64,10 @@ fixed in a milestone PR with a changelog line.
   lists devices and locks the driver table before `v1.0`. Until it
   lands, a plugged-in device is invisible. Vendor drivers are not
   part of that phase.
-- Python: there is no interpreter in this tree. Phase 14
-  (`docs/PYTHON.md`) runs RustPython as `python` before `v1.0`.
-  Until it lands, a `.py` file is an ordinary file. The plan adds
-  no syscall and no socket module.
+- Python: `cargo run` carries RustPython as `python` when
+  `target/galexy-python/python` was built (`docs/PYTHON.md`).
+  A `.py` file runs with the seat's tokens. The interpreter adds
+  no syscall and no socket module. `pip` and `subprocess` stay out.
 - Denial of service by the operator at the keyboard (the console budget
   and quotas are fairness, not security, mechanisms).
 

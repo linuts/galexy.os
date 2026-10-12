@@ -8,36 +8,37 @@ A small **capability-based** operating system in Rust. Boots BIOS and UEFI,
 runs on two CPUs, and has a real ring-3 userland: login seats under a
 userspace init, a shell with pipelines and line editing, utilities, a
 sealed disk-backed filesystem (galfs), process Caps, sleep / block /
-wake scheduling, and an on-OS Cranelift `rustc`.
+wake scheduling, an on-OS Cranelift `rustc`, and a RustPython
+`python` (a file, or the REPL).
 
 Not a Linux clone. No POSIX claim. Authority is **capabilities** (and
 galfs access cards), not global file descriptors or PIDs.
 
-**Status (October 2026):** Milestones 1–61 and 63–77 are in this tree
+**Status (October 2026):** Milestones 1–61 and 63–96 are in this tree
 (62 was superseded); `nano` is in the ramdisk. Milestone 67 gives init
 shutdown, `svc`, and the ABI freeze (`spawn` stays experimental).
 Milestone 71 raises the guest to 2 GiB, the per-task `Map` budget to
 1 GiB, open files to 64, and argv to 4 KiB, and adds ring-3 `gxld`.
-Milestone 72 runs a Cranelift `rustc` on Galexy and checks its object
-output against the host. Milestone 73 links that object with `gxld`
-and runs it inside the `test-rustc-hello` kernel. Milestones 74–77
-put `rustc` on the login image: `rustc hello.rs -o /hello`, then
-`/hello`.
-The QEMU suite is 124 runner tests plus host tests (`test-big` boots
-only under KVM; `rustc_obj_matches_host` and `rustc_hello_runs` run
-when the compiler ELF was present at image build). The Milestone 52 review checklist is complete except
+Milestones 72–77 run a Cranelift `rustc` on Galexy and put it on the
+login image: `rustc hello.rs -o /hello`, then `/hello`.
+Milestones 91–96 put RustPython on that same boot: `python hello.py`,
+and `python` with no file is the REPL.
+The QEMU suite is 127 runner tests plus host tests (`test-big` boots
+only under KVM; the rustc and python boots run when those ELFs were
+present at image build). The Milestone 52 review checklist is complete except
 the `review-rc1` tag, which is the owner's call. The `v1.0` tag waits
 on Phase 10 (Milestones 78–85, an address, a datagram, and a lane
 you can `fetch`; [`docs/NET.md`](docs/NET.md)), on Phase 13
 (Milestones 86–88, a listed USB device and the driver table;
-[`docs/USB.md`](docs/USB.md)), on Phase 14 (Milestones 91–96,
-RustPython as `python hello.py`; [`docs/PYTHON.md`](docs/PYTHON.md)),
+[`docs/USB.md`](docs/USB.md)),
 and on a KVM pass (BIOS+UEFI, TCG+KVM, q35+pc, `PERF.md`).
 The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md) → Where
-we stand. Known gap today: there is no network device, no lane, no USB
-controller, and no Python interpreter. The network plan is a ring-3 `net` service, DHCP,
+we stand. Known gap today: there is no network device and no USB
+controller. When `target/galexy-rustc/rustc` and
+`target/galexy-python/python` were built, a normal `cargo run` logs
+into a seat that has both. The network plan is a ring-3 `net` service, DHCP,
 and a granted TLS 1.3 lane, not a socket API. The USB plan sees
-devices and stops there. The Python plan is upstream RustPython
+devices and stops there. Python is upstream RustPython
 as a login-shell command, not CPython and not a socket module.
 The inventory is
 [`docs/DEVICES.md`](docs/DEVICES.md). Legacy device paths
@@ -77,6 +78,12 @@ cargo run --release                 # BIOS, headless; type on this terminal
 cargo run --release -- --display    # also open the framebuffer window (F1–F12)
 cargo run --release -- --uefi       # UEFI — set OVMF_FD if the default path is missing
 ```
+
+When `target/galexy-rustc/rustc` or `target/galexy-python/python`
+exists, that same `cargo run` includes them. No flag selects the
+image. `python` with no file is the REPL. The one-time host builds
+are `scripts/build-galexy-rustc.sh` and `scripts/build-galexy-python.sh`.
+CI does not run them, so the test image stays small.
 
 `cargo run --release` attaches a persistent `galfs.img` as **virtio-blk-pci**
 on `-M q35` (virtio 1.x; boot image stays IDE index 0 with `snapshot=on`,
