@@ -32,6 +32,9 @@ you can `fetch`; [`docs/NET.md`](docs/NET.md)), on Phase 13
 (Milestones 86–88, a listed USB device and the driver table;
 [`docs/USB.md`](docs/USB.md)),
 and on a KVM pass (BIOS+UEFI, TCG+KVM, q35+pc, `PERF.md`).
+Phase 15 (Milestones 97–99, [`docs/GALFS.md`](docs/GALFS.md)) is the
+sealed-commit plan: one virtio request, then a commit of the changed
+bytes plus one metadata seal. It does not gate `v1.0`.
 The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md) → Where
 we stand. Known gap today: there is no network device and no USB
 controller. When `target/galexy-rustc/rustc` and
@@ -343,6 +346,11 @@ crates/
   sysroot. `python hello.py`, a file copy, and a REPL (`>>>`).
   No new syscall, no `pip`, no sockets. Milestones 91–96. Plan:
   [`docs/PYTHON.md`](docs/PYTHON.md)
+- **Phase 15** — sealed commits. A dirty sync becomes one virtio
+  request, then a commit of the changed bytes plus one metadata
+  seal. The login table stays. Milestones 97–99. It can land beside
+  Phase 10 and Phase 13, and it does not gate `v1.0`. Plan:
+  [`docs/GALFS.md`](docs/GALFS.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
   static linker (LINKER.md, ✅ Milestone 69), `std` PAL (✅ Milestone
   70), compiler-sized limits and ring-3 `gxld` (✅ Milestone 71),

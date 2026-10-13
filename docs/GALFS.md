@@ -294,7 +294,9 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
   sized to the disk (`MIN_DISK_BYTES` = 8 MiB, files up to 64 MiB).
   `check_image` looks at the version and checks v12 or v13. The kernel
   still refuses a version other than 12, so it does not format or load
-  v13 yet
+  v13 yet. Phase 15 (Milestones **97–99**) is the plan for that load:
+  see Scheduled commits below. Host v13 names 32 files and does not
+  carry the actor table; the login volume does not become that map
 - Sealed dual-slot image (288 sectors/slot) on the IDE slave
 - Object + block fill stress; remove reuses blocks without leaks
 - Shell: `ls` / `cat` / `echo` / `touch` / `mkdir` / `rm` / `cp` / `mv`
@@ -402,6 +404,28 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 - Double-indirect / lengths beyond u16
 - Optional fsck repair into a new slot
 
+### Scheduled commits (Phase 15, Milestones 97–99)
+
+Checkboxes: `TODO.md`. The bar is a commit that costs the changed
+bytes, one metadata seal, and one flush. None of the three bars is
+a gigabyte per second.
+
+- **97** — one virtio data request for the 288-sector v12 slot, then
+  one flush. `DISK_VERSION` stays 12. Still one command in flight.
+  `PERF.md` records the TCG and KVM sync times
+- **98** — the kernel formats and loads a large volume: changed 4 KiB
+  blocks, one sealed 64 KiB metadata slot, one flush. Actors, objects,
+  shares, and quotas stay in that metadata. Host v13 (`MAX_FILES` = 32,
+  no actor table) is the extent-map shape, not the login image. A v12
+  image is refused. A 1 MiB file survives reboot. `core`'s metadata
+  (~66 MiB) stays in the RAM store because the file cap is 64 MiB
+- **99** — the object table is sized to the file count one desk
+  compile needs. That count is a format change. Dual-slot order stays.
+  A crash recovers the previous metadata slot. No journal
+
+Left out of this phase: `async` / `await`, several virtio commands in
+flight, ATA PIO as the fast path, POSIX, mmap, sparse files, hard links.
+
 ### Storage stack (Milestone 46 ✅)
 
 Default attach is virtio 1.x on `-M q35` (PCI capabilities, MMIO BARs,
@@ -442,6 +466,9 @@ and the legacy virtio I/O BAR (`disable-modern=on`, serial line
 | **63** ✅ | Per-actor KDF cost in the actor record (GALF v12) |
 | **64** ✅ | virtio-blk parks on `IO_BLOCK`; completion IRQ (INTx then, MSI-X in 65) |
 | **65** ✅ | virtio 1.x + MSI-X on `q35`; IDE (`-M pc`) and legacy virtio as fallbacks |
+| **97** | One virtio request for the 288-sector slot; `DISK_VERSION` stays 12; sync times in `PERF.md` |
+| **98** | Kernel large volume: changed 4 KiB blocks plus one 64 KiB metadata seal; login table kept; v12 refused |
+| **99** | Object table sized to one desk compile; crash recovers the previous metadata slot |
 
 Demo limits above are the shipped contract (double-indirect and fsck
 repair-into-new-slot are follow-ons). New code must not invent a second

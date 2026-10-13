@@ -2873,6 +2873,89 @@ This phase can land beside Phase 10 and Phase 13.
 
 ---
 
+## Phase 15 — Sealed commits
+
+A commit should cost the bytes that changed, plus one metadata seal
+and one flush. That is the small-fsync class. It is not ext4, APFS,
+NTFS, or ZFS on NVMe. Plan: `docs/GALFS.md` → Scheduled commits.
+This phase can land beside Phase 10 and Phase 13. It does not move
+the `v1.0` tag. Desktop-class throughput stays the non-goal in
+`THREAT.md`.
+
+## Milestone 97 — One request for the slot
+
+No format change. `DISK_VERSION` stays 12. The 128-entry virtio
+queue is the descriptor chain for one command, not 128 commands.
+
+- [ ] **One chain**: a dirty v12 sync is one virtio data request for
+      the 288-sector slot (144 KiB, about 36 pages), then one flush,
+      then the generation publish. The 32-sector batch cap is not
+      what limits this transfer. The chain allows 126 data
+      descriptors
+- [ ] **Still one command**: one request header, one status byte,
+      the device lock held across the wait, and the CPU that holds
+      the buffer stays pinned. A second in-flight command is not
+      added. galfs still has one disk buffer
+- [ ] **Measure**: `PERF.md` records one sync under TCG and under
+      KVM. On a host where `KVM_CREATE_VCPU` fails, the KVM cell
+      stays empty with the same note the other KVM cells use. The
+      number is not a gigabyte-per-second budget
+- [ ] **ATA**: PIO stays the legacy fallback. This milestone does
+      not make it the fast path
+
+## Milestone 98 — Kernel large volume
+
+The kernel formats and loads the large-volume image. File bytes
+leave the sealed slot. Host `galexy-galf` v13 is that shape for
+file bytes: two 64 KiB metadata slots, then a 4 KiB pool
+(`MIN_DISK_BYTES` = 8 MiB, files up to 64 MiB, eight extents per
+file). Its payload names 32 files and does not carry actors,
+shares, or quotas.
+
+- [ ] **Layout**: two 64 KiB sealed metadata slots, then a 4 KiB
+      data pool sized to the disk. A commit writes the changed
+      blocks, seals the inactive metadata slot, flushes, then
+      publishes. Unchanged blocks stay where they are
+- [ ] **The login volume stays galfs**: actors, objects, shares,
+      and quotas are in that metadata. Do not mount the 32-file
+      map as the volume `cargo run` uses. If the live table plus
+      extents does not fit the current v13 payload, the version
+      moves past 13 in this same change, with `galexy-galf`
+- [ ] **Version**: `DISK_VERSION` moves in the kernel and in
+      `galexy-galf` together. A v12 image is refused with the
+      existing foreign-version line. The operator deletes
+      `galfs.img`. There is no silent migrate
+- [ ] **Survive**: a 1 MiB file is still there after reboot. The
+      commit's data is that file's blocks plus one 64 KiB metadata
+      slot, not the other actors' bytes
+- [ ] **Still RAM**: `core`'s metadata is about 66 MiB, past the
+      64 MiB file cap, so it stays in the RAM store. `GALFS.md`
+      and `RUSTC.md` say so in this change
+- [ ] **Extents**: eight per file, as in host v13. A file that
+      needs a ninth is `NoResource` unless this milestone raises
+      that cap in the same version bump
+
+## Milestone 99 — Object table for a desk tree (Phase 15 gate)
+
+128 objects, and host v13's 32 files, do not hold a source tree
+plus a sysroot. `rustc` outputs already live in the RAM store for
+that reason.
+
+- [ ] **Count**: after Milestone 98 is the volume `cargo run`
+      mounts, count the files one desk compile needs (the imported
+      sysroot plus the objects `rustc hello.rs` writes). Write
+      that count in `GALFS.md` and `PERF.md`
+- [ ] **Size the table** to that count. The count is a format
+      change: `DISK_VERSION` moves with `galexy-galf`, the previous
+      image is refused, and the operator deletes `galfs.img`
+- [ ] **Dual slot**: write the inactive metadata, AEAD, flush,
+      publish. A crash recovers the previous metadata slot. The
+      new objects are absent. There is no journal
+- [ ] **Non-goals stay out**: `async` / `await`, several virtio
+      commands in flight, POSIX, mmap, sparse files, hard links
+
+---
+
 ## Known limitations / follow-ups
 
 Open bullets below are tracked by milestone id where planned. Waived

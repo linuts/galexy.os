@@ -222,7 +222,9 @@ monotonic, and `toml` 1.x parsing a ramdisk file with zero patches.
   stay in RAM. Host `galexy-galf` v13 is the sealed large-volume
   image (extent map, pool sized to the disk, files of 64 MiB).
   `check_image` dispatches on the version, so v12 and v13 both fsck.
-  The kernel does not format or load v13 yet.
+  The kernel does not format or load v13 yet. Milestone 98 is that
+  load, and it keeps the actor table. Milestone 99 sizes the object
+  table to one desk compile (`docs/GALFS.md` → Scheduled commits).
 - **Ring-3 `gxld`**: `gxldos` is a thin `main` over the Stage 2 crate.
   The kernel test installs read Caps and one write Cap at spawn;
   the program does not open a path. `test-gxld` links two objects
@@ -393,7 +395,7 @@ reads the linker pipe to EOF before `Wait`.
 | A subtly wrong link is a debugging sink | No layout or relocation change lands without the `rust-lld` differential green (`STYLE.md` → Linker) |
 | `panic=abort` turns every `FatalError` into a process abort | Stage 5 calls `process::exit(1)` after the diagnostic. `unwinding` plus `.eh_frame` is still the follow-on |
 | 2 GiB of guest RAM slows TCG runs | `rustc_obj_matches_host` ran under TCG on a host whose KVM cannot create a vCPU. CI runs it only when the ELF was already built |
-| galfs large-volume rewrite is bigger than hoped | RAM scratch volume for outputs; galfs v13 lands later without blocking the gate |
+| galfs large-volume rewrite is bigger than hoped | RAM scratch volume for outputs. Phase 15 (Milestones 98–99) is the on-disk load; it does not block this gate |
 
 ## Order of operations vs. the v1.0 roadmap
 

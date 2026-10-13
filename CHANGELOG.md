@@ -8,6 +8,11 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#121](https://github.com/linuts/galexy.os/pull/121) — Phase 15
+  plan — sealed commits are Milestones 97–99. A dirty sync becomes
+  one virtio request, then a commit of the changed bytes plus one
+  metadata seal. The login table stays. The phase can land beside
+  the network and USB, and it does not gate `v1.0`.
 - [#120](https://github.com/linuts/galexy.os/pull/120) — Shell —
   A login image built without the host ELFs says `python: not in
   this image` and names `scripts/build-galexy-python.sh`. The same
