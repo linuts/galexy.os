@@ -27,9 +27,19 @@ if [[ ! -x "$RUSTC" ]]; then
     echo "build-galexy-rustc: nightly rustc missing at $RUSTC" >&2
     exit 1
 fi
+# nightly-2026-10-08. `cargo run` clones this when the checkout is absent.
+RUST_REV="1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6"
 if [[ ! -f "$RUST_SRC/x.py" ]]; then
-    echo "build-galexy-rustc: rust checkout missing at $RUST_SRC" >&2
-    exit 1
+    echo "build-galexy-rustc: cloning $RUST_REV into $RUST_SRC"
+    mkdir -p "$RUST_SRC"
+    if [[ ! -d "$RUST_SRC/.git" ]]; then
+        git -C "$RUST_SRC" init
+    fi
+    if ! git -C "$RUST_SRC" remote get-url origin >/dev/null 2>&1; then
+        git -C "$RUST_SRC" remote add origin https://github.com/rust-lang/rust.git
+    fi
+    git -C "$RUST_SRC" fetch --depth 1 origin "$RUST_REV"
+    git -C "$RUST_SRC" checkout --detach FETCH_HEAD
 fi
 
 if [[ ! -f "$RUST_SRC/compiler/rustc_target/src/spec/targets/x86_64_unknown_galexy.rs" ]]; then

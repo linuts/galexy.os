@@ -336,20 +336,22 @@ reads the linker pipe to EOF before `Wait`.
 
 `test-rustc-hello` is not a seat. The login shell is:
 
-- The small image has no `rustc`. The shell prints
+- `cargo run` builds `target/galexy-rustc/rustc` when it is missing
+  (`scripts/build-galexy-rustc.sh`, including a clone of
+  `1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6` into `$HOME/galexy-rust`
+  when that checkout is absent) and then boots `galexy-os-desk`.
+  The same run builds `python` when that ELF is missing. Later
+  runs reuse the ELFs. `GALEXY_SKIP_COMPILERS=1` skips both and
+  boots the small image. That image's shell prints
   `rustc: not in this image` and `scripts/build-galexy-rustc.sh`.
 - The compiler ramdisk (~214 MiB ELF, ~90 MiB sysroot) is attached
-  to `test-rustc`, `test-rustc-hello`, `galexy-os-rustc`, and, when
-  the compiler ELF exists, to `galexy-os-desk`. `cargo run` boots
-  `galexy-os-desk` when `target/galexy-rustc/rustc` or
-  `target/galexy-python/python` was present at image build. Both
-  ELFs means one image: the compiler pieces and `python`. When
-  neither ELF exists, `cargo run` boots the small `galexy-os`
-  image. `--rustc` and `--python` still parse. They do not select
-  a different image. They error only when that ELF is missing.
-  The shared test ramdisk stays the small userspace set, so CI
-  does not run `x.py` or fetch RustPython (Milestone 74, then
-  Milestone 96).
+  to `test-rustc`, `test-rustc-hello`, `galexy-os-rustc`, and
+  `galexy-os-desk`. Both ELFs means one desk image: the compiler
+  pieces and `python`. `--rustc` and `--python` still parse. They
+  do not select a different image. They error only when that ELF
+  is missing. `cargo test` does not build them, so the shared test
+  ramdisk stays the small userspace set and CI does not run `x.py`
+  or fetch RustPython (Milestone 74, then Milestone 96).
 - The login kernel copies the JSON and `srlib/*` into the RAM store
   before init when the ramdisk contains `srlib/` (Milestone 75).
   A v12 disk file cannot hold `core`'s ~66 MiB `.rmeta`, so the

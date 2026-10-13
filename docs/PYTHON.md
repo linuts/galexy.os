@@ -186,16 +186,16 @@ with that civil time, and `time.monotonic` still moves like
 ### 95 Image
 
 `galexy-os-python` is the normal kernel plus a ramdisk that
-contains `python`. `cargo run` boots `galexy-os-desk` instead,
-which is that ramdisk plus the `rustc` sysroot when the compiler
-ELF was built too. No flag is required. The runner skips the
-desk image when neither ELF was present at build. CI does not
-download RustPython, and the shared test ramdisk stays small.
+contains `python`. `cargo run` builds
+`target/galexy-python/python` when it is missing, and the same
+for `rustc`, then boots `galexy-os-desk` with both. No flag is
+required. `GALEXY_SKIP_COMPILERS=1` skips that and boots the
+small image. `cargo test` does not build them, so CI does not
+download RustPython and the shared test ramdisk stays small.
 
 `python` with no arguments is the REPL (`>>>`). `exit()` returns
 to the shell. The proof is `python_repl_typing_e2e`. The small
-image, which is what `cargo run` boots when the ELF was absent,
-prints `python: not in this image` and
+image prints `python: not in this image` and
 `scripts/build-galexy-python.sh`.
 
 ### 96 Run it — Phase 14 gate

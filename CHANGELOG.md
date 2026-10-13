@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#122](https://github.com/linuts/galexy.os/pull/122) — Shell —
+  `cargo run` builds `python` and `rustc` when those ELFs are
+  missing, then boots the image that contains them. `cargo test`
+  does not. `GALEXY_SKIP_COMPILERS=1` still boots the small image.
 - [#121](https://github.com/linuts/galexy.os/pull/121) — Phase 15
   plan — sealed commits are Milestones 97–99. A dirty sync becomes
   one virtio request, then a commit of the changed bytes plus one

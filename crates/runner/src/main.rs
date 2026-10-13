@@ -23,9 +23,9 @@ fn image_path(name: &str, kind: &str) -> String {
 
 /// Says whether this boot's ramdisk contains `python` and `rustc`.
 ///
-/// Those ELFs are host builds. A tree that has not run the scripts
-/// boots the small image, and the shell then reports each name as
-/// missing instead of pretending the command does not exist.
+/// `cargo run` builds a missing ELF before this binary starts. The
+/// small image is `GALEXY_SKIP_COMPILERS=1` or `cargo test`. The
+/// shell then names the script instead of `command not found`.
 fn report_compilers(image: &str) {
     let python = env!("GALEXY_HAVE_PYTHON") == "1";
     let rustc = env!("GALEXY_HAVE_RUSTC") == "1";
