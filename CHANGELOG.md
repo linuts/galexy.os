@@ -8,7 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Shell — a deleted Cranelift backend is reinstalled by recreating
+- [#127](https://github.com/linuts/galexy.os/pull/127) — Shell —
+  a deleted Cranelift backend is reinstalled by recreating
   the component manifest paths, then `rustup component remove` and
   `component add`. Remove aborts, and add stays "up to date", while
   any manifest path is missing.
