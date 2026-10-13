@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- Shell — the BIOS disk image stays FAT16. A desk image of 512 MiB
+  or more was formatted as FAT32, and stage 2 panics with
+  `not implemented` while reading that root directory.
 - [#127](https://github.com/linuts/galexy.os/pull/127) — Shell —
   a deleted Cranelift backend is reinstalled by recreating
   the component manifest paths, then `rustup component remove` and
