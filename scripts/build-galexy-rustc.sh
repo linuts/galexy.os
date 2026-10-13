@@ -53,6 +53,17 @@ TARGET_LIBDIR="$(rustc +"$TOOLCHAIN" --print target-libdir)"
 HOST_TRIPLE="$(basename "$(dirname "$TARGET_LIBDIR")")"
 CG_DIR="$(dirname "$TARGET_LIBDIR")/codegen-backends"
 COMPONENT_CG="$SYSROOT/lib/rustlib/${HOST_TRIPLE}/codegen-backends"
+# `component add` reports "up to date" when the files were deleted out
+# from under an installed component. A stage0 directory symlink did
+# that: bootstrap's sysroot copy unlinked the host .so through the link.
+if ! compgen -G "${COMPONENT_CG}/librustc_codegen_cranelift*" >/dev/null; then
+    echo "build-galexy-rustc: cranelift backend missing from ${COMPONENT_CG}; reinstalling the component"
+    rustup component remove rustc-codegen-cranelift --toolchain "$TOOLCHAIN" || true
+    if ! rustup component add rustc-codegen-cranelift --toolchain "$TOOLCHAIN"; then
+        echo "build-galexy-rustc: could not reinstall rustc-codegen-cranelift on $TOOLCHAIN" >&2
+        exit 1
+    fi
+fi
 PREFERRED_LIBDIR="$(dirname "$(dirname "$(dirname "$TARGET_LIBDIR")")")"
 REAL_LIBDIR="$SYSROOT/lib/rustlib/${HOST_TRIPLE}/lib"
 # `lib64/rustlib` with no rlibs is not a real sysroot. rustc still
@@ -68,13 +79,21 @@ then
     TARGET_LIBDIR="$(rustc +"$TOOLCHAIN" --print target-libdir)"
     CG_DIR="$(dirname "$TARGET_LIBDIR")/codegen-backends"
 fi
+# Same rule as the stage0 wrapper: a directory symlink is followed by
+# the later copy, which then deletes the host backend.
+if [[ -L "$CG_DIR" ]]; then
+    rm -f "$CG_DIR"
+fi
 if [[ "$CG_DIR" != "$COMPONENT_CG" ]] \
     && compgen -G "${COMPONENT_CG}/librustc_codegen_cranelift*" >/dev/null \
     && ! compgen -G "${CG_DIR}/librustc_codegen_cranelift*" >/dev/null
 then
-    echo "build-galexy-rustc: linking cranelift backend into ${CG_DIR}"
-    mkdir -p "$(dirname "$CG_DIR")"
-    ln -sfn "$COMPONENT_CG" "$CG_DIR"
+    echo "build-galexy-rustc: hardlinking cranelift backend into ${CG_DIR}"
+    mkdir -p "$CG_DIR"
+    for so in "$COMPONENT_CG"/librustc_codegen_cranelift*; do
+        base="$(basename "$so")"
+        ln -f "$so" "$CG_DIR/$base" 2>/dev/null || cp -a "$so" "$CG_DIR/$base"
+    done
 fi
 if [[ ! -d "$CG_DIR" ]] || ! compgen -G "${CG_DIR}/librustc_codegen_cranelift*" >/dev/null; then
     echo "build-galexy-rustc: $TOOLCHAIN has no cranelift backend in $CG_DIR" >&2
