@@ -54,13 +54,51 @@ HOST_TRIPLE="$(basename "$(dirname "$TARGET_LIBDIR")")"
 CG_DIR="$(dirname "$TARGET_LIBDIR")/codegen-backends"
 COMPONENT_CG="$SYSROOT/lib/rustlib/${HOST_TRIPLE}/codegen-backends"
 # `component add` reports "up to date" when the files were deleted out
-# from under an installed component. A stage0 directory symlink did
-# that: bootstrap's sysroot copy unlinked the host .so through the link.
-if ! compgen -G "${COMPONENT_CG}/librustc_codegen_cranelift*" >/dev/null; then
+# from under an installed component. `component remove` then aborts,
+# and rolls back, unless every path in the component manifest exists
+# ("directory does not exist" — rustup's name for a missing file).
+# Recreate those paths empty so remove can finish, then add fetches
+# the real backend again.
+cranelift_so=()
+shopt -s nullglob
+cranelift_so=("$COMPONENT_CG"/librustc_codegen_cranelift*)
+shopt -u nullglob
+if [[ ${#cranelift_so[@]} -eq 0 ]] || [[ ! -s "${cranelift_so[0]}" ]]; then
     echo "build-galexy-rustc: cranelift backend missing from ${COMPONENT_CG}; reinstalling the component"
-    rustup component remove rustc-codegen-cranelift --toolchain "$TOOLCHAIN" || true
+    manifest="$SYSROOT/lib/rustlib/manifest-rustc-codegen-cranelift-preview-${HOST_TRIPLE}"
+    if [[ ! -f "$manifest" ]]; then
+        echo "build-galexy-rustc: no component manifest at $manifest" >&2
+        exit 1
+    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        case "$line" in
+            file:*)
+                rel="${line#file:}"
+                dest="$SYSROOT/$rel"
+                if [[ ! -e "$dest" ]]; then
+                    mkdir -p "$(dirname "$dest")"
+                    : > "$dest"
+                fi
+                ;;
+            dir:*)
+                rel="${line#dir:}"
+                mkdir -p "$SYSROOT/$rel"
+                ;;
+        esac
+    done < "$manifest"
+    if ! rustup component remove rustc-codegen-cranelift --toolchain "$TOOLCHAIN"; then
+        echo "build-galexy-rustc: could not remove rustc-codegen-cranelift on $TOOLCHAIN" >&2
+        exit 1
+    fi
     if ! rustup component add rustc-codegen-cranelift --toolchain "$TOOLCHAIN"; then
         echo "build-galexy-rustc: could not reinstall rustc-codegen-cranelift on $TOOLCHAIN" >&2
+        exit 1
+    fi
+    shopt -s nullglob
+    cranelift_so=("$COMPONENT_CG"/librustc_codegen_cranelift*)
+    shopt -u nullglob
+    if [[ ${#cranelift_so[@]} -eq 0 ]] || [[ ! -s "${cranelift_so[0]}" ]]; then
+        echo "build-galexy-rustc: reinstall left no cranelift backend in $COMPONENT_CG" >&2
         exit 1
     fi
 fi
@@ -105,6 +143,11 @@ if ! printf '' | rustc +"$TOOLCHAIN" -Zcodegen-backend=cranelift --crate-name __
 then
     echo "build-galexy-rustc: host rustc still cannot load cranelift from $CG_DIR" >&2
     exit 1
+fi
+# Stop after the host backend is loadable. Used to prove a reinstall
+# without starting x.py.
+if [[ "${GALEXY_RUSTC_SETUP_ONLY:-}" == 1 ]]; then
+    exit 0
 fi
 # A failed first run leaves a stage0 sysroot copied before the backend
 # was visible. The next x.py wipes and recopies it; drop the stale tree

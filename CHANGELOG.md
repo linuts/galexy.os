@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- Shell — a deleted Cranelift backend is reinstalled by recreating
+  the component manifest paths, then `rustup component remove` and
+  `component add`. Remove aborts, and add stays "up to date", while
+  any manifest path is missing.
 - [#126](https://github.com/linuts/galexy.os/pull/126) — Shell —
   stage 0 hardlinks the host Cranelift backend into a real
   `codegen-backends` directory. The directory symlink left by the
