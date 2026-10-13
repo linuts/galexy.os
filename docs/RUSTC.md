@@ -350,8 +350,10 @@ reads the linker pipe to EOF before `Wait`.
   that component. If `lib64/rustlib` exists, `rustc` looks there
   instead of `lib/` and does not see the component. The script
   removes that empty shadow. Stage 0's `rustc` is
-  `scripts/galexy-stage0-rustc.sh`, which links that backend into
-  the `--sysroot` bootstrap passes before the real compiler runs.
+  `scripts/galexy-stage0-rustc.sh`, which hardlinks that backend
+  into a real directory on the `--sysroot` bootstrap passes before
+  the real compiler runs. A directory symlink is followed by the
+  later sysroot copy, and that copy deletes the host backend.
 - The compiler ramdisk (~214 MiB ELF, ~90 MiB sysroot) is attached
   to `test-rustc`, `test-rustc-hello`, `galexy-os-rustc`, and
   `galexy-os-desk`. Both ELFs means one desk image: the compiler
