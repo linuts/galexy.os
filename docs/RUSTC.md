@@ -354,6 +354,9 @@ reads the linker pipe to EOF before `Wait`.
   into a real directory on the `--sysroot` bootstrap passes before
   the real compiler runs. A directory symlink is followed by the
   later sysroot copy, and that copy deletes the host backend.
+  `rustup component remove` will not drop a component whose manifest
+  paths are already gone, so the script recreates those empty paths,
+  removes the component, and installs it again.
 - The compiler ramdisk (~214 MiB ELF, ~90 MiB sysroot) is attached
   to `test-rustc`, `test-rustc-hello`, `galexy-os-rustc`, and
   `galexy-os-desk`. Both ELFs means one desk image: the compiler
