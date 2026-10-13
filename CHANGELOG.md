@@ -8,6 +8,12 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#123](https://github.com/linuts/galexy.os/pull/123) — Shell —
+  `cargo run`'s rustc build installs the host
+  `rustc-codegen-cranelift` component before `x.py`. This nightly
+  has no `codegen-backends` directory without it, so stage 0's
+  Cranelift probe failed on a fresh toolchain. Cargo's jobserver
+  fds are not passed into that build.
 - [#122](https://github.com/linuts/galexy.os/pull/122) — Shell —
   `cargo run` builds `python` and `rustc` when those ELFs are
   missing, then boots the image that contains them. `cargo test`

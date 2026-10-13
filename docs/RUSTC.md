@@ -344,6 +344,10 @@ reads the linker pipe to EOF before `Wait`.
   runs reuse the ELFs. `GALEXY_SKIP_COMPILERS=1` skips both and
   boots the small image. That image's shell prints
   `rustc: not in this image` and `scripts/build-galexy-rustc.sh`.
+  Stage 0 compiles the Galexy sysroot with the host nightly's
+  Cranelift backend. This nightly has no `codegen-backends` directory
+  until `rustc-codegen-cranelift` is installed; the script installs
+  that component and drops Cargo's jobserver fds before `x.py`.
 - The compiler ramdisk (~214 MiB ELF, ~90 MiB sysroot) is attached
   to `test-rustc`, `test-rustc-hello`, `galexy-os-rustc`, and
   `galexy-os-desk`. Both ELFs means one desk image: the compiler

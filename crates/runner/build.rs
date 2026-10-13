@@ -722,6 +722,22 @@ fn run_host_script(rel: &str) {
     cmd.arg(repo_root().join(rel));
     cmd.current_dir(repo_root());
     scrub_cargo_env(&mut cmd);
+    // Cargo hands this build script a jobserver on fds the child cannot
+    // open. x.py treats that as a broken environment and its rustc probe
+    // fails. The script also must not inherit this package's rustc.
+    for key in [
+        "CARGO_MAKEFLAGS",
+        "MAKEFLAGS",
+        "MFLAGS",
+        "RUSTC",
+        "RUSTDOC",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "RUSTFLAGS",
+        "RUSTDOCFLAGS",
+    ] {
+        cmd.env_remove(key);
+    }
     // The python script's load check is `cargo test` in this workspace,
     // which would wait on the lock `cargo run` already holds.
     cmd.env("GALEXY_SKIP_PYTHON_CHECK", "1");
