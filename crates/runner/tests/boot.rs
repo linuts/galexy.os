@@ -4168,6 +4168,53 @@ const VOLPASS_KEYS: &[(&str, &str)] = &[
     ("ret", "admin@galexy> "),
 ];
 
+/// The small login image has no compiler. The shell names the host
+/// script instead of calling the command missing.
+#[test]
+fn compiler_missing_typing_e2e() {
+    let disk = common::fresh_galfs_image("nocompiler");
+    let mut owned: Vec<(String, String)> = Vec::new();
+    for pairs in [CREATE_VOLUME_KEYS, LOGIN_ADMIN_KEYS, CLEAR_DEFAULT_PASSWD] {
+        for (code, echo) in pairs {
+            owned.push(((*code).to_string(), (*echo).to_string()));
+        }
+    }
+    owned.extend(type_line("python", "python: not in this image"));
+    owned.extend(type_line("rustc", "rustc: not in this image"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &keys,
+        "New passphrase: ",
+        "",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    let _ = std::fs::remove_file(&disk);
+    assert_passwords_masked(&serial);
+    assert!(
+        !serial.contains("[PANIC]"),
+        "small image panicked; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("python: not in this image\nscripts/build-galexy-python.sh"),
+        "python miss did not name the build; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("rustc: not in this image\nscripts/build-galexy-rustc.sh"),
+        "rustc miss did not name the build; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("python: command not found")
+            && !serial.contains("rustc: command not found"),
+        "compiler miss still said command not found; serial:\n{serial}"
+    );
+}
+
 /// `sync` (explicit commit, silent) then `whoami` after a `passwd`: proves
 /// the shell is live and accepting commands after the password change.
 const SYNC_WHOAMI_KEYS: &[(&str, &str)] = &[

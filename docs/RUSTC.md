@@ -334,6 +334,8 @@ reads the linker pipe to EOF before `Wait`.
 
 `test-rustc-hello` is not a seat. The login shell is:
 
+- The small image has no `rustc`. The shell prints
+  `rustc: not in this image` and `scripts/build-galexy-rustc.sh`.
 - The compiler ramdisk (~214 MiB ELF, ~90 MiB sysroot) is attached
   to `test-rustc`, `test-rustc-hello`, `galexy-os-rustc`, and, when
   the compiler ELF exists, to `galexy-os-desk`. `cargo run` boots

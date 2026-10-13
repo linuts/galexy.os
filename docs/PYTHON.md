@@ -193,7 +193,10 @@ desk image when neither ELF was present at build. CI does not
 download RustPython, and the shared test ramdisk stays small.
 
 `python` with no arguments is the REPL (`>>>`). `exit()` returns
-to the shell. The proof is `python_repl_typing_e2e`.
+to the shell. The proof is `python_repl_typing_e2e`. The small
+image, which is what `cargo run` boots when the ELF was absent,
+prints `python: not in this image` and
+`scripts/build-galexy-python.sh`.
 
 ### 96 Run it — Phase 14 gate
 
