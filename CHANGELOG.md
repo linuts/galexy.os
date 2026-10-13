@@ -8,7 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Shell — stage 0 hardlinks the host Cranelift backend into a real
+- [#126](https://github.com/linuts/galexy.os/pull/126) — Shell —
+  stage 0 hardlinks the host Cranelift backend into a real
   `codegen-backends` directory. The directory symlink left by the
   previous wrapper made bootstrap's sysroot copy delete the host
   `.so`. A missing backend file is reinstalled.
