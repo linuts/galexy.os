@@ -44,16 +44,54 @@ if ! rustup component add rustc-codegen-cranelift --toolchain "$TOOLCHAIN"; then
     echo "build-galexy-rustc: could not install rustc-codegen-cranelift on $TOOLCHAIN" >&2
     exit 1
 fi
-CG_DIR="$SYSROOT/lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends"
+# rustc loads codegen backends from beside `rustc --print target-libdir`.
+# On a 64-bit host, a `lib64/rustlib` directory wins over `lib/rustlib`,
+# even when it is empty. rustup always installs the cranelift component
+# under `lib/`, so that empty directory hides it and stage 0 dies with
+# "failed to find a codegen-backends folder".
+TARGET_LIBDIR="$(rustc +"$TOOLCHAIN" --print target-libdir)"
+HOST_TRIPLE="$(basename "$(dirname "$TARGET_LIBDIR")")"
+CG_DIR="$(dirname "$TARGET_LIBDIR")/codegen-backends"
+COMPONENT_CG="$SYSROOT/lib/rustlib/${HOST_TRIPLE}/codegen-backends"
+PREFERRED_LIBDIR="$(dirname "$(dirname "$(dirname "$TARGET_LIBDIR")")")"
+REAL_LIBDIR="$SYSROOT/lib/rustlib/${HOST_TRIPLE}/lib"
+# `lib64/rustlib` with no rlibs is not a real sysroot. rustc still
+# prefers it, so the component under `lib/` is invisible.
+SHADOW="$(dirname "$(dirname "$TARGET_LIBDIR")")"
+if [[ "$PREFERRED_LIBDIR" != "$SYSROOT/lib" ]] \
+    && compgen -G "${REAL_LIBDIR}/lib*.rlib" >/dev/null \
+    && [[ -z "$(find "$SHADOW" -name '*.rlib' -print -quit 2>/dev/null || true)" ]]
+then
+    echo "build-galexy-rustc: ${SHADOW} hides ${REAL_LIBDIR}; removing the shadow"
+    rm -rf "$SHADOW"
+    rmdir "$PREFERRED_LIBDIR" 2>/dev/null || true
+    TARGET_LIBDIR="$(rustc +"$TOOLCHAIN" --print target-libdir)"
+    CG_DIR="$(dirname "$TARGET_LIBDIR")/codegen-backends"
+fi
+if [[ "$CG_DIR" != "$COMPONENT_CG" ]] \
+    && compgen -G "${COMPONENT_CG}/librustc_codegen_cranelift*" >/dev/null \
+    && ! compgen -G "${CG_DIR}/librustc_codegen_cranelift*" >/dev/null
+then
+    echo "build-galexy-rustc: linking cranelift backend into ${CG_DIR}"
+    mkdir -p "$(dirname "$CG_DIR")"
+    ln -sfn "$COMPONENT_CG" "$CG_DIR"
+fi
 if [[ ! -d "$CG_DIR" ]] || ! compgen -G "${CG_DIR}/librustc_codegen_cranelift*" >/dev/null; then
     echo "build-galexy-rustc: $TOOLCHAIN has no cranelift backend in $CG_DIR" >&2
+    echo "build-galexy-rustc: rustc target libdir is $TARGET_LIBDIR" >&2
     exit 1
 fi
-# A failed first run copies the host sysroot before the component exists.
-# Stage 0 prefers that copy. Drop it when the backend .so is absent so the
-# next x.py copies the toolchain that has it.
+if ! printf '' | rustc +"$TOOLCHAIN" -Zcodegen-backend=cranelift --crate-name ___ \
+    --print=file-names --crate-type lib - >/dev/null
+then
+    echo "build-galexy-rustc: host rustc still cannot load cranelift from $CG_DIR" >&2
+    exit 1
+fi
+# A failed first run leaves a stage0 sysroot copied before the backend
+# was visible. The next x.py wipes and recopies it; drop the stale tree
+# so that copy includes the backend.
 STAGE0_SYS="$RUST_SRC/build/x86_64-unknown-linux-gnu/stage0-sysroot"
-STAGE0_CG="$STAGE0_SYS/lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends"
+STAGE0_CG="$STAGE0_SYS/lib/rustlib/${HOST_TRIPLE}/codegen-backends"
 if [[ -d "$STAGE0_SYS" ]] && ! compgen -G "${STAGE0_CG}/librustc_codegen_cranelift*" >/dev/null; then
     echo "build-galexy-rustc: removing stage0 sysroot that has no cranelift backend"
     rm -rf "$STAGE0_SYS"
@@ -173,7 +211,12 @@ export CARGO_BUILD_JOBS=1
 export CC_x86_64_unknown_galexy
 
 cd "$RUST_SRC"
-./x.py build --stage 1 compiler/rustc \
+# The outer `cargo run` jobserver fds are not open in this process.
+# Pass a clean environment into x.py so its cargo does not reuse them.
+env -u CARGO_MAKEFLAGS -u MAKEFLAGS -u MFLAGS \
+    -u RUSTC_WRAPPER -u RUSTC_WORKSPACE_WRAPPER \
+    -u RUSTFLAGS -u RUSTDOCFLAGS \
+    ./x.py build --stage 1 compiler/rustc \
     --host "$JSON_NAME" \
     --target "$JSON_NAME"
 

@@ -8,6 +8,11 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- Shell — `cargo run`'s rustc build follows `rustc --print
+  target-libdir` when it checks for the Cranelift backend. A
+  `lib64/rustlib` directory hides the component rustup installed
+  under `lib/`, which is the probe failure that remained after the
+  component was installed.
 - [#123](https://github.com/linuts/galexy.os/pull/123) — Shell —
   `cargo run`'s rustc build installs the host
   `rustc-codegen-cranelift` component before `x.py`. This nightly
