@@ -281,7 +281,9 @@ with nobody at the keyboard still is. The shell is what locks.
 COM1 audit lines name the actor, path, rights mask, or target task.
 They never include password bytes. Rights are the raw mask
 (`0x1` read, `0x2` write, `0x4` list, `0x8` create, `0x10` remove,
-`0x80` one-shot). `dmesg` (query cap `0x8007`) shows the same lines
+`0x80` one-shot). `lr` is `0x5`. The path is the bytes the shell
+passed, with no leading slash. A seat parked on its prompt is a live
+target. `dmesg` (query cap `0x8007`) shows the same lines
 after login. Repeated `login fail` lines collapse in that ring.
 
 ```text
@@ -297,8 +299,8 @@ after login. Repeated `login fail` lines collapse in that ring.
 [auth] useradd fail user=eve err=2
 [auth] userdel user=eve
 [auth] userdel fail user=eve err=4
-[auth] grant actor=admin path=/Desktop rights=0x1 target=shell2
-[auth] revoke actor=admin path=/Desktop rights=0x1 target=shell2
+[auth] grant actor=admin path=Desktop rights=0x5 target=shell2
+[auth] revoke actor=admin path=Desktop rights=0x5 target=shell2
 ```
 
 A secret prompt (`login`, volume unlock, `passwd`, `volpass`, confirm) echoes `*`

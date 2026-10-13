@@ -216,6 +216,12 @@ fn prompt_volume(kbd: Cap) -> bool {
 
 fn prompt_new_volume(kbd: Cap) -> bool {
     loop {
+        // Another seat may have sealed the disk while this one was
+        // still sitting on the first prompt. Do not ask again, and do
+        // not tell this seat it just created the volume.
+        if volume_query() == 0 {
+            return false;
+        }
         write_console(b"This disk has no passphrase yet.\n");
         write_console(
             b"Choose one. It seals the filesystem. An empty line leaves the disk locked.\n",
@@ -233,6 +239,10 @@ fn prompt_new_volume(kbd: Cap) -> bool {
             }
             LineRead::Line(0) => {
                 wipe(&mut pass);
+                if volume_query() == 0 {
+                    write_console(b"\n");
+                    return false;
+                }
                 write_console(b"\nVolume stays locked (RAM-only)\n");
                 return false;
             }
@@ -260,6 +270,12 @@ fn prompt_new_volume(kbd: Cap) -> bool {
             write_console(b"\npassphrases do not match\n");
             continue;
         }
+        if volume_query() == 0 {
+            wipe(&mut pass);
+            wipe(&mut confirm);
+            write_console(b"\n");
+            return false;
+        }
         let result = user_unlock(&pass[..n]);
         wipe(&mut pass);
         wipe(&mut confirm);
@@ -273,6 +289,9 @@ fn prompt_new_volume(kbd: Cap) -> bool {
 
 fn prompt_existing_volume(kbd: Cap) {
     loop {
+        if volume_query() == 0 {
+            return;
+        }
         write_console(b"Volume passphrase: ");
         let mut pass = [0u8; PASS_MAX];
         match read_line(kbd, &mut pass, true) {
@@ -286,10 +305,19 @@ fn prompt_existing_volume(kbd: Cap) {
             }
             LineRead::Line(0) => {
                 wipe(&mut pass);
+                if volume_query() == 0 {
+                    write_console(b"\n");
+                    return;
+                }
                 write_console(b"\nVolume stays locked (RAM-only)\n");
                 return;
             }
             LineRead::Line(n) => {
+                if volume_query() == 0 {
+                    wipe(&mut pass);
+                    write_console(b"\n");
+                    return;
+                }
                 let result = user_unlock(&pass[..n]);
                 wipe(&mut pass);
                 if result.ok {
