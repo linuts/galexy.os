@@ -82,14 +82,13 @@ cargo run --release -- --display    # also open the framebuffer window (F1–F12
 cargo run --release -- --uefi       # UEFI — set OVMF_FD if the default path is missing
 ```
 
-`python` and `rustc` are not in that boot until the host ELFs exist.
-Without them the shell prints `python: not in this image` and the
-script that builds it. No flag selects the image: when
+`cargo run` builds `python` and `rustc` when
 `target/galexy-python/python` or `target/galexy-rustc/rustc` is
-present, the same `cargo run` carries whichever was built. `python`
-with no file is the REPL. The one-time host builds are
-`scripts/build-galexy-python.sh` and `scripts/build-galexy-rustc.sh`.
-CI does not run them, so the test image stays small.
+missing, then boots the image that contains them. The first run is
+that host build. Later runs reuse the ELFs. `python` with no file
+is the REPL. `GALEXY_SKIP_COMPILERS=1` boots the small image
+instead, and the shell then names the script it did not run.
+`cargo test` does not build them, so CI stays on the small image.
 
 `cargo run --release` attaches a persistent `galfs.img` as **virtio-blk-pci**
 on `-M q35` (virtio 1.x; boot image stays IDE index 0 with `snapshot=on`,

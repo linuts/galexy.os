@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "login_compilers.rs"]
+mod login_compilers;
+
 fn main() {
     watch_userspace();
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
@@ -121,6 +124,11 @@ fn main() {
         )
         .unwrap();
     }
+
+    // `cargo run` builds python and rustc when the ELFs are missing, then
+    // the desk image below picks them up. `cargo test` does not: CI keeps
+    // the small ramdisk.
+    ensure_login_compilers();
 
     // Milestone 72: the shared ramdisk stays the userspace set. The
     // compiler ramdisk is `test-rustc` / `test-rustc-hello` only.
@@ -638,6 +646,11 @@ fn count_tar_files(tar: &[u8]) -> usize {
 /// scrubbed, so it neither inherits our features nor fights our lock.
 fn nested_cargo() -> Command {
     let mut cmd = Command::new(env!("CARGO"));
+    scrub_cargo_env(&mut cmd);
+    cmd
+}
+
+fn scrub_cargo_env(cmd: &mut Command) {
     for (key, _) in std::env::vars() {
         if key.starts_with("CARGO_FEATURE_")
             || key.starts_with("CARGO_BIN_")
@@ -652,7 +665,87 @@ fn nested_cargo() -> Command {
             cmd.env_remove(&key);
         }
     }
-    cmd
+    cmd.env_remove("CARGO_TARGET_DIR");
+}
+
+/// Build the login compilers when this process is `cargo run` and the
+/// ELFs are not already in `target/`. Tests and CI take the other branch
+/// and keep the small image.
+fn ensure_login_compilers() {
+    println!("cargo:rerun-if-env-changed=GALEXY_SKIP_COMPILERS");
+    println!("cargo:rerun-if-env-changed=GALEXY_BUILD_COMPILERS");
+    let skip = std::env::var_os("GALEXY_SKIP_COMPILERS").is_some();
+    let force = std::env::var_os("GALEXY_BUILD_COMPILERS").is_some();
+    let sub = cargo_subcommand();
+    if !login_compilers::want_login_compilers(skip, force, sub.as_deref()) {
+        return;
+    }
+    eprintln!("[runner] cargo run will build any missing login compiler (python, rustc)");
+    let root = repo_root();
+    if !root.join("target/galexy-rustc/rustc").is_file() {
+        eprintln!("[runner] building rustc for cargo run");
+        run_host_script("scripts/build-galexy-rustc.sh");
+    }
+    if !galexy_toolchain_linked() {
+        eprintln!("[runner] linking the galexy sysroot");
+        run_xtask_sysroot();
+    }
+    if !root.join("target/galexy-python/python").is_file() {
+        eprintln!("[runner] building python for cargo run");
+        run_host_script("scripts/build-galexy-python.sh");
+    }
+}
+
+fn cargo_subcommand() -> Option<String> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let ppid = status.lines().find_map(|line| {
+        let rest = line.strip_prefix("PPid:")?;
+        Some(rest.trim().to_string())
+    })?;
+    let raw = std::fs::read(format!("/proc/{ppid}/cmdline")).ok()?;
+    let args: Vec<&[u8]> = raw.split(|b| *b == 0).filter(|s| !s.is_empty()).collect();
+    let sub = login_compilers::positional_subcommand(&args)?;
+    Some(String::from_utf8_lossy(sub).into_owned())
+}
+
+fn galexy_toolchain_linked() -> bool {
+    let Ok(out) = Command::new("rustup").args(["toolchain", "list"]).output() else {
+        return false;
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .any(|line| line.split_whitespace().next() == Some("galexy"))
+}
+
+fn run_host_script(rel: &str) {
+    let mut cmd = Command::new("bash");
+    cmd.arg(repo_root().join(rel));
+    cmd.current_dir(repo_root());
+    scrub_cargo_env(&mut cmd);
+    // The python script's load check is `cargo test` in this workspace,
+    // which would wait on the lock `cargo run` already holds.
+    cmd.env("GALEXY_SKIP_PYTHON_CHECK", "1");
+    let status = cmd.status().unwrap_or_else(|e| panic!("spawn {rel}: {e}"));
+    if !status.success() {
+        panic!("{rel} failed ({status})");
+    }
+}
+
+fn run_xtask_sysroot() {
+    let mut cmd = nested_cargo();
+    cmd.current_dir(repo_root());
+    cmd.arg("run")
+        .arg("--quiet")
+        .arg("-p")
+        .arg("xtask")
+        .arg("--target-dir")
+        .arg(repo_root().join("target/xtask-login"))
+        .arg("--")
+        .arg("sysroot");
+    let status = cmd.status().expect("spawn cargo xtask sysroot");
+    if !status.success() {
+        panic!("cargo xtask sysroot failed ({status})");
+    }
 }
 
 fn is_release() -> bool {

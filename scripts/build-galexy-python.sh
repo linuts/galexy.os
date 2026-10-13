@@ -84,7 +84,11 @@ cargo +galexy build --release \
 mkdir -p "$OUT"
 cp "$SRC/target/x86_64-unknown-galexy/release/python" "$OUT/python"
 echo "build-galexy-python: $OUT/python"
+# `cargo run` sets this. That cargo already holds the workspace lock,
+# so a nested `cargo test` here would wait forever.
+if [[ "${GALEXY_SKIP_PYTHON_CHECK:-}" != "1" ]]; then
 (
     cd "$ROOT"
     cargo test -p xtask python_elf::pinned_python_elf_is_loadable -- --exact
 )
+fi

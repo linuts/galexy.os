@@ -4168,6 +4168,41 @@ const VOLPASS_KEYS: &[(&str, &str)] = &[
     ("ret", "admin@galexy> "),
 ];
 
+/// `cargo run` boots `galexy-os-desk` with both compilers. Typing the
+/// names must enter the REPL and rustc, not the small-image miss.
+#[test]
+fn cargo_run_compilers_typing_e2e() {
+    if env!("GALEXY_HAVE_PYTHON") != "1"
+        || env!("GALEXY_HAVE_RUSTC") != "1"
+        || env!("GALEXY_HAVE_DESK") != "1"
+    {
+        eprintln!("cargo_run_compilers_typing_e2e: skipped (desk image lacks python or rustc)");
+        return;
+    }
+    let serial = boot_typed(
+        "galexy-os-desk",
+        &[
+            ("python", ">>>"),
+            ("exit()", "admin@galexy>"),
+            ("rustc", "error:"),
+        ],
+        "error:",
+        Duration::from_secs(900),
+    );
+    assert!(
+        serial.contains(">>>"),
+        "python did not reach the REPL; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("not in this image"),
+        "cargo run image is missing a compiler; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+}
+
 /// The small login image has no compiler. The shell names the host
 /// script instead of calling the command missing.
 #[test]
