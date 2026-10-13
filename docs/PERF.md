@@ -96,6 +96,10 @@ ceiling is `NoResource`, never a panic.
 - **Disk bandwidth.** ATA is PIO. virtio-blk completes on MSI-X (INTx
   if the function has no MSI-X table). Correctness under `cache=none` /
   `writeback` / `writethrough` is tested; throughput is not.
+  Milestone 97 records one v12 sync under TCG and under KVM. That
+  number is the cost of sealing the 288-sector slot, not a
+  gigabyte-per-second budget. Milestones 98–99 are the later
+  commits (`GALFS.md` → Scheduled commits).
 - **Memory.** Free frames are reported by `stats`; a soft reserve
   refuses user spawns before the kernel heap is starved
   (`DESIGN.md` → Memory policy). There is no OOM killer because there

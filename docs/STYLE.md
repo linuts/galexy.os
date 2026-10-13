@@ -294,6 +294,32 @@ not wait on Phase 10, and Phase 10 does not wait on it.
   ramdisk. `cargo run` boots `galexy-os-desk` when the ELF exists,
   and that image carries `python`. `python` with no file is the REPL.
 
+## Sealed commits (galfs)
+
+Rules for Phase 15 (`docs/GALFS.md`; Milestones **97–99**). Binding
+now, the same way the network rules are. The phase does not move
+the `v1.0` tag.
+
+- **A commit costs the changed bytes, one metadata seal, and one
+  flush.** Unchanged file bytes stay where they are once the large
+  volume has landed. The bar is that class, not a gigabyte per
+  second.
+- **One virtio command in flight.** One buffer, one header, one
+  status byte. The queue lock stays held across the wait. A second
+  in-flight command is not this phase.
+- **Dual-slot order stays.** Write the inactive metadata, AEAD,
+  flush, publish. No journal in this phase.
+- **Milestone 97 does not move `DISK_VERSION`.** Milestone 98 moves
+  it with the kernel and `galexy-galf` together and refuses v12.
+  The login volume keeps actors, objects, shares, and quotas. Host
+  v13's 32-file map is not that volume. Milestone 99's object-table
+  count is another format change and refuses the image it replaces.
+  There is no silent migrate.
+- **`core`'s metadata stays in the RAM store** while the on-disk
+  file cap is 64 MiB.
+- **ATA PIO stays the legacy fallback.** `async` / `await`, POSIX,
+  mmap, sparse files, and hard links stay out.
+
 ## Subsystem docs
 
 A bus, a protocol, or a language runtime gets one deep doc before
