@@ -153,7 +153,7 @@ change-id = "ignore"
 build = "x86_64-unknown-linux-gnu"
 host = ["$JSON_NAME"]
 target = ["$JSON_NAME"]
-rustc = "$RUSTC"
+rustc = "$ROOT/scripts/galexy-stage0-rustc.sh"
 cargo = "$CARGO"
 jobs = 1
 full-bootstrap = true
@@ -213,9 +213,16 @@ export CC_x86_64_unknown_galexy
 cd "$RUST_SRC"
 # The outer `cargo run` jobserver fds are not open in this process.
 # Pass a clean environment into x.py so its cargo does not reuse them.
+# The stage0 wrapper reads the three GALEXY_* variables.
+export GALEXY_HOST_RUSTC="$RUSTC"
+export GALEXY_HOST_TRIPLE="$HOST_TRIPLE"
+export GALEXY_CODEGEN_BACKENDS="$CG_DIR"
 env -u CARGO_MAKEFLAGS -u MAKEFLAGS -u MFLAGS \
     -u RUSTC_WRAPPER -u RUSTC_WORKSPACE_WRAPPER \
     -u RUSTFLAGS -u RUSTDOCFLAGS \
+    GALEXY_HOST_RUSTC="$RUSTC" \
+    GALEXY_HOST_TRIPLE="$HOST_TRIPLE" \
+    GALEXY_CODEGEN_BACKENDS="$CG_DIR" \
     ./x.py build --stage 1 compiler/rustc \
     --host "$JSON_NAME" \
     --target "$JSON_NAME"
