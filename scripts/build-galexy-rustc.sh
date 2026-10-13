@@ -6,6 +6,10 @@
 # commit in rust-toolchain.toml (nightly-2026-10-08, 1d81eb4ad). It applies
 # scripts/galexy-rustc.patch when the builtin target is missing, installs
 # the PAL, writes bootstrap.toml, and builds stage 1 for the Galexy host.
+# The host nightly must have rustc-codegen-cranelift. This date's rustc
+# links LLVM in-process and creates lib/rustlib/.../codegen-backends only
+# when that component is installed. Stage 0 compiles std with
+# -Zcodegen-backend=cranelift, so a missing directory is fatal.
 # Stage 2 is not run: that would try to execute the Galexy ELF on Linux.
 #
 # Outputs:
@@ -26,6 +30,33 @@ JSON_NAME="x86_64-unknown-galexy.json"
 if [[ ! -x "$RUSTC" ]]; then
     echo "build-galexy-rustc: nightly rustc missing at $RUSTC" >&2
     exit 1
+fi
+# `cargo run` inherits CARGO_MAKEFLAGS pointing at jobserver fds that are
+# not open in this process. x.py's cargo then reports a misconfigured
+# build and its rustc probe dies. Drop those before bootstrap starts.
+# RUSTC is assigned above to the nightly binary. That assignment
+# replaces a value inherited from cargo. Do not unset it afterwards.
+unset CARGO_MAKEFLAGS MAKEFLAGS MFLAGS RUSTDOC RUSTC_WRAPPER \
+    RUSTC_WORKSPACE_WRAPPER RUSTFLAGS RUSTDOCFLAGS || true
+# An already-installed nightly does not grow this component just because
+# rust-toolchain.toml lists it, until the next rustup sync. Install it here.
+if ! rustup component add rustc-codegen-cranelift --toolchain "$TOOLCHAIN"; then
+    echo "build-galexy-rustc: could not install rustc-codegen-cranelift on $TOOLCHAIN" >&2
+    exit 1
+fi
+CG_DIR="$SYSROOT/lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends"
+if [[ ! -d "$CG_DIR" ]] || ! compgen -G "${CG_DIR}/librustc_codegen_cranelift*" >/dev/null; then
+    echo "build-galexy-rustc: $TOOLCHAIN has no cranelift backend in $CG_DIR" >&2
+    exit 1
+fi
+# A failed first run copies the host sysroot before the component exists.
+# Stage 0 prefers that copy. Drop it when the backend .so is absent so the
+# next x.py copies the toolchain that has it.
+STAGE0_SYS="$RUST_SRC/build/x86_64-unknown-linux-gnu/stage0-sysroot"
+STAGE0_CG="$STAGE0_SYS/lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends"
+if [[ -d "$STAGE0_SYS" ]] && ! compgen -G "${STAGE0_CG}/librustc_codegen_cranelift*" >/dev/null; then
+    echo "build-galexy-rustc: removing stage0 sysroot that has no cranelift backend"
+    rm -rf "$STAGE0_SYS"
 fi
 # nightly-2026-10-08. `cargo run` clones this when the checkout is absent.
 RUST_REV="1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6"
