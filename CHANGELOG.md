@@ -8,7 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Shell — stage 0's `rustc` is `scripts/galexy-stage0-rustc.sh`.
+- [#125](https://github.com/linuts/galexy.os/pull/125) — Shell —
+  stage 0's `rustc` is `scripts/galexy-stage0-rustc.sh`.
   The cargo probe passes `--sysroot` at a stage0 tree that has no
   `codegen-backends` directory yet. The wrapper links the host
   Cranelift backend into that sysroot before the real compiler runs.
