@@ -270,7 +270,7 @@ pub const SPAWN_INHERIT: u64 = 4;
 /// `spawn` grant bit (`r10`, bit 3): also give the new task the keyboard.
 ///
 /// The parent is expected to Cap-wait, so it is not reading keys at the
-/// same time. The shell sets this for `nano` and for nothing else.
+/// same time. The shell sets this for `edit` and for nothing else.
 pub const SPAWN_GRANT_KEYBOARD: u64 = 8;
 /// `spawn` grant bit (`r10`, bit 4): move up to two of the caller's file
 /// or pipe Caps into the child before it runs.

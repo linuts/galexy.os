@@ -827,18 +827,22 @@ snapshot (no cursor; the syscall renders into a stack buffer so it does
 not allocate). The files snapshot is the ramdisk's regular names, then each
 galfs path the task's tokens may list (`Desktop/`, `dan@Desktop/notes`),
 one per line. The shell keeps the current directory and accepts a leading
-`/` plus `owner@` on the first component. `echo`, `cat`, `nano`, `touch`, `mkdir`, `rm`, and `ls` are ramdisk
+`/` plus `owner@` on the first component. `echo`, `cat`, `edit`, `touch`, `mkdir`, `rm`, and `ls` are ramdisk
 programs: the shell composes the path and `spawn`s them. `ls` and `rm`
 also receive the query grant, so they can read the files snapshot.
-`nano` also receives the keyboard grant and the shell Cap-waits on it.
-The screen is the nano layout: a reverse title, a line-number gutter
+`edit` also receives the keyboard grant and the shell Cap-waits on it.
+The screen is a reverse title, a line-number gutter
 (`!` on a line the language service flagged), the text, a reverse
-status line, and two shortcut rows. `.rs` and `.py` are colored in
-the editor. The status line shows the first diagnostic (an unclosed
-delimiter, a Python header missing `:`, or a body that is not
-indented). Ctrl-T completes from that language's words and from
-identifiers already in the file. rust-analyzer and a Python language
-server are not on the image; the editor runs this service itself.
+status line, and two shortcut rows. Rust, Python, Lisp, JSON, CSV,
+TOML, and XML are colored in the editor. The status line shows the
+first diagnostic (an unclosed delimiter, a Python header missing `:`,
+or a body that is not indented). Ctrl-T completes from that language's
+words and from identifiers already in the file. Tab inserts a tab.
+The editor stores that byte and draws it to the next column of 8.
+A redraw hides the cursor until the cursor cell is known, so
+moving between lines does not paint the mark at the end of every row.
+rust-analyzer and a Python language server are not on the image; the
+editor runs this service itself.
 Ctrl-G opens a help page of the keys that are not already on the shortcut
 bar; the next key closes that page and is not inserted.
 `cd` stays in the shell, because that path lives there. A program name
@@ -859,7 +863,7 @@ rejects a name that already has a live task (`NoResource`), so typing
 `shell` cannot start a second keyboard-less shell that spins. The child
 always receives the console, and it writes the console of the task that
 spawned it. `SPAWN_GRANT_KEYBOARD` also gives the child the keyboard
-so an interactive program (`nano`) can read keys while the shell
+so an interactive program (`edit`) can read keys while the shell
 Cap-waits. The loader stays with the shell except when the spawn
 sets `SPAWN_GRANT_LOADER`: a ramdisk program with arguments
 (`rustc hello.rs -o /hello`) receives it so the compiler can start

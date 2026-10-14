@@ -2639,7 +2639,7 @@ ramdisk program, so create refuses it. The login compile uses
 program `hello` is already a ramdisk label, so the file `rustc` writes
 cannot reuse that name. The login directory is `/`. `echo` redirection
 (`echo … > name`) can write the one-line source; that line fits in 80
-bytes. A longer source is `nano`.
+bytes. A longer source is `edit`.
 
 - [x] A spawn name that is a path (`/hello`, `./hello` from the login
       directory) loads an ELF from galfs, including a RAM-store file.
@@ -2961,6 +2961,36 @@ that reason.
       new objects are absent. There is no journal
 - [ ] **Non-goals stay out**: `async` / `await`, several virtio
       commands in flight, POSIX, mmap, sparse files, hard links
+
+## Milestone 100 — Sense in the editor
+
+`edit` already colors Rust, Python, Lisp, JSON, CSV, TOML, and XML,
+reports one diagnostic, and completes a word on Ctrl-T. This milestone
+is the next step for Rust and Python: suggestions while typing, from
+the buffer, still inside the editor. rust-analyzer and a Python
+language server stay off the image.
+
+- [ ] **As you type**: after a letter or `_`, the status line lists up
+      to eight completions for the prefix under the cursor. Ctrl-T
+      still cycles them. Esc or a non-word key clears the list. The
+      list is the same words Ctrl-T already knows: language keywords,
+      then identifiers already in the file
+- [ ] **Rust names**: a `fn`, `struct`, `enum`, `trait`, `const`,
+      `static`, or `let` binding in the buffer is a completion, with
+      the line number on the status line when that name is the one
+      shown. A name that is not in the buffer is not invented
+- [ ] **Python names**: a `def` or `class` in the buffer is a
+      completion the same way. Indent and `:` diagnostics stay as
+      they are
+- [ ] **One row**: the list does not cover the text. It replaces the
+      diagnostic on the status line while it is open, and the
+      diagnostic returns when the list closes
+- [ ] **Proof**: `edit t.rs` typing `pri` shows `println` before
+      Ctrl-T. `edit h.py` typing `pri` shows `print`. A boot test
+      covers both
+- [ ] **Out of this milestone**: type-aware completion, signature
+      help, go to definition across files, and running an external
+      language server
 
 ---
 

@@ -15,7 +15,7 @@ Not a Linux clone. No POSIX claim. Authority is **capabilities** (and
 galfs access cards), not global file descriptors or PIDs.
 
 **Status (October 2026):** Milestones 1–61 and 63–96 are in this tree
-(62 was superseded); `nano` is in the ramdisk. Milestone 67 gives init
+(62 was superseded); `edit` is in the ramdisk. Milestone 67 gives init
 shutdown, `svc`, and the ABI freeze (`spawn` stays experimental).
 Milestone 71 raises the guest to 2 GiB, the per-task `Map` budget to
 1 GiB, open files to 64, and argv to 4 KiB, and adds ring-3 `gxld`.
@@ -147,7 +147,7 @@ frames). Up/down arrows recall session history (written to
 | Ctrl-C | Cancel a prompt, or kill the foreground job |
 | `fetch` | Re-show the login dashboard |
 | `help` | Commands |
-| `ls` / `echo hi` / `mkdir box` / `cat` / `nano` / `cp` / `mv` / `rm` / `stat` / `truncate` | Files under your tree. `nano <path>` edits with line numbers; Ctrl-T completes Rust and Python, Ctrl-O saves, Ctrl-X leaves |
+| `ls` / `echo hi` / `mkdir box` / `cat` / `edit` / `cp` / `mv` / `rm` / `stat` / `truncate` | Files under your tree. `edit <path>` edits with line numbers; Tab inserts a tab drawn to the next column of 8; Ctrl-T completes Rust, Python, Lisp, JSON, and TOML; Ctrl-O saves; Ctrl-X leaves |
 | `echo hi \| cat` · `echo *` | One pipeline (pipe + `give`); one `*` per word in the current directory |
 | `whoami` / `users` / `useradd` / `passwd` / `volpass` / `quota` / `tokens` | Identity, cards, limits. `volpass` changes the volume passphrase |
 | `grant` / `revoke` / `share` / `unshare` / `su` | Access cards (see AUTH.md) |
