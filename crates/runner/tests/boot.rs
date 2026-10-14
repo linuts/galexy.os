@@ -3891,10 +3891,10 @@ fn rustc_hello_typing_e2e() {
 
 /// `rustc test.rs` after a sealed volume is unlocked.
 ///
-/// Boot 1 chooses a passphrase and seals the disk. That seal replaces
-/// the pre-unlock RAM tree, so the target JSON is not on the image.
-/// Boot 2 unlocks the same disk and compiles a one-line program with
-/// no `--edition` and no `--target`.
+/// Boot 1 chooses a passphrase and seals the disk. Loading that seal
+/// on boot 2 replaces the RAM tree, and the rlib bodies were never in
+/// the v12 image. Boot 2 unlocks and compiles with no `--edition` and
+/// no `--target`.
 #[test]
 fn rustc_after_unlock_typing_e2e() {
     if env!("GALEXY_HAVE_RUSTC") != "1" {
