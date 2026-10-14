@@ -1,17 +1,35 @@
 //! Line editor: CSI keys, history browse, tab completion.
+//!
+//! BS and DEL are both backspace. Left and right accept `ESC [ C`/`D`,
+//! a parameterized form (`ESC [ 1 ; 2 D`), and SS3 (`ESC O D`). The
+//! cursor stays inside the buffer, so a backspace cannot slice backwards.
 
 use super::builtins::*;
 use super::jobs::*;
 use super::state::*;
 
+use core::sync::atomic::{AtomicU16, Ordering};
+
 use galexy_abi::{Cap, SysError};
+use galexy_core::{line_backspace, line_delete, line_insert, line_left, line_right, Key, KeyDec};
 use galexy_rt::{files_cap, read, session_locked, write_console, yield_now};
 
-/// ESC / CSI parser while editing a line (arrow keys → history).
-pub(crate) enum KeyParse {
-    Normal,
-    Esc,
-    Csi,
+/// One byte that followed a bare Esc, for the next `read_line`.
+/// `0x100` means empty. A password prompt treats Esc as cancel, and the
+/// key that proved it was not an arrow must still reach the next prompt.
+static READ_LINE_REPLAY: AtomicU16 = AtomicU16::new(0x100);
+
+fn stash_key(byte: u8) {
+    READ_LINE_REPLAY.store(byte as u16, Ordering::Relaxed);
+}
+
+fn take_stashed_key() -> Option<u8> {
+    let value = READ_LINE_REPLAY.swap(0x100, Ordering::Relaxed);
+    if value == 0x100 {
+        None
+    } else {
+        Some(value as u8)
+    }
 }
 
 pub(crate) enum LineRead {
@@ -26,57 +44,94 @@ pub(crate) enum LineRead {
 
 /// Reads a line. When `secret`, echoes `*` (never cleartext) so the COM1
 /// mirror of `write_console` cannot leak the password.
+///
+/// Left and right move inside the line. Backspace (BS or DEL) deletes
+/// the character before the cursor. A bare Esc or Ctrl-C cancels. An
+/// arrow sequence starts with Esc and is not a cancel.
 pub(crate) fn read_line(kbd: Cap, buf: &mut [u8], secret: bool) -> LineRead {
     wipe(buf);
     let mut len = 0usize;
+    let mut pos = 0usize;
+    let mut dec = KeyDec::new();
     loop {
         let mut chunk = [0u8; 8];
-        let got = read(kbd, &mut chunk);
-        if !got.ok {
-            write_console(b"\nread: keyboard denied\n");
-            wipe(buf);
-            return LineRead::Denied;
-        }
-        let n = got.value as usize;
+        let n = if let Some(byte) = take_stashed_key() {
+            chunk[0] = byte;
+            1
+        } else {
+            let got = read(kbd, &mut chunk);
+            if !got.ok {
+                write_console(b"\nread: keyboard denied\n");
+                wipe(buf);
+                return LineRead::Denied;
+            }
+            got.value as usize
+        };
         for &byte in &chunk[..n.min(chunk.len())] {
-            match byte {
-                b'\n' | b'\r' => {
-                    write_console(b"\n");
-                    return LineRead::Line(len);
-                }
-                // Esc or Ctrl-C cancels without submitting.
-                0x1b | 0x03 => {
-                    write_console(b"\n");
-                    wipe(buf);
-                    return LineRead::Cancel;
-                }
-                0x08 => {
-                    if len > 0 {
-                        len -= 1;
-                        buf[len] = 0;
-                        write_console(&[0x08, b' ', 0x08]);
-                    }
-                }
-                b if b.is_ascii_graphic() || (!secret && b == b' ') => {
-                    if len >= buf.len() {
+            let mut next = Some(byte);
+            while let Some(b) = next.take() {
+                match dec.feed(b) {
+                    Key::More => {}
+                    Key::Escape => {
+                        if let Some(replay) = dec.take_replay() {
+                            stash_key(replay);
+                        }
                         write_console(b"\n");
-                        write_console(if secret {
-                            b"password too long\n"
-                        } else {
-                            b"input too long\n"
-                        });
                         wipe(buf);
-                        return LineRead::Overlong;
+                        return LineRead::Cancel;
                     }
-                    buf[len] = b;
-                    len += 1;
-                    if secret {
-                        write_console(b"*");
-                    } else {
-                        write_console(&[b]);
+                    Key::Cancel => {
+                        write_console(b"\n");
+                        wipe(buf);
+                        return LineRead::Cancel;
                     }
+                    Key::Submit => {
+                        write_console(b"\n");
+                        return LineRead::Line(len);
+                    }
+                    Key::Backspace => {
+                        if line_backspace(buf, &mut len, &mut pos) {
+                            paint_backspace(buf, len, pos, secret);
+                        }
+                    }
+                    Key::Delete => {
+                        if line_delete(buf, &mut len, &mut pos) {
+                            paint_delete(buf, len, pos, secret);
+                        }
+                    }
+                    Key::Left => {
+                        if line_left(&mut pos, len) {
+                            move_left(1);
+                        }
+                    }
+                    Key::Right => {
+                        if line_right(&mut pos, len) {
+                            move_right(1);
+                        }
+                    }
+                    Key::Home => {
+                        move_left(pos);
+                        pos = 0;
+                    }
+                    Key::End => {
+                        move_right(len.saturating_sub(pos));
+                        pos = len;
+                    }
+                    Key::Char(ch) if ch.is_ascii_graphic() || (!secret && ch == b' ') => {
+                        if !line_insert(buf, &mut len, &mut pos, ch) {
+                            write_console(b"\n");
+                            write_console(if secret {
+                                b"password too long\n"
+                            } else {
+                                b"input too long\n"
+                            });
+                            wipe(buf);
+                            return LineRead::Overlong;
+                        }
+                        paint_insert(buf, len, pos, secret);
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
@@ -88,14 +143,8 @@ pub(crate) fn repl(
     must_change: &mut bool,
     history: &mut History,
 ) -> ReplEnd {
-    let mut line = [0u8; LINE_MAX];
-    let mut len = 0usize;
-    let mut draft = [0u8; LINE_MAX];
-    let mut draft_len = 0usize;
-    // Index into history while browsing; `None` means the draft line.
-    let mut hist_idx: Option<usize> = None;
-    let mut parse = KeyParse::Normal;
-    let mut pos = 0usize;
+    let mut edit = ReplEdit::new();
+    let mut dec = KeyDec::new();
     prompt(cwd);
     loop {
         if session_locked() {
@@ -118,109 +167,114 @@ pub(crate) fn repl(
             continue;
         }
         for &byte in &buf[..n.min(buf.len())] {
-            match parse {
-                KeyParse::Normal => match byte {
-                    b'\n' | b'\r' => {
-                        write_console(b"\n");
-                        let cmd = trim(&line[..len]);
-                        history.push(cmd);
-                        hist_idx = None;
-                        draft_len = 0;
-                        if let Some(end) = dispatch(kbd, cmd, cwd, must_change, history) {
-                            return end;
-                        }
-                        len = 0;
-                        pos = 0;
-                    }
-                    0x1b => parse = KeyParse::Esc,
-                    0x08 => editor_backspace(
-                        &mut line,
-                        &mut len,
-                        &mut pos,
-                        &mut draft,
-                        &mut draft_len,
-                        &mut hist_idx,
-                    ),
-                    0x01 => {
-                        move_left(pos);
-                        pos = 0;
-                    }
-                    0x05 => {
-                        move_right(len - pos);
-                        pos = len;
-                    }
-                    0x15 => editor_clear(
-                        &mut line,
-                        &mut len,
-                        &mut pos,
-                        &mut draft,
-                        &mut draft_len,
-                        &mut hist_idx,
-                    ),
-                    0x09 => tab_complete(
-                        cwd,
-                        &mut line,
-                        &mut len,
-                        &mut pos,
-                        &mut draft,
-                        &mut draft_len,
-                        &mut hist_idx,
-                    ),
-                    b if (b.is_ascii_graphic() || b == b' ') && len < LINE_MAX => {
-                        editor_insert(
-                            b,
-                            &mut line,
-                            &mut len,
-                            &mut pos,
-                            &mut draft,
-                            &mut draft_len,
-                            &mut hist_idx,
-                        );
-                    }
-                    _ => {}
-                },
-                KeyParse::Esc => {
-                    parse = if byte == b'[' {
-                        KeyParse::Csi
-                    } else {
-                        KeyParse::Normal
-                    };
+            let mut next = Some(byte);
+            while let Some(b) = next.take() {
+                let key = dec.feed(b);
+                if key == Key::More {
+                    continue;
                 }
-                KeyParse::Csi => {
-                    parse = KeyParse::Normal;
-                    match byte {
-                        b'A' => history_up(
-                            history,
-                            &mut line,
-                            &mut len,
-                            &mut pos,
-                            &mut draft,
-                            &mut draft_len,
-                            &mut hist_idx,
-                        ),
-                        b'B' => history_down(
-                            history,
-                            &mut line,
-                            &mut len,
-                            &mut pos,
-                            &mut draft,
-                            &mut draft_len,
-                            &mut hist_idx,
-                        ),
-                        b'D' if pos > 0 => {
-                            pos -= 1;
-                            move_left(1);
-                        }
-                        b'C' if pos < len => {
-                            pos += 1;
-                            move_right(1);
-                        }
-                        _ => {}
-                    }
+                if key == Key::Escape {
+                    next = dec.take_replay();
+                    continue;
+                }
+                if let Some(end) = apply_repl_key(key, kbd, cwd, must_change, history, &mut edit) {
+                    return end;
                 }
             }
         }
     }
+}
+
+struct ReplEdit {
+    line: [u8; LINE_MAX],
+    len: usize,
+    pos: usize,
+    draft: [u8; LINE_MAX],
+    draft_len: usize,
+    hist_idx: Option<usize>,
+}
+
+impl ReplEdit {
+    fn new() -> Self {
+        Self {
+            line: [0; LINE_MAX],
+            len: 0,
+            pos: 0,
+            draft: [0; LINE_MAX],
+            draft_len: 0,
+            hist_idx: None,
+        }
+    }
+}
+
+fn apply_repl_key(
+    key: Key,
+    kbd: Cap,
+    cwd: &mut Cwd,
+    must_change: &mut bool,
+    history: &mut History,
+    edit: &mut ReplEdit,
+) -> Option<ReplEnd> {
+    let ReplEdit {
+        line,
+        len,
+        pos,
+        draft,
+        draft_len,
+        hist_idx,
+    } = edit;
+    match key {
+        Key::Submit => {
+            write_console(b"\n");
+            let cmd = trim(&line[..*len]);
+            history.push(cmd);
+            *hist_idx = None;
+            *draft_len = 0;
+            if let Some(end) = dispatch(kbd, cmd, cwd, must_change, history) {
+                return Some(end);
+            }
+            *len = 0;
+            *pos = 0;
+        }
+        Key::Backspace => {
+            editor_backspace(line, len, pos, draft, draft_len, hist_idx);
+        }
+        Key::Delete => {
+            if line_delete(line, len, pos) {
+                paint_delete(line, *len, *pos, false);
+                *hist_idx = None;
+                draft[..*len].copy_from_slice(&line[..*len]);
+                *draft_len = *len;
+            }
+        }
+        Key::Left => {
+            if line_left(pos, *len) {
+                move_left(1);
+            }
+        }
+        Key::Right => {
+            if line_right(pos, *len) {
+                move_right(1);
+            }
+        }
+        Key::Up => history_up(history, line, len, pos, draft, draft_len, hist_idx),
+        Key::Down => history_down(history, line, len, pos, draft, draft_len, hist_idx),
+        Key::Home => {
+            move_left(*pos);
+            *pos = 0;
+        }
+        Key::End => {
+            move_right((*len).saturating_sub(*pos));
+            *pos = *len;
+        }
+        Key::Other(0x15) => editor_clear(line, len, pos, draft, draft_len, hist_idx),
+        Key::Other(0x09) => tab_complete(cwd, line, len, pos, draft, draft_len, hist_idx),
+        Key::Char(ch) if ch.is_ascii_graphic() || ch == b' ' => {
+            editor_insert(ch, line, len, pos, draft, draft_len, hist_idx);
+        }
+        _ => {}
+    }
+    None
 }
 
 pub(crate) fn editor_insert(
@@ -232,21 +286,11 @@ pub(crate) fn editor_insert(
     draft_len: &mut usize,
     hist_idx: &mut Option<usize>,
 ) {
-    if *len >= LINE_MAX || *pos > *len {
+    if !line_insert(line, len, pos, byte) {
         return;
     }
+    paint_insert(line, *len, *pos, false);
     *hist_idx = None;
-    for i in (*pos..*len).rev() {
-        line[i + 1] = line[i];
-    }
-    line[*pos] = byte;
-    *len += 1;
-    write_console(&[byte]);
-    if *pos + 1 < *len {
-        write_console(&line[*pos + 1..*len]);
-        move_left(*len - *pos - 1);
-    }
-    *pos += 1;
     draft[..*len].copy_from_slice(&line[..*len]);
     *draft_len = *len;
 }
@@ -259,23 +303,10 @@ pub(crate) fn editor_backspace(
     draft_len: &mut usize,
     hist_idx: &mut Option<usize>,
 ) {
-    if *pos == 0 || *len == 0 {
+    if !line_backspace(line, len, pos) {
         return;
     }
-    *pos -= 1;
-    for i in *pos..*len - 1 {
-        line[i] = line[i + 1];
-    }
-    *len -= 1;
-    line[*len] = 0;
-    if *pos == *len {
-        write_console(&[0x08, b' ', 0x08]);
-    } else {
-        move_left(1);
-        write_console(&line[*pos..*len]);
-        write_console(b" ");
-        move_left(*len - *pos + 1);
-    }
+    paint_backspace(line, *len, *pos, false);
     *hist_idx = None;
     draft[..*len].copy_from_slice(&line[..*len]);
     *draft_len = *len;
@@ -289,6 +320,9 @@ pub(crate) fn editor_clear(
     draft_len: &mut usize,
     hist_idx: &mut Option<usize>,
 ) {
+    if *pos > *len {
+        *pos = *len;
+    }
     move_left(*pos);
     for _ in 0..*len {
         write_console(b" ");
@@ -310,13 +344,90 @@ pub(crate) fn move_right(n: usize) {
     move_csi(n, b'C');
 }
 
+/// The buffer edit has already happened. `pos` is the new cursor.
+fn paint_backspace(line: &[u8], len: usize, pos: usize, secret: bool) {
+    if pos > len || len > line.len() {
+        return;
+    }
+    if pos == len {
+        write_console(&[0x08, b' ', 0x08]);
+        return;
+    }
+    move_left(1);
+    paint_span(&line[pos..len], secret);
+    write_console(b" ");
+    move_left(len - pos + 1);
+}
+
+/// `pos` is the index after the inserted byte. The screen cursor is
+/// still where that byte was inserted.
+fn paint_insert(line: &[u8], len: usize, pos: usize, secret: bool) {
+    if pos == 0 || pos > len || len > line.len() {
+        return;
+    }
+    if secret {
+        write_console(b"*");
+    } else {
+        write_console(&[line[pos - 1]]);
+    }
+    let tail = len - pos;
+    if tail == 0 {
+        return;
+    }
+    paint_span(&line[pos..len], secret);
+    move_left(tail);
+}
+
+/// The character under the cursor is already gone. The screen cursor
+/// is still on that cell.
+fn paint_delete(line: &[u8], len: usize, pos: usize, secret: bool) {
+    if pos > len || len > line.len() {
+        return;
+    }
+    let tail = len - pos;
+    if tail > 0 {
+        paint_span(&line[pos..len], secret);
+    }
+    write_console(b" ");
+    move_left(tail + 1);
+}
+
+fn paint_span(bytes: &[u8], secret: bool) {
+    if secret {
+        let mut left = bytes.len();
+        let stars = [b'*'; 8];
+        while left > 0 {
+            let n = left.min(stars.len());
+            write_console(&stars[..n]);
+            left -= n;
+        }
+        return;
+    }
+    write_console(bytes);
+}
+
 pub(crate) fn move_csi(n: usize, final_byte: u8) {
     if n == 0 {
         return;
     }
-    write_console(b"\x1b[");
-    write_u64_dec(n as u64);
-    write_console(&[final_byte]);
+    // One write. A lone `ESC [` never leaves the console cutter's CSI
+    // state, so the syscall returns 0 and this task retries forever.
+    let mut raw = [0u8; 16];
+    raw[0] = 0x1b;
+    raw[1] = b'[';
+    let mut tmp = [0u8; 8];
+    let mut t = tmp.len();
+    let mut v = n;
+    while v > 0 && t > 0 {
+        t -= 1;
+        tmp[t] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
+    let digits = &tmp[t..];
+    raw[2..2 + digits.len()].copy_from_slice(digits);
+    let end = 2 + digits.len();
+    raw[end] = final_byte;
+    write_console(&raw[..=end]);
 }
 
 pub(crate) fn history_up(
@@ -375,7 +486,7 @@ pub(crate) fn replace_input_line(
     pos: &mut usize,
     new: &[u8],
 ) {
-    move_right(*len - *pos);
+    move_right((*len).saturating_sub(*pos));
     for _ in 0..*len {
         write_console(&[0x08, b' ', 0x08]);
     }
@@ -485,7 +596,7 @@ pub(crate) fn tab_complete(
         if *len > 0 {
             write_console(&line[..*len]);
         }
-        move_left(*len - *pos);
+        move_left((*len).saturating_sub(*pos));
     }
 }
 

@@ -3910,6 +3910,85 @@ fn util_typing_e2e_on(image_name: &str) {
     );
 }
 
+/// Login name and a shell command, edited in the middle of the line.
+///
+/// `admn`, Left, Backspace, `m`, `i` is `admin`. `echo xqy`, Left, Left,
+/// Right, Backspace submits `echo xy`. The Delete key is DEL and is the
+/// same backspace. The old editor panicked when the cursor and the length
+/// disagreed, which init reported as `[user task panicked]`.
+const LINE_EDIT_LOGIN: &[(&str, &str)] = &[
+    ("a", "a"),
+    ("d", "d"),
+    ("m", "m"),
+    ("n", "n"),
+    ("left", "\u{1b}[1D"),
+    ("backspace", "\u{1b}[2D"),
+    ("m", "\u{1b}[1D"),
+    ("i", "\u{1b}[1D"),
+    ("ret", "Password: "),
+    ("a", "*"),
+    ("d", "*"),
+    ("m", "*"),
+    ("i", "*"),
+    ("n", "*"),
+    ("ret", "admin@galexy> "),
+];
+
+const LINE_EDIT_ECHO: &[(&str, &str)] = &[
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("x", "x"),
+    ("q", "q"),
+    ("y", "y"),
+    ("left", "\u{1b}[1D"),
+    ("left", "\u{1b}[1D"),
+    ("right", "\u{1b}[1C"),
+    ("backspace", "\u{1b}[2D"),
+    ("ret", "xy\n"),
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("x", "x"),
+    ("q", "q"),
+    ("y", "y"),
+    ("left", "\u{1b}[1D"),
+    ("delete", "\u{1b}[2D"),
+    ("ret", "xy\n"),
+];
+
+#[test]
+fn shell_line_edit_typing_e2e() {
+    let mut keys = LINE_EDIT_LOGIN.to_vec();
+    keys.extend(CLEAR_DEFAULT_PASSWD.iter().copied());
+    keys.extend(LINE_EDIT_ECHO.iter().copied());
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "xy\n",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    assert_passwords_masked(&serial);
+    assert!(
+        serial.matches("xy\n").count() >= 2,
+        "edited echo did not print xy twice; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[user task panicked]"),
+        "shell panicked while editing; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("command not found"),
+        "edited line was not echo; serial:\n{serial}"
+    );
+}
+
 /// Cap-wait exit status surfaces as `echo $?`.
 #[test]
 fn shell_echo_status_typing_e2e() {

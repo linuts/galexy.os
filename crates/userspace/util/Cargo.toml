@@ -95,6 +95,7 @@ path = "src/bin/chime.rs"
 [dependencies]
 galexy-rt = { path = "../galexy-rt" }
 galexy-abi = { path = "../../galexy-abi" }
+galexy-core = { path = "../../galexy-core" }
 
 [build-dependencies]
 galexy-abi = { path = "../../galexy-abi" }

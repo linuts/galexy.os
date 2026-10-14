@@ -1,17 +1,23 @@
 //! The galexy.os shell: line editing + command dispatch.
 //!
 //! Characters typed on the keyboard are echoed as they arrive; Enter
-//! flushes the line. Lines starting with a known command run it; anything
-//! else is echoed back (the original echo-shell behavior). The status bar
-//! renders live system stats at the bottom of the screen.
+//! flushes the line. Left and right move inside the line. Backspace is
+//! BS or DEL and deletes the character before the cursor. Lines starting
+//! with a known command run it; anything else is echoed back (the
+//! original echo-shell behavior). The status bar renders live system
+//! stats at the bottom of the screen.
 
 use crate::sync::Mutex;
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::arch::mm;
-use crate::drivers::{keyboard, screen};
+use crate::drivers::{console, keyboard, screen};
 use crate::sched;
+use galexy_core::{line_backspace, line_delete, line_insert, line_left, line_right, Key, KeyDec};
+
+/// Bytes of one in-kernel command line.
+const LINE_MAX: usize = 128;
 
 /// Prompt color.
 pub(crate) const PROMPT_COLOR: screen::Color = screen::Color::new(0x7C, 0xA0, 0xFF);
@@ -23,8 +29,26 @@ const VALUE_COLOR: screen::Color = screen::Color::new(0xB0, 0xB0, 0xB0);
 const BAR_BG: screen::Color = screen::Color::new(0x20, 0x28, 0x38);
 const BAR_FG: screen::Color = screen::Color::new(0xC8, 0xD0, 0xE0);
 
+struct EditLine {
+    buf: [u8; LINE_MAX],
+    len: usize,
+    pos: usize,
+    keys: KeyDec,
+}
+
+impl EditLine {
+    const fn new() -> Self {
+        Self {
+            buf: [0; LINE_MAX],
+            len: 0,
+            pos: 0,
+            keys: KeyDec::new(),
+        }
+    }
+}
+
 /// Current line under construction.
-static LINE: Mutex<String> = Mutex::new(String::new());
+static LINE: Mutex<EditLine> = Mutex::new(EditLine::new());
 /// The foreground program's name while it runs — the prompt stays away
 /// until it exits, so its output never lands on an input line. Cleared by
 /// [`poll`] once no task with that name is running.
@@ -53,25 +77,156 @@ pub fn poll() {
     }
     let mut line = LINE.lock();
     while let Some(c) = keyboard::pop_key() {
-        match c {
-            '\n' | '\r' => {
-                flush_and_dispatch(&line);
-                line.clear();
+        if !c.is_ascii() {
+            continue;
+        }
+        let mut next = Some(c as u8);
+        while let Some(b) = next.take() {
+            let key = line.keys.feed(b);
+            if key == Key::More {
+                continue;
             }
-            '\u{0008}' => {
-                if line.pop().is_some() {
-                    screen::backspace();
-                }
+            if key == Key::Escape {
+                next = line.keys.take_replay();
+                continue;
             }
-            c => {
-                line.push(c);
-                // Echo through the console policy: the typed char shows on
-                // screen AND lands on COM1 — headless harnesses sync the
-                // typing flow on exactly this.
-                crate::drivers::console::out_char(c);
+            screen::set_color(TEXT_COLOR);
+            if key == Key::Submit {
+                let n = line.len.min(LINE_MAX);
+                let mut tmp = [0u8; LINE_MAX];
+                tmp[..n].copy_from_slice(&line.buf[..n]);
+                line.len = 0;
+                line.pos = 0;
+                let text = core::str::from_utf8(&tmp[..n]).unwrap_or("");
+                // Drop the editor lock before dispatch: a spawn must
+                // not re-enter this line.
+                drop(line);
+                flush_and_dispatch(text);
+                return;
             }
+            edit_key(&mut line, key);
         }
     }
+}
+
+fn edit_key(line: &mut EditLine, key: Key) {
+    let EditLine { buf, len, pos, .. } = line;
+    match key {
+        Key::Backspace => {
+            if line_backspace(buf, len, pos) {
+                paint_backspace(buf, *len, *pos);
+            }
+        }
+        Key::Delete => {
+            if line_delete(buf, len, pos) {
+                paint_delete(buf, *len, *pos);
+            }
+        }
+        Key::Left => {
+            if line_left(pos, *len) {
+                out_move(1, b'D');
+            }
+        }
+        Key::Right => {
+            if line_right(pos, *len) {
+                out_move(1, b'C');
+            }
+        }
+        Key::Home => {
+            out_move(*pos, b'D');
+            *pos = 0;
+        }
+        Key::End => {
+            out_move((*len).saturating_sub(*pos), b'C');
+            *pos = *len;
+        }
+        Key::Other(0x15) => {
+            out_move(*pos, b'D');
+            for _ in 0..*len {
+                console::out_str(" ");
+            }
+            out_move(*len, b'D');
+            buf.fill(0);
+            *len = 0;
+            *pos = 0;
+        }
+        Key::Char(ch) if ch.is_ascii_graphic() || ch == b' ' => {
+            if line_insert(buf, len, pos, ch) {
+                paint_insert(buf, *len, *pos);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn paint_backspace(line: &[u8], len: usize, pos: usize) {
+    if pos > len || len > line.len() {
+        return;
+    }
+    if pos == len {
+        console::out_str("\u{8} \u{8}");
+        return;
+    }
+    out_move(1, b'D');
+    out_bytes(&line[pos..len]);
+    console::out_str(" ");
+    out_move(len - pos + 1, b'D');
+}
+
+fn paint_insert(line: &[u8], len: usize, pos: usize) {
+    if pos == 0 || pos > len || len > line.len() {
+        return;
+    }
+    out_bytes(&[line[pos - 1]]);
+    let tail = len - pos;
+    if tail == 0 {
+        return;
+    }
+    out_bytes(&line[pos..len]);
+    out_move(tail, b'D');
+}
+
+fn paint_delete(line: &[u8], len: usize, pos: usize) {
+    if pos > len || len > line.len() {
+        return;
+    }
+    let tail = len - pos;
+    if tail > 0 {
+        out_bytes(&line[pos..len]);
+    }
+    console::out_str(" ");
+    out_move(tail + 1, b'D');
+}
+
+fn out_bytes(bytes: &[u8]) {
+    if let Ok(text) = core::str::from_utf8(bytes) {
+        console::out_str(text);
+    }
+}
+
+fn out_move(n: usize, dir: u8) {
+    if n == 0 {
+        return;
+    }
+    let mut raw = [0u8; 16];
+    raw[0] = 0x1b;
+    raw[1] = b'[';
+    let mut tmp = [0u8; 8];
+    let mut t = tmp.len();
+    let mut v = n;
+    while v > 0 && t > 0 {
+        t -= 1;
+        tmp[t] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
+    let digits = &tmp[t..];
+    if 2 + digits.len() + 1 > raw.len() {
+        return;
+    }
+    raw[2..2 + digits.len()].copy_from_slice(digits);
+    let end = 2 + digits.len();
+    raw[end] = dir;
+    out_bytes(&raw[..=end]);
 }
 
 /// Unknown line: `<line>: command not found`, then the prompt.

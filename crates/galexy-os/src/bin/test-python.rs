@@ -13,8 +13,8 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use bootloader_api::{BootInfo, entry_point};
-use galexy_os::{QemuExitCode, drivers::screen, exit_qemu, println, sched, serial_println};
+use bootloader_api::{entry_point, BootInfo};
+use galexy_os::{drivers::screen, exit_qemu, println, sched, serial_println, QemuExitCode};
 use x86_64::VirtAddr;
 
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);

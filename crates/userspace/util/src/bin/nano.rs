@@ -12,6 +12,7 @@
 use core::cell::UnsafeCell;
 
 use galexy_abi::{Cap, CapRights, SysError};
+use galexy_core::{Key, KeyDec};
 use galexy_rt::{
     arg, close, create_replace, entry, keyboard_cap, open, read, write, write_console, yield_now,
 };
@@ -72,12 +73,6 @@ enum Note {
     Failed,
 }
 
-enum Parse {
-    Normal,
-    Esc,
-    Csi,
-}
-
 enum Step {
     Stay,
     Redraw,
@@ -115,7 +110,7 @@ fn main() -> i32 {
     };
     write_console(b"\x1b[0m\x1b[2J");
     draw(doc, path, &mut ed);
-    let mut parse = Parse::Normal;
+    let mut dec = KeyDec::new();
     loop {
         let mut buf = [0u8; 8];
         let got = read(keyboard_cap(), &mut buf);
@@ -132,25 +127,34 @@ fn main() -> i32 {
         // One key closes help. An arrow is several bytes, so the whole
         // sequence is that one key. A later key batched into the same
         // read (the queue fills while this task is off-CPU) still runs.
-        let mut bytes = &buf[..n];
-        if ed.help {
-            ed.help = false;
-            parse = Parse::Normal;
-            let skip = key_len(bytes);
-            bytes = &bytes[skip..];
-            draw(doc, path, &mut ed);
-            if bytes.is_empty() {
-                continue;
-            }
-        }
         let mut redraw = false;
-        for &byte in bytes {
-            match feed(&mut parse, doc, cut, path, &mut ed, byte) {
-                Step::Stay => {}
-                Step::Redraw => redraw = true,
-                Step::Quit => {
-                    leave_screen();
-                    return 0;
+        for &byte in &buf[..n] {
+            let mut next = Some(byte);
+            while let Some(b) = next.take() {
+                let key = dec.feed(b);
+                if key == Key::More {
+                    continue;
+                }
+                if key == Key::Escape {
+                    if ed.help {
+                        let _ = dec.take_replay();
+                    } else {
+                        next = dec.take_replay();
+                        continue;
+                    }
+                }
+                if ed.help {
+                    ed.help = false;
+                    redraw = true;
+                    continue;
+                }
+                match on_key(doc, cut, path, &mut ed, key) {
+                    Step::Stay => {}
+                    Step::Redraw => redraw = true,
+                    Step::Quit => {
+                        leave_screen();
+                        return 0;
+                    }
                 }
             }
         }
@@ -238,105 +242,54 @@ fn push(doc: &mut [u8], len: &mut usize, bytes: &[u8]) -> bool {
     true
 }
 
-/// Length of the first key in `buf`.
-///
-/// A CSI sequence (`ESC [` + parameters + a final byte) is one key.
-/// `ESC` plus a non-`[` byte is one key. Everything else is one byte.
-/// A truncated escape is consumed whole so the next read does not
-/// resume it mid-sequence.
-fn key_len(buf: &[u8]) -> usize {
-    if buf.first() != Some(&0x1b) {
-        return 1;
-    }
-    if buf.len() < 2 {
-        return 1;
-    }
-    if buf[1] != b'[' {
-        return 2;
-    }
-    let mut i = 2;
-    while i < buf.len() {
-        let byte = buf[i];
-        i += 1;
-        if !(byte.is_ascii_digit() || byte == b';') {
-            break;
-        }
-    }
-    i
-}
-
-fn feed(
-    parse: &mut Parse,
-    doc: &mut [u8],
-    cut: &mut [u8],
-    path: &[u8],
-    ed: &mut Editor,
-    byte: u8,
-) -> Step {
-    match parse {
-        Parse::Esc => {
-            *parse = if byte == b'[' {
-                Parse::Csi
-            } else if byte == 0x1b {
-                Parse::Esc
-            } else {
-                Parse::Normal
-            };
-            Step::Stay
-        }
-        Parse::Csi => feed_csi(parse, doc, ed, byte),
-        Parse::Normal => feed_normal(parse, doc, cut, path, ed, byte),
-    }
-}
-
-fn feed_csi(parse: &mut Parse, doc: &[u8], ed: &mut Editor, byte: u8) -> Step {
-    match byte {
-        b'0'..=b'9' | b';' => Step::Stay,
-        0x1b => {
-            *parse = Parse::Esc;
-            Step::Stay
-        }
-        b'A' => {
-            *parse = Parse::Normal;
-            move_vert(doc, ed, -1);
-            Step::Redraw
-        }
-        b'B' => {
-            *parse = Parse::Normal;
-            move_vert(doc, ed, 1);
-            Step::Redraw
-        }
-        b'C' => {
-            *parse = Parse::Normal;
-            move_right(doc, ed);
-            Step::Redraw
-        }
-        b'D' => {
-            *parse = Parse::Normal;
+fn on_key(doc: &mut [u8], cut: &mut [u8], path: &[u8], ed: &mut Editor, key: Key) -> Step {
+    match key {
+        Key::Left => {
             move_left(doc, ed);
             Step::Redraw
         }
-        _ => {
-            *parse = Parse::Normal;
-            Step::Stay
+        Key::Right => {
+            move_right(doc, ed);
+            Step::Redraw
         }
-    }
-}
-
-fn feed_normal(
-    parse: &mut Parse,
-    doc: &mut [u8],
-    cut: &mut [u8],
-    path: &[u8],
-    ed: &mut Editor,
-    byte: u8,
-) -> Step {
-    match byte {
-        0x1b => {
-            *parse = Parse::Esc;
-            Step::Stay
+        Key::Up => {
+            move_vert(doc, ed, -1);
+            Step::Redraw
         }
-        0x18 => {
+        Key::Down => {
+            move_vert(doc, ed, 1);
+            Step::Redraw
+        }
+        Key::Home => {
+            ed.quit_armed = false;
+            ed.cursor = line_start(doc, ed.len, cursor_line(doc, ed));
+            sync_goal(doc, ed);
+            Step::Redraw
+        }
+        Key::End => {
+            ed.quit_armed = false;
+            let start = line_start(doc, ed.len, cursor_line(doc, ed));
+            ed.cursor = start + line_len(doc, ed.len, start);
+            sync_goal(doc, ed);
+            Step::Redraw
+        }
+        Key::Backspace => {
+            backspace(doc, ed);
+            Step::Redraw
+        }
+        Key::Delete | Key::Other(0x04) => {
+            delete_at(doc, ed);
+            Step::Redraw
+        }
+        Key::Submit => {
+            insert(doc, ed, b'\n');
+            Step::Redraw
+        }
+        Key::Char(b) if b.is_ascii_graphic() || b == b' ' => {
+            insert(doc, ed, b);
+            Step::Redraw
+        }
+        Key::Other(0x18) => {
             if ed.dirty && !ed.quit_armed {
                 ed.quit_armed = true;
                 ed.note = Note::Unsaved;
@@ -345,58 +298,29 @@ fn feed_normal(
                 Step::Quit
             }
         }
-        0x0f => {
+        Key::Other(0x0f) => {
             save(doc, path, ed);
             Step::Redraw
         }
-        0x0b => {
+        Key::Other(0x0b) => {
             cut_line(doc, cut, ed);
             Step::Redraw
         }
-        0x15 => {
+        Key::Other(0x15) => {
             paste(doc, cut, ed);
             Step::Redraw
         }
-        0x07 => {
+        Key::Other(0x07) => {
             ed.quit_armed = false;
             ed.help = true;
             Step::Redraw
         }
-        0x01 => {
-            ed.quit_armed = false;
-            ed.cursor = line_start(doc, ed.len, cursor_line(doc, ed));
-            sync_goal(doc, ed);
-            Step::Redraw
-        }
-        0x05 => {
-            ed.quit_armed = false;
-            let start = line_start(doc, ed.len, cursor_line(doc, ed));
-            ed.cursor = start + line_len(doc, ed.len, start);
-            sync_goal(doc, ed);
-            Step::Redraw
-        }
-        0x04 => {
-            delete_at(doc, ed);
-            Step::Redraw
-        }
-        0x19 => {
+        Key::Other(0x19) => {
             move_vert(doc, ed, -PAGE);
             Step::Redraw
         }
-        0x16 => {
+        Key::Other(0x16) => {
             move_vert(doc, ed, PAGE);
-            Step::Redraw
-        }
-        0x08 | 0x7f => {
-            backspace(doc, ed);
-            Step::Redraw
-        }
-        b'\n' | b'\r' => {
-            insert(doc, ed, b'\n');
-            Step::Redraw
-        }
-        b if b.is_ascii_graphic() || b == b' ' => {
-            insert(doc, ed, b);
             Step::Redraw
         }
         _ => Step::Stay,
