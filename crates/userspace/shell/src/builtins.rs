@@ -25,7 +25,10 @@ pub(crate) fn show_help() {
     help_row(b"echo [text]", b"print, or echo text >|>> file");
     help_row(b"echo $?", b"last Cap-wait exit status");
     help_row(b"cat <path>", b"print file");
-    help_row(b"nano <path>", b"edit a file (Ctrl-O save, Ctrl-X exit)");
+    help_row(
+        b"nano <path>",
+        b"edit a file (line numbers, Ctrl-T completes .rs/.py)",
+    );
     help_row(b"touch <path>", b"create empty file");
     help_row(b"mkdir <path>", b"create directory");
     help_row(b"rm <path>", b"remove file or empty dir");

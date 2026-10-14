@@ -25,6 +25,8 @@ const LINE_SPACING: usize = 2;
 const LINE_HEIGHT: usize = FONT_HEIGHT.val() + LINE_SPACING;
 /// Foreground restored by SGR 0 / SGR 39.
 const DEFAULT_FG: Color = Color::new(0xE0, 0xE0, 0xE0);
+/// Glyph color on an SGR 7 bar.
+const INK: Color = Color::new(0x12, 0x12, 0x16);
 /// Columns between tab stops.
 const TAB_WIDTH: usize = 8;
 
@@ -127,16 +129,21 @@ const TTY_COLS: usize = 200;
 const TTY_ROWS: usize = 128;
 
 /// One saved character. A zero `ch` is an empty cell.
+///
+/// `rev` is SGR 7: the cell is a bar of `fg` with the glyph in ink.
+/// The flag sits in the padding after `Color`, so the grid does not grow.
 #[derive(Clone, Copy)]
 struct Cell {
     ch: char,
     fg: Color,
+    rev: bool,
 }
 
 impl Cell {
     const BLANK: Self = Self {
         ch: '\0',
         fg: Color { r: 0, g: 0, b: 0 },
+        rev: false,
     };
 }
 
@@ -148,6 +155,7 @@ struct TtyGrids {
     x: [usize; super::keyboard::TTY_COUNT],
     y: [usize; super::keyboard::TTY_COUNT],
     fg: [Color; super::keyboard::TTY_COUNT],
+    rev: [bool; super::keyboard::TTY_COUNT],
     ansi: [AnsiParser; super::keyboard::TTY_COUNT],
     /// Scrolled-off rows stored in the spare cells above `text_rows`.
     hist_len: [usize; super::keyboard::TTY_COUNT],
@@ -161,9 +169,9 @@ fn row_differs(previous: usize, current: usize, row: usize, cols: usize) -> bool
     let grids = GRIDS.lock();
     let left = &grids.cells[previous][row][..cols];
     let right = &grids.cells[current][row][..cols];
-    left.iter()
-        .zip(right)
-        .any(|(a, b)| a.ch != b.ch || a.fg.r != b.fg.r || a.fg.g != b.fg.g || a.fg.b != b.fg.b)
+    left.iter().zip(right).any(|(a, b)| {
+        a.ch != b.ch || a.fg.r != b.fg.r || a.fg.g != b.fg.g || a.fg.b != b.fg.b || a.rev != b.rev
+    })
 }
 
 static GRIDS: Mutex<TtyGrids> = Mutex::new(TtyGrids {
@@ -171,6 +179,7 @@ static GRIDS: Mutex<TtyGrids> = Mutex::new(TtyGrids {
     x: [0; super::keyboard::TTY_COUNT],
     y: [0; super::keyboard::TTY_COUNT],
     fg: [DEFAULT_FG; super::keyboard::TTY_COUNT],
+    rev: [false; super::keyboard::TTY_COUNT],
     ansi: [AnsiParser::ground(); super::keyboard::TTY_COUNT],
     hist_len: [0; super::keyboard::TTY_COUNT],
     hist_next: [0; super::keyboard::TTY_COUNT],
@@ -186,6 +195,8 @@ struct ScreenWriter {
     char_x: usize,
     char_y: usize,
     fg: Color,
+    /// SGR 7. The next glyph is ink on a bar of [`Self::fg`].
+    reverse: bool,
     ansi: AnsiParser,
     /// TTY whose cursor and cells the next glyph updates.
     focus: usize,
@@ -257,7 +268,17 @@ impl ScreenWriter {
         }
         if self.char_y < rows {
             self.store_cell(c);
-            self.draw_glyph(c);
+            if self.reverse {
+                let bar = self.fg;
+                self.fill_cell(bar);
+                if c != ' ' {
+                    self.fg = INK;
+                    self.draw_glyph(c);
+                    self.fg = bar;
+                }
+            } else {
+                self.draw_glyph(c);
+            }
         }
         self.char_x += 1;
     }
@@ -401,6 +422,7 @@ impl ScreenWriter {
         let any = self.ansi.present[..n].contains(&true);
         if n == 0 || !any {
             self.fg = DEFAULT_FG;
+            self.reverse = false;
             return;
         }
         for i in 0..n {
@@ -411,8 +433,17 @@ impl ScreenWriter {
     }
 
     fn apply_sgr_one(&mut self, code: u16) {
+        match code {
+            0 => {
+                self.fg = DEFAULT_FG;
+                self.reverse = false;
+            }
+            7 => self.reverse = true,
+            27 => self.reverse = false,
+            39 => self.fg = DEFAULT_FG,
+            _ => {}
+        }
         self.fg = match code {
-            0 | 39 => DEFAULT_FG,
             30 => Color::new(0x00, 0x00, 0x00),
             31 => Color::new(0xE0, 0x40, 0x40),
             32 => Color::new(0x40, 0xE0, 0x40),
@@ -431,6 +462,33 @@ impl ScreenWriter {
             97 => Color::new(0xFF, 0xFF, 0xFF),
             _ => self.fg,
         };
+    }
+
+    /// Fills the cursor cell with `color`, including the line gap, so a
+    /// reverse run is a solid bar. Does not change the cell grid.
+    fn fill_cell(&mut self, color: Color) {
+        if !self.paint_pixels() {
+            return;
+        }
+        let x_origin = self.char_x * self.char_width;
+        let y_origin = self.char_y * LINE_HEIGHT;
+        let buffer = &mut *self.fb.buffer;
+        let info = self.fb.info;
+        let bpp = info.bytes_per_pixel;
+        for row in 0..LINE_HEIGHT {
+            let y = y_origin + row;
+            if y >= info.height {
+                break;
+            }
+            for col in 0..self.char_width {
+                let x = x_origin + col;
+                if x >= info.width {
+                    break;
+                }
+                let idx = (y * info.stride + x) * bpp;
+                Self::write_pixel(buffer, idx, info, color);
+            }
+        }
     }
 
     fn tab(&mut self) {
@@ -536,7 +594,10 @@ impl ScreenWriter {
     /// Clears one character cell to background (black) — used by backspace,
     /// because drawing a space glyph writes nothing (zero-intensity skip).
     fn clear_cell(&mut self) {
+        let saved = self.reverse;
+        self.reverse = false;
         self.store_cell('\0');
+        self.reverse = saved;
         self.blank_cell_pixels();
     }
 
@@ -703,6 +764,7 @@ impl ScreenWriter {
         }
         self.char_x = 0;
         self.char_y = 0;
+        self.reverse = false;
         self.ansi = AnsiParser::ground();
     }
 
@@ -724,7 +786,11 @@ impl ScreenWriter {
         }
         let x = self.char_x;
         let y = self.char_y;
-        GRIDS.lock().cells[focus][y][x] = Cell { ch, fg: self.fg };
+        GRIDS.lock().cells[focus][y][x] = Cell {
+            ch,
+            fg: self.fg,
+            rev: self.reverse,
+        };
     }
 
     fn clear_row_cells(&self, row: usize) {
@@ -798,6 +864,7 @@ impl ScreenWriter {
         grids.x[i] = self.char_x;
         grids.y[i] = self.char_y;
         grids.fg[i] = self.fg;
+        grids.rev[i] = self.reverse;
         grids.ansi[i] = self.ansi;
     }
 
@@ -810,6 +877,7 @@ impl ScreenWriter {
         self.char_x = grids.x[i];
         self.char_y = grids.y[i];
         self.fg = grids.fg[i];
+        self.reverse = grids.rev[i];
         self.ansi = grids.ansi[i];
     }
 
@@ -922,14 +990,28 @@ impl ScreenWriter {
         let mut row_cells = [Cell::BLANK; TTY_COLS];
         self.copy_view_row(row, &mut row_cells[..cols]);
         for (col, cell) in row_cells.iter().enumerate().take(cols) {
-            if cell.ch == '\0' || cell.ch == ' ' {
-                continue;
-            }
-            self.char_x = col;
-            self.char_y = row;
-            self.fg = cell.fg;
-            self.draw_glyph(cell.ch);
+            self.paint_stored(col, row, *cell);
         }
+    }
+
+    fn paint_stored(&mut self, x: usize, y: usize, cell: Cell) {
+        if cell.rev {
+            self.char_x = x;
+            self.char_y = y;
+            self.fill_cell(cell.fg);
+            if cell.ch != '\0' && cell.ch != ' ' {
+                self.fg = INK;
+                self.draw_glyph(cell.ch);
+            }
+            return;
+        }
+        if cell.ch == '\0' || cell.ch == ' ' {
+            return;
+        }
+        self.char_x = x;
+        self.char_y = y;
+        self.fg = cell.fg;
+        self.draw_glyph(cell.ch);
     }
 
     /// Paints the focused TTY's text rows onto the framebuffer.
@@ -1028,10 +1110,7 @@ impl ScreenWriter {
         self.char_x = x;
         self.char_y = y;
         self.blank_cell_pixels();
-        if cell.ch != '\0' && cell.ch != ' ' {
-            self.fg = cell.fg;
-            self.draw_glyph(cell.ch);
-        }
+        self.paint_stored(x, y, cell);
         self.char_x = saved_x;
         self.char_y = saved_y;
         self.fg = saved_fg;
@@ -1113,6 +1192,7 @@ pub fn init(boot_info: &mut bootloader_api::info::BootInfo) {
         char_x: 0,
         char_y: 0,
         fg: DEFAULT_FG,
+        reverse: false,
         ansi: AnsiParser::ground(),
         focus: 0,
         shown: 0,
@@ -1322,6 +1402,7 @@ pub fn fill_shown_for_bench() {
                 *cell = Cell {
                     ch: 'M',
                     fg: Color::new(200, 200, 200),
+                    rev: false,
                 };
             }
         }

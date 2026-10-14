@@ -3532,6 +3532,63 @@ const NANO_KEYS: &[(&str, &str)] = &[
     ("ret", "hi!\nyo\n"),
 ];
 
+/// `nano t.rs`: line numbers are on the gutter, Ctrl-T turns `pri` into
+/// `println`, and `{` is reported as an unclosed brace.
+#[test]
+fn shell_nano_lang_typing_e2e() {
+    let keys = with_login(&[
+        ("n", "n"),
+        ("a", "a"),
+        ("n", "n"),
+        ("o", "o"),
+        ("spc", " "),
+        ("t", "t"),
+        ("dot", "."),
+        ("r", "r"),
+        ("s", "s"),
+        ("ret", "@1,1@"),
+        ("p", "p"),
+        ("r", "r"),
+        ("i", "i"),
+        ("ctrl+t", "println"),
+        ("shift+bracket_left", "unclosed"),
+        ("ctrl+x", "Unsaved"),
+        ("ctrl+x", "admin@galexy> "),
+    ]);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "admin@galexy> ",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    assert!(
+        serial.contains("   1|"),
+        "nano did not draw a line number; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("\u{1b}[7m"),
+        "nano title was not reverse; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("Rust"),
+        "a .rs buffer did not name Rust; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("println"),
+        "Ctrl-T did not complete println; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("unclosed"),
+        "the open brace was not reported; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[user task panicked]"),
+        "nano panicked; serial:\n{serial}"
+    );
+}
+
 fn nano_typing_e2e_on(image_name: &str) {
     let keys = with_login(NANO_KEYS);
     let serial = boot_and_type(

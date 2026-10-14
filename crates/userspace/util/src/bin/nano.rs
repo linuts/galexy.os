@@ -5,6 +5,10 @@
 //! trusted code. The buffer lives in this image (no user heap) and holds
 //! one text file. Ctrl-O writes it back, Ctrl-X leaves. Ctrl-C is the
 //! seat's foreground kill and never reaches this loop.
+//!
+//! `.rs` and `.py` use the in-process language service: colors, one
+//! diagnostic on the status line, and Ctrl-T completion. The image does
+//! not carry rust-analyzer or a Python language server.
 
 #![no_std]
 #![no_main]
@@ -12,7 +16,9 @@
 use core::cell::UnsafeCell;
 
 use galexy_abi::{Cap, CapRights, SysError};
-use galexy_core::{Key, KeyDec};
+use galexy_core::{
+    complete, diagnose, lang_of, paint_line, Compl, HiState, Key, KeyDec, Lang, Span, COMPL_LEN,
+};
 use galexy_rt::{
     arg, close, create_replace, entry, keyboard_cap, open, read, write, write_console, yield_now,
 };
@@ -23,9 +29,13 @@ entry!(main);
 const CAP: usize = 16 * 1024;
 /// One cut line, including its newline.
 const CUT: usize = 1024;
-/// Columns the editor paints. Narrower than the framebuffer and a typical
-/// host terminal, so a CSI row does not wrap under the cursor math.
-const COLS: usize = 72;
+/// Columns of the line-number gutter, including the bar (`   1|`).
+const GUTTER: usize = 5;
+/// Columns of file text. With the gutter this stays inside a normal
+/// terminal so a CSI row does not wrap under the cursor math.
+const TEXT_COLS: usize = 64;
+/// Title, status, and shortcut rows are this wide.
+const WIDTH: usize = GUTTER + TEXT_COLS;
 /// Text rows between the title and the status line.
 const VIEW_ROWS: usize = 12;
 /// Rows [`move_vert`] jumps for Ctrl-Y / Ctrl-V. Same count as [`VIEW_ROWS`].
@@ -59,6 +69,13 @@ struct Editor {
     /// closes it and is not inserted.
     help: bool,
     note: Note,
+    lang: Lang,
+    msg: [u8; 48],
+    msg_len: usize,
+    compl_on: bool,
+    prefix: [u8; COMPL_LEN],
+    prefix_len: usize,
+    compl_i: usize,
 }
 
 enum Note {
@@ -71,6 +88,8 @@ enum Note {
     Cut,
     Paste,
     Failed,
+    /// Text in [`Editor::msg`].
+    Msg,
 }
 
 enum Step {
@@ -107,6 +126,13 @@ fn main() -> i32 {
         } else {
             Note::None
         },
+        lang: lang_of(path),
+        msg: [0; 48],
+        msg_len: 0,
+        compl_on: false,
+        prefix: [0; COMPL_LEN],
+        prefix_len: 0,
+        compl_i: 0,
     };
     write_console(b"\x1b[0m\x1b[2J");
     draw(doc, path, &mut ed);
@@ -243,6 +269,9 @@ fn push(doc: &mut [u8], len: &mut usize, bytes: &[u8]) -> bool {
 }
 
 fn on_key(doc: &mut [u8], cut: &mut [u8], path: &[u8], ed: &mut Editor, key: Key) -> Step {
+    if !matches!(key, Key::Other(0x14)) {
+        ed.compl_on = false;
+    }
     match key {
         Key::Left => {
             move_left(doc, ed);
@@ -315,6 +344,7 @@ fn on_key(doc: &mut [u8], cut: &mut [u8], path: &[u8], ed: &mut Editor, key: Key
             ed.help = true;
             Step::Redraw
         }
+        Key::Other(0x14) => complete_word(doc, ed),
         Key::Other(0x19) => {
             move_vert(doc, ed, -PAGE);
             Step::Redraw
@@ -524,6 +554,80 @@ fn place_on_line(doc: &[u8], len: usize, line: usize, goal: usize) -> usize {
     start + goal.min(line_len(doc, len, start))
 }
 
+fn complete_word(doc: &mut [u8], ed: &mut Editor) -> Step {
+    ed.quit_armed = false;
+    let start = word_start(doc, ed.cursor);
+    if !ed.compl_on {
+        let n = (ed.cursor - start).min(ed.prefix.len());
+        ed.prefix[..n].copy_from_slice(&doc[start..start + n]);
+        ed.prefix_len = n;
+        ed.compl_i = 0;
+        ed.compl_on = true;
+    } else {
+        ed.compl_i = ed.compl_i.saturating_add(1);
+    }
+    let mut slots = [Compl::new(); 8];
+    let n = complete(
+        ed.lang,
+        &doc[..ed.len],
+        &ed.prefix[..ed.prefix_len],
+        &mut slots,
+    );
+    if n == 0 {
+        set_msg(ed, b"no match");
+        ed.compl_on = false;
+        return Step::Redraw;
+    }
+    let slot = slots[ed.compl_i % n];
+    if !replace_word(doc, ed, start, &slot.bytes[..slot.len]) {
+        ed.compl_on = false;
+        return Step::Redraw;
+    }
+    set_msg(ed, &slot.bytes[..slot.len]);
+    Step::Redraw
+}
+
+fn word_start(doc: &[u8], cursor: usize) -> usize {
+    let mut i = cursor.min(doc.len());
+    while i > 0 && is_word(doc[i - 1]) {
+        i -= 1;
+    }
+    i
+}
+
+fn is_word(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+fn replace_word(doc: &mut [u8], ed: &mut Editor, start: usize, word: &[u8]) -> bool {
+    let old = ed.cursor.saturating_sub(start);
+    if ed.len - old + word.len() > CAP {
+        ed.note = Note::Full;
+        return false;
+    }
+    let tail = ed.cursor;
+    if word.len() > old {
+        let extra = word.len() - old;
+        doc.copy_within(tail..ed.len, tail + extra);
+    } else if word.len() < old {
+        let less = old - word.len();
+        doc.copy_within(tail..ed.len, tail - less);
+    }
+    doc[start..start + word.len()].copy_from_slice(word);
+    ed.len = ed.len - old + word.len();
+    ed.cursor = start + word.len();
+    mark_dirty(ed);
+    sync_goal(doc, ed);
+    true
+}
+
+fn set_msg(ed: &mut Editor, text: &[u8]) {
+    let n = text.len().min(ed.msg.len());
+    ed.msg[..n].copy_from_slice(&text[..n]);
+    ed.msg_len = n;
+    ed.note = Note::Msg;
+}
+
 fn draw(doc: &[u8], path: &[u8], ed: &mut Editor) {
     ed.cursor = ed.cursor.min(ed.len);
     let (line, col) = cursor_line_col(&doc[..ed.len], ed.cursor);
@@ -533,28 +637,101 @@ fn draw(doc: &[u8], path: &[u8], ed: &mut Editor) {
     if line >= ed.top + VIEW_ROWS {
         ed.top = line + 1 - VIEW_ROWS;
     }
-    let hscroll = col.saturating_sub(COLS - 1);
+    let hscroll = col.saturating_sub(TEXT_COLS - 1);
     draw_title(path, ed);
     if ed.help {
         draw_help_page();
-        draw_status(ed, line, col);
+        draw_status(doc, ed, line, col);
         draw_shortcuts();
         return;
     }
+    let diag = diagnose(ed.lang, &doc[..ed.len]);
+    let mut state = HiState::new();
+    for line_no in 0..ed.top {
+        if let Some(text) = view_line(doc, ed.len, line_no) {
+            paint_line(ed.lang, text, &mut state, |_, _| {});
+        }
+    }
+    let last = last_line(&doc[..ed.len]);
     for row in 0..VIEW_ROWS {
+        let line_no = ed.top + row;
         let mut out = Row::new();
         out.goto(2 + row, 1);
         out.erase();
-        if let Some(text) = view_line(doc, ed.len, ed.top + row) {
-            out.push(visible(text, hscroll));
+        if line_no <= last {
+            push_gutter(
+                &mut out,
+                line_no + 1,
+                diag.is_some_and(|d| d.line == line_no),
+            );
+            if let Some(text) = view_line(doc, ed.len, line_no) {
+                paint_visible(&mut out, ed.lang, text, hscroll, &mut state);
+            }
         }
+        out.push_sgr(b"\x1b[0m");
         out.flush();
     }
-    draw_status(ed, line, col);
+    draw_status(doc, ed, line, col);
     draw_shortcuts();
     let mut out = Row::new();
-    out.goto(2 + line - ed.top, 1 + col - hscroll);
+    out.goto(2 + line - ed.top, 1 + GUTTER + col - hscroll);
     out.flush();
+}
+
+fn push_gutter(out: &mut Row, line: usize, bad: bool) {
+    if bad {
+        out.push_sgr(b"\x1b[31m");
+    } else {
+        out.push_sgr(b"\x1b[7m");
+    }
+    out.push_vis(&fmt_gutter(line, bad));
+    out.push_sgr(b"\x1b[0m");
+}
+
+fn fmt_gutter(line: usize, bad: bool) -> [u8; GUTTER] {
+    let mut raw = [b' '; GUTTER];
+    raw[GUTTER - 1] = b'|';
+    let mut n = line.max(1);
+    let mut i = GUTTER - 2;
+    loop {
+        raw[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 || i == 0 {
+            break;
+        }
+        i -= 1;
+    }
+    if bad {
+        raw[0] = b'!';
+    }
+    raw
+}
+
+fn paint_visible(out: &mut Row, lang: Lang, line: &[u8], hscroll: usize, state: &mut HiState) {
+    let mut col = 0usize;
+    paint_line(lang, line, state, |span, bytes| {
+        let from = col;
+        let to = col + bytes.len();
+        col = to;
+        let vis_from = from.max(hscroll);
+        let vis_to = to.min(hscroll + TEXT_COLS);
+        if vis_from < vis_to {
+            let a = vis_from - from;
+            let b = vis_to - from;
+            out.push_sgr(span_sgr(span));
+            out.push_vis(&bytes[a..b]);
+        }
+    });
+}
+
+fn span_sgr(span: Span) -> &'static [u8] {
+    match span {
+        Span::Keyword => b"\x1b[36m",
+        Span::String => b"\x1b[32m",
+        Span::Comment => b"\x1b[90m",
+        Span::Number => b"\x1b[35m",
+        Span::Text => b"\x1b[37m",
+    }
 }
 
 fn view_line(doc: &[u8], len: usize, line: usize) -> Option<&[u8]> {
@@ -566,79 +743,110 @@ fn view_line(doc: &[u8], len: usize, line: usize) -> Option<&[u8]> {
     Some(&doc[start..start + n])
 }
 
-fn visible(line: &[u8], hscroll: usize) -> &[u8] {
-    let rest = line.get(hscroll..).unwrap_or(&[]);
-    let n = rest.len().min(COLS);
-    &rest[..n]
-}
-
 fn draw_title(path: &[u8], ed: &Editor) {
     let mut out = Row::new();
     out.goto(1, 1);
     out.erase();
-    out.push(b"\x1b[36m");
-    out.push(b" galexy nano  ");
-    out.push(tail(path, 40));
+    out.push_sgr(b"\x1b[7m");
+    out.push_vis(b" galexy nano  ");
+    out.push_vis(tail(path, 28));
+    if ed.lang != Lang::Text {
+        out.push_vis(b"  ");
+        out.push_vis(ed.lang.name());
+    }
     if ed.readonly {
-        out.push(b"  read only");
+        out.push_vis(b"  Read Only");
+    } else if ed.dirty {
+        out.push_vis(b"  Modified");
     }
-    if ed.dirty {
-        out.push(b"  *");
-    }
-    out.push(b"\x1b[0m");
+    out.pad_to(WIDTH);
+    out.push_sgr(b"\x1b[0m");
     out.flush();
 }
 
-fn draw_status(ed: &Editor, line: usize, col: usize) {
+fn draw_status(doc: &[u8], ed: &Editor, line: usize, col: usize) {
     let mut out = Row::new();
     out.goto(2 + VIEW_ROWS, 1);
     out.erase();
-    out.push(b"\x1b[33m ");
+    out.push_sgr(b"\x1b[7m ");
+    if ed.lang != Lang::Text {
+        out.push_vis(ed.lang.name());
+        out.push_vis(b"  ");
+    }
     match ed.note {
-        Note::New => out.push(b"New file"),
+        Note::New => out.push_vis(b"New File"),
         Note::Wrote(n) => {
-            out.push(b"Wrote ");
-            out.push_u(n);
+            out.push_vis(b"Wrote ");
+            out.push_dec(n);
         }
-        Note::ReadOnly => out.push(b"Read only"),
-        Note::Unsaved => out.push(b"Unsaved; ^X discards"),
-        Note::Full => out.push(b"Buffer full"),
-        Note::Cut => out.push(b"Cut"),
-        Note::Paste => out.push(b"Pasted"),
-        Note::Failed => out.push(b"Save failed"),
-        Note::None if ed.dirty => out.push(b"Modified"),
-        Note::None => {}
+        Note::ReadOnly => out.push_vis(b"Read Only"),
+        Note::Unsaved => out.push_vis(b"Unsaved; ^X discards"),
+        Note::Full => out.push_vis(b"Buffer full"),
+        Note::Cut => out.push_vis(b"Cut Text"),
+        Note::Paste => out.push_vis(b"Uncut Text"),
+        Note::Failed => out.push_vis(b"Save failed"),
+        Note::Msg => out.push_vis(&ed.msg[..ed.msg_len]),
+        Note::None => {
+            if let Some(diag) = diagnose(ed.lang, &doc[..ed.len]) {
+                out.push_vis(diag.msg.as_bytes());
+            } else if ed.dirty {
+                out.push_vis(b"Modified");
+            }
+        }
     }
     if ed.help {
-        out.push(b"any key closes help  ");
+        out.push_vis(b"  any key closes help");
     }
-    out.push(b"  @");
-    out.push_u(line + 1);
-    out.push(b",");
-    out.push_u(col + 1);
-    out.push(b"@");
-    out.push(b"\x1b[0m");
+    out.push_vis(b"  @");
+    out.push_dec(line + 1);
+    out.push_vis(b",");
+    out.push_dec(col + 1);
+    out.push_vis(b"@");
+    out.pad_to(WIDTH);
+    out.push_sgr(b"\x1b[0m");
     out.flush();
 }
 
 fn draw_shortcuts() {
-    let mut out = Row::new();
-    out.goto(3 + VIEW_ROWS, 1);
-    out.erase();
-    out.push(b"\x1b[90m ^X Exit  ^O Save  ^K Cut  ^U Paste  ^G Help\x1b[0m");
-    out.flush();
+    let mut top = Row::new();
+    top.goto(3 + VIEW_ROWS, 1);
+    top.erase();
+    shortcut(&mut top, b"^G", b"Help");
+    shortcut(&mut top, b"^O", b"Write Out");
+    shortcut(&mut top, b"^K", b"Cut Text");
+    shortcut(&mut top, b"^T", b"Complete");
+    shortcut(&mut top, b"^Y", b"Prev Pg");
+    top.push_sgr(b"\x1b[0m");
+    top.flush();
+    let mut bot = Row::new();
+    bot.goto(4 + VIEW_ROWS, 1);
+    bot.erase();
+    shortcut(&mut bot, b"^X", b"Exit");
+    shortcut(&mut bot, b"^U", b"Uncut Text");
+    shortcut(&mut bot, b"^V", b"Next Pg");
+    shortcut(&mut bot, b"^D", b"Delete");
+    bot.push_sgr(b"\x1b[0m");
+    bot.flush();
+}
+
+fn shortcut(out: &mut Row, key: &[u8], label: &[u8]) {
+    out.push_sgr(b"\x1b[7m");
+    out.push_vis(key);
+    out.push_sgr(b"\x1b[0m ");
+    out.push_vis(label);
+    out.push_vis(b"  ");
 }
 
 /// Keys that are not already on the shortcut bar.
 fn draw_help_page() {
     const LINES: [&[u8]; 8] = [
         b"arrows            move the cursor",
+        b"line numbers      every row; ! is a problem",
         b"Ctrl-A / Ctrl-E   start / end of the line",
         b"Ctrl-Y / Ctrl-V   page up / down",
-        b"Ctrl-D            delete at the cursor",
+        b"Ctrl-T            complete Rust or Python",
         b"Ctrl-K / Ctrl-U   cut the line / paste it",
-        b"Ctrl-O            save",
-        b"Ctrl-X            exit; Ctrl-X again discards",
+        b"Ctrl-O / Ctrl-X   save / exit",
         b"Ctrl-G or any key close this help",
     ];
     for row in 0..VIEW_ROWS {
@@ -666,15 +874,17 @@ fn leave_screen() {
 }
 
 struct Row {
-    buf: [u8; 160],
+    buf: [u8; 512],
     len: usize,
+    cols: usize,
 }
 
 impl Row {
     fn new() -> Self {
         Self {
-            buf: [0; 160],
+            buf: [0; 512],
             len: 0,
+            cols: 0,
         }
     }
 
@@ -683,6 +893,36 @@ impl Row {
         let n = bytes.len().min(room);
         self.buf[self.len..self.len + n].copy_from_slice(&bytes[..n]);
         self.len += n;
+    }
+
+    fn push_vis(&mut self, bytes: &[u8]) {
+        self.push(bytes);
+        self.cols += bytes.len();
+    }
+
+    fn push_sgr(&mut self, bytes: &[u8]) {
+        self.push(bytes);
+    }
+
+    fn push_dec(&mut self, mut n: usize) {
+        if n == 0 {
+            self.push_vis(b"0");
+            return;
+        }
+        let mut tmp = [0u8; 8];
+        let mut i = tmp.len();
+        while n > 0 {
+            i -= 1;
+            tmp[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+        self.push_vis(&tmp[i..]);
+    }
+
+    fn pad_to(&mut self, cols: usize) {
+        while self.cols < cols {
+            self.push_vis(b" ");
+        }
     }
 
     fn push_u(&mut self, mut n: usize) {
