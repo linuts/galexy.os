@@ -344,6 +344,10 @@ reads the linker pipe to EOF before `Wait`.
   runs reuse the ELFs. `GALEXY_SKIP_COMPILERS=1` skips both and
   boots the small image. That image's shell prints
   `rustc: not in this image` and `scripts/build-galexy-rustc.sh`.
+  The desk image is large enough that a default FAT format is
+  FAT32. BIOS stage 2 does not read a FAT32 root directory
+  (`unimplemented!` in `fat.rs`), so the image is FAT16 with a
+  cluster size that stays under 65525 clusters.
   Stage 0 compiles the Galexy sysroot with the host nightly's
   Cranelift backend. This nightly has no `codegen-backends` directory
   until `rustc-codegen-cranelift` is installed; the script installs
