@@ -8,7 +8,7 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Shell — `rustc test.rs` finds `/x86_64-unknown-galexy.json` after a
+- [#131](https://github.com/linuts/galexy.os/pull/131) — Shell — `rustc test.rs` finds `/x86_64-unknown-galexy.json` after a
   sealed volume is unlocked. The boot copy lives in the pre-unlock RAM
   tree, and loading the disk replaces that tree; the main loop imports
   the sysroot again once the volume is open. A bare `rustc` line also
