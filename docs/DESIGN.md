@@ -163,14 +163,18 @@ Each TTY's cell grid is the scrollback: `TTY_ROWS` (128) by `TTY_COLS`
 Supported controls, and nothing else: tab, CR, LF, backspace (`0x08`),
 form feed (`0x0c`), ESC, and the CSI subset above. ASCII BEL (`0x07`)
 is a PC-speaker beep in the console writer, not a CSI and not a glyph.
-Other CSI final bytes are consumed and ignored. The console stays
+Other CSI final bytes are consumed and ignored. Horizontal cursor
+motion (`C`/`D`) and backspace wrap across text rows, so a wrapped
+input line stays editable. They stop at the origin and do not enter
+the status row. The console stays
 byte/ASCII-centric: the keyboard may deliver a Unicode scalar, but the
 shell line editor accepts only ASCII graphic characters (and space
 outside a secret prompt). Full Unicode editing is a non-goal.
 
 Ctrl-C (`U+0003`) cancels a shell prompt, or, when a TTY foreground job
 Cap is live, kills that job and is not queued. Ctrl-D (`U+0004`) is
-not end-of-file; the line editor ignores it. Esc cancels a prompt.
+not end-of-file; the line editor ignores it. A bare Esc cancels a
+prompt. Esc followed by `[` or `O` is a cursor sequence, not a cancel.
 
 ### serial — "the console on a wire" (`drivers/`)
 
@@ -866,7 +870,9 @@ inside that sequence. The host terminal stopped painting until a later
 byte resynced it, so a screen editor (and a long listing) looked frozen
 the way `ls` did before the shell waited for the child. A write that
 cannot fit the next whole sequence returns a short `0` and the runtime
-yields and retries.
+yields and retries. A buffer that is only `ESC [` never reaches ground,
+so the shell writes each cursor motion (`ESC [ <n> C` or `D`) as one
+syscall.
 Presenting a reserved index is not enough; the task must have been
 granted it. A ramdisk entry that is not an ELF is `Unsupported`. The
 main loop, which is on the kernel page
@@ -938,7 +944,8 @@ Main loop: drains the key queue — printable chars echo + buffer up (the
 echo goes through the console policy: screen + serial); Enter
 dispatches (`help`, `stats`, `tasks`, `threads`, `clear`, `about`; a
 lone name that is an ELF is started; anything else reports
-`<line>: command not found`); Backspace erases. The name is looked up
+`<line>: command not found`); Backspace (BS or DEL) erases the
+character before the cursor, and left/right move inside the line. The name is looked up
 in the ramdisk and handed to the loader (dispatch body factored into
 `shell::exec(line)` so boot tests drive the SAME path typing does).
 Foreground semantics for this in-kernel editor: the typed line closes
@@ -953,8 +960,12 @@ fit — via `screen::draw_status_bar`. It never moves the text cursor
 (hijacking `set_pos` for the bar could leave typing on the status row so
 input vanished on the next redraw). That row is not part of the text
 scroll, and the bar is drawn without feeding the CSI parser. Arrow keys
-arrive as CSI (`ESC [ A`…`D`) on the keyboard Cap. Up/down browse
-`shell.history`. Left/right move inside the line; Ctrl-A / Ctrl-E jump
+arrive as CSI (`ESC [ A`…`D`, including `ESC [ 1 ; 2 D` and SS3
+`ESC O D`) on the keyboard Cap. Up/down browse `shell.history`.
+Left/right move inside the line on the prompt and on login, lock, and
+password fields. Backspace is BS (`0x08`) or DEL (`0x7f`) and deletes
+the character before the cursor; the cursor is clamped so that edit
+cannot slice past the buffer. Ctrl-A / Ctrl-E jump
 to the ends; Ctrl-U clears the line. `echo text | cat` is one pipe:
 the shell `give`s the write end to `echo` and the read end to `cat`.
 A `*` word expands to names in the current directory from the files

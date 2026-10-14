@@ -21,7 +21,9 @@
 //! fastfetch-style dashboard prints, then the prompt is `user@galexy>`
 //! (with `:/path` when cwd is not `/`). Up/down arrows recall lines from
 //! the session history (loaded from / saved to per-user `shell.history`
-//! on login / logout). `lock` freezes the seat until the same password.
+//! on login / logout). Left/right move inside the line on the prompt
+//! and on every password or login field. Backspace is BS or DEL.
+//! `lock` freezes the seat until the same password.
 //! Five minutes with no keys does that too. `logout` returns to login.
 
 #![no_std]

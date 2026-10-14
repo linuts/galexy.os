@@ -333,10 +333,20 @@ impl ScreenWriter {
         if rows == 0 || cols == 0 {
             return;
         }
-        let y = self.char_y.min(rows - 1) as isize + dy;
-        let x = self.char_x as isize + dx;
-        self.char_y = y.clamp(0, (rows - 1) as isize) as usize;
-        self.char_x = x.clamp(0, (cols - 1) as isize) as usize;
+        if dy != 0 {
+            // A cursor parked just past the last cell would otherwise
+            // carry that "pending wrap" onto the destination row.
+            if self.char_x >= cols {
+                self.char_x = cols - 1;
+            }
+            let y = self.char_y.min(rows - 1) as isize + dy;
+            self.char_y = y.clamp(0, (rows - 1) as isize) as usize;
+        }
+        if dx != 0 {
+            let (x, y) = galexy_core::shift_cursor(self.char_x, self.char_y, cols, rows, dx);
+            self.char_x = x;
+            self.char_y = y;
+        }
     }
 
     fn erase_display(&mut self) {
@@ -578,13 +588,18 @@ impl ScreenWriter {
         self.char_x = 0;
     }
 
-    /// Erases the glyph left of the cursor, moving the cursor back one cell.
-    /// Does not cross line boundaries (backspace is line-local by design).
+    /// Erases the glyph left of the cursor and leaves the cursor on that cell.
+    ///
+    /// Column 0 continues onto the last cell of the previous text row, so
+    /// a wrapped input line can be edited. The origin is a no-op.
     fn backspace(&mut self) {
-        if self.char_x == 0 {
+        let cols = self.max_char_x();
+        let rows = self.text_rows();
+        let Some((x, y)) = galexy_core::backspace_cell(self.char_x, self.char_y, cols, rows) else {
             return;
-        }
-        self.char_x -= 1;
+        };
+        self.char_x = x;
+        self.char_y = y;
         self.clear_cell();
     }
 
@@ -1376,7 +1391,7 @@ pub fn set_color(color: Color) {
     with_lock(|screen| screen.fg = color);
 }
 
-/// Erases the character left of the cursor (within the current line only).
+/// Erases the character left of the cursor, wrapping to the previous text row.
 pub fn backspace() {
     with_lock(|screen| {
         if screen.focus == screen.shown {

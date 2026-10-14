@@ -576,6 +576,7 @@ name = "shell"
 version = "0.1.0"
 dependencies = [
  "galexy-abi",
+ "galexy-core",
  "galexy-rt",
 ]
 
@@ -758,6 +759,7 @@ name = "util"
 version = "0.1.0"
 dependencies = [
  "galexy-abi",
+ "galexy-core",
  "galexy-rt",
 ]
 

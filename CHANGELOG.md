@@ -8,6 +8,14 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#129](https://github.com/linuts/galexy.os/pull/129) — Shell — backspace no longer panics the line editor, and left/right
+  move inside a line. BS and DEL both delete the character before the
+  cursor. Login, lock, and password prompts use the same motions.
+  Arrow sequences may carry parameters (`ESC [ 1 ; 2 D`) or the SS3
+  form (`ESC O D`). Each motion is one console write, so `ESC [` is
+  not left open across the budget cut. The screen's horizontal cursor
+  and backspace wrap across text rows. nano and the Python REPL follow
+  the same keys.
 - [#128](https://github.com/linuts/galexy.os/pull/128) — Shell —
   the BIOS disk image stays FAT16. A desk image of 512 MiB
   or more was formatted as FAT32, and stage 2 panics with
