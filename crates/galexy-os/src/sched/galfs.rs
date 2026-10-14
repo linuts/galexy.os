@@ -483,6 +483,31 @@ static DIRTY: AtomicBool = AtomicBool::new(false);
 /// current locked period; cleared by the next successful encode.
 static LOCKED_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 
+/// The login kernel should copy `srlib/` once the live table is the one
+/// that will stay. A sealed unlock sets this; the main loop imports with
+/// interrupts on (the copy is ~90 MiB and must not run inside the syscall).
+static COMPILER_SYSROOT_DUE: AtomicBool = AtomicBool::new(false);
+
+/// Ask the main loop to import the compiler sysroot after this unlock.
+pub fn note_compiler_sysroot() {
+    COMPILER_SYSROOT_DUE.store(true, Ordering::Release);
+}
+
+/// `true` once, when an import was requested and the volume is open.
+///
+/// A locked volume keeps the flag set. The pre-unlock RAM table is
+/// replaced by the sealed disk, so importing before that would be discarded.
+pub fn take_compiler_sysroot_due() -> bool {
+    if !COMPILER_SYSROOT_DUE.load(Ordering::Acquire) {
+        return false;
+    }
+    if volume_locked() {
+        return false;
+    }
+    COMPILER_SYSROOT_DUE.store(false, Ordering::Release);
+    true
+}
+
 /// Marks the table dirty so the next [`sync_if_dirty`] / [`sync`] flushes.
 pub fn mark_dirty() {
     DIRTY.store(true, Ordering::Release);
@@ -666,6 +691,7 @@ pub fn unlock_volume(passphrase: &[u8]) -> Result<(), SysError> {
             } else {
                 crate::serial_println!("[galfs] unlocked slot {} gen {}", slot, gen);
             }
+            note_compiler_sysroot();
             Ok(())
         }
         DiskLoad::Empty => {
@@ -680,6 +706,7 @@ pub fn unlock_volume(passphrase: &[u8]) -> Result<(), SysError> {
                     "[galfs] formatted sealed disk (LBA base {})",
                     disk_lba_base()
                 );
+                note_compiler_sysroot();
                 Ok(())
             } else {
                 // Leave the disk fresh. A key that never reached the
@@ -981,6 +1008,10 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
     let mut table = TABLE.lock();
     copy_table(&best, &mut table);
     refresh_roots(&table);
+    drop(table);
+    // The pre-unlock import, if any, addressed the RAM table. Those
+    // indexes now name whatever the sealed image stored.
+    super::large::reset();
     ACTIVE_SLOT.store(slot, Ordering::Release);
     ACTIVE_GEN.store(best_gen, Ordering::Release);
     DISK_LIVE.store(true, Ordering::Release);

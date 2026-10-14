@@ -8,6 +8,11 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#131](https://github.com/linuts/galexy.os/pull/131) — Shell — `rustc test.rs` finds `/x86_64-unknown-galexy.json` after a
+  sealed volume is unlocked. The boot copy lives in the pre-unlock RAM
+  tree, and loading the disk replaces that tree; the main loop imports
+  the sysroot again once the volume is open. A bare `rustc` line also
+  passes `--edition 2024` when the user did not name an edition.
 - [#130](https://github.com/linuts/galexy.os/pull/130) — Shell — nano shows line numbers and the two shortcut rows, with a
   reverse title and status bar. `.rs` and `.py` are colored in the
   editor. The status line shows the first diagnostic, and Ctrl-T

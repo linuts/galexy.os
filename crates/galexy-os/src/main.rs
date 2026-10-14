@@ -77,6 +77,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         // A queued launch loads on this loop (kernel page table). The
         // in-kernel editor only consumes keys when no ring-3 shell owns them.
         // F1–F12 only record a switch; this loop paints it.
+        // After a sealed unlock, copy rustc's target JSON and rlibs into
+        // the live tree. The pre-unlock RAM copy does not survive the load.
+        sched::install_compiler_sysroot_if_due();
         sched::drain_spawn();
         sched::poll_idle_locks();
         screen::apply_tty_switch();
