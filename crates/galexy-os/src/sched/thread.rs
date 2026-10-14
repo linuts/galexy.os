@@ -192,7 +192,7 @@ impl Grants {
         }
     }
 
-    /// Console and keyboard for a program the shell Cap-waits (`nano`).
+    /// Console and keyboard for a program the shell Cap-waits (`edit`).
     ///
     /// `query` is included when the spawn asked for the files snapshot.
     /// The loader and power stay with the parent.

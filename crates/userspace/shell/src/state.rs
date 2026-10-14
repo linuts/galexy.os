@@ -356,10 +356,13 @@ pub(crate) fn snapshot_has(line: &[u8]) -> bool {
 pub(crate) fn prompt(cwd: &Cwd) {
     // One write, so a kernel log on the serial mirror cannot land between
     // the name and `> `. Shape: `user@galexy>` or `user@galexy:/path> `.
+    // `?25h` shows the cursor again after `edit` hid it for a redraw. A
+    // killed editor never gets to send that sequence itself.
     let mut name = [0u8; USER_MAX];
     let got = user(&mut name, galexy_abi::USER_WHOAMI);
-    let mut line = [0u8; USER_MAX + 1 + 6 + 2 + PATH_MAX + 2];
-    let mut n = 0usize;
+    let mut line = [0u8; 6 + USER_MAX + 1 + 6 + 2 + PATH_MAX + 2];
+    line[..6].copy_from_slice(b"\x1b[?25h");
+    let mut n = 6usize;
     let uname = if got.ok && got.value > 0 {
         &name[..(got.value as usize).min(USER_MAX)]
     } else {

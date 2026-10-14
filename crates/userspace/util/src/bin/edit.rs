@@ -1,4 +1,4 @@
-//! nano — a screen editor in the shape of GNU nano.
+//! edit — a screen editor. The key layout started from GNU nano.
 //!
 //! Trust: the shell spawns this with `SPAWN_INHERIT` (the caller's galfs
 //! cards) and `SPAWN_GRANT_KEYBOARD`, then Cap-waits. The ramdisk is
@@ -6,9 +6,10 @@
 //! one text file. Ctrl-O writes it back, Ctrl-X leaves. Ctrl-C is the
 //! seat's foreground kill and never reaches this loop.
 //!
-//! `.rs` and `.py` use the in-process language service: colors, one
-//! diagnostic on the status line, and Ctrl-T completion. The image does
-//! not carry rust-analyzer or a Python language server.
+//! Rust, Python, Lisp, JSON, CSV, TOML, and XML use the in-process
+//! language service: colors, one diagnostic on the status line, and
+//! Ctrl-T completion. The image does not carry rust-analyzer or a
+//! Python language server. Tab inserts four spaces.
 
 #![no_std]
 #![no_main]
@@ -60,6 +61,10 @@ struct Editor {
     cursor: usize,
     /// Column to land on when moving up or down.
     goal: usize,
+    /// First text column currently on screen. It moves only when the
+    /// cursor would leave the window, so a shorter line does not slide
+    /// every row back to column 0.
+    hscroll: usize,
     top: usize,
     dirty: bool,
     readonly: bool,
@@ -101,7 +106,7 @@ enum Step {
 fn main() -> i32 {
     let path = arg();
     if path.is_empty() {
-        write_console(b"nano: usage: nano <path>\n");
+        write_console(b"edit: usage: edit <path>\n");
         return 1;
     }
     // SAFETY: this task never shares `SCRATCH`, and `main` does not
@@ -115,6 +120,7 @@ fn main() -> i32 {
         len: loaded.len,
         cursor: 0,
         goal: 0,
+        hscroll: 0,
         top: 0,
         dirty: false,
         readonly: loaded.readonly,
@@ -142,7 +148,7 @@ fn main() -> i32 {
         let got = read(keyboard_cap(), &mut buf);
         if !got.ok {
             leave_screen();
-            write_console(b"nano: keyboard denied\n");
+            write_console(b"edit: keyboard denied\n");
             return 1;
         }
         if got.value == 0 {
@@ -207,11 +213,11 @@ fn load(doc: &mut [u8], path: &[u8]) -> Option<Loaded> {
             });
         }
         if opened.value == SysError::Unsupported as u64 {
-            write_console(b"nano: is a directory\n");
+            write_console(b"edit: is a directory\n");
         } else if opened.value == SysError::AccessDenied as u64 {
-            write_console(b"nano: denied\n");
+            write_console(b"edit: denied\n");
         } else {
-            write_console(b"nano: failed\n");
+            write_console(b"edit: failed\n");
         }
         return None;
     }
@@ -223,7 +229,7 @@ fn load(doc: &mut [u8], path: &[u8]) -> Option<Loaded> {
         let got = read(cap, &mut chunk);
         if !got.ok {
             let _ = close(cap);
-            write_console(b"nano: read failed\n");
+            write_console(b"edit: read failed\n");
             return None;
         }
         if got.value == 0 {
@@ -254,13 +260,13 @@ fn take_byte(doc: &mut [u8], len: &mut usize, byte: u8) -> bool {
     if byte.is_ascii_graphic() || byte == b' ' || byte == b'\n' {
         return push(doc, len, &[byte]);
     }
-    write_console(b"nano: not text\n");
+    write_console(b"edit: not text\n");
     false
 }
 
 fn push(doc: &mut [u8], len: &mut usize, bytes: &[u8]) -> bool {
     if len.saturating_add(bytes.len()) > CAP {
-        write_console(b"nano: file too big\n");
+        write_console(b"edit: file too big\n");
         return false;
     }
     doc[*len..*len + bytes.len()].copy_from_slice(bytes);
@@ -316,6 +322,10 @@ fn on_key(doc: &mut [u8], cut: &mut [u8], path: &[u8], ed: &mut Editor, key: Key
         }
         Key::Char(b) if b.is_ascii_graphic() || b == b' ' => {
             insert(doc, ed, b);
+            Step::Redraw
+        }
+        Key::Other(0x09) => {
+            insert_tab(doc, ed);
             Step::Redraw
         }
         Key::Other(0x18) => {
@@ -390,6 +400,18 @@ fn write_all(cap: Cap, bytes: &[u8]) -> bool {
         off += n;
     }
     true
+}
+
+/// Four spaces. A file tab is stored the same way on load.
+fn insert_tab(doc: &mut [u8], ed: &mut Editor) {
+    for _ in 0..4 {
+        if ed.len >= CAP {
+            ed.quit_armed = false;
+            ed.note = Note::Full;
+            return;
+        }
+        insert(doc, ed, b' ');
+    }
 }
 
 fn insert(doc: &mut [u8], ed: &mut Editor, byte: u8) {
@@ -637,12 +659,14 @@ fn draw(doc: &[u8], path: &[u8], ed: &mut Editor) {
     if line >= ed.top + VIEW_ROWS {
         ed.top = line + 1 - VIEW_ROWS;
     }
-    let hscroll = col.saturating_sub(TEXT_COLS - 1);
+    reveal_col(&mut ed.hscroll, col);
+    let hscroll = ed.hscroll;
     draw_title(path, ed);
     if ed.help {
         draw_help_page();
         draw_status(doc, ed, line, col);
         draw_shortcuts();
+        place_cursor(2, 1);
         return;
     }
     let diag = diagnose(ed.lang, &doc[..ed.len]);
@@ -673,8 +697,26 @@ fn draw(doc: &[u8], path: &[u8], ed: &mut Editor) {
     }
     draw_status(doc, ed, line, col);
     draw_shortcuts();
+    place_cursor(2 + line - ed.top, 1 + GUTTER + col - hscroll);
+}
+
+/// Keeps `col` inside the text window. A column already on screen does
+/// not move the window.
+fn reveal_col(hscroll: &mut usize, col: usize) {
+    if col < *hscroll {
+        *hscroll = col;
+    } else if col >= *hscroll + TEXT_COLS {
+        *hscroll = col + 1 - TEXT_COLS;
+    }
+}
+
+/// Parks the hardware cursor and shows it. The hide at the start of
+/// [`draw_title`] stays in force across the row writes, so the mark is
+/// not painted at the end of every line on the way here.
+fn place_cursor(row: usize, col: usize) {
     let mut out = Row::new();
-    out.goto(2 + line - ed.top, 1 + GUTTER + col - hscroll);
+    out.goto(row, col);
+    out.push(b"\x1b[?25h");
     out.flush();
 }
 
@@ -745,10 +787,11 @@ fn view_line(doc: &[u8], len: usize, line: usize) -> Option<&[u8]> {
 
 fn draw_title(path: &[u8], ed: &Editor) {
     let mut out = Row::new();
+    out.push(b"\x1b[?25l");
     out.goto(1, 1);
     out.erase();
     out.push_sgr(b"\x1b[7m");
-    out.push_vis(b" galexy nano  ");
+    out.push_vis(b" galexy edit  ");
     out.push_vis(tail(path, 28));
     if ed.lang != Lang::Text {
         out.push_vis(b"  ");
@@ -839,12 +882,13 @@ fn shortcut(out: &mut Row, key: &[u8], label: &[u8]) {
 
 /// Keys that are not already on the shortcut bar.
 fn draw_help_page() {
-    const LINES: [&[u8]; 8] = [
+    const LINES: [&[u8]; 9] = [
         b"arrows            move the cursor",
         b"line numbers      every row; ! is a problem",
         b"Ctrl-A / Ctrl-E   start / end of the line",
         b"Ctrl-Y / Ctrl-V   page up / down",
-        b"Ctrl-T            complete Rust or Python",
+        b"Tab               insert four spaces",
+        b"Ctrl-T            complete the word",
         b"Ctrl-K / Ctrl-U   cut the line / paste it",
         b"Ctrl-O / Ctrl-X   save / exit",
         b"Ctrl-G or any key close this help",
@@ -870,7 +914,7 @@ fn tail(bytes: &[u8], max: usize) -> &[u8] {
 }
 
 fn leave_screen() {
-    write_console(b"\x1b[0m\x1b[2J\x1b[H");
+    write_console(b"\x1b[0m\x1b[?25h\x1b[2J\x1b[H");
 }
 
 struct Row {

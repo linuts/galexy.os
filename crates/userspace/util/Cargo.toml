@@ -13,8 +13,8 @@ name = "cat"
 path = "src/bin/cat.rs"
 
 [[bin]]
-name = "nano"
-path = "src/bin/nano.rs"
+name = "edit"
+path = "src/bin/edit.rs"
 
 [[bin]]
 name = "touch"

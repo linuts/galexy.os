@@ -83,6 +83,8 @@ struct AnsiParser {
     count: u8,
     current: u16,
     any_digit: bool,
+    /// The sequence started with `?` (DEC private mode).
+    private: bool,
 }
 
 impl AnsiParser {
@@ -94,6 +96,7 @@ impl AnsiParser {
             count: 0,
             current: 0,
             any_digit: false,
+            private: false,
         }
     }
 
@@ -204,6 +207,9 @@ struct ScreenWriter {
     shown: usize,
     /// Underscore phase. The main loop toggles this every 500 ms.
     blink_on: bool,
+    /// CSI `?25l` is in force. A screen redraw hides the mark so it is
+    /// not painted at the end of every row. `?25h` clears this.
+    cursor_hidden: bool,
     /// `apply_blink` has run at least once (so the first phase paints).
     blink_seen: bool,
     /// An underscore is drawn at [`Self::mark_x`] / [`Self::mark_y`].
@@ -215,8 +221,9 @@ struct ScreenWriter {
 impl ScreenWriter {
     /// Writes one character, including tab, CR, and CSI sequences.
     ///
-    /// The blink mark is cleared before the glyph and redrawn after, so
-    /// a block cannot stick on a cell the cursor has left.
+    /// The blink mark is cleared before the glyph. It is drawn once at
+    /// the end of the write, so a multi-row redraw does not drag it
+    /// across every cell.
     fn write_char(&mut self, c: char) {
         let paint = self.focus == self.shown;
         if paint {
@@ -225,7 +232,11 @@ impl ScreenWriter {
         // New output leaves scrollback and shows the live grid again.
         self.snap_to_live();
         self.dispatch_char(c);
-        if paint && self.blink_on {
+    }
+
+    /// One underscore, at the cursor the write finished on.
+    fn finish_output(&mut self) {
+        if self.focus == self.shown && self.blink_on && !self.cursor_hidden {
             self.show_mark();
         }
     }
@@ -310,6 +321,7 @@ impl ScreenWriter {
                 self.ansi.current = self.ansi.current.saturating_mul(10).saturating_add(digit);
             }
             ';' => self.ansi.push(),
+            '?' => self.ansi.private = true,
             '\u{1b}' => self.ansi.state = AnsiState::Esc,
             ch if ('\u{40}'..='\u{7e}').contains(&ch) => {
                 self.ansi.push();
@@ -330,6 +342,12 @@ impl ScreenWriter {
             'J' => self.erase_display(),
             'K' => self.erase_line(),
             'm' => self.apply_sgr(),
+            'h' | 'l' if self.ansi.private && self.ansi.param(0, 0) == 25 => {
+                self.cursor_hidden = final_byte == 'l';
+                if self.cursor_hidden {
+                    self.hide_mark();
+                }
+            }
             _ => {}
         }
     }
@@ -1069,7 +1087,7 @@ impl ScreenWriter {
         self.blink_on = on;
         self.blink_seen = true;
         self.hide_mark();
-        if on {
+        if on && !self.cursor_hidden {
             self.show_mark();
         }
     }
@@ -1197,6 +1215,7 @@ pub fn init(boot_info: &mut bootloader_api::info::BootInfo) {
         focus: 0,
         shown: 0,
         blink_on: false,
+        cursor_hidden: false,
         blink_seen: false,
         mark_shown: false,
         mark_x: 0,
@@ -1246,7 +1265,7 @@ pub fn set_pos(char_x: usize, char_y: usize) {
         screen.char_x = char_x;
         screen.char_y = char_y;
         screen.clamp_to_text();
-        if screen.focus == screen.shown && screen.blink_on {
+        if screen.focus == screen.shown && screen.blink_on && !screen.cursor_hidden {
             screen.show_mark();
         }
     });
@@ -1331,7 +1350,10 @@ pub fn draw_status_bar(bg: Color, fg: Color, text: &str) {
 
 /// Writes one character to the screen's visible TTY.
 pub fn out_char(c: char) {
-    with_lock(|screen| screen.write_char(c));
+    with_lock(|screen| {
+        screen.write_char(c);
+        screen.finish_output();
+    });
 }
 
 /// Writes a string to the screen's visible TTY, interpreting tab, CR, and CSI.
@@ -1340,6 +1362,7 @@ pub fn out_str(s: &str) {
         for c in s.chars() {
             screen.write_char(c);
         }
+        screen.finish_output();
     });
 }
 
@@ -1352,6 +1375,7 @@ pub fn out_str_tty(tty: u8, s: &str) {
         for c in s.chars() {
             screen.write_char(c);
         }
+        screen.finish_output();
         // Persist this TTY's cursor even when focus never changed (the
         // common shell path). Without this, a later focus switch reloads
         // a stale grid cursor and the input line looks "lost".
@@ -1381,7 +1405,7 @@ pub fn show_tty(index: u8) {
         screen.focus_on(index);
         screen.shown = index;
         screen.repaint_changed(previous);
-        if screen.blink_on {
+        if screen.blink_on && !screen.cursor_hidden {
             screen.show_mark();
         }
     });

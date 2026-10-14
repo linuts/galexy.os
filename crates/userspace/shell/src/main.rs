@@ -11,8 +11,8 @@
 //! / `fg`); Ctrl-Z is not implemented. Pipelines are up to four stages
 //! joined by ` | `. A `*` word expands to
 //! names in the current directory from the files snapshot.
-//! `echo`, `cat`, `nano`, `touch`, `mkdir`, `rm`, and `ls` are those utilities.
-//! `nano` also receives the keyboard grant and Cap-waits, so it can edit.
+//! `echo`, `cat`, `edit`, `touch`, `mkdir`, `rm`, and `ls` are those utilities.
+//! `edit` also receives the keyboard grant and Cap-waits, so it can edit.
 //! The kernel keeps the status bar and the screen, and loads this shell
 //! again if it faults. The current directory lives here and starts over
 //! at `/` after a restart. Archive names stay at `/`. A path may begin

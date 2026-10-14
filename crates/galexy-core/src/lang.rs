@@ -1,4 +1,6 @@
-//! In-editor language service for Rust and Python.
+//! In-editor language service.
+//!
+//! Rust, Python, Lisp, JSON, CSV, TOML, and XML.
 //!
 //! Highlighting, diagnostics, and completion run in the process. The
 //! image does not ship rust-analyzer or a Python language server, so
@@ -14,6 +16,16 @@ pub enum Lang {
     Rust,
     /// Python source (`.py`).
     Python,
+    /// Lisp source (`.lisp`, `.lsp`, `.scm`).
+    Lisp,
+    /// JSON (`.json`).
+    Json,
+    /// CSV (`.csv`).
+    Csv,
+    /// TOML (`.toml`).
+    Toml,
+    /// XML (`.xml`).
+    Xml,
 }
 
 impl Lang {
@@ -23,6 +35,11 @@ impl Lang {
             Self::Text => b"",
             Self::Rust => b"Rust",
             Self::Python => b"Python",
+            Self::Lisp => b"Lisp",
+            Self::Json => b"JSON",
+            Self::Csv => b"CSV",
+            Self::Toml => b"TOML",
+            Self::Xml => b"XML",
         }
     }
 }
@@ -53,6 +70,7 @@ const GROUND: u8 = 0;
 const RUST_BLOCK: u8 = 1;
 const PY_TRIPLE_SQ: u8 = 2;
 const PY_TRIPLE_DQ: u8 = 3;
+const XML_COMMENT: u8 = 4;
 
 impl HiState {
     /// Ground state, nothing open.
@@ -70,12 +88,22 @@ impl Default for HiState {
     }
 }
 
-/// `.rs` is Rust, `.py` is Python, anything else is plain text.
+/// Picks a language from the path suffix. Anything else is plain text.
 pub fn lang_of(path: &[u8]) -> Lang {
     if path.ends_with(b".rs") {
         Lang::Rust
     } else if path.ends_with(b".py") {
         Lang::Python
+    } else if path.ends_with(b".lisp") || path.ends_with(b".lsp") || path.ends_with(b".scm") {
+        Lang::Lisp
+    } else if path.ends_with(b".json") {
+        Lang::Json
+    } else if path.ends_with(b".csv") {
+        Lang::Csv
+    } else if path.ends_with(b".toml") {
+        Lang::Toml
+    } else if path.ends_with(b".xml") {
+        Lang::Xml
     } else {
         Lang::Text
     }
@@ -91,6 +119,11 @@ pub fn paint_line(lang: Lang, line: &[u8], state: &mut HiState, mut emit: impl F
         }
         Lang::Rust => paint_rust(line, state, &mut emit),
         Lang::Python => paint_python(line, state, &mut emit),
+        Lang::Lisp => paint_words(Lang::Lisp, line, b';', &mut emit),
+        Lang::Json => paint_words(Lang::Json, line, 0, &mut emit),
+        Lang::Csv => paint_words(Lang::Csv, line, 0, &mut emit),
+        Lang::Toml => paint_words(Lang::Toml, line, b'#', &mut emit),
+        Lang::Xml => paint_xml(line, state, &mut emit),
     }
 }
 
@@ -109,6 +142,11 @@ pub fn diagnose(lang: Lang, doc: &[u8]) -> Option<Diag> {
         Lang::Text => None,
         Lang::Rust => diag_rust(doc),
         Lang::Python => diag_python(doc),
+        Lang::Lisp => diag_lisp(doc),
+        Lang::Json => diag_json(doc),
+        Lang::Csv => diag_csv(doc),
+        Lang::Toml => diag_toml(doc),
+        Lang::Xml => diag_xml(doc),
     }
 }
 
@@ -199,9 +237,12 @@ fn push_unique(out: &mut [Compl], n: &mut usize, word: &[u8]) {
 
 fn keywords(lang: Lang) -> Option<&'static [&'static [u8]]> {
     match lang {
-        Lang::Text => None,
+        Lang::Text | Lang::Csv | Lang::Xml => None,
         Lang::Rust => Some(RUST_WORDS),
         Lang::Python => Some(PYTHON_WORDS),
+        Lang::Lisp => Some(LISP_WORDS),
+        Lang::Json => Some(JSON_WORDS),
+        Lang::Toml => Some(TOML_WORDS),
     }
 }
 
@@ -288,6 +329,26 @@ const PYTHON_WORDS: &[&[u8]] = &[
     b"with",
     b"yield",
 ];
+
+const LISP_WORDS: &[&[u8]] = &[
+    b"car",
+    b"cdr",
+    b"cond",
+    b"cons",
+    b"define",
+    b"defun",
+    b"defmacro",
+    b"if",
+    b"lambda",
+    b"let",
+    b"list",
+    b"nil",
+    b"quote",
+];
+
+const JSON_WORDS: &[&[u8]] = &[b"false", b"null", b"true"];
+
+const TOML_WORDS: &[&[u8]] = &[b"false", b"true"];
 
 const PY_HEADERS: &[&[u8]] = &[
     b"def", b"class", b"if", b"elif", b"else", b"for", b"while", b"try", b"except", b"finally",
@@ -923,6 +984,319 @@ fn unexpected(b: u8) -> &'static str {
         b']' => "unexpected ']'",
         _ => "unexpected '}'",
     }
+}
+
+/// `#`, `;`, or no comment. Quotes, numbers, and that language's words.
+fn paint_words(lang: Lang, line: &[u8], comment: u8, emit: &mut impl FnMut(Span, &[u8])) {
+    let mut i = 0usize;
+    while i < line.len() {
+        let b = line[i];
+        if comment != 0 && b == comment {
+            emit(Span::Comment, &line[i..]);
+            return;
+        }
+        if b == b'"' || (b == b'\'' && lang == Lang::Toml) {
+            let end = close_rust_quote(line, i, b);
+            emit(Span::String, &line[i..end]);
+            i = end;
+            continue;
+        }
+        if number_at(line, i) {
+            let start = i;
+            if line[i] == b'-' {
+                i += 1;
+            }
+            while i < line.len() && (is_ident_cont(line[i]) || line[i] == b'.') {
+                i += 1;
+            }
+            emit(Span::Number, &line[start..i]);
+            continue;
+        }
+        if is_ident_start(b) {
+            let start = i;
+            i += 1;
+            while i < line.len() && is_ident_cont(line[i]) {
+                i += 1;
+            }
+            let word = &line[start..i];
+            let kind = if is_keyword(lang, word) {
+                Span::Keyword
+            } else {
+                Span::Text
+            };
+            emit(kind, word);
+            continue;
+        }
+        let start = i;
+        i += 1;
+        while i < line.len() && !word_boundary(lang, line, i, comment) {
+            i += 1;
+        }
+        emit(Span::Text, &line[start..i]);
+    }
+}
+
+fn number_at(line: &[u8], i: usize) -> bool {
+    let b = line[i];
+    if b.is_ascii_digit() {
+        return true;
+    }
+    b == b'-' && i + 1 < line.len() && line[i + 1].is_ascii_digit()
+}
+
+fn word_boundary(lang: Lang, line: &[u8], i: usize, comment: u8) -> bool {
+    let b = line[i];
+    (comment != 0 && b == comment)
+        || b == b'"'
+        || (b == b'\'' && lang == Lang::Toml)
+        || number_at(line, i)
+        || is_ident_start(b)
+}
+
+fn paint_xml(line: &[u8], state: &mut HiState, emit: &mut impl FnMut(Span, &[u8])) {
+    let mut i = 0usize;
+    if state.mode == XML_COMMENT {
+        if let Some(end) = find_slice(line, b"-->") {
+            emit(Span::Comment, &line[..end]);
+            state.mode = GROUND;
+            i = end;
+        } else {
+            emit(Span::Comment, line);
+            return;
+        }
+    }
+    while i < line.len() {
+        if line[i..].starts_with(b"<!--") {
+            if let Some(end) = find_slice(&line[i + 4..], b"-->") {
+                let at = i + 4 + end;
+                emit(Span::Comment, &line[i..at]);
+                i = at;
+                continue;
+            }
+            emit(Span::Comment, &line[i..]);
+            state.mode = XML_COMMENT;
+            return;
+        }
+        let b = line[i];
+        if b == b'"' || b == b'\'' {
+            let end = close_rust_quote(line, i, b);
+            emit(Span::String, &line[i..end]);
+            i = end;
+            continue;
+        }
+        if b == b'<' {
+            let start = i;
+            i += 1;
+            if i < line.len() && line[i] == b'/' {
+                i += 1;
+            }
+            while i < line.len() && (is_ident_cont(line[i]) || line[i] == b':' || line[i] == b'-') {
+                i += 1;
+            }
+            emit(Span::Keyword, &line[start..i]);
+            continue;
+        }
+        let start = i;
+        i += 1;
+        while i < line.len()
+            && line[i] != b'<'
+            && line[i] != b'"'
+            && line[i] != b'\''
+            && !line[i..].starts_with(b"<!--")
+        {
+            i += 1;
+        }
+        emit(Span::Text, &line[start..i]);
+    }
+}
+
+fn find_slice(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || hay.len() < needle.len() {
+        return None;
+    }
+    let last = hay.len() - needle.len();
+    let mut i = 0usize;
+    while i <= last {
+        if &hay[i..i + needle.len()] == needle {
+            return Some(i + needle.len());
+        }
+        i += 1;
+    }
+    None
+}
+
+fn diag_lisp(doc: &[u8]) -> Option<Diag> {
+    diag_source(doc, b';', true, false, false, false)
+}
+
+fn diag_json(doc: &[u8]) -> Option<Diag> {
+    diag_source(doc, 0, false, true, true, false)
+}
+
+fn diag_toml(doc: &[u8]) -> Option<Diag> {
+    diag_source(doc, b'#', false, true, false, true)
+}
+
+fn diag_csv(doc: &[u8]) -> Option<Diag> {
+    diag_source(doc, 0, false, false, false, false)
+}
+
+fn diag_xml(doc: &[u8]) -> Option<Diag> {
+    let mut line = 0u16;
+    let mut i = 0usize;
+    let mut comment = false;
+    let mut quote = 0u8;
+    let mut angles = 0i32;
+    let mut angle_line = 0u16;
+    while i < doc.len() {
+        let b = doc[i];
+        if b == b'\n' {
+            if quote != 0 {
+                return Some(Diag {
+                    line: line as usize,
+                    msg: "unclosed string",
+                });
+            }
+            line = line.saturating_add(1);
+            i += 1;
+            continue;
+        }
+        if comment {
+            if doc[i..].starts_with(b"-->") {
+                comment = false;
+                i += 3;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if quote != 0 {
+            if b == b'\\' && i + 1 < doc.len() && doc[i + 1] != b'\n' {
+                i += 2;
+                continue;
+            }
+            if b == quote {
+                quote = 0;
+            }
+            i += 1;
+            continue;
+        }
+        if doc[i..].starts_with(b"<!--") {
+            comment = true;
+            i += 4;
+            continue;
+        }
+        if b == b'"' || b == b'\'' {
+            quote = b;
+            i += 1;
+            continue;
+        }
+        if b == b'<' {
+            if angles == 0 {
+                angle_line = line;
+            }
+            angles += 1;
+        } else if b == b'>' {
+            if angles == 0 {
+                return Some(Diag {
+                    line: line as usize,
+                    msg: "unexpected '>'",
+                });
+            }
+            angles -= 1;
+        }
+        i += 1;
+    }
+    if comment {
+        return Some(Diag {
+            line: line as usize,
+            msg: "unclosed comment",
+        });
+    }
+    if quote != 0 {
+        return Some(Diag {
+            line: line as usize,
+            msg: "unclosed string",
+        });
+    }
+    if angles > 0 {
+        return Some(Diag {
+            line: angle_line as usize,
+            msg: "unclosed '<'",
+        });
+    }
+    None
+}
+
+/// Strings, an optional line comment, and the delimiters the caller asked for.
+fn diag_source(
+    doc: &[u8],
+    comment: u8,
+    parens: bool,
+    brackets: bool,
+    braces: bool,
+    single: bool,
+) -> Option<Diag> {
+    let mut stack = [(0u8, 0u16); 32];
+    let mut sp = 0usize;
+    let mut line = 0u16;
+    let mut i = 0usize;
+    let mut quote = 0u8;
+    while i < doc.len() {
+        let b = doc[i];
+        if quote != 0 {
+            if b == b'\n' {
+                return Some(Diag {
+                    line: line as usize,
+                    msg: "unclosed string",
+                });
+            }
+            if b == b'\\' && i + 1 < doc.len() && doc[i + 1] != b'\n' {
+                i += 2;
+                continue;
+            }
+            if b == quote {
+                quote = 0;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'\n' {
+            line = line.saturating_add(1);
+            i += 1;
+            continue;
+        }
+        if comment != 0 && b == comment {
+            while i < doc.len() && doc[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if b == b'"' || (single && b == b'\'') {
+            quote = b;
+            i += 1;
+            continue;
+        }
+        let track = (parens && (b == b'(' || b == b')'))
+            || (brackets && (b == b'[' || b == b']'))
+            || (braces && (b == b'{' || b == b'}'));
+        if track {
+            if let Some(msg) = push_delim(&mut stack, &mut sp, b, line) {
+                return Some(Diag {
+                    line: line as usize,
+                    msg,
+                });
+            }
+        }
+        i += 1;
+    }
+    if quote != 0 {
+        return Some(Diag {
+            line: line as usize,
+            msg: "unclosed string",
+        });
+    }
+    open_diag(&stack, sp)
 }
 
 fn open_diag(stack: &[(u8, u16)], sp: usize) -> Option<Diag> {

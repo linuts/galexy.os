@@ -3468,26 +3468,26 @@ fn shell_util_typing_e2e() {
     util_typing_e2e_on("galexy-os");
 }
 
-/// `nano note`: type two lines, move with the arrows, save, leave, reopen,
+/// `edit note`: type two lines, move with the arrows, save, leave, reopen,
 /// append `!`, save again, then `cat` the file. The status marker
 /// `@line,col@` is 1-based and is reprinted on every redraw, so each key
 /// syncs on the marker from that redraw.
 #[test]
-fn shell_nano_typing_e2e() {
-    nano_typing_e2e_on("galexy-os");
+fn shell_edit_typing_e2e() {
+    edit_typing_e2e_on("galexy-os");
 }
 
 /// Same keystrokes on the `gxld`-linked ramdisk.
 #[test]
-fn gxld_image_nano_typing_e2e() {
-    nano_typing_e2e_on("galexy-os-gxld");
+fn gxld_image_edit_typing_e2e() {
+    edit_typing_e2e_on("galexy-os-gxld");
 }
 
-const NANO_KEYS: &[(&str, &str)] = &[
-    ("n", "n"),
-    ("a", "a"),
-    ("n", "n"),
-    ("o", "o"),
+const EDIT_KEYS: &[(&str, &str)] = &[
+    ("e", "e"),
+    ("d", "d"),
+    ("i", "i"),
+    ("t", "t"),
     ("spc", " "),
     ("n", "n"),
     ("o", "o"),
@@ -3496,6 +3496,11 @@ const NANO_KEYS: &[(&str, &str)] = &[
     ("ret", "@1,1@"),
     ("h", "@1,2@"),
     ("i", "@1,3@"),
+    ("tab", "@1,7@"),
+    ("backspace", "@1,6@"),
+    ("backspace", "@1,5@"),
+    ("backspace", "@1,4@"),
+    ("backspace", "@1,3@"),
     // Ctrl-G used to repeat the shortcut bar. The page lists keys that
     // are not on that bar; the next key closes it and is not inserted.
     ("ctrl+g", "close this help"),
@@ -3507,10 +3512,10 @@ const NANO_KEYS: &[(&str, &str)] = &[
     ("o", "@2,3@"),
     ("ctrl+o", "Wrote 5"),
     ("ctrl+x", "admin@galexy> "),
-    ("n", "n"),
-    ("a", "a"),
-    ("n", "n"),
-    ("o", "o"),
+    ("e", "e"),
+    ("d", "d"),
+    ("i", "i"),
+    ("t", "t"),
     ("spc", " "),
     ("n", "n"),
     ("o", "o"),
@@ -3532,15 +3537,15 @@ const NANO_KEYS: &[(&str, &str)] = &[
     ("ret", "hi!\nyo\n"),
 ];
 
-/// `nano t.rs`: line numbers are on the gutter, Ctrl-T turns `pri` into
+/// `edit t.rs`: line numbers are on the gutter, Ctrl-T turns `pri` into
 /// `println`, and `{` is reported as an unclosed brace.
 #[test]
-fn shell_nano_lang_typing_e2e() {
+fn shell_edit_lang_typing_e2e() {
     let keys = with_login(&[
-        ("n", "n"),
-        ("a", "a"),
-        ("n", "n"),
-        ("o", "o"),
+        ("e", "e"),
+        ("d", "d"),
+        ("i", "i"),
+        ("t", "t"),
         ("spc", " "),
         ("t", "t"),
         ("dot", "."),
@@ -3565,11 +3570,11 @@ fn shell_nano_lang_typing_e2e() {
     );
     assert!(
         serial.contains("   1|"),
-        "nano did not draw a line number; serial:\n{serial}"
+        "edit did not draw a line number; serial:\n{serial}"
     );
     assert!(
         serial.contains("\u{1b}[7m"),
-        "nano title was not reverse; serial:\n{serial}"
+        "edit title was not reverse; serial:\n{serial}"
     );
     assert!(
         serial.contains("Rust"),
@@ -3585,12 +3590,12 @@ fn shell_nano_lang_typing_e2e() {
     );
     assert!(
         !serial.contains("[user task panicked]"),
-        "nano panicked; serial:\n{serial}"
+        "edit panicked; serial:\n{serial}"
     );
 }
 
-fn nano_typing_e2e_on(image_name: &str) {
-    let keys = with_login(NANO_KEYS);
+fn edit_typing_e2e_on(image_name: &str) {
+    let keys = with_login(EDIT_KEYS);
     let serial = boot_and_type(
         &image(image_name),
         &keys,
@@ -3601,23 +3606,23 @@ fn nano_typing_e2e_on(image_name: &str) {
     );
     assert!(
         serial.contains("Wrote 5"),
-        "nano did not save the first buffer; serial:\n{serial}"
+        "edit did not save the first buffer; serial:\n{serial}"
     );
     assert!(
         serial.contains("Wrote 6"),
-        "nano did not save the reopened buffer; serial:\n{serial}"
+        "edit did not save the reopened buffer; serial:\n{serial}"
     );
     assert!(
         serial.contains("hi!\nyo\n"),
         "cat did not print the edited file; serial:\n{serial}"
     );
     assert!(
-        !serial.contains("nano: keyboard denied"),
-        "nano was spawned without the keyboard grant; serial:\n{serial}"
+        !serial.contains("edit: keyboard denied"),
+        "edit was spawned without the keyboard grant; serial:\n{serial}"
     );
     assert!(
         !serial.contains("[pf] ring-3 task fault"),
-        "nano faulted; serial:\n{serial}"
+        "edit faulted; serial:\n{serial}"
     );
 }
 

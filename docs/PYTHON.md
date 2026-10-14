@@ -51,7 +51,7 @@ Milestone 96 checks that the run did not leave a child task.
 | `socket`, `ssl`, and `asyncio` networks | `std::net` stays unsupported (`NET.md`). A later milestone may speak a lane. It is not this phase, and it is not a BSD socket with a Python name. |
 | `sqlite3`, `ctypes`, `cffi` | Those need C. |
 | `os.fork`, `os.exec`, `os.system`, `os.environ`, `subprocess`, `multiprocessing` | There is no environment block and no fork. Spawn stays the kernel's, and this program does not call it. |
-| A second editor | `nano` is already the editor. The REPL reads the seat keyboard and does not draw a screen of its own. |
+| A second editor | `edit` is already the editor. The REPL reads the seat keyboard and does not draw a screen of its own. |
 | A new syscall or a Python service | The ABI freeze holds. Init does not supervise the interpreter. The seat does, for one run. |
 | Putting `python` on the shared test ramdisk | Test kernels and CI stay small. The login image `cargo run` boots is the one that carries it. |
 | Changing `targets/x86_64-unknown-galexy.json` | The spec is frozen. If the build cannot use it, Milestone 91 stops and says why. It does not edit the file. |

@@ -2315,11 +2315,11 @@ pub(in crate::sched) fn idle_scan(all_tasks: bool) {
             if !all_tasks && !is_console_shell_name(threads[i].name()) {
                 continue;
             }
-            // A foreground child (`rustc`, `nano`) keeps the seat, up to
+            // A foreground child (`rustc`, `edit`) keeps the seat, up to
             // [`FOREGROUND_IDLE_MS`] after the last key. The clock
             // restarts when the Cap-wait ends, so the prompt is not
             // already inside the 5 min window. Keys during the wait
-            // (nano) move `last_input_tick` and extend the pause.
+            // (`edit`) move `last_input_tick` and extend the pause.
             let holding =
                 state == STATE_WAITING && threads[i].wait_for_exit.load(Ordering::Acquire);
             if holding {

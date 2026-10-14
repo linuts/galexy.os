@@ -25,10 +25,7 @@ pub(crate) fn show_help() {
     help_row(b"echo [text]", b"print, or echo text >|>> file");
     help_row(b"echo $?", b"last Cap-wait exit status");
     help_row(b"cat <path>", b"print file");
-    help_row(
-        b"nano <path>",
-        b"edit a file (line numbers, Ctrl-T completes .rs/.py)",
-    );
+    help_row(b"edit <path>", b"edit a file (line numbers, Tab, Ctrl-T)");
     help_row(b"touch <path>", b"create empty file");
     help_row(b"mkdir <path>", b"create directory");
     help_row(b"rm <path>", b"remove file or empty dir");
@@ -295,8 +292,8 @@ pub(crate) fn dispatch(
         grep_cmd(cwd, rest);
         return None;
     }
-    if let Some(name) = arg_of(line, b"nano") {
-        nano(cwd, name);
+    if let Some(name) = arg_of(line, b"edit") {
+        edit(cwd, name);
         return None;
     }
     if let Some(name) = arg_of(line, b"touch") {
@@ -529,21 +526,21 @@ pub(crate) fn redirection(rest: &[u8]) -> Option<(&[u8], &[u8], bool)> {
     None
 }
 
-pub(crate) fn nano(cwd: &Cwd, name: &[u8]) {
+pub(crate) fn edit(cwd: &Cwd, name: &[u8]) {
     let name = trim(name);
     if name.is_empty() || !path_arg_ok(name) {
-        write_console(b"nano: usage: nano <path>\n");
+        write_console(b"edit: usage: edit <path>\n");
         prompt(cwd);
         return;
     }
     let mut path = [0u8; PATH_MAX];
     let Some(n) = compose(cwd, name, false, &mut path) else {
-        write_console(b"nano: path too long\n");
+        write_console(b"edit: path too long\n");
         prompt(cwd);
         return;
     };
     let grants = galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_KEYBOARD;
-    spawn_and_prompt(cwd, b"nano", &path[..n], grants, true);
+    spawn_and_prompt(cwd, b"edit", &path[..n], grants, true);
 }
 
 pub(crate) fn cat(cwd: &Cwd, name: &[u8]) {
