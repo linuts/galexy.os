@@ -3548,7 +3548,7 @@ const EDIT_KEYS: &[(&str, &str)] = &[
     ("ret", "@1,1@"),
     ("tab", "@1,9@"),
     ("shift+1", "@1,10@"),
-    ("ctrl+o", "Wrote 3"),
+    ("ctrl+o", "Wrote 2"),
     ("ctrl+x", "admin@galexy> "),
     ("c", "c"),
     ("a", "a"),
