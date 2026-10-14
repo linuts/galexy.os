@@ -852,10 +852,7 @@ fn diag_python_shape(doc: &[u8]) -> Option<Diag> {
 }
 
 fn py_line(line: &[u8], prev_indent: &mut usize, prev_colon: &mut bool) -> Option<&'static str> {
-    let mut indent = 0usize;
-    while indent < line.len() && line[indent] == b' ' {
-        indent += 1;
-    }
+    let indent = indent_width(line);
     let mut code = [0u8; 160];
     let mut n = 0usize;
     let mut i = 0usize;
@@ -879,7 +876,7 @@ fn py_line(line: &[u8], prev_indent: &mut usize, prev_colon: &mut bool) -> Optio
         n += 1;
         i += 1;
     }
-    while n > 0 && code[n - 1] == b' ' {
+    while n > 0 && (code[n - 1] == b' ' || code[n - 1] == b'\t') {
         n -= 1;
     }
     if n == 0 {
@@ -900,9 +897,23 @@ fn py_line(line: &[u8], prev_indent: &mut usize, prev_colon: &mut bool) -> Optio
     None
 }
 
+fn indent_width(line: &[u8]) -> usize {
+    let mut col = 0usize;
+    for &byte in line {
+        if byte == b' ' {
+            col += 1;
+        } else if byte == b'\t' {
+            col += 8 - (col % 8);
+        } else {
+            break;
+        }
+    }
+    col
+}
+
 fn first_ident(code: &[u8]) -> Option<&[u8]> {
     let mut i = 0usize;
-    while i < code.len() && code[i] == b' ' {
+    while i < code.len() && (code[i] == b' ' || code[i] == b'\t') {
         i += 1;
     }
     if i >= code.len() || !is_ident_start(code[i]) {

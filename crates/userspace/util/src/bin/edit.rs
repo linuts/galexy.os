@@ -9,7 +9,8 @@
 //! Rust, Python, Lisp, JSON, CSV, TOML, and XML use the in-process
 //! language service: colors, one diagnostic on the status line, and
 //! Ctrl-T completion. The image does not carry rust-analyzer or a
-//! Python language server. Tab inserts four spaces.
+//! Python language server. Tab inserts a tab byte. The editor draws
+//! that byte out to the next column of 8.
 
 #![no_std]
 #![no_main]
@@ -39,6 +40,8 @@ const TEXT_COLS: usize = 64;
 const WIDTH: usize = GUTTER + TEXT_COLS;
 /// Text rows between the title and the status line.
 const VIEW_ROWS: usize = 12;
+/// Display columns between tab stops. Matches the screen driver's tab.
+const TAB_STOP: usize = 8;
 /// Rows [`move_vert`] jumps for Ctrl-Y / Ctrl-V. Same count as [`VIEW_ROWS`].
 const PAGE: isize = 12;
 
@@ -251,13 +254,10 @@ fn load(doc: &mut [u8], path: &[u8]) -> Option<Loaded> {
     })
 }
 
-/// Appends one file byte. A tab becomes four spaces. A byte that is not
-/// text prints an error and returns false.
+/// Appends one file byte. A tab stays a tab. A byte that is not text
+/// prints an error and returns false.
 fn take_byte(doc: &mut [u8], len: &mut usize, byte: u8) -> bool {
-    if byte == b'\t' {
-        return push(doc, len, b"    ");
-    }
-    if byte.is_ascii_graphic() || byte == b' ' || byte == b'\n' {
+    if byte == b'\t' || byte.is_ascii_graphic() || byte == b' ' || byte == b'\n' {
         return push(doc, len, &[byte]);
     }
     write_console(b"edit: not text\n");
@@ -402,16 +402,9 @@ fn write_all(cap: Cap, bytes: &[u8]) -> bool {
     true
 }
 
-/// Four spaces. A file tab is stored the same way on load.
+/// One tab byte. [`paint_visible`] draws it to the next stop of [`TAB_STOP`].
 fn insert_tab(doc: &mut [u8], ed: &mut Editor) {
-    for _ in 0..4 {
-        if ed.len >= CAP {
-            ed.quit_armed = false;
-            ed.note = Note::Full;
-            return;
-        }
-        insert(doc, ed, b' ');
-    }
+    insert(doc, ed, b'\t');
 }
 
 fn insert(doc: &mut [u8], ed: &mut Editor, byte: u8) {
@@ -542,10 +535,20 @@ fn cursor_line_col(doc: &[u8], cursor: usize) -> (usize, usize) {
             line += 1;
             col = 0;
         } else {
-            col += 1;
+            col += display_width(col, byte);
         }
     }
     (line, col)
+}
+
+/// Columns a byte occupies at display column `col`. A tab runs to the
+/// next multiple of [`TAB_STOP`].
+fn display_width(col: usize, byte: u8) -> usize {
+    if byte == b'\t' {
+        TAB_STOP - (col % TAB_STOP)
+    } else {
+        1
+    }
 }
 
 fn last_line(doc: &[u8]) -> usize {
@@ -573,7 +576,18 @@ fn line_len(doc: &[u8], len: usize, start: usize) -> usize {
 
 fn place_on_line(doc: &[u8], len: usize, line: usize, goal: usize) -> usize {
     let start = line_start(doc, len, line);
-    start + goal.min(line_len(doc, len, start))
+    let end = start + line_len(doc, len, start);
+    let mut col = 0usize;
+    let mut i = start;
+    while i < end {
+        let width = display_width(col, doc[i]);
+        if col + width > goal {
+            return i;
+        }
+        col += width;
+        i += 1;
+    }
+    i
 }
 
 fn complete_word(doc: &mut [u8], ed: &mut Editor) -> Step {
@@ -752,16 +766,29 @@ fn fmt_gutter(line: usize, bad: bool) -> [u8; GUTTER] {
 fn paint_visible(out: &mut Row, lang: Lang, line: &[u8], hscroll: usize, state: &mut HiState) {
     let mut col = 0usize;
     paint_line(lang, line, state, |span, bytes| {
-        let from = col;
-        let to = col + bytes.len();
-        col = to;
-        let vis_from = from.max(hscroll);
-        let vis_to = to.min(hscroll + TEXT_COLS);
-        if vis_from < vis_to {
-            let a = vis_from - from;
-            let b = vis_to - from;
-            out.push_sgr(span_sgr(span));
-            out.push_vis(&bytes[a..b]);
+        let mut painted = false;
+        for &byte in bytes {
+            let start = col;
+            col += display_width(col, byte);
+            let vis_from = start.max(hscroll);
+            let vis_to = col.min(hscroll + TEXT_COLS);
+            if vis_from >= vis_to {
+                continue;
+            }
+            if !painted {
+                out.push_sgr(span_sgr(span));
+                painted = true;
+            }
+            // Spaces, not a raw tab: the screen tab starts from the
+            // hardware column, which includes the gutter.
+            let n = vis_to - vis_from;
+            if byte == b'\t' {
+                for _ in 0..n {
+                    out.push_vis(b" ");
+                }
+            } else {
+                out.push_vis(&[byte]);
+            }
         }
     });
 }
@@ -887,7 +914,7 @@ fn draw_help_page() {
         b"line numbers      every row; ! is a problem",
         b"Ctrl-A / Ctrl-E   start / end of the line",
         b"Ctrl-Y / Ctrl-V   page up / down",
-        b"Tab               insert four spaces",
+        b"Tab               insert a tab",
         b"Ctrl-T            complete the word",
         b"Ctrl-K / Ctrl-U   cut the line / paste it",
         b"Ctrl-O / Ctrl-X   save / exit",

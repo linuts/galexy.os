@@ -3469,9 +3469,11 @@ fn shell_util_typing_e2e() {
 }
 
 /// `edit note`: type two lines, move with the arrows, save, leave, reopen,
-/// append `!`, save again, then `cat` the file. The status marker
-/// `@line,col@` is 1-based and is reprinted on every redraw, so each key
-/// syncs on the marker from that redraw.
+/// append `!`, save again, then `cat` the file. Tab is one byte drawn to
+/// the next column of 8 (`hi` then Tab lands on `@1,9@`; one backspace
+/// returns to `@1,3@`). A second file stores that byte and `cat` prints
+/// it. The status marker `@line,col@` is 1-based and is reprinted on
+/// every redraw, so each key syncs on the marker from that redraw.
 #[test]
 fn shell_edit_typing_e2e() {
     edit_typing_e2e_on("galexy-os");
@@ -3496,10 +3498,9 @@ const EDIT_KEYS: &[(&str, &str)] = &[
     ("ret", "@1,1@"),
     ("h", "@1,2@"),
     ("i", "@1,3@"),
-    ("tab", "@1,7@"),
-    ("backspace", "@1,6@"),
-    ("backspace", "@1,5@"),
-    ("backspace", "@1,4@"),
+    // `hi` sits at display column 2, so one tab runs to column 8
+    // (`@1,9@`). One backspace deletes that byte.
+    ("tab", "@1,9@"),
     ("backspace", "@1,3@"),
     // Ctrl-G used to repeat the shortcut bar. The page lists keys that
     // are not on that bar; the next key closes it and is not inserted.
@@ -3535,6 +3536,28 @@ const EDIT_KEYS: &[(&str, &str)] = &[
     ("t", "t"),
     ("e", "e"),
     ("ret", "hi!\nyo\n"),
+    // A saved tab is the byte itself. At column 0 it stops at column 8.
+    ("e", "e"),
+    ("d", "d"),
+    ("i", "i"),
+    ("t", "t"),
+    ("spc", " "),
+    ("t", "t"),
+    ("a", "a"),
+    ("b", "b"),
+    ("ret", "@1,1@"),
+    ("tab", "@1,9@"),
+    ("shift+1", "@1,10@"),
+    ("ctrl+o", "Wrote 3"),
+    ("ctrl+x", "admin@galexy> "),
+    ("c", "c"),
+    ("a", "a"),
+    ("t", "t"),
+    ("spc", " "),
+    ("t", "t"),
+    ("a", "a"),
+    ("b", "b"),
+    ("ret", "\t!\n"),
 ];
 
 /// `edit t.rs`: line numbers are on the gutter, Ctrl-T turns `pri` into
@@ -3600,7 +3623,7 @@ fn edit_typing_e2e_on(image_name: &str) {
         &image(image_name),
         &keys,
         "[boot] main loop ready",
-        "hi!\nyo\n",
+        "\t!\n",
         Duration::from_millis(30),
         Duration::from_secs(240),
     );
@@ -3615,6 +3638,10 @@ fn edit_typing_e2e_on(image_name: &str) {
     assert!(
         serial.contains("hi!\nyo\n"),
         "cat did not print the edited file; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("\t!\n"),
+        "cat did not print the saved tab; serial:\n{serial}"
     );
     assert!(
         !serial.contains("edit: keyboard denied"),

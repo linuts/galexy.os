@@ -837,8 +837,9 @@ status line, and two shortcut rows. Rust, Python, Lisp, JSON, CSV,
 TOML, and XML are colored in the editor. The status line shows the
 first diagnostic (an unclosed delimiter, a Python header missing `:`,
 or a body that is not indented). Ctrl-T completes from that language's
-words and from identifiers already in the file. Tab inserts four
-spaces. A redraw hides the cursor until the cursor cell is known, so
+words and from identifiers already in the file. Tab inserts a tab.
+The editor stores that byte and draws it to the next column of 8.
+A redraw hides the cursor until the cursor cell is known, so
 moving between lines does not paint the mark at the end of every row.
 rust-analyzer and a Python language server are not on the image; the
 editor runs this service itself.

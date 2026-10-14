@@ -77,6 +77,7 @@ fn python_colon_and_indent() {
     );
     assert!(diagnose(Lang::Python, b"def f():\n    pass\n").is_none());
     assert!(diagnose(Lang::Python, b"def f():\n\n    pass\n").is_none());
+    assert!(diagnose(Lang::Python, b"def f():\n\tpass\n").is_none());
 }
 
 #[test]
