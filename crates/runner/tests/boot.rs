@@ -3879,7 +3879,174 @@ fn rustc_hello_typing_e2e() {
         !serial.contains("error:"),
         "rustc reported an error; serial:\n{serial}"
     );
+    assert!(
+        !serial.contains("target file"),
+        "rustc could not read the target JSON; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("`--edition` is unspecified"),
+        "rustc was started without an edition; serial:\n{serial}"
+    );
 }
+
+/// `rustc test.rs` after a sealed volume is unlocked.
+///
+/// Boot 1 chooses a passphrase and seals the disk. That seal replaces
+/// the pre-unlock RAM tree, so the target JSON is not on the image.
+/// Boot 2 unlocks the same disk and compiles a one-line program with
+/// no `--edition` and no `--target`.
+#[test]
+fn rustc_after_unlock_typing_e2e() {
+    if env!("GALEXY_HAVE_RUSTC") != "1" {
+        eprintln!("rustc_after_unlock_typing_e2e: skipped (no target/galexy-rustc/rustc)");
+        return;
+    }
+    let disk = common::fresh_galfs_image("rustc-unlock");
+    let mut seal: Vec<(&str, &str)> = CREATE_VOLUME_KEYS.to_vec();
+    seal.extend(LOGIN_ADMIN_KEYS.iter().copied());
+    seal.extend(CLEAR_DEFAULT_PASSWD.iter().copied());
+    seal.extend_from_slice(&SYNC_WHOAMI_KEYS[..5]);
+    let serial1 = common::boot_and_type_galfs(
+        &image("galexy-os-rustc"),
+        &disk,
+        &seal,
+        "New passphrase: ",
+        "",
+        Duration::from_millis(30),
+        Duration::from_secs(360),
+    );
+    assert!(
+        !serial1.contains("[PANIC]"),
+        "boot 1 panicked; serial:\n{serial1}"
+    );
+    assert!(
+        serial1.contains("[galfs] formatted sealed disk"),
+        "fresh disk was not sealed; serial:\n{serial1}"
+    );
+    assert!(
+        serial1.contains("rustc-sysroot:"),
+        "sysroot was not imported after the first unlock; serial:\n{serial1}"
+    );
+
+    let mut keys: Vec<(&str, &str)> = UNLOCK_GALFS_KEYS.to_vec();
+    keys.extend(LOGIN_ADMIN_TESTPASS_KEYS.iter().copied());
+    keys.extend_from_slice(RUSTC_TEST_RS_KEYS);
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os-rustc"),
+        &disk,
+        &keys,
+        "Volume passphrase: ",
+        "t-ok",
+        Duration::from_millis(30),
+        Duration::from_secs(900),
+    );
+    let sysroot = serial
+        .rfind("rustc-sysroot:")
+        .expect("boot 2 did not import the sysroot");
+    let ready = serial
+        .find("[boot] main loop ready")
+        .expect("boot ready line missing");
+    assert!(
+        sysroot > ready,
+        "sysroot import ran before unlock replaced the RAM tree; serial:\n{serial}"
+    );
+    let first = serial.find("t-ok").expect("source line was not echoed");
+    assert!(
+        serial[first + 1..].contains("t-ok"),
+        "/t did not print; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("target file"),
+        "rustc could not read the target JSON; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("`--edition` is unspecified"),
+        "rustc was started without an edition; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("error:"),
+        "rustc reported an error; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[pf] ring-3 task fault"),
+        "a program faulted; serial:\n{serial}"
+    );
+}
+
+/// `echo fn main(){println!("t-ok");} > t.rs`, then `rustc t.rs -o /t`, then `/t`.
+const RUSTC_TEST_RS_KEYS: &[(&str, &str)] = &[
+    ("e", "e"),
+    ("c", "c"),
+    ("h", "h"),
+    ("o", "o"),
+    ("spc", " "),
+    ("f", "f"),
+    ("n", "n"),
+    ("spc", " "),
+    ("m", "m"),
+    ("a", "a"),
+    ("i", "i"),
+    ("n", "n"),
+    ("shift+9", "("),
+    ("shift+0", ")"),
+    ("shift+bracket_left", "{"),
+    ("p", "p"),
+    ("r", "r"),
+    ("i", "i"),
+    ("n", "n"),
+    ("t", "t"),
+    ("l", "l"),
+    ("n", "n"),
+    ("shift+1", "!"),
+    ("shift+9", "("),
+    ("shift+apostrophe", "\""),
+    ("t", "t"),
+    ("minus", "-"),
+    ("o", "o"),
+    ("k", "k"),
+    ("shift+apostrophe", "\""),
+    ("shift+0", ")"),
+    ("semicolon", ";"),
+    ("shift+bracket_right", "}"),
+    ("spc", " "),
+    ("shift+dot", ">"),
+    ("spc", " "),
+    ("t", "t"),
+    ("dot", "."),
+    ("r", "r"),
+    ("s", "s"),
+    ("ret", "admin@galexy>"),
+    ("r", "r"),
+    ("u", "u"),
+    ("s", "s"),
+    ("t", "t"),
+    ("c", "c"),
+    ("spc", " "),
+    ("t", "t"),
+    ("dot", "."),
+    ("r", "r"),
+    ("s", "s"),
+    ("spc", " "),
+    ("minus", "-"),
+    ("o", "o"),
+    ("spc", " "),
+    ("slash", "/"),
+    ("t", "t"),
+    ("ret", "admin@galexy>"),
+    ("slash", "/"),
+    ("t", "t"),
+    ("ret", "t-ok"),
+];
+
+/// Passphrase `galfs` on a volume sealed by [`CREATE_VOLUME_KEYS`].
+const UNLOCK_GALFS_KEYS: &[(&str, &str)] = &[
+    ("g", "*"),
+    ("a", "*"),
+    ("l", "*"),
+    ("f", "*"),
+    ("s", "*"),
+    ("ret", "Login as: "),
+];
 
 /// Milestone 69 differential: the `galexy-os-gxld` image carries init,
 /// shell, hello and every util re-linked by `gxld` from the exact objects

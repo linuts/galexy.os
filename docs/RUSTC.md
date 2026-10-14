@@ -370,16 +370,24 @@ reads the linker pipe to EOF before `Wait`.
   ramdisk stays the small userspace set and CI does not run `x.py`
   or fetch RustPython (Milestone 74, then Milestone 96).
 - The login kernel copies the JSON and `srlib/*` into the RAM store
-  before init when the ramdisk contains `srlib/` (Milestone 75).
-  A v12 disk file cannot hold `core`'s ~66 MiB `.rmeta`, so the
-  copy is RAM-only and repeats every boot. A program with
-  arguments inherits the session, so `rustc` can open those files
-  (Milestone 76). A bare name still does not.
+  when the ramdisk contains `srlib/` (Milestone 75). A diskless or
+  auto-unlocked boot copies before init. A sealed volume stays locked
+  until the passphrase, and loading that disk replaces the RAM table,
+  so the copy runs again from the main loop after unlock. Doing it
+  inside the unlock syscall would allocate ~90 MiB with interrupts off.
+  A v12 disk file cannot hold `core`'s ~66 MiB `.rmeta`, so the copy
+  is RAM-only and repeats every boot. An empty rlib header left by an
+  earlier seal is replaced from the ramdisk; a file that already has
+  the right length is kept. A program with arguments inherits the
+  session, so `rustc` can open those files (Milestone 76). A bare name
+  still does not.
 - `spawn` of a path loads that galfs ELF (Milestone 77). The typed
   gate is `rustc hello.rs -o /hello` and then `/hello`, which prints
   `hello from rustc on galexy`. The bare label `hello` stays the
-  ramdisk program, so `-o hello` is `Unsupported`. The shell does not
-  rewrite `rustc`'s arguments. A ramdisk program with arguments
+  ramdisk program, so `-o hello` is `Unsupported`. The shell supplies
+  `--edition 2024` when the line did not name an edition. The nightly
+  otherwise stays on 2015 and prints that the edition was unspecified.
+  A ramdisk program with arguments
   receives the query grant (`read_dir` of the sysroot) and the loader
   grant (`rustc` spawns `gxld`). A galfs path does not receive the
   loader. A pipeline stage does not either, so `rustc` is the command

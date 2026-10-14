@@ -446,8 +446,14 @@ pub(crate) fn dispatch(
     // First word is a program name; the rest is a space-separated argv.
     // Builtins already returned. A missing name stays `command not found`.
     if let Some((name, rest)) = split_word(line) {
-        let mut arg = [0u8; LINE_MAX];
-        let Some(n) = argv_from_words(rest, &mut arg) else {
+        // `--edition` plus the user's words. A line is at most LINE_MAX;
+        // the edition prefix is 15 bytes (`--edition` NUL `2024` NUL).
+        let mut arg = [0u8; LINE_MAX + 16];
+        let Some(n) = (if name == b"rustc" {
+            rustc_argv(rest, &mut arg)
+        } else {
+            argv_from_words(rest, &mut arg)
+        }) else {
             write_console(b"argv: too long\n");
             prompt(cwd);
             return None;
@@ -1590,6 +1596,41 @@ pub(crate) fn ls(cwd: &Cwd, long: bool) {
         return;
     };
     launch_util(cwd, b"ls", &arg[..n], true);
+}
+
+/// Edition a bare `rustc file.rs` compiles with.
+///
+/// The on-OS nightly otherwise prints that it is defaulting to 2015
+/// and asks for an explicit edition. 2024 is the latest it accepts.
+const RUSTC_EDITION: &[u8] = b"2024";
+
+/// True when `rest` already has `flag` or `flag=...` as its own word.
+fn argv_has_word(rest: &[u8], flag: &[u8]) -> bool {
+    rest.split(|b| *b == b' ')
+        .any(|word| word == flag || (word.starts_with(flag) && word.get(flag.len()) == Some(&b'=')))
+}
+
+/// NUL argv for `rustc`. Supplies `--edition 2024` when the line did not.
+pub(crate) fn rustc_argv(rest: &[u8], out: &mut [u8]) -> Option<usize> {
+    if argv_has_word(rest, b"--edition") {
+        return argv_from_words(rest, out);
+    }
+    let mut n = 0usize;
+    if !push_bytes(out, &mut n, b"--edition") || !push_byte(out, &mut n, 0) {
+        return None;
+    }
+    if !push_bytes(out, &mut n, RUSTC_EDITION) {
+        return None;
+    }
+    let mut tmp = [0u8; LINE_MAX];
+    let rn = argv_from_words(rest, &mut tmp)?;
+    if rn == 0 {
+        return Some(n);
+    }
+    if !push_byte(out, &mut n, 0) || !push_bytes(out, &mut n, &tmp[..rn]) {
+        return None;
+    }
+    Some(n)
 }
 
 /// NUL-separated argv from a space-separated tail. Empty words are

@@ -216,7 +216,17 @@ pub fn init() {
 /// and each `srlib/*` file under
 /// `/lib/rustlib/x86_64-unknown-galexy/lib`. One kernel import per
 /// file. The bytes stay in the RAM store and are not sealed to disk.
+///
+/// A locked volume is skipped. The pre-unlock RAM table is thrown away
+/// when the sealed disk is loaded, which is why `rustc` then cannot
+/// open `/x86_64-unknown-galexy.json`. [`install_compiler_sysroot_if_due`]
+/// runs this again once the live table is the unlocked one. A file that
+/// is already the right length is left in place; a short stub (an empty
+/// rlib header from an earlier seal) is replaced from the ramdisk.
 pub fn install_compiler_sysroot() {
+    if galfs::volume_locked() {
+        return;
+    }
     let mut names: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
     ramdisk::for_each_name(|name| {
         if name.starts_with("srlib/") || name == "x86_64-unknown-galexy.json" {
@@ -234,16 +244,52 @@ pub fn install_compiler_sysroot() {
     for name in &names {
         let bytes = ramdisk::find(name).unwrap_or_else(|| panic!("ramdisk file vanished: {name}"));
         if let Some(file_name) = name.strip_prefix("srlib/") {
-            galfs::import_promoted(libs, file_name, bytes)
-                .unwrap_or_else(|err| panic!("import {file_name}: {err:?}"));
+            place_sysroot_file(libs, file_name, bytes, &sysroot_lib_path(file_name), true);
         } else {
-            let id = galfs::create_file_under(root, name)
-                .unwrap_or_else(|err| panic!("create {name}: {err:?}"));
-            let wrote = galfs::append_file(id, bytes).unwrap_or(0);
-            assert_eq!(wrote, bytes.len(), "short write {name}");
+            place_sysroot_file(root, name, bytes, name, false);
         }
     }
     serial_println!("rustc-sysroot: {} entries", names.len());
+}
+
+/// Imports the sysroot when an unlock asked for it and the volume is open.
+///
+/// The unlock syscall only sets the flag. This runs from the main loop,
+/// with interrupts on, because the copy is about 90 MiB.
+pub fn install_compiler_sysroot_if_due() {
+    if !galfs::take_compiler_sysroot_due() {
+        return;
+    }
+    install_compiler_sysroot();
+}
+
+/// `lib/rustlib/x86_64-unknown-galexy/lib/<name>` for [`galfs::remove_as_admin`].
+fn sysroot_lib_path(name: &str) -> alloc::string::String {
+    let mut path = alloc::string::String::from("lib/rustlib/x86_64-unknown-galexy/lib/");
+    path.push_str(name);
+    path
+}
+
+/// Writes `bytes` at `name` under `parent`. An existing file of the same
+/// length is kept. A different length is removed via `remove_path` (an
+/// admin-root path) and written again.
+fn place_sysroot_file(parent: u16, name: &str, bytes: &[u8], remove_path: &str, promoted: bool) {
+    if let Some(id) = galfs::find_under(parent, name) {
+        if galfs::object_len(id) == Some(bytes.len()) {
+            return;
+        }
+        galfs::remove_as_admin(remove_path)
+            .unwrap_or_else(|err| panic!("remove {remove_path}: {err:?}"));
+    }
+    if promoted {
+        galfs::import_promoted(parent, name, bytes)
+            .unwrap_or_else(|err| panic!("import {name}: {err:?}"));
+    } else {
+        let id = galfs::create_file_under(parent, name)
+            .unwrap_or_else(|err| panic!("create {name}: {err:?}"));
+        let wrote = galfs::append_file(id, bytes).unwrap_or(0);
+        assert_eq!(wrote, bytes.len(), "short write {name}");
+    }
 }
 
 fn sysroot_mkdir(parent: u16, name: &str) -> u16 {

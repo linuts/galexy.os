@@ -404,6 +404,17 @@ fn free_tree(store: &mut Store, ib: u32, indirect: bool) {
     free_id(store, ib);
 }
 
+/// Drops every promoted file.
+///
+/// A sealed unlock replaces the galfs table. Object indexes from the
+/// pre-unlock RAM tree no longer name those files, so the bodies must
+/// not stay attached to the new table.
+pub fn reset() {
+    for index in 0..SLOTS {
+        clear(index);
+    }
+}
+
 /// Drops a promoted file and returns its blocks to the pool.
 pub fn clear(index: usize) {
     let mut store = STORE.lock();

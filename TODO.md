@@ -2604,6 +2604,13 @@ and is repeated every boot. It is not sealed to disk. Do not bump
       fails for lack of space.
       `rustc_image_login_typing_e2e` under TCG (`rustc-sysroot: 33 entries`)
 
+A later boot of a sealed disk loads that image over the RAM table, so
+the pre-unlock copy is gone and `rustc test.rs` reports
+`target file "/x86_64-unknown-galexy.json" does not exist`. The import
+runs again after unlock, from the main loop. The shell also passes
+`--edition 2024` when the line did not, so a bare `rustc file.rs` does
+not stay on edition 2015.
+
 ## Milestone 76 — Pass arguments to a ramdisk program ✅
 
 A line with a space that is not a builtin prints `command not found`.
@@ -2612,7 +2619,8 @@ without waiting. `rustc hello.rs -o hello` is that shape. Pipelines
 already split stages and pass argv; a single command does not. The
 shell line is 80 bytes (`LINE_MAX`). The gate command fits. Spawn's
 argv blob is 4096 bytes. The shell does not rewrite the program's
-own arguments: `-o hello` is the bare name `hello`, which is the
+own arguments except a missing `--edition`, which becomes `2024`:
+`-o hello` is the bare name `hello`, which is the
 ramdisk program, so create refuses it. The login compile uses
 `-o /hello` (Milestone 77).
 
