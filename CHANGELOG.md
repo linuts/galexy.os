@@ -8,6 +8,11 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#132](https://github.com/linuts/galexy.os/pull/132) — Shell — the screen editor command is `edit`.
+  Tab inserts four spaces. Lisp, JSON, CSV, TOML, and XML are colored
+  in the editor and report one diagnostic. A redraw hides the cursor
+  until the final cell, so moving between lines does not drag the mark
+  down every row.
 - [#131](https://github.com/linuts/galexy.os/pull/131) — Shell — `rustc test.rs` finds `/x86_64-unknown-galexy.json` after a
   sealed volume is unlocked. The boot copy lives in the pre-unlock RAM
   tree, and loading the disk replaces that tree; the main loop imports
