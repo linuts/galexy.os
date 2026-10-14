@@ -149,8 +149,9 @@ lock. F1–F12 select which grid is painted; the others keep their cells.
 Text uses every row except the last, which the status bar owns; scrolling
 shifts only the text rows, by one line height. Tab stops are every 8
 columns. CR returns to column 0. ESC introduces a fixed-size CSI parser
-(no allocation): SGR colors 30–37 and 90–97 plus reset, cursor position
-and movement (`H`/`f`/`A`–`D`), erase in display (`J` 0 and 2), and
+(no allocation): SGR colors 30–37 and 90–97, reverse (`7`, cleared by
+`27` or reset), cursor position and movement (`H`/`f`/`A`–`D`), erase
+in display (`J` 0 and 2), and
 erase in line (`K` 0 and 2). The parser state survives a split `write`
 and is saved with the TTY. The shown TTY draws a two-pixel underscore
 at the cursor on a 500 ms phase (`timer_ticks / 500`). The main loop
@@ -830,6 +831,14 @@ one per line. The shell keeps the current directory and accepts a leading
 programs: the shell composes the path and `spawn`s them. `ls` and `rm`
 also receive the query grant, so they can read the files snapshot.
 `nano` also receives the keyboard grant and the shell Cap-waits on it.
+The screen is the nano layout: a reverse title, a line-number gutter
+(`!` on a line the language service flagged), the text, a reverse
+status line, and two shortcut rows. `.rs` and `.py` are colored in
+the editor. The status line shows the first diagnostic (an unclosed
+delimiter, a Python header missing `:`, or a body that is not
+indented). Ctrl-T completes from that language's words and from
+identifiers already in the file. rust-analyzer and a Python language
+server are not on the image; the editor runs this service itself.
 Ctrl-G opens a help page of the keys that are not already on the shortcut
 bar; the next key closes that page and is not inserted.
 `cd` stays in the shell, because that path lives there. A program name

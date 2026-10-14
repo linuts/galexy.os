@@ -8,6 +8,11 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#130](https://github.com/linuts/galexy.os/pull/130) — Shell — nano shows line numbers and the two shortcut rows, with a
+  reverse title and status bar. `.rs` and `.py` are colored in the
+  editor. The status line shows the first diagnostic, and Ctrl-T
+  completes from the language's words and from names already in the
+  file.
 - [#129](https://github.com/linuts/galexy.os/pull/129) — Shell — backspace no longer panics the line editor, and left/right
   move inside a line. BS and DEL both delete the character before the
   cursor. Login, lock, and password prompts use the same motions.

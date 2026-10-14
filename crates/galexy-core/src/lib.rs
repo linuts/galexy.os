@@ -21,6 +21,9 @@ mod crc32_test;
 mod date;
 #[cfg(test)]
 mod date_test;
+mod lang;
+#[cfg(test)]
+mod lang_test;
 mod line_edit;
 #[cfg(test)]
 mod line_edit_test;
@@ -42,6 +45,9 @@ pub use bitmap::Bitmap;
 pub use console_cut::console_commit_len;
 pub use crc32::crc32;
 pub use date::{civil_to_utc, format_utc, parse_utc, utc_to_civil, Civil, YEAR_MAX, YEAR_MIN};
+pub use lang::{
+    complete, diagnose, lang_of, paint_line, Compl, Diag, HiState, Lang, Span, COMPL_LEN,
+};
 pub use line_edit::{
     backspace_cell, line_backspace, line_clamp, line_delete, line_insert, line_left, line_right,
     shift_cursor, Key, KeyDec,
