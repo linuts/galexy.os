@@ -3906,14 +3906,17 @@ fn rustc_after_unlock_typing_e2e() {
     seal.extend(LOGIN_ADMIN_KEYS.iter().copied());
     seal.extend(CLEAR_DEFAULT_PASSWD.iter().copied());
     seal.extend_from_slice(&SYNC_WHOAMI_KEYS[..5]);
+    // The copy runs after `sync` has already echoed the prompt. An empty
+    // final marker returns at that echo and kills the guest while the
+    // ~90 MiB import is still allocating.
     let serial1 = common::boot_and_type_galfs(
         &image("galexy-os-rustc"),
         &disk,
         &seal,
         "New passphrase: ",
-        "",
+        "rustc-sysroot:",
         Duration::from_millis(30),
-        Duration::from_secs(360),
+        Duration::from_secs(600),
     );
     assert!(
         !serial1.contains("[PANIC]"),
@@ -3929,6 +3932,9 @@ fn rustc_after_unlock_typing_e2e() {
     );
 
     let mut keys: Vec<(&str, &str)> = UNLOCK_GALFS_KEYS.to_vec();
+    // Hold the username until the post-unlock copy prints. Typing `rustc`
+    // while that copy is still running is the missing-target-file race.
+    keys.last_mut().expect("unlock keys").1 = "rustc-sysroot:";
     keys.extend(LOGIN_ADMIN_TESTPASS_KEYS.iter().copied());
     keys.extend_from_slice(RUSTC_TEST_RS_KEYS);
     let serial = common::boot_and_type_galfs(
@@ -3938,7 +3944,7 @@ fn rustc_after_unlock_typing_e2e() {
         "Volume passphrase: ",
         "t-ok",
         Duration::from_millis(30),
-        Duration::from_secs(900),
+        Duration::from_secs(1200),
     );
     let sysroot = serial
         .rfind("rustc-sysroot:")
