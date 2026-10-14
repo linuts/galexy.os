@@ -46,7 +46,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         )
     };
     sched::ramdisk::init(archive);
-    assert!(sched::ramdisk::find("hello").is_some());
+    assert!(sched::ramdisk::find("testing/hello").is_some());
 
     let (region, _) = sched::spawn_user_launcher("budget", |gr| {
         unsafe {
@@ -98,7 +98,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 }
 
 fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
-    let hello = b"hello";
+    let hello = b"testing/hello";
     let mut code = alloc::vec::Vec::new();
     code.push(0xEB);
     code.push(hello.len() as u8);

@@ -703,11 +703,12 @@ owner the walk starts at the task's actor root. A token on the task
 (object id + rights) must cover the target: create needs CREATE on the
 parent, open needs READ, write needs WRITE, remove needs REMOVE, and
 the files snapshot needs LIST. Holding a token on a parent covers the
-children it permits. `spawn` of a name with no `/` loads that ramdisk label. A name
-with `/` loads an ELF from galfs, including a RAM-store file, using
-the caller's tokens (`AccessDenied` when none cover it). The shell
-rewrites `./hello` from the login directory to `/hello`, so the
-compiled file does not collide with the ramdisk program `hello`.
+children it permits. `spawn` of a name with no `/` loads that ramdisk label.
+`testing/<name>` and `/testing/<name>` also load a ramdisk program (the
+sample programs). Any other name with `/` loads an ELF from galfs, including
+a RAM-store file, using the caller's tokens (`AccessDenied` when none cover
+it). The shell rewrites `./hello` from the login directory to `/hello`.
+That path is the file you compiled. The sample program is `testing/hello`.
 `open` of a path with no slash and no `@` still
 hits the ramdisk first and grants READ. Any other path walks galfs and
 must name a file (READ|WRITE). A directory open is `Unsupported`. A
@@ -850,7 +851,7 @@ on its own is a launch: `spawn` on the loader cap (EXEC) parks the
 caller (`STATE_WAITING`) until the main loop has loaded the ELF, then
 returns a **process Cap** (`PROC_CAP_BASE`…). Shell utilities set
 `SPAWN_INHERIT` (session tokens) and Cap-`wait` so the prompt returns
-after they finish; bare program names (`hello`, `linger`) drop the Cap
+after they finish; bare program names (`testing/hello`, `testing/linger`) drop the Cap
 (fire-and-forget). `SPAWN_WAIT` still parks until exit as a convenience
 (Cap remains installed). `r8`/`r9` are an optional argument, at most `SPAWN_ARG_MAX`
 (4096) bytes, copied onto the child's stack (`rdi` is the address, `rsi` the

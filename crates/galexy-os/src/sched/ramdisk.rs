@@ -66,3 +66,29 @@ pub fn find(name: &str) -> Option<&'static [u8]> {
     }
     None
 }
+
+/// `testing/hello` or `/testing/hello`. Sample programs live here so a
+/// bare `hello` is not a command. Any other slash name is a galfs path.
+pub fn is_testing_path(name: &str) -> bool {
+    testing_key(name).is_some()
+}
+
+/// The ramdisk bytes for a [`is_testing_path`] name.
+pub fn testing_elf(name: &str) -> Option<&'static [u8]> {
+    find(testing_key(name)?)
+}
+
+fn testing_key(name: &str) -> Option<&str> {
+    let key = name.strip_prefix('/').unwrap_or(name);
+    let bin = key.strip_prefix("testing/")?;
+    if bin.is_empty() || bin.contains('/') || bin.contains('@') {
+        return None;
+    }
+    if !bin
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return None;
+    }
+    Some(key)
+}

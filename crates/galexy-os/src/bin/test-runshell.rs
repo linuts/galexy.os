@@ -38,8 +38,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     sched::ramdisk::init(archive);
 
     // Sanity: the service finds hello (and misses a bogus name).
-    let Some(hello_elf) = sched::ramdisk::find("hello") else {
-        panic!("'hello' not found in the ramdisk tar");
+    let Some(hello_elf) = sched::ramdisk::find("testing/hello") else {
+        panic!("'testing/hello' not found in the ramdisk tar");
     };
     assert!(
         sched::ramdisk::find("no-such-program").is_none(),
@@ -53,7 +53,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let baseline = galexy_os::arch::mm::free_frames();
 
     // The shell seam: same dispatch the typing flow reaches via poll().
-    shell::exec("hello");
+    shell::exec("testing/hello");
     serial_println!("[test-runshell] dispatch done");
 
     // Main loop: hlt + rotations while the program runs; the entry shim

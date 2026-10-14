@@ -103,7 +103,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
 fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let banner = b"banner.txt";
-    let hello = b"hello";
+    let hello = b"testing/hello";
     let mut code = alloc::vec::Vec::new();
     code.push(0xEB);
     code.push((banner.len() + hello.len()) as u8);

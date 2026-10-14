@@ -193,7 +193,7 @@ fn embed<const N: usize>(
 
 fn build_prelogin(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let mut code = alloc::vec::Vec::new();
-    let [hello, notes] = embed(&mut code, code_base, [b"hello", b"notes"]);
+    let [hello, notes] = embed(&mut code, code_base, [b"testing/hello", b"notes"]);
     mov_r64_imm(&mut code, 15, scratch);
 
     // spawn hello with the real loader Cap (the seat has the grant).
@@ -201,7 +201,7 @@ fn build_prelogin(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     mov_eax(&mut code, Syscall::Spawn as u32);
     mov_r64_imm(&mut code, 7, loader);
     mov_r64_imm(&mut code, 6, hello);
-    mov_r64_imm(&mut code, 2, 5);
+    mov_r64_imm(&mut code, 2, b"testing/hello".len() as u64);
     mov_r64_imm(&mut code, 8, 0);
     mov_r64_imm(&mut code, 9, 0);
     mov_r64_imm(&mut code, 10, 0);

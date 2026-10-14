@@ -1325,6 +1325,15 @@ fn render_tasks(out: &mut TextBuf<'_>) {
 }
 
 fn render_files(out: &mut TextBuf<'_>) {
+    let mut saw_testing = false;
+    crate::sched::ramdisk::for_each_name(|name| {
+        if name.starts_with("testing/") {
+            saw_testing = true;
+        }
+    });
+    if saw_testing {
+        out.push(b"testing/\n");
+    }
     crate::sched::ramdisk::for_each_name(|name| {
         out.push(name.as_bytes());
         out.push(b"\n");
@@ -1472,10 +1481,18 @@ fn syscall_spawn(frame: &Context) -> SyscallResult {
         }
     }
     let name = core::str::from_utf8(&raw[..len as usize]).unwrap_or("");
-    // A slash is a galfs path (`/hello`, after the shell rewrites
-    // `./hello`). The bytes are read in the drain, under the caller's
+    // `testing/hello` and `/testing/hello` are ramdisk programs. Any
+    // other slash is a galfs path (`/hello`, after the shell rewrites
+    // `./hello`). Those bytes are read in the drain, under the caller's
     // tokens. A label with no slash stays a ramdisk program.
-    if name.contains('/') {
+    if crate::sched::ramdisk::is_testing_path(name) {
+        let Some(bytes) = crate::sched::ramdisk::testing_elf(name) else {
+            return SyscallResult::err(SysError::NotFound);
+        };
+        if let Err(err) = crate::sched::loader::validate_elf(bytes) {
+            return SyscallResult::err(err);
+        }
+    } else if name.contains('/') {
         if name.len() > 64 || !path_ok(name) {
             return SyscallResult::err(SysError::BadValue);
         }

@@ -857,10 +857,31 @@ fn read_elf_dir(bin_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
         }
         let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         if bytes.starts_with(b"\x7fELF") {
-            bins.insert(name, bytes);
+            bins.insert(ramdisk_entry_name(&name), bytes);
         }
     }
     bins
+}
+
+/// Sample programs the login image keeps only because a test runs them.
+/// Packed as `testing/<name>`, not as a bare command.
+const TESTING_PROGRAMS: &[&str] = &[
+    "hello",
+    "linger",
+    "nap",
+    "stdmin",
+    "stdtest",
+    "bigtest",
+    "thread-test",
+    "futex-test",
+];
+
+fn ramdisk_entry_name(name: &str) -> String {
+    if TESTING_PROGRAMS.contains(&name) {
+        format!("testing/{name}")
+    } else {
+        name.to_string()
+    }
 }
 
 /// `no_std` programs built with `-Zbuild-std=core,alloc`.
@@ -933,7 +954,7 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
             .join(pkg);
         let bytes = std::fs::read(&elf).unwrap_or_else(|e| panic!("read {}: {e}", elf.display()));
         assert!(bytes.starts_with(b"\x7fELF"), "{pkg} is not an ELF");
-        bins.insert(pkg.into(), bytes);
+        bins.insert(ramdisk_entry_name(pkg), bytes);
     }
     // Milestone 71: the sysroot the on-OS compiler will read, under `rust/`.
     pack_sysroot(&std_target, profile, &mut bins);

@@ -109,6 +109,7 @@ pub(crate) fn show_help() {
     write_console(b"  a new disk asks for a volume passphrase before login\n");
     write_console(b"  su admin restores a born-admin seat; login always needs a password\n");
     write_console(b"  a bare program name loads it from the ramdisk\n");
+    write_console(b"  sample programs are under testing/ (testing/hello)\n");
 }
 
 pub(crate) fn help_section(title: &[u8]) {
@@ -1661,7 +1662,7 @@ pub(crate) fn argv_from_words(rest: &[u8], out: &mut [u8]) -> Option<usize> {
 
 /// Starts the ramdisk program `name`. A missing name, or a file that is
 /// not an ELF, is reported as an unknown command. The prompt returns
-/// once the program is loaded (linger / hello keep running).
+/// once the program is loaded (`testing/linger` keeps running).
 pub(crate) fn launch(cwd: &Cwd, name: &[u8]) {
     if is_console_shell_name(name) {
         write_console(name);
@@ -1675,8 +1676,8 @@ pub(crate) fn launch(cwd: &Cwd, name: &[u8]) {
 }
 
 /// A ramdisk label stays as typed. A name with `/` becomes a galfs path:
-/// `./hello` from the login directory `/` is `/hello`, so it does not
-/// collide with the ramdisk program `hello`.
+/// `./note` from the login directory `/` is `/note`. A sample program
+/// is `testing/hello`, which stays on the ramdisk.
 fn program_name<'a>(cwd: &Cwd, name: &'a [u8], buf: &'a mut [u8; PATH_MAX]) -> &'a [u8] {
     if !name.contains(&b'/') {
         return name;

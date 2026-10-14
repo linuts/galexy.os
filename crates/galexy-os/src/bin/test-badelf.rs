@@ -136,7 +136,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert!(programs >= 4, "ramdisk should carry init/shell/util/hello");
     serial_println!("[test-badelf] {} ramdisk program(s) validate", programs);
 
-    let hello = sched::ramdisk::find("hello").expect("hello in ramdisk");
+    let hello = sched::ramdisk::find("testing/hello").expect("testing/hello in ramdisk");
     let loads = load_phdrs(hello);
     assert!(
         loads.len() >= 2,

@@ -79,7 +79,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         )
     };
     sched::ramdisk::init(archive);
-    assert!(sched::ramdisk::find("hello").is_some(), "hello on ramdisk");
+    assert!(
+        sched::ramdisk::find("testing/hello").is_some(),
+        "testing/hello on ramdisk"
+    );
 
     let admin = galfs::admin_root();
     let mut baseline: Option<(usize, usize)> = None;
@@ -240,7 +243,7 @@ fn run_round(round: usize) -> Report {
 
 fn build_worker(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let mut code = alloc::vec::Vec::new();
-    let [msg, path, hello] = embed(&mut code, code_base, [MSG, b"soak.txt", b"hello"]);
+    let [msg, path, hello] = embed(&mut code, code_base, [MSG, b"soak.txt", b"testing/hello"]);
     mov_r64_imm(&mut code, 15, scratch);
     let pair = |i: usize| (0x08 + (i as i32) * 0x10, 0x10 + (i as i32) * 0x10);
 
@@ -314,7 +317,7 @@ fn build_worker(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     mov_eax(&mut code, Syscall::Spawn as u32);
     mov_r64_imm(&mut code, 7, loader);
     mov_r64_imm(&mut code, 6, hello);
-    mov_r64_imm(&mut code, 2, 5);
+    mov_r64_imm(&mut code, 2, b"testing/hello".len() as u64);
     mov_r64_imm(&mut code, 8, 0);
     mov_r64_imm(&mut code, 9, 0);
     mov_r64_imm(&mut code, 10, SPAWN_WAIT);

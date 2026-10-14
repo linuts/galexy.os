@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- Shell — sample programs live under `testing/`. `hello`, `linger`, `nap`,
+  `stdmin`, `stdtest`, `bigtest`, `thread-test`, and `futex-test` are no
+  longer bare commands. Init services (`stamp`, `probe`, `spare`, `bell`,
+  `chime`) stay where init starts them.
 - [#132](https://github.com/linuts/galexy.os/pull/132) — Shell — the screen editor command is `edit`.
   Tab inserts a tab, drawn to the next column of 8. Lisp, JSON, CSV, TOML, and XML are colored
   in the editor and report one diagnostic. A redraw hides the cursor

@@ -77,7 +77,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         }
     }
 
-    assert!(sched::ramdisk::find("linger").is_some());
+    assert!(sched::ramdisk::find("testing/linger").is_some());
 
     let (region, _) = sched::spawn_user_launcher("orphan-parent", |gr| {
         unsafe {
@@ -126,10 +126,10 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         x86_64::instructions::hlt();
         sched::reap();
         assert!(
-            sched::is_name_running("linger"),
+            sched::is_name_running("testing/linger"),
             "linger must keep running after parent exit"
         );
-        if let Some(p) = sched::parent_slot_of("linger") {
+        if let Some(p) = sched::parent_slot_of("testing/linger") {
             if p == init {
                 break p;
             }
@@ -138,7 +138,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         if elapsed > TICK_TIMEOUT {
             panic!(
                 "linger never reparented to init; parent={:?} init={init}",
-                sched::parent_slot_of("linger")
+                sched::parent_slot_of("testing/linger")
             );
         }
     };
@@ -594,7 +594,7 @@ fn build_rpc_blob(code_base: u64, scratch: u64, payload: &[u8]) -> alloc::vec::V
 }
 
 fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
-    let linger = b"linger";
+    let linger = b"testing/linger";
     let mut code = alloc::vec::Vec::new();
     code.push(0xEB);
     code.push(linger.len() as u8);

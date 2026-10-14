@@ -38,7 +38,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     };
     sched::ramdisk::init(archive);
 
-    let Some(bytes) = sched::ramdisk::find("linger") else {
+    let Some(bytes) = sched::ramdisk::find("testing/linger") else {
         panic!("linger missing");
     };
     let _ = sched::loader::spawn_program("linger", bytes).expect("linger elf");

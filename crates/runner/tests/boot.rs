@@ -2701,11 +2701,19 @@ const LOGIN_CLI_PROMPT_KEYS: &[(&str, &str)] = &[
     ("ret", "admin@galexy> "),
 ];
 
-/// Qcode + expected-echo pairs for typing `hello` + Enter (typing
-/// E2E). Each key syncs on the shell's echo of it (console = screen +
-/// serial); the Enter key syncs on hello's program output (the write
+/// Qcode + expected-echo pairs for typing `testing/hello` + Enter.
+/// Each key syncs on the shell's echo of it (console = screen +
+/// serial); the Enter key syncs on the program output (the write
 /// syscall's console mirror) — proof the whole dispatch ran.
 const RUN_HELLO_KEYS: &[(&str, &str)] = &[
+    ("t", "t"),
+    ("e", "e"),
+    ("s", "s"),
+    ("t", "t"),
+    ("i", "i"),
+    ("n", "n"),
+    ("g", "g"),
+    ("slash", "/"),
     ("h", "h"),
     ("e", "e"),
     ("l", "l"),
@@ -2738,12 +2746,28 @@ const STATUS_AFTER_LOGIN: &[(&str, &str)] = &[
 /// is still running. `crash` kills the shell; login again, then `x` is
 /// echoed by the new shell, and `beat` is still arriving.
 const SUPERVISOR_AFTER_LOGIN: &[(&str, &str)] = &[
+    ("t", "t"),
+    ("e", "e"),
+    ("s", "s"),
+    ("t", "t"),
+    ("i", "i"),
+    ("n", "n"),
+    ("g", "g"),
+    ("slash", "/"),
     ("h", "h"),
     ("e", "e"),
     ("l", "l"),
     ("l", "l"),
     ("o", "o"),
     ("ret", HELLO_TEXT),
+    ("t", "t"),
+    ("e", "e"),
+    ("s", "s"),
+    ("t", "t"),
+    ("i", "i"),
+    ("n", "n"),
+    ("g", "g"),
+    ("slash", "/"),
     ("l", "l"),
     ("i", "i"),
     ("n", "n"),
@@ -3189,8 +3213,8 @@ fn shell_query_typing_e2e() {
         "typed `ls` never listed banner.txt; serial:\n{serial}"
     );
     assert!(
-        serial.contains("hello\n"),
-        "typed `ls` never listed hello; serial:\n{serial}"
+        serial.contains("testing/\n"),
+        "typed `ls` never listed testing/; serial:\n{serial}"
     );
 }
 
@@ -4925,6 +4949,14 @@ fn shell_run_hello_typing_e2e_uefi() {
 fn shell_stdmin_typing_e2e() {
     const LINE: &str = "stdmin: a=[1, 2]";
     const KEYS: &[(&str, &str)] = &[
+        ("t", "t"),
+        ("e", "e"),
+        ("s", "s"),
+        ("t", "t"),
+        ("i", "i"),
+        ("n", "n"),
+        ("g", "g"),
+        ("slash", "/"),
         ("s", "s"),
         ("t", "t"),
         ("d", "d"),

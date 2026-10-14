@@ -160,9 +160,10 @@ pub(crate) fn task_spawn(
         if !seat && parent_fs.root == galfs::NO_OBJECT {
             return Err(SysError::AccessDenied);
         }
-        // Snapshot before attenuation. A path spawn reads the ELF with
-        // the parent's own tokens even when the child does not inherit.
-        let load_fs = if name.contains('/') {
+        // Snapshot before attenuation. A galfs path spawn reads the ELF
+        // with the parent's own tokens even when the child does not
+        // inherit. `testing/<name>` is a ramdisk program, not a path.
+        let load_fs = if name.contains('/') && !ramdisk::is_testing_path(name) {
             parent_fs
         } else {
             galfs::FsCred::none()
@@ -217,6 +218,16 @@ pub(crate) fn task_spawn(
         thread.state.store(STATE_WAITING, Ordering::Release);
         Ok(())
     })
+}
+
+/// Ramdisk ELF for this spawn. Seats share `shell`. A testing path
+/// loads `testing/<name>` even when the caller wrote a leading `/`.
+fn ramdisk_spawn_bytes(name: &str, elf_name: &str) -> Option<&'static [u8]> {
+    if ramdisk::is_testing_path(name) {
+        ramdisk::testing_elf(name)
+    } else {
+        ramdisk::find(elf_name)
+    }
 }
 
 /// Largest ELF a path spawn will copy out of galfs.
@@ -361,7 +372,7 @@ pub fn drain_spawn() {
     // the child can exit. Publishing early lets the other CPU run a short
     // program to completion in the gap; the exit then wakes nobody and
     // the parent parks forever (`test-soak`'s `hello`).
-    let path_bytes = if name.contains('/') {
+    let path_bytes = if name.contains('/') && !ramdisk::is_testing_path(name) {
         Some(read_spawn_file(load_fs.root, &load_fs.tokens, name))
     } else {
         None
@@ -389,7 +400,7 @@ pub fn drain_spawn() {
                 Some(Err(err))
             }
         }
-    } else if let Some(bytes) = ramdisk::find(elf_name) {
+    } else if let Some(bytes) = ramdisk_spawn_bytes(name, elf_name) {
         let spawned = if seat {
             loader::spawn_launched_seat(
                 name,

@@ -67,7 +67,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         !sched::loader::elf_bytes_wx_ok(&bad),
         "W|X PT_LOAD must fail elf_bytes_wx_ok"
     );
-    let hello = sched::ramdisk::find("hello").expect("hello in ramdisk");
+    let hello = sched::ramdisk::find("testing/hello").expect("testing/hello in ramdisk");
     assert!(
         sched::loader::elf_bytes_wx_ok(hello),
         "hello must satisfy W^X"

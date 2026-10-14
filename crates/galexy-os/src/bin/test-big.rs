@@ -12,7 +12,7 @@ use x86_64::VirtAddr;
 
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
-const PROGRAM: &str = "bigtest";
+const PROGRAM: &str = "testing/bigtest";
 
 fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galexy_os::init();
