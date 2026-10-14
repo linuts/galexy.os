@@ -3537,6 +3537,8 @@ const EDIT_KEYS: &[(&str, &str)] = &[
     ("e", "e"),
     ("ret", "hi!\nyo\n"),
     // A saved tab is the byte itself. At column 0 it stops at column 8.
+    // The buffer is that byte plus `!` (no trailing newline), so the
+    // status line says `Wrote 2`.
     ("e", "e"),
     ("d", "d"),
     ("i", "i"),
