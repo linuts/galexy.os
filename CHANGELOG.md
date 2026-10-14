@@ -8,7 +8,7 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Shell — backspace no longer panics the line editor, and left/right
+- [#129](https://github.com/linuts/galexy.os/pull/129) — Shell — backspace no longer panics the line editor, and left/right
   move inside a line. BS and DEL both delete the character before the
   cursor. Login, lock, and password prompts use the same motions.
   Arrow sequences may carry parameters (`ESC [ 1 ; 2 D`) or the SS3
