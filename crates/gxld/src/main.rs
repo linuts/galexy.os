@@ -5,6 +5,25 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    #[cfg(target_os = "galexy")]
+    {
+        // The leader stack is four pages. Linking `println!` dropped a
+        // `BTreeMap` of symbols on that stack and wrote the guard under
+        // it (`err=0x6`, `cr2=0xc803ffff1f0`). Move the link onto the
+        // 17 MiB thread rustc already uses.
+        return std::thread::Builder::new()
+            .name("gxld-main".to_string())
+            .stack_size(17 * 1024 * 1024)
+            .spawn(link_main)
+            .expect("gxld thread")
+            .join()
+            .unwrap_or_else(|_| ExitCode::from(1));
+    }
+    #[cfg(not(target_os = "galexy"))]
+    link_main()
+}
+
+fn link_main() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let argv = match expand_response_files(raw) {
         Ok(v) => v,

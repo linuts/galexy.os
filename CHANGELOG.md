@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- Linker — on-OS `gxld` links on a 17 MiB thread. A one-line
+  `println!` dropped a symbol map on the 4-page leader and wrote the
+  guard under it (`err=0x6`, `cr2=0xc803ffff1f0`).
 - [#136](https://github.com/linuts/galexy.os/pull/136) — Shell — `nano <path>` is the screen editor, with the keyboard grant.
   A renamed userspace ELF left in the target directory is not packed
   onto the ramdisk.
