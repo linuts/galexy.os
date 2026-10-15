@@ -4,8 +4,10 @@
 # The rust checkout is not part of this repo. This script expects it at
 # GALEXY_RUST_SRC (default: $HOME/galexy-rust), already checked out at the
 # commit in rust-toolchain.toml (nightly-2026-10-08, 1d81eb4ad). It applies
-# scripts/galexy-rustc.patch when the builtin target is missing, installs
-# the PAL, writes bootstrap.toml, and builds stage 1 for the Galexy host.
+# scripts/galexy-rustc.patch when the builtin target is missing, updates
+# Cranelift's reported features when an older checkout still lists SSE,
+# installs the PAL, writes bootstrap.toml, and builds stage 1 for the
+# Galexy host.
 # The host nightly must have rustc-codegen-cranelift. This date's rustc
 # links LLVM in-process and creates lib/rustlib/.../codegen-backends only
 # when that component is installed. Stage 0 compiles std with
@@ -176,6 +178,42 @@ fi
 if [[ ! -f "$RUST_SRC/compiler/rustc_target/src/spec/targets/x86_64_unknown_galexy.rs" ]]; then
     patch -d "$RUST_SRC" -p1 < "$ROOT/scripts/galexy-rustc.patch"
 fi
+
+# A checkout that already has the builtin target skips the patch.
+# Cranelift used to report SSE for every x86_64 OS, which is the
+# issue #162235 warning on rustc-abi softfloat. Write the same report
+# the patch carries when this tree still has the old arm.
+python3 - "$RUST_SRC/compiler/rustc_codegen_cranelift/src/lib.rs" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+if "RustcAbi::Softfloat" in text and "sym::soft_float" in text:
+    raise SystemExit(0)
+old_import = "use rustc_target::spec::{Arch, CfgAbi, Env, Os};"
+new_import = "use rustc_target::spec::{Arch, CfgAbi, Env, Os, RustcAbi};"
+old_arm = """            Arch::X86_64 if sess.target.os != Os::None => {
+                // x86_64 mandates SSE2 support and rustc requires the x87 feature to be enabled
+                vec![sym::fxsr, sym::sse, sym::sse2, sym::x87]
+            }"""
+new_arm = """            Arch::X86_64 if sess.target.os != Os::None => {
+                if sess.target.rustc_abi == Some(RustcAbi::Softfloat) {
+                    // Softfloat ABI requires +soft-float and forbids sse.
+                    // Reporting the hardfloat set is the issue #162235 warning.
+                    vec![sym::soft_float]
+                } else {
+                    // x86_64 mandates SSE2 support and rustc requires the x87 feature to be enabled
+                    vec![sym::fxsr, sym::sse, sym::sse2, sym::x87]
+                }
+            }"""
+if old_import not in text or old_arm not in text:
+    raise SystemExit(
+        "build-galexy-rustc: cranelift target_config anchor missing; "
+        "scripts/galexy-rustc.patch is out of date"
+    )
+text = text.replace(old_import, new_import, 1).replace(old_arm, new_arm, 1)
+path.write_text(text)
+print("build-galexy-rustc: cranelift reports soft-float for a softfloat ABI")
+PY
 
 cp "$ROOT/targets/$JSON_NAME" "$RUST_SRC/$JSON_NAME"
 python3 "$ROOT/scripts/galexy-std-sysroot.py" --patch-library "$RUST_SRC/library"

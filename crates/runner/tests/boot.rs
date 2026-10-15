@@ -4085,7 +4085,8 @@ fn rustc_after_unlock_typing_e2e() {
 }
 
 /// `rustc test.rs` with no `-o` writes `test`. `ls` shows the source and
-/// the binary, and typing `test` runs it.
+/// the binary, and typing `test` runs it. The compile prints neither ABI
+/// warning from issue 162235.
 #[test]
 fn shell_rustc_default_out_typing_e2e() {
     if env!("GALEXY_HAVE_RUSTC") != "1" {
@@ -4151,6 +4152,14 @@ fn shell_rustc_default_out_typing_e2e() {
     assert!(
         !serial.contains("error:"),
         "rustc reported an error; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("target feature `soft-float` must be enabled"),
+        "rustc warned that soft-float is missing; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("target feature `sse` must be disabled"),
+        "rustc warned that sse is enabled; serial:\n{serial}"
     );
 }
 
