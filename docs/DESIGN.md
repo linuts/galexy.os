@@ -167,7 +167,8 @@ Ctrl+Up and Ctrl+Down move one line. The keyboard interrupt stores the
 count and does not enqueue the chord, so plain arrows stay shell
 history. The main loop paints the move. The next glyph — a character
 the shell echoes, or any other write — drops the view back to the live
-rows.
+rows. COM1 is only a write mirror, so the same move also redraws the
+visible cells there (below).
 
 Supported controls, and nothing else: tab, CR, LF, backspace (`0x08`),
 form feed (`0x0c`), ESC, and the CSI subset above. ASCII BEL (`0x07`)
@@ -197,8 +198,16 @@ headless terminal's Ctrl+Up / Ctrl+Down is `ESC [ 1 ; 5 A` / `B`
 (modifier 5 is Ctrl; rxvt sends `ESC [ a` / `b`). That sequence stores
 the same one-line scroll as the PS/2 chord and is not queued. A plain
 arrow and Ctrl+Shift (`ESC [ 1 ; 6 A`) are queued, so history is
-unchanged. The
-UART lock is dropped before that delivery. One `_print` holds the lock
+unchanged. The scroll itself is a framebuffer repaint; the host
+terminal would keep showing the live tail. When the view actually
+moves, the shown cells are written to COM1 on the alternate screen
+(`ESC [ ? 1049 h`, cursor-addressed rows, home). Rows past the host
+height clamp, so the top of the view — the line just revealed — stays
+visible. Returning to the live rows, or the next glyph, leaves that
+screen (`ESC [ ? 1049 l`) and the following mirrored bytes continue
+the transcript. The redraw is queued under the screen lock and sent
+after the lock drops, so the UART wait is not an IF=0 section. The
+UART lock is dropped before a received byte is delivered. One `_print` holds the lock
 for the whole line, so two CPUs cannot tear it, and transmit harvests
 pending receive bytes while the FIFO is busy so a paste during that hold
 cannot overrun the 16-byte FIFO. `serial_println!` also appends the
@@ -1003,7 +1012,8 @@ arrive as CSI (`ESC [ A`…`D`, including `ESC [ 1 ; 2 D` and SS3
 Ctrl+Up and Ctrl+Down never arrive on that Cap; they scroll the
 console one line, and the next echoed character returns to the prompt.
 On the headless terminal the chord is `ESC [ 1 ; 5 A` / `B`, recognized
-on COM1 before the queue.
+on COM1 before the queue, and the visible cells are redrawn on that
+same line so the shell view actually moves.
 Left/right move inside the line on the prompt and on login, lock, and
 password fields. Backspace is BS (`0x08`) or DEL (`0x7f`) and deletes
 the character before the cursor; the cursor is clamped so that edit
