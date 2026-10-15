@@ -76,7 +76,8 @@ dashboard.
    package dir per program (`dir == package == binary name`); each links
    `galexy-rt` (runtime) + `galexy-abi` (contract) — NEVER the kernel.
    The runner consumes program bins via artifact bindeps (same mechanism
-   as kernel bins) and packs them into the tar ramdisk; the kernel loads
+   as kernel bins) and packs them into the tar ramdisk. A file left in
+   the target directory after a binary is renamed is not packed. The kernel loads
    them as static ET_EXEC ELFs (`sched/loader.rs`) at
    `galexy_abi::USER_IMAGE_BASE` — a FIXED virtual load address (per-task
    trees make everyone sharing the base safe). Loader strictness: every
@@ -834,6 +835,7 @@ one per line. The shell keeps the current directory and accepts a leading
 programs: the shell composes the path and `spawn`s them. `ls` and `rm`
 also receive the query grant, so they can read the files snapshot.
 `edit` also receives the keyboard grant and the shell Cap-waits on it.
+`nano` is that same spawn.
 The screen is a reverse title, a line-number gutter
 (`!` on a line the language service flagged), the text, a reverse
 status line, and two shortcut rows. Rust, Python, Lisp, JSON, CSV,

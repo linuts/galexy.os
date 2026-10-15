@@ -26,6 +26,7 @@ pub(crate) fn show_help() {
     help_row(b"echo $?", b"last Cap-wait exit status");
     help_row(b"cat <path>", b"print file");
     help_row(b"edit <path>", b"edit a file (line numbers, Tab, Ctrl-T)");
+    help_row(b"nano <path>", b"same editor as edit");
     help_row(b"touch <path>", b"create empty file");
     help_row(b"mkdir <path>", b"create directory");
     help_row(b"rm <path>", b"remove file or empty dir");
@@ -297,6 +298,13 @@ pub(crate) fn dispatch(
         edit(cwd, name);
         return None;
     }
+    // The editor used to be the ramdisk name `nano`. A leftover ELF from
+    // that rename is not the command: this spawn is `edit`, with the
+    // keyboard grant. A bare launch of the leftover would be denied.
+    if let Some(name) = arg_of(line, b"nano") {
+        edit(cwd, name);
+        return None;
+    }
     if let Some(name) = arg_of(line, b"touch") {
         touch(cwd, name);
         return None;
@@ -527,6 +535,7 @@ pub(crate) fn redirection(rest: &[u8]) -> Option<(&[u8], &[u8], bool)> {
     None
 }
 
+/// `edit` and `nano` both land here. The ramdisk program is `edit`.
 pub(crate) fn edit(cwd: &Cwd, name: &[u8]) {
     let name = trim(name);
     if name.is_empty() || !path_arg_ok(name) {
