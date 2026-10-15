@@ -24,6 +24,26 @@ fn main() -> i32 {
     ls_plain(raw)
 }
 
+/// The desk ramdisk lists the sysroot before any file the user created.
+/// A 1 KiB read stops inside `srlib/`, so `test.rs` and the binary
+/// `rustc` just wrote never appear. The buffer stays off the 16 KiB
+/// leader stack.
+fn read_snapshot() -> Option<&'static [u8]> {
+    static mut BUF: [u8; galexy_abi::FILES_SNAPSHOT_MAX] = [0; galexy_abi::FILES_SNAPSHOT_MAX];
+    let (ptr, n) = {
+        // SAFETY: `ls` is one thread and does not re-enter this buffer.
+        let buf = unsafe { &mut *core::ptr::addr_of_mut!(BUF) };
+        let got = read(files_cap(), buf);
+        if !got.ok {
+            return None;
+        }
+        (buf.as_ptr(), (got.value as usize).min(buf.len()))
+    };
+    // SAFETY: `ptr` addresses the static. The slice stays valid until
+    // the next call, and `ls` does not call this again while walking it.
+    Some(unsafe { core::slice::from_raw_parts(ptr, n) })
+}
+
 fn trim_nul(bytes: &[u8]) -> &[u8] {
     match bytes.iter().position(|b| *b == 0) {
         Some(i) => &bytes[..i],
@@ -32,14 +52,12 @@ fn trim_nul(bytes: &[u8]) -> &[u8] {
 }
 
 fn ls_plain(cwd: &[u8]) -> i32 {
-    let mut buf = [0u8; 1024];
-    let got = read(files_cap(), &mut buf);
-    if !got.ok {
+    let Some(buf) = read_snapshot() else {
         let _ = write_console(b"ls: denied\n");
         return 1;
-    }
-    let n = (got.value as usize).min(buf.len());
+    };
     let mut i = 0usize;
+    let n = buf.len();
     while i < n {
         let rest = &buf[i..n];
         let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());
@@ -53,14 +71,12 @@ fn ls_plain(cwd: &[u8]) -> i32 {
 }
 
 fn ls_long(cwd: &[u8]) -> i32 {
-    let mut buf = [0u8; 1024];
-    let got = read(files_cap(), &mut buf);
-    if !got.ok {
+    let Some(buf) = read_snapshot() else {
         let _ = write_console(b"ls: denied\n");
         return 1;
-    }
-    let n = (got.value as usize).min(buf.len());
+    };
     let mut i = 0usize;
+    let n = buf.len();
     while i < n {
         let rest = &buf[i..n];
         let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());

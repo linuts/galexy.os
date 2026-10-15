@@ -12,7 +12,7 @@ use core::sync::atomic::{AtomicU16, Ordering};
 
 use galexy_abi::{Cap, SysError};
 use galexy_core::{line_backspace, line_delete, line_insert, line_left, line_right, Key, KeyDec};
-use galexy_rt::{files_cap, read, session_locked, write_console, yield_now};
+use galexy_rt::{read, session_locked, write_console, yield_now};
 
 /// One byte that followed a bare Esc, for the next `read_line`.
 /// `0x100` means empty. A password prompt treats Esc as cancel, and the
@@ -545,12 +545,8 @@ pub(crate) fn tab_complete(
     let mut names = [[0u8; 64]; 16];
     let mut nlens = [0usize; 16];
     let mut nmatch = 0usize;
-    let mut snap = [0u8; 1024];
-    let got = read(files_cap(), &mut snap);
-    if !got.ok {
-        return;
-    }
-    let snap_n = (got.value as usize).min(snap.len());
+    let snap = crate::state::read_files_snapshot();
+    let snap_n = snap.len();
     let mut i = 0usize;
     while i < snap_n && nmatch < names.len() {
         let rest = &snap[i..snap_n];

@@ -334,16 +334,25 @@ pub(crate) fn comp_bytes_ok(comp: &[u8]) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || *b == b'.' || *b == b'_' || *b == b'-')
 }
 
-pub(crate) fn snapshot_has(line: &[u8]) -> bool {
-    let mut buf = [0u8; 1024];
+/// The whole files snapshot. `ls` and completion used to stop at 1 KiB,
+/// which is the ramdisk prefix on a desk image, so a file created after
+/// the sysroot import was invisible.
+pub(crate) fn read_files_snapshot() -> alloc::vec::Vec<u8> {
+    let mut buf = alloc::vec![0u8; galexy_abi::FILES_SNAPSHOT_MAX];
     let got = read(files_cap(), &mut buf);
     if !got.ok {
-        return false;
+        return alloc::vec::Vec::new();
     }
     let n = (got.value as usize).min(buf.len());
+    buf.truncate(n);
+    buf
+}
+
+pub(crate) fn snapshot_has(line: &[u8]) -> bool {
+    let buf = read_files_snapshot();
     let mut i = 0usize;
-    while i < n {
-        let rest = &buf[i..n];
+    while i < buf.len() {
+        let rest = &buf[i..];
         let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());
         if &rest[..end] == line {
             return true;
