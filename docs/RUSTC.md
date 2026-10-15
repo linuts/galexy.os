@@ -252,7 +252,10 @@ rlibs inside it, not separate ramdisk files. Stage 2 is not run: that
 would try to execute the Galexy ELF on Linux. `download-ci-llvm` is
 false. Cranelift does not compile LLVM, and LLVM cannot instruction-select
 this target. The fork lives outside this repo; `scripts/galexy-rustc.patch`
-is the diff.
+is the diff. A later run copies `std-pal/` again and regenerates
+`sys/pal/galexy/abi.rs` from `galexy-abi`, so a syscall added after
+the first install (such as `Date`) stays in the same table as
+`syscall.rs`.
 
 `channel = "nightly"` so the guest reports
 `1.101.0-nightly (1d81eb4ad 2026-10-07)`, the same string stage 0
