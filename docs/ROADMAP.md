@@ -574,10 +574,12 @@ runs the ELF it writes. Checkboxes: `TODO.md` Milestones **74–77**.
    exists. `cargo run` stays the small image. `cargo run --rustc`
    boots the compiler image. CI still does not run `x.py`
 2. **75 Sysroot** ✅ — before init, import `srlib/*` and the target JSON
-   into the RAM store at the paths `rustc` already opens. Repeated
-   every boot. The v12 disk file cap is 64 MiB and `core`'s metadata
-   is ~66 MiB, so this is not a disk write. The small ramdisk has no
-   `srlib/` and skips the import
+   into the RAM store at the paths `rustc` already opens. The rlib and
+   rmeta bodies stay the ramdisk mapping, and a stored admin quota
+   below the 128 MiB pool is raised first. Repeated every boot. The
+   v12 disk file cap is 64 MiB and `core`'s metadata is ~66 MiB, so
+   this is not a disk write. The small ramdisk has no `srlib/` and
+   skips the import
 3. **76 Arguments** ✅ — a ramdisk program with arguments gets a
    NUL-separated argv and the shell waits for it. The loader bit is
    set for that ramdisk program (`rustc` spawns `gxld`) and not for a

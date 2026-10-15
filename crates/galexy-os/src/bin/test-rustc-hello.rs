@@ -122,11 +122,12 @@ fn install_sysroot() {
         sched::ramdisk::find("gxld").is_some(),
         "gxld missing from ramdisk"
     );
+    sched::galfs::raise_admin_quota_for_sysroot();
 
     for name in &names {
         let bytes = sched::ramdisk::find(name).expect("ramdisk file vanished");
         if let Some(file_name) = name.strip_prefix("srlib/") {
-            sched::galfs::import_promoted(libs, file_name, bytes)
+            sched::galfs::import_shared(libs, file_name, bytes)
                 .unwrap_or_else(|_| panic!("import {file_name}"));
         } else {
             copy_file(root, name, bytes);
