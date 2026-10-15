@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#138](https://github.com/linuts/galexy.os/pull/138) — Shell — `ls` reads the whole files snapshot, so `test.rs` and the
+  binary from `rustc test.rs` show up after the sysroot. Typing that
+  binary's name runs it when the ramdisk has no program by that name.
 - [#134](https://github.com/linuts/galexy.os/pull/134) — Shell — Ctrl+Up and Ctrl+Down scroll the console one line. The next
   typed character returns to the live prompt. Plain arrows still recall
   command history, and Shift+Page still moves half a screen.

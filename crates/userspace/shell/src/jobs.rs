@@ -6,7 +6,7 @@ use core::cell::UnsafeCell;
 use core::sync::atomic::Ordering;
 
 use galexy_abi::Cap;
-use galexy_rt::{close, files_cap, kill, pipe, read, spawn_with, wait, write_console};
+use galexy_rt::{close, kill, pipe, spawn_with, wait, write_console};
 
 pub(crate) const JOB_MAX: usize = 4;
 pub(crate) const STAGE_MAX: usize = 4;
@@ -542,13 +542,8 @@ pub(crate) fn expanded_line(cwd: &Cwd, line: &[u8], out: &mut [u8; LINE_MAX]) ->
         out[..line.len()].copy_from_slice(line);
         return Some(line.len());
     }
-    let mut snap = [0u8; 1024];
-    let got = read(files_cap(), &mut snap);
-    let snap_n = if got.ok {
-        (got.value as usize).min(snap.len())
-    } else {
-        0
-    };
+    let snap = crate::state::read_files_snapshot();
+    let snap_n = snap.len();
     let mut n = 0usize;
     let mut i = 0usize;
     let mut first = true;

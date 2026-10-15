@@ -39,8 +39,12 @@ fn snapshot_has_child(dir: &[u8]) -> bool {
     prefix[..dir.len()].copy_from_slice(dir);
     prefix[dir.len()] = b'/';
     let prefix = &prefix[..=dir.len()];
-    let mut buf = [0u8; 1024];
-    let got = read(files_cap(), &mut buf);
+    // Same window as `ls`: a 1 KiB read never reaches a directory the
+    // user created after the sysroot import.
+    static mut BUF: [u8; galexy_abi::FILES_SNAPSHOT_MAX] = [0; galexy_abi::FILES_SNAPSHOT_MAX];
+    // SAFETY: `rm` is one thread and does not re-enter this buffer.
+    let buf = unsafe { &mut *core::ptr::addr_of_mut!(BUF) };
+    let got = read(files_cap(), buf);
     if !got.ok {
         return false;
     }

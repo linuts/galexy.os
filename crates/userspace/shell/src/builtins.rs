@@ -1755,14 +1755,29 @@ pub(crate) fn spawn_and_prompt(
     wait_exit: bool,
 ) {
     let bg = BACKGROUND.load(Ordering::Relaxed);
-    let grants = if bg {
+    let mut grants = if bg {
         grants | galexy_abi::SPAWN_NO_FG
     } else {
         grants
     };
-    let result = spawn_with(program, arg, grants);
+    let typed = program;
+    let mut path_buf = [0u8; PATH_MAX];
+    let mut result = spawn_with(program, arg, grants);
+    // `rustc test.rs` writes `test` in the current directory. A bare
+    // name the ramdisk does not have is that file. Ramdisk names still
+    // win, and the path spawn does not receive the loader.
+    if !result.ok
+        && SysError::from_code(result.value) == SysError::NotFound
+        && compiler_build_script(program).is_none()
+        && !program.contains(&b'/')
+    {
+        if let Some(n) = absolute_spawn_path(cwd, program, &mut path_buf) {
+            grants &= !galexy_abi::SPAWN_GRANT_LOADER;
+            result = spawn_with(&path_buf[..n], arg, grants);
+        }
+    }
     if !result.ok {
-        write_console(program);
+        write_console(typed);
         write_console(b": ");
         match SysError::from_code(result.value) {
             SysError::NoResource => write_console(b"busy\n"),

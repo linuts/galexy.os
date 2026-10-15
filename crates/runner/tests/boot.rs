@@ -2296,6 +2296,10 @@ fn keystroke(c: char) -> (String, String) {
         ')' => "shift+0".to_string(),
         '"' => "shift+apostrophe".to_string(),
         '>' => "shift+dot".to_string(),
+        '!' => "shift+1".to_string(),
+        '{' => "shift+bracket_left".to_string(),
+        '}' => "shift+bracket_right".to_string(),
+        ';' => "semicolon".to_string(),
         '.' => "dot".to_string(),
         ',' => "comma".to_string(),
         '-' => "minus".to_string(),
@@ -4077,6 +4081,76 @@ fn rustc_after_unlock_typing_e2e() {
     assert!(
         !serial.contains("[pf] ring-3 task fault"),
         "a program faulted; serial:\n{serial}"
+    );
+}
+
+/// `rustc test.rs` with no `-o` writes `test`. `ls` shows the source and
+/// the binary, and typing `test` runs it.
+#[test]
+fn shell_rustc_default_out_typing_e2e() {
+    if env!("GALEXY_HAVE_RUSTC") != "1" {
+        eprintln!("shell_rustc_default_out_typing_e2e: skipped (no target/galexy-rustc/rustc)");
+        return;
+    }
+    let mut owned = with_login(&[])
+        .into_iter()
+        .map(|(k, e)| (k.to_string(), e.to_string()))
+        .collect::<Vec<_>>();
+    owned.extend(type_line(
+        "echo fn main(){println!(\"testing!!!\");} > test.rs",
+        "admin@galexy>",
+    ));
+    owned.extend(type_line("rustc test.rs", "admin@galexy>"));
+    owned.extend(type_line("ls", "admin@galexy>"));
+    owned.extend(type_line("test", "testing!!!"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(k, e)| (k.as_str(), e.as_str()))
+        .collect();
+    let serial = boot_and_type(
+        &image("galexy-os-rustc"),
+        &keys,
+        "[boot] main loop ready",
+        "testing!!!",
+        Duration::from_millis(30),
+        Duration::from_secs(900),
+    );
+    let ls_at = serial.rfind("admin@galexy> ls").expect("ls was not typed");
+    let listing = &serial[ls_at..];
+    let listing_end = listing
+        .find("admin@galexy> test")
+        .expect("test was not typed after ls");
+    let listing = &listing[..listing_end];
+    assert!(
+        listing.contains("test.rs"),
+        "ls hid test.rs; listing:\n{listing}"
+    );
+    assert!(
+        listing.contains("\ntest\n"),
+        "ls hid the test binary; listing:\n{listing}"
+    );
+    let first = serial
+        .find("testing!!!")
+        .expect("source line was not echoed");
+    assert!(
+        serial[first + 1..].contains("testing!!!"),
+        "test did not print; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[loader] program '/test' ready"),
+        "bare test did not spawn /test; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[pf] ring-3 task fault"),
+        "a program faulted; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("command not found"),
+        "shell rejected a command; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("error:"),
+        "rustc reported an error; serial:\n{serial}"
     );
 }
 

@@ -395,7 +395,10 @@ the stack at image+1GiB).
 - `spawn` of a path loads that galfs ELF (Milestone 77). The typed
   gate is `rustc hello.rs -o /hello` and then `/hello`, which prints
   `hello from rustc on galexy`. The bare label `hello` stays the
-  ramdisk program, so `-o hello` is `Unsupported`. The shell supplies
+  ramdisk program, so `-o hello` is `Unsupported`. A bare
+  `rustc test.rs` writes `test` in the current directory (there is no
+  ramdisk program by that name). `ls` lists it, and typing `test` runs
+  it. The shell supplies
   `--edition 2024` when the line did not name an edition. The nightly
   otherwise stays on 2015 and prints that the edition was unspecified.
   A ramdisk program with arguments

@@ -844,6 +844,11 @@ one per line. The shell keeps the current directory and accepts a leading
 programs: the shell composes the path and `spawn`s them. `ls` and `rm`
 also receive the query grant, so they can read the files snapshot.
 `edit` also receives the keyboard grant and the shell Cap-waits on it.
+`ls` reads the whole files snapshot (`FILES_SNAPSHOT_MAX`). A 1 KiB
+read stopped inside the sysroot names, so a file created at `/` after
+that import (`test.rs`, the `test` binary) was missing from `ls` while
+`edit` could still open it. A bare command the ramdisk does not have
+is that file in the current directory.
 `nano` is that same spawn.
 The screen is a reverse title, a line-number gutter
 (`!` on a line the language service flagged), the text, a reverse

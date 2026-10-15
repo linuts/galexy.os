@@ -9,7 +9,7 @@
 //!
 //! No timestamps, permissions, symlinks, hard links, or locks: those are
 //! `Unsupported`. `read_dir` is built from the `files` snapshot (one
-//! kernel read, at most 1 KiB — the same list `ls` shows).
+//! kernel read, at most `FILES_SNAPSHOT_MAX` — the same list `ls` shows).
 
 use crate::ffi::OsString;
 use crate::fs::TryLockError;

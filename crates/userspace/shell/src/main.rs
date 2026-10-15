@@ -5,7 +5,9 @@
 //! child Cap so the prompt returns after they exit. A ramdisk program
 //! with arguments gets the same inherit-and-wait path; the rest of the
 //! line is a NUL-separated argv. A name with `/` is a galfs path
-//! (`/hello`, and `./hello` from `/`). Sample programs are `testing/hello`.
+//! (`/hello`, and `./hello` from `/`). A bare name the ramdisk does not
+//! have is the file in the current directory (`rustc test.rs` writes
+//! `test`; typing `test` runs it). Sample programs are `testing/hello`.
 //! A bare program name returns once
 //! the load finishes (Cap dropped) and keeps running.
 //! A bare launch shares this console. `cmd &` is a background job (`jobs`
