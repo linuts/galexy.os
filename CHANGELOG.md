@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#139](https://github.com/linuts/galexy.os/pull/139) — Compiler — Cranelift reports `soft-float` on this ABI, so
+  `rustc test.rs` is quiet about issue 162235. Rebuild the guest
+  compiler with `scripts/build-galexy-rustc.sh`; `cargo run` keeps
+  the ELF it already has.
 - [#138](https://github.com/linuts/galexy.os/pull/138) — Shell — `ls` reads the whole files snapshot, so `test.rs` and the
   binary from `rustc test.rs` show up after the sysroot. Typing that
   binary's name runs it when the ramdisk has no program by that name.
