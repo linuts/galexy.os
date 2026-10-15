@@ -17,7 +17,7 @@ use x86_64::VirtAddr;
 
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
-const PROGRAM: &str = "thread-test";
+const PROGRAM: &str = "testing/thread-test";
 
 fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galexy_os::init();

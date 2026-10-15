@@ -36,13 +36,13 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let mut cursor = TarCursor::new(archive);
     let mut hello_elf: Option<&[u8]> = None;
     while let Some((name, body)) = cursor.next_file() {
-        if name == "hello" {
+        if name == "testing/hello" {
             hello_elf = Some(body);
             break;
         }
     }
     let Some(hello_elf) = hello_elf else {
-        panic!("'hello' not found in the ramdisk tar");
+        panic!("'testing/hello' not found in the ramdisk tar");
     };
 
     let baseline = galexy_os::arch::mm::free_frames();

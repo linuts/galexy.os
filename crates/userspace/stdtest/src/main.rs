@@ -84,7 +84,11 @@ fn env_checks() {
     check_eq("consts::OS", env::consts::OS, "galexy");
     check_eq("consts::FAMILY", env::consts::FAMILY, "");
     let args: Vec<String> = env::args().collect();
-    check_eq("args[0]", args.first().map(String::as_str), Some("stdtest"));
+    check_eq(
+        "args[0]",
+        args.first().map(String::as_str),
+        Some("testing/stdtest"),
+    );
     check_eq("args.len", args.len(), 1);
     check("vars empty", env::vars().next().is_none());
     check("var missing", env::var("HOME").is_err());
@@ -341,7 +345,7 @@ fn process_checks() {
     check("echo stderr empty", out.stderr.is_empty());
 
     // Inherited stdout goes to the console; wait returns the code.
-    let status = Command::new("hello").status().unwrap();
+    let status = Command::new("testing/hello").status().unwrap();
     check("hello status", status.success());
 
     // Explicit pipe through spawn + read.
@@ -377,7 +381,7 @@ fn process_checks() {
     );
 
     // Kill a lingering child.
-    let mut child = Command::new("linger")
+    let mut child = Command::new("testing/linger")
         .stdout(Stdio::null())
         .spawn()
         .unwrap();

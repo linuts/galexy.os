@@ -268,7 +268,12 @@ pub fn exec(line: &str) {
 /// file that is not an ELF, leaves the caller to report not-found.
 /// Runs on the main loop, which is the kernel page table.
 fn launch(name: &str) -> bool {
-    let Some(bytes) = sched::ramdisk::find(name) else {
+    let found = if sched::ramdisk::is_testing_path(name) {
+        sched::ramdisk::testing_elf(name)
+    } else {
+        sched::ramdisk::find(name)
+    };
+    let Some(bytes) = found else {
         return false;
     };
     if !sched::loader::looks_like_elf(bytes) {

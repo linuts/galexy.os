@@ -154,7 +154,7 @@ frames). Up/down arrows recall session history (written to
 | `stats` / `tasks` / `threads` / `dmesg` / `sync` | Queries and the kernel log (after login) |
 | `echo $?` | Exit status of the last Cap-waited program |
 | `logout` | Back to the login screen |
-| `hello` / `linger` / `nap` | Sample user programs |
+| `testing/hello` / `testing/linger` / `testing/nap` | Sample programs kept for tests |
 | `svc status\|start\|stop\|restart <name>` | Service table, through init |
 | `svc raise\|drop <notice>` | Rising or falling edge of a notice. Starts or stops the rows bound to it |
 | `svc every <ms> <name>` | Arm a monotonic beat. First run is one interval later |
@@ -175,7 +175,7 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 - **Init and seats** — userspace `init` is the orphan root and respawns F-key seats; Ctrl-C kills the TTY foreground job
 - **Scheduling** — RR + pin-at-spawn + idle steal; `sleep`; blocking keyboard and pipe reads park and wake (`docs/SCHEDULING.md`)
 - **gxld** — the static ELF64 linker: `no_std` library + GNU-ld-compatible CLI; `rustc -Clinker=gxld` links every userspace program and the `galexy-os-gxld` image passes the same tests as the `rust-lld` one (`docs/LINKER.md`)
-- **rustc** — upstream Cranelift `rustc`. On the login image, `rustc hello.rs -o /hello` links with `gxld` and `/hello` runs. The bare name `hello` stays the ramdisk program (`docs/RUSTC.md`)
+- **rustc** — upstream Cranelift `rustc`. On the login image, `rustc hello.rs -o /hello` links with `gxld` and `/hello` runs. The sample program is `testing/hello` (`docs/RUSTC.md`)
 
 ## Tests
 

@@ -56,11 +56,11 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     sched::ramdisk::init(archive);
 
     assert!(
-        sched::ramdisk::find("hello").is_some(),
+        sched::ramdisk::find("testing/hello").is_some(),
         "hello missing from ramdisk"
     );
     assert!(
-        sched::ramdisk::find("linger").is_some(),
+        sched::ramdisk::find("testing/linger").is_some(),
         "linger missing from ramdisk"
     );
 
@@ -128,8 +128,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 }
 
 fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
-    let hello = b"hello";
-    let linger = b"linger";
+    let hello = b"testing/hello";
+    let linger = b"testing/linger";
     let mut code: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
     code.push(0xEB);
     code.push((hello.len() + linger.len()) as u8);

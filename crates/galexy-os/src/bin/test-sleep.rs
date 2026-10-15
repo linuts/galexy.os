@@ -33,13 +33,13 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let mut cursor = TarCursor::new(archive);
     let mut elf: Option<&[u8]> = None;
     while let Some((name, body)) = cursor.next_file() {
-        if name == "nap" {
+        if name == "testing/nap" {
             elf = Some(body);
             break;
         }
     }
     let Some(elf) = elf else {
-        panic!("'nap' not found in the ramdisk tar");
+        panic!("'testing/nap' not found in the ramdisk tar");
     };
 
     let before = arch::timer_ticks();

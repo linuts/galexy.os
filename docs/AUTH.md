@@ -319,7 +319,7 @@ the flag because it lives in the sealed actor record.
 | Spawn kind | galfs credentials |
 | --- | --- |
 | Utility (`SPAWN_INHERIT`, or legacy `SPAWN_WAIT`) | Parent’s tokens, optionally ANDed with the `r10` rights mask (bits 8..15). Mask `0` keeps the full set |
-| Bare program (`hello`, `linger`, `/hello` with no arguments) | Parent’s `fs_root`, **empty tokens** (the mask does not apply). No loader |
+| Bare program (`testing/hello`, `testing/linger`, `/hello` with no arguments) | Parent’s `fs_root`, **empty tokens** (the mask does not apply). No loader |
 | `edit` | Same cards as a utility, plus `SPAWN_GRANT_KEYBOARD` (bit 3). The shell Cap-waits, so it is not reading that seat's keys at the same time |
 | Ramdisk program with arguments (`rustc hello.rs -o /hello`) | Same cards as a utility, plus `SPAWN_GRANT_QUERY` and `SPAWN_GRANT_LOADER` (bit 6). `rustc` lists the sysroot and spawns `gxld`. Power stays with the shell. Named utilities (`echo`, `ls`) do not get the loader |
 | galfs path with arguments | Same cards as a utility, plus `SPAWN_GRANT_QUERY`. No loader: a program the user wrote cannot spawn |
