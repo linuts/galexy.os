@@ -8,7 +8,7 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Shell — `ls` reads the whole files snapshot, so `test.rs` and the
+- [#138](https://github.com/linuts/galexy.os/pull/138) — Shell — `ls` reads the whole files snapshot, so `test.rs` and the
   binary from `rustc test.rs` show up after the sysroot. Typing that
   binary's name runs it when the ramdisk has no program by that name.
 - [#134](https://github.com/linuts/galexy.os/pull/134) — Shell — Ctrl+Up and Ctrl+Down scroll the console one line. The next
