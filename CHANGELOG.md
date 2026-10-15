@@ -8,7 +8,7 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Shell — Ctrl+Up and Ctrl+Down scroll the console one line. The next
+- [#134](https://github.com/linuts/galexy.os/pull/134) — Shell — Ctrl+Up and Ctrl+Down scroll the console one line. The next
   typed character returns to the live prompt. Plain arrows still recall
   command history, and Shift+Page still moves half a screen.
 - [#133](https://github.com/linuts/galexy.os/pull/133) — Shell — sample programs live under `testing/`. `hello`, `linger`, `nap`,
