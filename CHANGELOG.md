@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#141](https://github.com/linuts/galexy.os/pull/141) — Shell — Headless Ctrl+Up redraws the shell view on
+  COM1. The chord was scrolling the framebuffer only, so the terminal
+  stayed on the live tail.
 - [#140](https://github.com/linuts/galexy.os/pull/140) — Shell — Ctrl+Up and Ctrl+Down scroll from a
   headless terminal. That chord arrives as `ESC [ 1 ; 5 A` / `B` and
   was being read as history.
