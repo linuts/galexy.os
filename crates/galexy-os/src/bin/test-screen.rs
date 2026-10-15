@@ -169,6 +169,110 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         "status-row marker scrolled away (intensity {status})"
     );
 
+    /* --- Ctrl+Up / Ctrl+Down move one line; a glyph snaps back --- */
+
+    // Two history lines, marked in different columns so one line of
+    // scroll is not the same as a half-page jump. 'A' scrolls off first.
+    assert!(
+        text_rows >= 4,
+        "one-line scroll needs room below the markers"
+    );
+    screen::clear_screen();
+    screen::set_pos(0, 0);
+    screen::out_str("A\n B\n");
+    for _ in 0..(text_rows - 1) {
+        screen::out_char('\n');
+    }
+    let live = unsafe { region_max_intensity(addr, info, 0, 0, CHAR_WIDTH * 2, 16) };
+    assert_eq!(live, 0, "both marker lines must have left the live view");
+
+    // Plain Up is still history CSI, not a scroll.
+    galexy_os::drivers::keyboard::add_scancode(0xE0);
+    galexy_os::drivers::keyboard::add_scancode(0x48);
+    galexy_os::drivers::keyboard::add_scancode(0xE0);
+    galexy_os::drivers::keyboard::add_scancode(0xC8);
+    screen::apply_scrollback();
+    let plain = [
+        galexy_os::drivers::keyboard::pop_key(),
+        galexy_os::drivers::keyboard::pop_key(),
+        galexy_os::drivers::keyboard::pop_key(),
+    ];
+    assert_eq!(plain, [Some('\u{1b}'), Some('['), Some('A')]);
+    assert!(galexy_os::drivers::keyboard::pop_key().is_none());
+    let still_live = unsafe { region_max_intensity(addr, info, 0, 0, CHAR_WIDTH * 2, 16) };
+    assert_eq!(still_live, 0, "plain Up must not scroll the console");
+
+    // Ctrl+Shift+Up stays a history key.
+    galexy_os::drivers::keyboard::add_scancode(0x2A);
+    galexy_os::drivers::keyboard::add_scancode(0x1D);
+    galexy_os::drivers::keyboard::add_scancode(0xE0);
+    galexy_os::drivers::keyboard::add_scancode(0x48);
+    screen::apply_scrollback();
+    let chord = [
+        galexy_os::drivers::keyboard::pop_key(),
+        galexy_os::drivers::keyboard::pop_key(),
+        galexy_os::drivers::keyboard::pop_key(),
+    ];
+    assert_eq!(chord, [Some('\u{1b}'), Some('['), Some('A')]);
+    let shift_live = unsafe { region_max_intensity(addr, info, 0, 0, CHAR_WIDTH * 2, 16) };
+    assert_eq!(shift_live, 0, "Ctrl+Shift+Up must not scroll");
+    galexy_os::drivers::keyboard::add_scancode(0xE0);
+    galexy_os::drivers::keyboard::add_scancode(0xC8);
+    galexy_os::drivers::keyboard::add_scancode(0x9D);
+    galexy_os::drivers::keyboard::add_scancode(0xAA);
+
+    // Left Ctrl held. Set-1 up is E0 48, down is E0 50.
+    galexy_os::drivers::keyboard::add_scancode(0x1D);
+    galexy_os::drivers::keyboard::add_scancode(0xE0);
+    galexy_os::drivers::keyboard::add_scancode(0x48);
+    galexy_os::drivers::keyboard::add_scancode(0xE0);
+    galexy_os::drivers::keyboard::add_scancode(0xC8);
+    screen::apply_scrollback();
+    assert!(galexy_os::drivers::keyboard::pop_key().is_none());
+    let one_a = unsafe { region_max_intensity(addr, info, 0, 0, CHAR_WIDTH, 16) };
+    let one_b = unsafe { region_max_intensity(addr, info, CHAR_WIDTH, 0, CHAR_WIDTH, 16) };
+    assert_eq!(one_a, 0, "one Ctrl+Up must show the newer line, not 'A'");
+    assert!(
+        one_b >= 200,
+        "one Ctrl+Up should show 'B' (intensity {one_b})"
+    );
+
+    galexy_os::drivers::keyboard::add_scancode(0xE0);
+    galexy_os::drivers::keyboard::add_scancode(0x48);
+    galexy_os::drivers::keyboard::add_scancode(0xE0);
+    galexy_os::drivers::keyboard::add_scancode(0xC8);
+    screen::apply_scrollback();
+    let two_a = unsafe { region_max_intensity(addr, info, 0, 0, CHAR_WIDTH, 16) };
+    let two_b = unsafe { region_max_intensity(addr, info, CHAR_WIDTH, 0, CHAR_WIDTH, 16) };
+    assert!(
+        two_a >= 200,
+        "a second Ctrl+Up should show 'A' (intensity {two_a})"
+    );
+    assert_eq!(two_b, 0, "the older line is 'A', not 'B'");
+
+    galexy_os::drivers::keyboard::add_scancode(0xE0);
+    galexy_os::drivers::keyboard::add_scancode(0x50);
+    galexy_os::drivers::keyboard::add_scancode(0xE0);
+    galexy_os::drivers::keyboard::add_scancode(0xD0);
+    screen::apply_scrollback();
+    let back_b = unsafe { region_max_intensity(addr, info, CHAR_WIDTH, 0, CHAR_WIDTH, 16) };
+    assert!(
+        back_b >= 200,
+        "Ctrl+Down should return to 'B' (intensity {back_b})"
+    );
+
+    // A console write is what a typed key becomes. It leaves scrollback.
+    console::out_str("Z");
+    let snapped = unsafe { region_max_intensity(addr, info, 0, 0, CHAR_WIDTH * 2, 16) };
+    assert_eq!(snapped, 0, "typing must leave scrollback");
+    let typed_y = (text_rows - 1) * LINE_HEIGHT;
+    let typed = unsafe { region_max_intensity(addr, info, 0, typed_y, CHAR_WIDTH, 16) };
+    assert!(
+        typed >= 200,
+        "the typed glyph must land on the live bottom row (intensity {typed})"
+    );
+    galexy_os::drivers::keyboard::add_scancode(0x9D);
+
     /* --- tab, CR, CSI color, erase leaves the status row --- */
 
     screen::clear_screen();

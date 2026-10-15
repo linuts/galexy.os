@@ -91,6 +91,7 @@ pub(crate) fn show_help() {
 
     help_section(b"keys");
     help_row(b"up / down", b"history (saved on logout)");
+    help_row(b"Ctrl-up / Ctrl-down", b"scroll one line; typing returns");
     help_row(b"tab", b"complete a file name");
     help_row(b"left / right", b"move inside the line");
     help_row(b"Ctrl-A / Ctrl-E", b"start / end of the line");

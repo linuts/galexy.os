@@ -160,7 +160,14 @@ wakes an idle CPU at that edge. The mark is cleared before the next
 glyph so a block cannot stick on a cell the cursor has left.
 
 Each TTY's cell grid is the scrollback: `TTY_ROWS` (128) by `TTY_COLS`
-(200). Scrolling drops the top line. There is no extra history buffer.
+(200). Text uses the rows above the status bar. A line that scrolls off
+the top is kept in the spare rows of that same grid; there is no second
+history buffer. Shift+PageUp and Shift+PageDown move half a screen.
+Ctrl+Up and Ctrl+Down move one line. The keyboard interrupt stores the
+count and does not enqueue the chord, so plain arrows stay shell
+history. The main loop paints the move. The next glyph — a character
+the shell echoes, or any other write — drops the view back to the live
+rows.
 
 Supported controls, and nothing else: tab, CR, LF, backspace (`0x08`),
 form feed (`0x0c`), ESC, and the CSI subset above. ASCII BEL (`0x07`)
@@ -212,7 +219,9 @@ scancode set 1). Unicode characters, and COM1 bytes via
 `keyboard::push_char`, are pushed into the active TTY's `kcore::Ring`
 (twelve rings, one per F-key). F1–F12 do not become input and have no
 UART equivalent: the handler stores the TTY index and the main loop
-paints that grid.
+paints that grid. Shift+PageUp / Shift+PageDown and Ctrl+Up /
+Ctrl+Down are the same kind of side channel: the handler stores a
+scroll count and the main loop applies it. Neither chord is queued.
 The in-kernel editor drains TTY 0 via `keyboard::pop_key()`. A ring-3
 shell `read`s the keyboard capability (`reserved::KEYBOARD_INDEX`, READ)
 and gets the queue of the TTY it was started on. A zero-length success
@@ -980,6 +989,8 @@ input vanished on the next redraw). That row is not part of the text
 scroll, and the bar is drawn without feeding the CSI parser. Arrow keys
 arrive as CSI (`ESC [ A`…`D`, including `ESC [ 1 ; 2 D` and SS3
 `ESC O D`) on the keyboard Cap. Up/down browse `shell.history`.
+Ctrl+Up and Ctrl+Down never arrive on that Cap; they scroll the
+console one line, and the next echoed character returns to the prompt.
 Left/right move inside the line on the prompt and on login, lock, and
 password fields. Backspace is BS (`0x08`) or DEL (`0x7f`) and deletes
 the character before the cursor; the cursor is clamped so that edit

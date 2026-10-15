@@ -137,12 +137,15 @@ fastfetch-style **command center** dashboard prints (OS / TTY / user /
 uptime / heap / galfs / tasks), then the prompt is `admin@galexy> `.
 The bottom status bar keeps a live strip (uptime, heap, galfs, tasks,
 frames). Up/down arrows recall session history (written to
-`shell.history` on `logout`).
+`shell.history` on `logout`). Ctrl+Up and Ctrl+Down scroll that
+output one line, so a long command does not need `more` or `less`.
+The next character you type returns to the bottom.
 
 | Keys / command | What it does |
 | --- | --- |
 | F1–F12 | Switch consoles (each seat has its own login) |
 | ↑ / ↓ | Command history (`shell.history`) |
+| Ctrl+↑ / Ctrl+↓ | Scroll output one line; typing returns to the bottom |
 | ← / → · Ctrl-A · Ctrl-E · Ctrl-U | Move inside the line, jump to the ends, clear it |
 | Ctrl-C | Cancel a prompt, or kill the foreground job |
 | `fetch` | Re-show the login dashboard |

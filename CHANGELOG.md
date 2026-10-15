@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#134](https://github.com/linuts/galexy.os/pull/134) — Shell — Ctrl+Up and Ctrl+Down scroll the console one line. The next
+  typed character returns to the live prompt. Plain arrows still recall
+  command history, and Shift+Page still moves half a screen.
 - [#137](https://github.com/linuts/galexy.os/pull/137) — Linker — on-OS `gxld` links on a 17 MiB thread. A one-line
   `println!` dropped a symbol map on the 4-page leader and wrote the
   guard under it (`err=0x6`, `cr2=0xc803ffff1f0`).
