@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#136](https://github.com/linuts/galexy.os/pull/136) — Shell — `nano <path>` is the screen editor, with the keyboard grant.
+  A renamed userspace ELF left in the target directory is not packed
+  onto the ramdisk.
 - [#135](https://github.com/linuts/galexy.os/pull/135) — Sysroot — `libcore`'s metadata stays a ramdisk mapping, and a stored
   admin quota below the 128 MiB pool is raised before that import. The
   login kernel no longer copies each library into 4 KiB heap blocks.

@@ -841,7 +841,74 @@ fn galexy_std_sysroot(out_dir: &Path) -> PathBuf {
     PathBuf::from(path.trim())
 }
 
-fn read_elf_dir(bin_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+/// Bin names the `no_std` packages still build. Cargo leaves a renamed
+/// binary in the target directory (`nano` after it became `edit`). Packing
+/// every ELF would launch that leftover with no keyboard grant.
+///
+/// `src/bin/<name>.rs` is a bin even without a `[[bin]]` row (`nap`).
+fn nostd_bin_names() -> std::collections::BTreeSet<String> {
+    let mut names = std::collections::BTreeSet::new();
+    for pkg in NOSTD_PACKAGES {
+        let root = repo_root().join(format!("crates/userspace/{pkg}"));
+        let manifest = root.join("Cargo.toml");
+        let text = std::fs::read_to_string(&manifest)
+            .unwrap_or_else(|e| panic!("read {}: {e}", manifest.display()));
+        let mut in_bin = false;
+        let mut found = false;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with("[[bin]]") {
+                in_bin = true;
+                continue;
+            }
+            if line.starts_with('[') {
+                in_bin = false;
+                continue;
+            }
+            if !in_bin {
+                continue;
+            }
+            let Some(rest) = line.strip_prefix("name") else {
+                continue;
+            };
+            let rest = rest.trim().trim_start_matches('=').trim();
+            let Some(name) = rest.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
+                continue;
+            };
+            if !name.is_empty() {
+                names.insert(name.to_string());
+                found = true;
+            }
+        }
+        if !found {
+            names.insert(pkg.to_string());
+        }
+        let autobins = !text.contains("autobins = false") && !text.contains("autobins=false");
+        if !autobins {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(root.join("src/bin")) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                if !stem.is_empty() {
+                    names.insert(stem.to_string());
+                }
+            }
+        }
+    }
+    names
+}
+
+fn read_elf_dir(
+    bin_dir: &Path,
+    allow: &std::collections::BTreeSet<String>,
+) -> std::collections::BTreeMap<String, Vec<u8>> {
     let mut bins = std::collections::BTreeMap::new();
     for entry in std::fs::read_dir(bin_dir)
         .unwrap_or_else(|e| panic!("read {}: {e}", bin_dir.display()))
@@ -856,9 +923,14 @@ fn read_elf_dir(bin_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
             continue;
         }
         let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        if bytes.starts_with(b"\x7fELF") {
-            bins.insert(ramdisk_entry_name(&name), bytes);
+        if !bytes.starts_with(b"\x7fELF") {
+            continue;
         }
+        if !allow.contains(&name) {
+            println!("cargo:warning=skipping stale userspace ELF {name} (not a current bin)");
+            continue;
+        }
+        bins.insert(ramdisk_entry_name(&name), bytes);
     }
     bins
 }
@@ -917,7 +989,10 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
     }
 
     let profile = if release { "release" } else { "debug" };
-    let mut bins = read_elf_dir(&target_dir.join(galexy_target_dir_name()).join(profile));
+    let mut bins = read_elf_dir(
+        &target_dir.join(galexy_target_dir_name()).join(profile),
+        &nostd_bin_names(),
+    );
 
     let sysroot = galexy_std_sysroot(out_dir);
     let std_target = out_dir.join("std-target");
@@ -1129,5 +1204,8 @@ fn build_gxld_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Ve
         panic!("gxld-linked userspace build failed");
     }
     let profile = if release { "release" } else { "debug" };
-    read_elf_dir(&target_dir.join(galexy_target_dir_name()).join(profile))
+    read_elf_dir(
+        &target_dir.join(galexy_target_dir_name()).join(profile),
+        &nostd_bin_names(),
+    )
 }

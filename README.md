@@ -147,7 +147,7 @@ frames). Up/down arrows recall session history (written to
 | Ctrl-C | Cancel a prompt, or kill the foreground job |
 | `fetch` | Re-show the login dashboard |
 | `help` | Commands |
-| `ls` / `echo hi` / `mkdir box` / `cat` / `edit` / `cp` / `mv` / `rm` / `stat` / `truncate` | Files under your tree. `edit <path>` edits with line numbers; Tab inserts a tab drawn to the next column of 8; Ctrl-T completes Rust, Python, Lisp, JSON, and TOML; Ctrl-O saves; Ctrl-X leaves |
+| `ls` / `echo hi` / `mkdir box` / `cat` / `edit` / `cp` / `mv` / `rm` / `stat` / `truncate` | Files under your tree. `edit <path>` (also `nano`) edits with line numbers; Tab inserts a tab drawn to the next column of 8; Ctrl-T completes Rust, Python, Lisp, JSON, and TOML; Ctrl-O saves; Ctrl-X leaves |
 | `echo hi \| cat` · `echo *` | One pipeline (pipe + `give`); one `*` per word in the current directory |
 | `whoami` / `users` / `useradd` / `passwd` / `volpass` / `quota` / `tokens` | Identity, cards, limits. `volpass` changes the volume passphrase |
 | `grant` / `revoke` / `share` / `unshare` / `su` | Access cards (see AUTH.md) |

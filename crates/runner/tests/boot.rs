@@ -3643,6 +3643,49 @@ fn shell_edit_lang_typing_e2e() {
     );
 }
 
+/// `nano note` is the screen editor. A leftover ramdisk ELF named `nano`
+/// used to start without the keyboard grant and exit `keyboard denied`.
+#[test]
+fn shell_nano_alias_typing_e2e() {
+    let keys = with_login(&[
+        ("n", "n"),
+        ("a", "a"),
+        ("n", "n"),
+        ("o", "o"),
+        ("spc", " "),
+        ("n", "n"),
+        ("o", "o"),
+        ("t", "t"),
+        ("e", "e"),
+        ("ret", "@1,1@"),
+        ("ctrl+x", "admin@galexy> "),
+    ]);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "admin@galexy> ",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    assert!(
+        serial.contains("galexy edit"),
+        "nano did not open the editor; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[loader] program 'edit' ready"),
+        "nano did not spawn edit; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("keyboard denied"),
+        "nano was spawned without the keyboard grant; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[loader] program 'nano' ready"),
+        "a stale nano ELF was launched; serial:\n{serial}"
+    );
+}
+
 fn edit_typing_e2e_on(image_name: &str) {
     let keys = with_login(EDIT_KEYS);
     let serial = boot_and_type(
