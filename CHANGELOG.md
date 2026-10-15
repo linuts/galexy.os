@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#140](https://github.com/linuts/galexy.os/pull/140) — Shell — Ctrl+Up and Ctrl+Down scroll from a
+  headless terminal. That chord arrives as `ESC [ 1 ; 5 A` / `B` and
+  was being read as history.
 - [#138](https://github.com/linuts/galexy.os/pull/138) — Shell — `ls` reads the whole files snapshot, so `test.rs` and the
   binary from `rustc test.rs` show up after the sysroot. Typing that
   binary's name runs it when the ramdisk has no program by that name.
