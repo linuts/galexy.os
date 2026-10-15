@@ -261,6 +261,20 @@ fn screen_test_passes() {
         serial.contains("\u{1b}[31mZ"),
         "console did not mirror the CSI bytes to serial:\n{serial}"
     );
+    // Ctrl+Up scrolls the cell grid. COM1 is a write mirror, so the
+    // older row has to be redrawn or a headless shell never moves.
+    assert!(
+        serial.contains("\u{1b}[?1049h"),
+        "headless scroll did not open a view on COM1:\n{serial}"
+    );
+    assert!(
+        serial.contains("\u{1b}[1;1H B"),
+        "headless Ctrl+Up did not show the scrolled row on COM1:\n{serial}"
+    );
+    assert!(
+        serial.contains("\u{1b}[?1049l"),
+        "headless scroll did not return COM1 to the live transcript:\n{serial}"
+    );
 }
 
 #[test]

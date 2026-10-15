@@ -189,6 +189,192 @@ static GRIDS: Mutex<TtyGrids> = Mutex::new(TtyGrids {
     view: [0; super::keyboard::TTY_COUNT],
 });
 
+/// Bytes of one COM1 redraw of the shown text view.
+///
+/// A 4K grid of plain text is about 24 KiB; SGR runs fit in the rest.
+const MIRROR_CAP: usize = 48 * 1024;
+
+/// Pending host-terminal bytes. Filled while [`SCREEN`] is held, sent
+/// after that lock drops so the UART wait is not an IF=0 section.
+///
+/// Lock order: [`SCREEN`], then this, then [`GRIDS`]. [`flush_serial_view`]
+/// takes this alone and must not take [`SCREEN`].
+struct MirrorBuf {
+    bytes: [u8; MIRROR_CAP],
+    /// Start of bytes not yet handed to the UART.
+    pos: usize,
+    len: usize,
+    /// The host is on the alternate screen, showing a scroll view.
+    alt: bool,
+}
+
+static MIRROR: Mutex<MirrorBuf> = Mutex::new(MirrorBuf {
+    bytes: [0; MIRROR_CAP],
+    pos: 0,
+    len: 0,
+    alt: false,
+});
+
+impl MirrorBuf {
+    fn reset(&mut self) {
+        self.pos = 0;
+        self.len = 0;
+    }
+
+    fn push(&mut self, bytes: &[u8]) -> bool {
+        let Some(end) = self.len.checked_add(bytes.len()) else {
+            return false;
+        };
+        if end > MIRROR_CAP {
+            return false;
+        }
+        self.bytes[self.len..end].copy_from_slice(bytes);
+        self.len = end;
+        true
+    }
+}
+
+fn write_dec(dst: &mut [u8], mut n: usize) -> usize {
+    let mut tmp = [0u8; 4];
+    let mut i = tmp.len();
+    loop {
+        i -= 1;
+        tmp[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 || i == 0 {
+            break;
+        }
+    }
+    let digits = &tmp[i..];
+    let n = digits.len().min(dst.len());
+    dst[..n].copy_from_slice(&digits[..n]);
+    n
+}
+
+fn push_cup(mirror: &mut MirrorBuf, row: usize, col: usize) -> bool {
+    let mut buf = [0u8; 16];
+    let mut n = 0;
+    buf[n] = 0x1b;
+    n += 1;
+    buf[n] = b'[';
+    n += 1;
+    n += write_dec(&mut buf[n..], row.max(1));
+    buf[n] = b';';
+    n += 1;
+    n += write_dec(&mut buf[n..], col.max(1));
+    buf[n] = b'H';
+    n += 1;
+    mirror.push(&buf[..n])
+}
+
+fn push_sgr(mirror: &mut MirrorBuf, rev: bool, code: u8) -> bool {
+    let mut buf = [0u8; 16];
+    let mut n = 0;
+    buf[n] = 0x1b;
+    n += 1;
+    buf[n] = b'[';
+    n += 1;
+    buf[n] = b'0';
+    n += 1;
+    if rev {
+        buf[n] = b';';
+        n += 1;
+        buf[n] = b'7';
+        n += 1;
+    }
+    if code != 39 {
+        buf[n] = b';';
+        n += 1;
+        n += write_dec(&mut buf[n..], code as usize);
+    }
+    buf[n] = b'm';
+    n += 1;
+    mirror.push(&buf[..n])
+}
+
+/// Palette index for a stored color. `39` is the default foreground.
+fn sgr_code(color: Color) -> u8 {
+    match (color.r, color.g, color.b) {
+        (0x00, 0x00, 0x00) => 30,
+        (0xE0, 0x40, 0x40) => 31,
+        (0x40, 0xE0, 0x40) => 32,
+        (0xE0, 0xE0, 0x40) => 33,
+        (0x60, 0x80, 0xE0) => 34,
+        (0xE0, 0x60, 0xE0) => 35,
+        (0x40, 0xE0, 0xE0) => 36,
+        (0xE0, 0xE0, 0xE0) => 39,
+        (0x80, 0x80, 0x80) => 90,
+        (0xFF, 0x80, 0x80) => 91,
+        (0x80, 0xFF, 0x80) => 92,
+        (0xFF, 0xFF, 0x80) => 93,
+        (0x80, 0xA0, 0xFF) => 94,
+        (0xFF, 0x80, 0xFF) => 95,
+        (0x80, 0xFF, 0xFF) => 96,
+        (0xFF, 0xFF, 0xFF) => 97,
+        _ => 39,
+    }
+}
+
+fn row_width(cells: &[Cell]) -> usize {
+    let mut width = 0;
+    for (i, cell) in cells.iter().enumerate() {
+        if cell.rev || (cell.ch != '\0' && cell.ch != ' ') {
+            width = i + 1;
+        }
+    }
+    width
+}
+
+fn push_row(mirror: &mut MirrorBuf, cells: &[Cell]) -> bool {
+    let mut rev = false;
+    let mut code = 39u8;
+    let mut tmp = [0u8; 4];
+    for cell in cells {
+        let cell_rev = cell.rev;
+        let cell_code = sgr_code(cell.fg);
+        if cell_rev != rev || cell_code != code {
+            if !push_sgr(mirror, cell_rev, cell_code) {
+                return false;
+            }
+            rev = cell_rev;
+            code = cell_code;
+        }
+        let ch = if cell.ch == '\0' { ' ' } else { cell.ch };
+        let encoded = ch.encode_utf8(&mut tmp);
+        if !mirror.push(encoded.as_bytes()) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Sends a queued redraw. The screen lock is not held, and neither is
+/// [`MIRROR`] across the UART wait: a preempted holder of that lock would
+/// deadlock a write syscall that queues the next frame.
+fn flush_serial_view() {
+    loop {
+        let mut chunk = [0u8; 256];
+        let n = x86_64::instructions::interrupts::without_interrupts(|| {
+            let mut mirror = MIRROR.lock();
+            if mirror.pos >= mirror.len {
+                mirror.reset();
+                return 0;
+            }
+            let n = (mirror.len - mirror.pos).min(chunk.len());
+            chunk[..n].copy_from_slice(&mirror.bytes[mirror.pos..mirror.pos + n]);
+            mirror.pos += n;
+            if mirror.pos >= mirror.len {
+                mirror.reset();
+            }
+            n
+        });
+        if n == 0 {
+            return;
+        }
+        crate::drivers::serial::write_bytes(&chunk[..n]);
+    }
+}
+
 /// Terminal state + framebuffer handle, guarded by the global lock.
 struct ScreenWriter {
     fb: FramebufferSpec,
@@ -784,6 +970,7 @@ impl ScreenWriter {
         self.char_y = 0;
         self.reverse = false;
         self.ansi = AnsiParser::ground();
+        self.queue_serial_live();
     }
 
     /// True when the next glyph should touch the framebuffer.
@@ -870,7 +1057,66 @@ impl ScreenWriter {
         GRIDS.lock().view[focus] = 0;
         if self.focus == self.shown {
             self.repaint_text();
+            self.queue_serial_live();
         }
+    }
+
+    /// Leaves the host's alternate screen so the transcript and cursor
+    /// are where the next mirrored byte expects them.
+    fn queue_serial_live(&mut self) {
+        if self.focus != self.shown {
+            return;
+        }
+        let mut mirror = MIRROR.lock();
+        if !mirror.alt {
+            return;
+        }
+        mirror.reset();
+        if mirror.push(b"\x1b[?1049l\x1b[0m") {
+            mirror.alt = false;
+        }
+    }
+
+    /// Draws the shown scroll view on COM1.
+    ///
+    /// Headless `cargo run` only has this UART. A framebuffer repaint
+    /// does not move the host terminal, so Ctrl+Up looked like a no-op.
+    /// The alternate screen keeps the transcript intact; typing or a
+    /// return to the live rows leaves it and the next echoed byte
+    /// continues that transcript. Cursor-position writes clamp on a
+    /// short host window, which keeps the top of the view (the line
+    /// just scrolled in) on screen.
+    fn queue_serial_scroll(&mut self) {
+        if self.focus != self.shown {
+            return;
+        }
+        let rows = self.text_rows().min(TTY_ROWS);
+        let cols = self.max_char_x().min(TTY_COLS);
+        if rows == 0 || cols == 0 {
+            return;
+        }
+        let mut mirror = MIRROR.lock();
+        mirror.reset();
+        if !mirror.alt && !mirror.push(b"\x1b[?1049h") {
+            return;
+        }
+        mirror.alt = true;
+        if !mirror.push(b"\x1b[H\x1b[2J\x1b[0m") {
+            return;
+        }
+        let mut row_cells = [Cell::BLANK; TTY_COLS];
+        for row in 0..rows {
+            row_cells.fill(Cell::BLANK);
+            self.copy_view_row(row, &mut row_cells[..cols]);
+            let width = row_width(&row_cells[..cols]);
+            if width == 0 {
+                continue;
+            }
+            if !push_cup(&mut mirror, row + 1, 1) || !push_row(&mut mirror, &row_cells[..width]) {
+                break;
+            }
+        }
+        let _ = mirror.push(b"\x1b[H");
     }
 
     fn save_focus(&self) {
@@ -1021,6 +1267,11 @@ impl ScreenWriter {
         self.repaint_text();
         if next == 0 && self.blink_on {
             self.show_mark();
+        }
+        if next == 0 {
+            self.queue_serial_live();
+        } else {
+            self.queue_serial_scroll();
         }
     }
 
@@ -1263,6 +1514,9 @@ where
             f(writer);
         }
     });
+    // UART transmit waits on the line. That wait stays outside the
+    // IF=0 screen section; delivery from it does not take the screen.
+    flush_serial_view();
 }
 
 /// Current cursor position, in character cells.
@@ -1429,6 +1683,12 @@ pub fn show_tty(index: u8) {
         screen.repaint_changed(previous);
         if screen.blink_on && !screen.cursor_hidden {
             screen.show_mark();
+        }
+        let scrolled = GRIDS.lock().view[screen.focus] != 0;
+        if scrolled {
+            screen.queue_serial_scroll();
+        } else {
+            screen.queue_serial_live();
         }
     });
     serial_println!("[tty] {}", index + 1);
