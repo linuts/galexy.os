@@ -6,7 +6,7 @@
 //! screen lock. Locks are kept tiny and never nested, so this is safe to
 //! call from interrupt context.
 
-use core::sync::atomic::{AtomicI8, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicI16, AtomicI8, AtomicU64, AtomicU8, Ordering};
 
 use crate::sync::Mutex;
 use galexy_core::Ring;
@@ -50,6 +50,11 @@ static PENDING: AtomicU8 = AtomicU8::new(SWITCH_NONE);
 static DROPS: AtomicU64 = AtomicU64::new(0);
 /// Scrollback pages waiting for the main loop. Negative is older text.
 static SCROLL: AtomicI8 = AtomicI8::new(0);
+/// Scrollback lines waiting for the main loop. Negative is older text.
+///
+/// Ctrl+Up / Ctrl+Down store one line each. A burst before the main
+/// loop can run can exceed a page, so this is wider than [`SCROLL`].
+static SCROLL_LINES: AtomicI16 = AtomicI16::new(0);
 
 /// Brings the PS/2 controller's first port (keyboard) online: the enable
 /// command + stale-buffer drain. Formerly part of `arch::pics::init` — it
@@ -91,18 +96,31 @@ pub fn add_scancode(scancode: u8) {
             match keyboard.add_byte(scancode) {
                 Ok(Some(key_event)) => {
                     // Modifiers update inside `process_keyevent`, so read
-                    // them first. Shift+PageUp must not take the screen lock.
+                    // them first. Scroll chords must not take the screen lock.
                     let mods = keyboard.get_modifiers();
                     let shift = mods.lshift || mods.rshift;
+                    let ctrl = mods.lctrl || mods.rctrl;
+                    let alt = mods.lalt || mods.ralt;
                     let down = matches!(key_event.state, KeyState::Down | KeyState::SingleShot);
                     let page_up = key_event.code == KeyCode::PageUp;
                     let page_down = key_event.code == KeyCode::PageDown;
+                    let line_up = key_event.code == KeyCode::ArrowUp;
+                    let line_down = key_event.code == KeyCode::ArrowDown;
                     let decoded = keyboard.process_keyevent(key_event);
                     if shift && down && (page_up || page_down) {
                         let dir: i8 = if page_up { -1 } else { 1 };
                         let _ = SCROLL.try_update(Ordering::AcqRel, Ordering::Relaxed, |cur| {
                             Some(cur.saturating_add(dir))
                         });
+                        None
+                    } else if ctrl && !shift && !alt && down && (line_up || line_down) {
+                        // One line, and not a shell history key. Ctrl+Shift
+                        // stays a plain arrow so history chords are unchanged.
+                        let dir: i16 = if line_up { -1 } else { 1 };
+                        let _ =
+                            SCROLL_LINES.try_update(Ordering::AcqRel, Ordering::Relaxed, |cur| {
+                                Some(cur.saturating_add(dir))
+                            });
                         None
                     } else {
                         decoded
@@ -228,6 +246,11 @@ pub fn set_active(tty: u8) {
 /// Takes accumulated Shift+Page scroll pages. Negative is older text.
 pub fn take_scroll() -> i8 {
     SCROLL.swap(0, Ordering::AcqRel)
+}
+
+/// Takes accumulated Ctrl+Up / Ctrl+Down lines. Negative is older text.
+pub fn take_scroll_lines() -> i16 {
+    SCROLL_LINES.swap(0, Ordering::AcqRel)
 }
 
 /// Takes the console switch the keyboard recorded, if one is waiting.

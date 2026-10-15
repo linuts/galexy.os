@@ -981,11 +981,33 @@ impl ScreenWriter {
         let page = (rows / 2).max(1);
         let steps = pages.unsigned_abs() as usize;
         let delta = page.saturating_mul(steps);
+        self.apply_scroll_delta(tty, delta, pages < 0);
+    }
+
+    /// Moves the shown TTY's scrollback by `lines` (negative is older).
+    fn scroll_lines(&mut self, lines: i16) {
+        if lines == 0 {
+            return;
+        }
+        let tty = self.shown;
+        if tty >= super::keyboard::TTY_COUNT {
+            return;
+        }
+        self.focus_on(tty);
+        self.apply_scroll_delta(tty, lines.unsigned_abs() as usize, lines < 0);
+    }
+
+    /// `older` increases the view into history. `delta` is a row count.
+    fn apply_scroll_delta(&mut self, tty: usize, delta: usize, older: bool) {
+        if delta == 0 {
+            return;
+        }
+        let rows = self.text_rows().min(TTY_ROWS);
         let mut grids = GRIDS.lock();
         let spare = TTY_ROWS.saturating_sub(rows);
         let hist = grids.hist_len[tty].min(spare);
         let view = grids.view[tty].min(hist);
-        let next = if pages < 0 {
+        let next = if older {
             view.saturating_add(delta).min(hist)
         } else {
             view.saturating_sub(delta)
@@ -1442,16 +1464,25 @@ pub fn repaint_shown() {
     });
 }
 
-/// Applies a Shift+PageUp / Shift+PageDown the keyboard recorded.
+/// Applies scroll chords the keyboard recorded.
 ///
-/// The interrupt only stores a page count. This runs from the main loop
+/// Shift+Page moves half a screen. Ctrl+Up / Ctrl+Down move one line.
+/// The interrupt only stores the counts. This runs from the main loop
 /// so the screen lock is never taken from IRQ context.
 pub fn apply_scrollback() {
     let pages = super::keyboard::take_scroll();
-    if pages == 0 {
+    let lines = super::keyboard::take_scroll_lines();
+    if pages == 0 && lines == 0 {
         return;
     }
-    with_lock(|screen| screen.scroll_view(pages));
+    with_lock(|screen| {
+        if pages != 0 {
+            screen.scroll_view(pages);
+        }
+        if lines != 0 {
+            screen.scroll_lines(lines);
+        }
+    });
 }
 
 /// Paints a TTY switch the keyboard recorded, if one is waiting.
