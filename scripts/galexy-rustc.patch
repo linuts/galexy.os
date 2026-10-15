@@ -518,12 +518,24 @@ index a30dd1c3e..0ec7e1514 100644
  use rustc_target::spec::{Arch, CfgAbi, Env, Os};
  
  pub use crate::config::*;
-@@ -166,7 +168,7 @@ fn target_config(&self, sess: &EarlySession) -> TargetConfig {
+@@ -49,3 +51,3 @@
+-use rustc_target::spec::{Arch, CfgAbi, Env, Os};
++use rustc_target::spec::{Arch, CfgAbi, Env, Os, RustcAbi};
+ 
+ pub use crate::config::*;
+@@ -166,7 +168,13 @@ fn target_config(&self, sess: &EarlySession) -> TargetConfig {
          let target_features = match sess.target.arch {
              Arch::X86_64 if sess.target.os != Os::None => {
-                 // x86_64 mandates SSE2 support and rustc requires the x87 feature to be enabled
+-                // x86_64 mandates SSE2 support and rustc requires the x87 feature to be enabled
 -                vec![sym::fxsr, sym::sse, sym::sse2, Symbol::intern("x87")]
-+                vec![sym::fxsr, sym::sse, sym::sse2, sym::x87]
++                if sess.target.rustc_abi == Some(RustcAbi::Softfloat) {
++                    // Softfloat ABI requires +soft-float and forbids sse.
++                    // Reporting the hardfloat set is the issue #162235 warning.
++                    vec![sym::soft_float]
++                } else {
++                    // x86_64 mandates SSE2 support and rustc requires the x87 feature to be enabled
++                    vec![sym::fxsr, sym::sse, sym::sse2, sym::x87]
++                }
              }
              Arch::AArch64 => match &sess.target.os {
                  Os::None => vec![],

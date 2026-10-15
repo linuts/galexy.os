@@ -11,6 +11,12 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 - [#140](https://github.com/linuts/galexy.os/pull/140) — Shell — Ctrl+Up and Ctrl+Down scroll from a
   headless terminal. That chord arrives as `ESC [ 1 ; 5 A` / `B` and
   was being read as history.
+- [#139](https://github.com/linuts/galexy.os/pull/139) — Compiler — Cranelift reports `soft-float` on this ABI, so
+  `rustc test.rs` is quiet about issue 162235. Rebuild the guest
+  compiler with `scripts/build-galexy-rustc.sh`; `cargo run` keeps
+  the ELF it already has. That script also refreshes the generated
+  syscall table in an existing checkout, so `Date` stays in step
+  with `std-pal`.
 - [#138](https://github.com/linuts/galexy.os/pull/138) — Shell — `ls` reads the whole files snapshot, so `test.rs` and the
   binary from `rustc test.rs` show up after the sysroot. Typing that
   binary's name runs it when the ramdisk has no program by that name.

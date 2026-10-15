@@ -76,7 +76,11 @@ def generate_abi(dest: Path) -> None:
             skip_next = True
             continue
         lines.append(line)
-    dest.write_text(ABI_HEADER + "".join(lines))
+    text = ABI_HEADER + "".join(lines)
+    if dest.is_file() and dest.read_text() == text:
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(text)
 
 
 def install_pal(std_src: Path) -> None:
@@ -429,7 +433,9 @@ def patch_library(library: Path) -> None:
         return
     # The dispatcher patches are one-shot. PAL sources are copies of
     # `std-pal/` and have to follow that tree, or a later rustc build
-    # links the stale `join_paths`.
+    # links the stale `join_paths`. `abi.rs` is generated, so a refresh
+    # also rewrites it; otherwise `syscall.rs` can call `Date` against
+    # a table from the first install.
     for src in pal_files():
         rel = src.relative_to(STD_PAL)
         dest = std_src / rel
@@ -438,6 +444,7 @@ def patch_library(library: Path) -> None:
             continue
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
+    generate_abi(std_src / "sys/pal/galexy/abi.rs")
 
 
 def main() -> None:

@@ -252,7 +252,10 @@ rlibs inside it, not separate ramdisk files. Stage 2 is not run: that
 would try to execute the Galexy ELF on Linux. `download-ci-llvm` is
 false. Cranelift does not compile LLVM, and LLVM cannot instruction-select
 this target. The fork lives outside this repo; `scripts/galexy-rustc.patch`
-is the diff.
+is the diff. A later run copies `std-pal/` again and regenerates
+`sys/pal/galexy/abi.rs` from `galexy-abi`, so a syscall added after
+the first install (such as `Date`) stays in the same table as
+`syscall.rs`.
 
 `channel = "nightly"` so the guest reports
 `1.101.0-nightly (1d81eb4ad 2026-10-07)`, the same string stage 0
@@ -285,10 +288,19 @@ sibling `.rmeta`. A `no_std` hello needs only `libcore` and
 why one file may be 80 MiB. The shared pool is 128 MiB so a `std`
 sysroot fits beside that metadata. The on-disk v13 file cap stays 64 MiB.
 
-Cranelift injects SSE for this OS. The kernel enables `CR4.OSFXSR` on
-every CPU (an AP's trampoline otherwise reloads CR4 with only PAE) and
-new threads restore a masked `MXCSR`. The soft-float warning from
-issue 162235 stays a warning.
+Cranelift's codegen for this OS uses SSE. The kernel enables
+`CR4.OSFXSR` on every CPU (an AP's trampoline otherwise reloads CR4
+with only PAE) and new threads restore a masked `MXCSR`. The feature
+list it reports to rustc follows the target ABI. On
+`rustc-abi: softfloat` that list is `soft-float`, which is what
+issue 162235 requires, so `rustc test.rs` compiles without the
+soft-float and sse ABI warnings. Other x86_64 operating systems keep
+`fxsr`, `sse`, `sse2`, and `x87`. The patch applies that report on a
+fresh checkout. A checkout that already has the builtin target skips
+the patch, and `scripts/build-galexy-rustc.sh` writes the same report
+into `rustc_codegen_cranelift` before `x.py`. `cargo run` reuses an
+existing `target/galexy-rustc/rustc`, so a desk image that already
+has the compiler needs that script again before the warnings go away.
 
 Inline `asm!` in a crate compiled on-OS is still out of scope. The
 sysroot was built on the host. PAL syscall stubs stay
