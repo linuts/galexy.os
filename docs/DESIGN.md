@@ -192,7 +192,12 @@ the console policy also mirrors the **visible** TTY's bytes here so a
 headless boot is readable. Receive is the other direction: IRQ4 (vector
 36) drains the FIFO and `keyboard::push_char` delivers each byte to the
 active TTY. `\r` is Enter, a following `\n` is swallowed (CRLF is one
-key), DEL and BS are backspace, and bytes above ASCII are dropped. The
+key), DEL and BS are backspace, and bytes above ASCII are dropped. A
+headless terminal's Ctrl+Up / Ctrl+Down is `ESC [ 1 ; 5 A` / `B`
+(modifier 5 is Ctrl; rxvt sends `ESC [ a` / `b`). That sequence stores
+the same one-line scroll as the PS/2 chord and is not queued. A plain
+arrow and Ctrl+Shift (`ESC [ 1 ; 6 A`) are queued, so history is
+unchanged. The
 UART lock is dropped before that delivery. One `_print` holds the lock
 for the whole line, so two CPUs cannot tear it, and transmit harvests
 pending receive bytes while the FIFO is busy so a paste during that hold
@@ -222,6 +227,7 @@ UART equivalent: the handler stores the TTY index and the main loop
 paints that grid. Shift+PageUp / Shift+PageDown and Ctrl+Up /
 Ctrl+Down are the same kind of side channel: the handler stores a
 scroll count and the main loop applies it. Neither chord is queued.
+COM1 stores the same one-line count for `ESC [ 1 ; 5 A` / `B`.
 The in-kernel editor drains TTY 0 via `keyboard::pop_key()`. A ring-3
 shell `read`s the keyboard capability (`reserved::KEYBOARD_INDEX`, READ)
 and gets the queue of the TTY it was started on. A zero-length success
@@ -996,6 +1002,8 @@ arrive as CSI (`ESC [ A`…`D`, including `ESC [ 1 ; 2 D` and SS3
 `ESC O D`) on the keyboard Cap. Up/down browse `shell.history`.
 Ctrl+Up and Ctrl+Down never arrive on that Cap; they scroll the
 console one line, and the next echoed character returns to the prompt.
+On the headless terminal the chord is `ESC [ 1 ; 5 A` / `B`, recognized
+on COM1 before the queue.
 Left/right move inside the line on the prompt and on login, lock, and
 password fields. Backspace is BS (`0x08`) or DEL (`0x7f`) and deletes
 the character before the cursor; the cursor is clamped so that edit
