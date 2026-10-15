@@ -483,9 +483,10 @@ static DIRTY: AtomicBool = AtomicBool::new(false);
 /// current locked period; cleared by the next successful encode.
 static LOCKED_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 
-/// The login kernel should copy `srlib/` once the live table is the one
+/// The login kernel should attach `srlib/` once the live table is the one
 /// that will stay. A sealed unlock sets this; the main loop imports with
-/// interrupts on (the copy is ~90 MiB and must not run inside the syscall).
+/// interrupts on. The bodies stay ramdisk mappings, so this is not a
+/// ~90 MiB copy inside the syscall.
 static COMPILER_SYSROOT_DUE: AtomicBool = AtomicBool::new(false);
 
 /// Ask the main loop to import the compiler sysroot after this unlock.
@@ -1842,6 +1843,39 @@ fn admin_quota_limits() -> (u16, u32) {
     (OBJECT_SLOTS as u16, super::large::LARGE_POOL_BYTES as u32)
 }
 
+/// Raises admin's stored quota to [`admin_quota_limits`] when it is lower.
+///
+/// A sealed disk keeps the quota from the release that formatted it.
+/// That cap can be 64 MiB, which is below `libcore`'s metadata, so the
+/// sysroot import returns `NoResource` after the smaller libraries have
+/// already been copied. A higher quota is left alone. The must-change
+/// flag stays set. Nothing is dirtied when the stored limits already fit.
+pub fn raise_admin_quota_for_sysroot() {
+    let (need_objects, need_bytes) = admin_quota_limits();
+    let mut table = TABLE.lock();
+    let Some(actor) = table
+        .actors
+        .iter_mut()
+        .find(|a| a.used && a.name_is(ADMIN_NAME))
+    else {
+        return;
+    };
+    let objects_low = actor.object_limit() < need_objects as u32;
+    let bytes_low = actor.max_bytes < need_bytes;
+    if !objects_low && !bytes_low {
+        return;
+    }
+    if objects_low {
+        let keep = actor.max_objects & MUST_CHANGE_BIT;
+        actor.max_objects = need_objects | keep;
+    }
+    if bytes_low {
+        actor.max_bytes = need_bytes;
+    }
+    drop(table);
+    mark_dirty();
+}
+
 fn actor_usage(table: &Table, ai: usize) -> (u32, u32) {
     let mut objects = 0u32;
     let mut bytes = 0u32;
@@ -2069,12 +2103,12 @@ pub fn create_file_under(parent: u16, name: &str) -> Result<u16, SysError> {
     Ok(oi as u16)
 }
 
-/// Creates `name` under `parent` with `bytes` in the RAM large store.
+/// Creates `name` under `parent` with a copy of `bytes` in the RAM store.
 ///
-/// Files that fit in 32 KiB normally stay in the v12 pool. The on-OS
-/// sysroot has many of those, and that pool is 128 KiB total, so the
-/// compiler image imports every rlib through here and leaves v12 for
-/// rustc's own short temps.
+/// Files that fit in 32 KiB normally stay in the v12 pool. A real write
+/// that outgrows that pool promotes through [`super::large::create_from`].
+/// The compiler sysroot uses [`import_shared`] instead, so its ramdisk
+/// bytes are not copied into 4 KiB boxes.
 pub fn import_promoted(parent: u16, name: &str, bytes: &[u8]) -> Result<u16, SysError> {
     if bytes.len() > super::large::LARGE_FILE_MAX as usize {
         return Err(SysError::BadValue);
@@ -2088,6 +2122,31 @@ pub fn import_promoted(parent: u16, name: &str, bytes: &[u8]) -> Result<u16, Sys
         }
     }
     if !super::large::create_from(id as usize, bytes) {
+        return Err(SysError::NoResource);
+    }
+    mark_dirty();
+    Ok(id)
+}
+
+/// Creates `name` under `parent` with `bytes` attached, not copied.
+///
+/// `bytes` must outlive the volume (a ramdisk slice). Quota still
+/// counts the length. A later write copies the visible prefix into
+/// pool blocks. The compiler sysroot uses this so `libcore`'s metadata
+/// does not allocate one 4 KiB heap box per block.
+pub fn import_shared(parent: u16, name: &str, bytes: &'static [u8]) -> Result<u16, SysError> {
+    if bytes.len() > super::large::LARGE_FILE_MAX as usize {
+        return Err(SysError::BadValue);
+    }
+    let id = create_file_under(parent, name)?;
+    {
+        let table = TABLE.lock();
+        let actor = table.objects[id as usize].actor as usize;
+        if !can_add_bytes(&table, actor, bytes.len() as u32) {
+            return Err(SysError::NoResource);
+        }
+    }
+    if !super::large::create_shared(id as usize, bytes) {
         return Err(SysError::NoResource);
     }
     mark_dirty();

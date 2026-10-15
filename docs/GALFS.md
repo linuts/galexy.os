@@ -284,7 +284,11 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
   `kdf_iters`; 256×512 block
   pool; 8 directs + single indirect/file (32 KiB on disk); per-actor object +
   byte quotas (defaults for new users; admin at the large-file maximum
-  on a fresh RAM table, or the stored quota on a loaded v12 disk)
+  on a fresh RAM table, or the stored quota on a loaded v12 disk). The
+  compiler sysroot import raises a stored admin quota up to the object
+  table and the 128 MiB pool, and does not lower a higher one. Its
+  rlib and rmeta bodies stay the ramdisk mapping until a write copies
+  them into 4 KiB blocks
 - **Large files (Milestone 71)**: a write past 32 KiB promotes the file
   into a RAM store (4 KiB blocks, `u32` length, double indirection, 64
   MiB). Same file body for read, write, stat, truncate, and quota.

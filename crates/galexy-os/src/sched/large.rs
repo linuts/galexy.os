@@ -4,8 +4,10 @@
 //! that promotes the file here: 4 KiB blocks, one indirect block per
 //! 4 MiB, length `u32`. The pool grows on the kernel heap up to
 //! [`LARGE_POOL_BYTES`] of file data, plus indirect blocks. One file
-//! is still capped at [`LARGE_FILE_MAX`]. Callers hold the galfs table
-//! lock and then [`STORE`]; this module never locks the table.
+//! is still capped at [`LARGE_FILE_MAX`]. A sysroot import can attach
+//! a ramdisk slice instead of copying it; the first write copies the
+//! visible prefix into blocks. Callers hold the galfs table lock and
+//! then [`STORE`]; this module never locks the table.
 
 use alloc::boxed::Box;
 use alloc::vec;
@@ -38,6 +40,9 @@ const POOL_CAP: usize = (LARGE_POOL_BYTES / LARGE_BLOCK) + 128;
 struct File {
     len: u32,
     indirect: Vec<u32>,
+    /// Ramdisk body. Empty `indirect` until a write copies `len` bytes
+    /// into pool blocks and clears this.
+    shared: Option<&'static [u8]>,
 }
 
 struct Store {
@@ -144,9 +149,81 @@ pub fn create_from(index: usize, bytes: &[u8]) -> bool {
         store.files[index] = Some(File {
             len: 0,
             indirect: Vec::new(),
+            shared: None,
         });
     }
     append(index, bytes, bytes.len() as u32) == bytes.len()
+}
+
+/// Attaches `bytes` as the body of a fresh promoted file.
+///
+/// The slice stays where it is (a ramdisk mapping). A later append or
+/// write copies the visible prefix into pool blocks and then extends
+/// that copy. Replaces any previous large body for `index`.
+pub fn create_shared(index: usize, bytes: &'static [u8]) -> bool {
+    if index >= SLOTS || bytes.len() > LARGE_FILE_MAX as usize {
+        return false;
+    }
+    clear(index);
+    let mut store = STORE.lock();
+    ensure_slots(&mut store);
+    store.files[index] = Some(File {
+        len: bytes.len() as u32,
+        indirect: Vec::new(),
+        shared: Some(bytes),
+    });
+    true
+}
+
+/// Copies a shared body into pool blocks. `STORE` is already held.
+/// A short copy puts the slice back and frees the new blocks.
+fn materialize(store: &mut Store, index: usize) -> bool {
+    let Some(file) = store.files.get(index).and_then(|f| f.as_ref()) else {
+        return false;
+    };
+    let Some(src) = file.shared else {
+        return true;
+    };
+    let n = (file.len as usize).min(src.len());
+    if let Some(file) = store.files[index].as_mut() {
+        file.shared = None;
+        file.len = 0;
+    }
+    let mut written = 0usize;
+    while written < n {
+        let pos = store.files[index].as_ref().map(|f| f.len).unwrap_or(0);
+        if pos >= LARGE_FILE_MAX {
+            break;
+        }
+        let data_index = pos as usize / LARGE_BLOCK;
+        let off = pos as usize % LARGE_BLOCK;
+        let Some(bi) = ensure_data(store, index, data_index) else {
+            break;
+        };
+        let room = (LARGE_BLOCK - off)
+            .min(n - written)
+            .min((LARGE_FILE_MAX - pos) as usize);
+        if room == 0 {
+            break;
+        }
+        let block = store.blocks[bi as usize].as_mut().unwrap();
+        block[off..off + room].copy_from_slice(&src[written..written + room]);
+        store.files[index].as_mut().unwrap().len = pos + room as u32;
+        written += room;
+    }
+    if written == n {
+        return true;
+    }
+    let indirect = core::mem::take(&mut store.files[index].as_mut().unwrap().indirect);
+    for ib in indirect {
+        free_tree(store, ib, true);
+    }
+    if let Some(file) = store.files[index].as_mut() {
+        file.len = n as u32;
+        file.shared = Some(src);
+        file.indirect.clear();
+    }
+    false
 }
 
 /// Appends `src`, stopping after `max_new` new bytes or at
@@ -155,6 +232,9 @@ pub fn append(index: usize, src: &[u8], max_new: u32) -> usize {
     let mut store = STORE.lock();
     ensure_slots(&mut store);
     if index >= SLOTS || store.files[index].is_none() {
+        return 0;
+    }
+    if !materialize(&mut store, index) {
         return 0;
     }
     let len0 = store.files[index].as_ref().map(|f| f.len).unwrap_or(0);
@@ -200,6 +280,9 @@ pub fn write_at(index: usize, start: usize, src: &[u8], max_new: u32) -> usize {
     let mut store = STORE.lock();
     ensure_slots(&mut store);
     if index >= SLOTS || store.files[index].is_none() {
+        return 0;
+    }
+    if !materialize(&mut store, index) {
         return 0;
     }
     let mut budget = max_new;
@@ -293,6 +376,15 @@ pub fn read(index: usize, start: usize, dst: &mut [u8]) -> Option<usize> {
     if start >= len || dst.is_empty() {
         return Some(0);
     }
+    if let Some(bytes) = file.shared {
+        let end = (start + dst.len()).min(len).min(bytes.len());
+        if start >= end {
+            return Some(0);
+        }
+        let n = end - start;
+        dst[..n].copy_from_slice(&bytes[start..end]);
+        return Some(n);
+    }
     let want = dst.len().min(len - start);
     let mut copied = 0usize;
     while copied < want {
@@ -323,6 +415,10 @@ pub fn truncate_to(index: usize, new_len: u32) {
         return;
     };
     if new_len >= file.len {
+        return;
+    }
+    if file.shared.is_some() {
+        file.len = new_len;
         return;
     }
     file.len = new_len;
@@ -440,6 +536,12 @@ pub fn ok() -> bool {
         };
         if file.len > LARGE_FILE_MAX {
             return false;
+        }
+        if let Some(bytes) = file.shared {
+            if !file.indirect.is_empty() || (file.len as usize) > bytes.len() {
+                return false;
+            }
+            continue;
         }
         let need = if file.len == 0 {
             0

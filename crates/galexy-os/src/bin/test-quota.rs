@@ -71,6 +71,36 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert_eq!(um2, 8);
     assert_eq!(ub2, 100);
 
+    assert!(galfs::actor_must_change(admin), "fresh admin must change");
+    galfs::set_actor_quota("admin", 16, 64 * 1024 * 1024).expect("old admin cap");
+    assert!(
+        galfs::actor_must_change(admin),
+        "set quota keeps must-change"
+    );
+    galfs::raise_admin_quota_for_sysroot();
+    let (_, am, _, ax) = galfs::actor_quota("admin").expect("admin after raise");
+    assert!(am >= galfs::OBJECT_SLOTS as u32, "object cap");
+    assert!(ax >= 128 * 1024 * 1024, "byte cap");
+    assert!(galfs::actor_must_change(admin), "raise keeps must-change");
+
+    static SAMPLE: &[u8] = b"sysroot-bytes";
+    let id = galfs::import_shared(admin, "coremeta", SAMPLE).expect("shared");
+    let mut got = [0u8; 16];
+    let n = galfs::read_file_bytes(id, &mut got).expect("read shared");
+    assert_eq!(&got[..n], SAMPLE);
+    galfs::truncate_file(id, 7).expect("truncate shared");
+    let n = galfs::read_file_bytes(id, &mut got).expect("read truncated");
+    assert_eq!(&got[..n], b"sysroot");
+    let extra = galfs::append_file(id, b"!").expect("copy on write");
+    assert_eq!(extra, 1);
+    let n = galfs::read_file_bytes(id, &mut got).expect("read copied");
+    assert_eq!(&got[..n], b"sysroot!");
+
+    galfs::set_actor_quota("admin", 128, 200 * 1024 * 1024).expect("higher cap");
+    galfs::raise_admin_quota_for_sysroot();
+    let (_, _, _, ax) = galfs::actor_quota("admin").expect("admin stays high");
+    assert_eq!(ax, 200 * 1024 * 1024, "raise does not lower a higher quota");
+
     println!("[test-quota] object and byte limits enforced");
     serial_println!("[test-quota] passed");
     exit_qemu(QemuExitCode::Success);

@@ -692,7 +692,9 @@ path in a fixed galfs table (128 objects, 32 actors with one root each,
 pointers plus one single-indirect block per file / 32 KiB on the v12
 image — Milestone 45 / GALF v12). A write past 32 KiB promotes that
 file into the RAM large store (4 KiB blocks, 80 MiB per file, 128 MiB
-pool; Milestones 72–73);
+pool; Milestones 72–73). A compiler sysroot file can name its ramdisk
+bytes instead of copying them; the first write copies that file into
+blocks.
 that promotion allocates on the kernel heap while the write syscall
 holds the thread table. A path ending in `/` is a directory and
 returns 0. A file returns
