@@ -844,10 +844,13 @@ fn galexy_std_sysroot(out_dir: &Path) -> PathBuf {
 /// Bin names the `no_std` packages still build. Cargo leaves a renamed
 /// binary in the target directory (`nano` after it became `edit`). Packing
 /// every ELF would launch that leftover with no keyboard grant.
+///
+/// `src/bin/<name>.rs` is a bin even without a `[[bin]]` row (`nap`).
 fn nostd_bin_names() -> std::collections::BTreeSet<String> {
     let mut names = std::collections::BTreeSet::new();
     for pkg in NOSTD_PACKAGES {
-        let manifest = repo_root().join(format!("crates/userspace/{pkg}/Cargo.toml"));
+        let root = repo_root().join(format!("crates/userspace/{pkg}"));
+        let manifest = root.join("Cargo.toml");
         let text = std::fs::read_to_string(&manifest)
             .unwrap_or_else(|e| panic!("read {}: {e}", manifest.display()));
         let mut in_bin = false;
@@ -879,6 +882,24 @@ fn nostd_bin_names() -> std::collections::BTreeSet<String> {
         }
         if !found {
             names.insert(pkg.to_string());
+        }
+        let autobins = !text.contains("autobins = false") && !text.contains("autobins=false");
+        if !autobins {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(root.join("src/bin")) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                if !stem.is_empty() {
+                    names.insert(stem.to_string());
+                }
+            }
         }
     }
     names
