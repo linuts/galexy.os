@@ -81,7 +81,7 @@ ceiling is `NoResource`, never a panic.
 | Default actor quota | 16 objects, 16 KiB | `GALFS.md` |
 | Path | 8 components × 64 bytes; actor names 32 | `galexy_core::path` |
 | Spawn name / arg blob | 64 / 4096 bytes | `galexy_abi` |
-| User stack | leader: 4 pages. Spawned thread: 16 pages by default, up to 4352 (17 MiB). Milestone 93: `python` wrote the guard under the leader (`err=0x6`, `cr2=0xc803ffffa70`). The interpreter switches onto a 17 MiB heap buffer; the thread cap did not move. Guest RAM stays 2 GiB | `THREAD_STACK_PAGES_MAX` |
+| User stack | leader: 4 pages. Spawned thread: 16 pages by default, up to 4352 (17 MiB). Milestone 93: `python` wrote the guard under the leader (`err=0x6`, `cr2=0xc803ffffa70`). The interpreter switches onto a 17 MiB heap buffer; the thread cap did not move. `gxld` wrote the same guard while dropping a symbol map (`err=0x6`, `cr2=0xc803ffff1f0`, 3600 bytes below image+1GiB) and hops with `thread::Builder` (4352 pages). Guest RAM stays 2 GiB | `THREAD_STACK_PAGES_MAX` |
 | User image window | 512 MiB above `USER_IMAGE_BASE` | `loader::USER_IMAGE_WINDOW` |
 | User heap (`Map`) | 262_144 pages / 1 GiB per task | `galexy_abi::USER_HEAP_PAGES` |
 | Channels | 8 system-wide; one message of 256 bytes and two file Caps | `sched::channel` |

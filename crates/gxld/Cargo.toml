@@ -18,6 +18,9 @@ path = "src/lib.rs"
 default = ["std"]
 std = []
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("galexy"))'] }
+
 [build-dependencies]
 galexy-abi = { path = "../galexy-abi" }
 

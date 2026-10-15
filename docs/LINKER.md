@@ -53,6 +53,11 @@ Milestone 71 landed the ring-3 program (`gxldos`, `bin/test-gxld`).
 Milestone 73 links cg_clif output with that program (`test-rustc-hello`).
 Still open from this plan: `.eh_frame` kept for `unwinding`.
 
+On Galexy the `gxld` binary `rustc` spawns hops onto a 17 MiB thread
+before it reads inputs. The leader stack stays 4 pages. Linking
+`println!` dropped a symbol `BTreeMap` on that leader and wrote the
+guard under it (`err=0x6`, `cr2=0xc803ffff1f0`).
+
 ## Why a linker at all
 
 Before Milestone 69 nothing on Galexy linked. `gxc` emitted a finished

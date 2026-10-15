@@ -332,6 +332,13 @@ ported. `.eh_frame` stays out until `panic=unwind`. `std` closes every
 file cap in `rt::cleanup`: stdio is not a `File`, and `Command::output`
 reads the linker pipe to EOF before `Wait`.
 
+On Galexy the `gxld` CLI hops onto a 17 MiB thread before it reads
+inputs, the same size as `rustc`'s compile thread. The leader stack
+stays 4 pages. Linking a one-line `println!` dropped a `BTreeMap` of
+`gxld::link::Def` on that leader and wrote the unmapped guard
+(`err=0x6`, `rip=0xc8000069a07`, `cr2=0xc803ffff1f0`, 3600 bytes below
+the stack at image+1GiB).
+
 ### On the shell (Milestones 74–77, and the desk image)
 
 `test-rustc-hello` is not a seat. The login shell is:
@@ -369,14 +376,18 @@ reads the linker pipe to EOF before `Wait`.
   is missing. `cargo test` does not build them, so the shared test
   ramdisk stays the small userspace set and CI does not run `x.py`
   or fetch RustPython (Milestone 74, then Milestone 96).
-- The login kernel copies the JSON and `srlib/*` into the RAM store
-  when the ramdisk contains `srlib/` (Milestone 75). A diskless or
-  auto-unlocked boot copies before init. A sealed volume stays locked
-  until the passphrase, and loading that disk replaces the RAM table,
-  so the copy runs again from the main loop after unlock. Doing it
-  inside the unlock syscall would allocate ~90 MiB with interrupts off.
-  A v12 disk file cannot hold `core`'s ~66 MiB `.rmeta`, so the copy
-  is RAM-only and repeats every boot. An empty rlib header left by an
+- The login kernel attaches the JSON and `srlib/*` when the ramdisk
+  contains `srlib/` (Milestone 75). A diskless or auto-unlocked boot
+  attaches before init. A sealed volume stays locked until the
+  passphrase, and loading that disk replaces the RAM table, so the
+  attach runs again from the main loop after unlock. Each rlib and
+  rmeta stays the ramdisk mapping until a write copies that file into
+  4 KiB blocks. Before the attach, a stored admin quota below the
+  128 MiB pool (an older sealed disk) is raised to the pool, and the
+  object limit is raised to the table size. The must-change flag is
+  kept. A higher quota is left alone. A v12 disk file still cannot
+  hold `core`'s ~66 MiB `.rmeta`, so the libraries are not sealed and
+  the attach repeats every boot. An empty rlib header left by an
   earlier seal is replaced from the ramdisk; a file that already has
   the right length is kept. A program with arguments inherits the
   session, so `rustc` can open those files (Milestone 76). A bare name

@@ -11,6 +11,15 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 - [#134](https://github.com/linuts/galexy.os/pull/134) — Shell — Ctrl+Up and Ctrl+Down scroll the console one line. The next
   typed character returns to the live prompt. Plain arrows still recall
   command history, and Shift+Page still moves half a screen.
+- [#137](https://github.com/linuts/galexy.os/pull/137) — Linker — on-OS `gxld` links on a 17 MiB thread. A one-line
+  `println!` dropped a symbol map on the 4-page leader and wrote the
+  guard under it (`err=0x6`, `cr2=0xc803ffff1f0`).
+- [#136](https://github.com/linuts/galexy.os/pull/136) — Shell — `nano <path>` is the screen editor, with the keyboard grant.
+  A renamed userspace ELF left in the target directory is not packed
+  onto the ramdisk.
+- [#135](https://github.com/linuts/galexy.os/pull/135) — Sysroot — `libcore`'s metadata stays a ramdisk mapping, and a stored
+  admin quota below the 128 MiB pool is raised before that import. The
+  login kernel no longer copies each library into 4 KiB heap blocks.
 - [#133](https://github.com/linuts/galexy.os/pull/133) — Shell — sample programs live under `testing/`. `hello`, `linger`, `nap`,
   `stdmin`, `stdtest`, `bigtest`, `thread-test`, and `futex-test` are no
   longer bare commands. Init services (`stamp`, `probe`, `spare`, `bell`,

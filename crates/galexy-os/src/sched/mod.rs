@@ -209,13 +209,15 @@ pub fn init() {
     serial_println!("[sched] ready");
 }
 
-/// Copies the compiler sysroot into the RAM store when this ramdisk
-/// carries `srlib/`. Every other image returns without a serial line.
+/// Attaches the compiler sysroot when this ramdisk carries `srlib/`.
+/// Every other image returns without a serial line.
 ///
 /// Paths match `test-rustc-hello`: the target JSON at the admin root,
 /// and each `srlib/*` file under
 /// `/lib/rustlib/x86_64-unknown-galexy/lib`. One kernel import per
-/// file. The bytes stay in the RAM store and are not sealed to disk.
+/// file. An rlib or rmeta keeps the ramdisk mapping until something
+/// writes it. The JSON is small and is copied into the v12 pool.
+/// None of those bodies are sealed to disk.
 ///
 /// A locked volume is skipped. The pre-unlock RAM table is thrown away
 /// when the sealed disk is loaded, which is why `rustc` then cannot
@@ -223,6 +225,8 @@ pub fn init() {
 /// runs this again once the live table is the unlocked one. A file that
 /// is already the right length is left in place; a short stub (an empty
 /// rlib header from an earlier seal) is replaced from the ramdisk.
+/// A stored admin quota below the pool is raised first, so an older
+/// sealed disk can name `libcore`'s metadata.
 pub fn install_compiler_sysroot() {
     if galfs::volume_locked() {
         return;
@@ -236,6 +240,7 @@ pub fn install_compiler_sysroot() {
     if !names.iter().any(|name| name.starts_with("srlib/")) {
         return;
     }
+    galfs::raise_admin_quota_for_sysroot();
     let root = galfs::admin_root();
     let lib = sysroot_mkdir(root, "lib");
     let rustlib = sysroot_mkdir(lib, "rustlib");
@@ -255,7 +260,8 @@ pub fn install_compiler_sysroot() {
 /// Imports the sysroot when an unlock asked for it and the volume is open.
 ///
 /// The unlock syscall only sets the flag. This runs from the main loop,
-/// with interrupts on, because the copy is about 90 MiB.
+/// with interrupts on. The libraries stay ramdisk mappings, so the
+/// attach itself does not grow the heap by the size of the sysroot.
 pub fn install_compiler_sysroot_if_due() {
     if !galfs::take_compiler_sysroot_due() {
         return;
@@ -273,7 +279,13 @@ fn sysroot_lib_path(name: &str) -> alloc::string::String {
 /// Writes `bytes` at `name` under `parent`. An existing file of the same
 /// length is kept. A different length is removed via `remove_path` (an
 /// admin-root path) and written again.
-fn place_sysroot_file(parent: u16, name: &str, bytes: &[u8], remove_path: &str, promoted: bool) {
+fn place_sysroot_file(
+    parent: u16,
+    name: &str,
+    bytes: &'static [u8],
+    remove_path: &str,
+    promoted: bool,
+) {
     if let Some(id) = galfs::find_under(parent, name) {
         if galfs::object_len(id) == Some(bytes.len()) {
             return;
@@ -282,7 +294,7 @@ fn place_sysroot_file(parent: u16, name: &str, bytes: &[u8], remove_path: &str, 
             .unwrap_or_else(|err| panic!("remove {remove_path}: {err:?}"));
     }
     if promoted {
-        galfs::import_promoted(parent, name, bytes)
+        galfs::import_shared(parent, name, bytes)
             .unwrap_or_else(|err| panic!("import {name}: {err:?}"));
     } else {
         let id = galfs::create_file_under(parent, name)
