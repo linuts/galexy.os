@@ -8,7 +8,7 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Shell — `nano <path>` is the screen editor, with the keyboard grant.
+- [#136](https://github.com/linuts/galexy.os/pull/136) — Shell — `nano <path>` is the screen editor, with the keyboard grant.
   A renamed userspace ELF left in the target directory is not packed
   onto the ramdisk.
 - [#135](https://github.com/linuts/galexy.os/pull/135) — Sysroot — `libcore`'s metadata stays a ramdisk mapping, and a stored
