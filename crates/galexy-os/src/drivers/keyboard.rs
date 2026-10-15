@@ -116,11 +116,7 @@ pub fn add_scancode(scancode: u8) {
                     } else if ctrl && !shift && !alt && down && (line_up || line_down) {
                         // One line, and not a shell history key. Ctrl+Shift
                         // stays a plain arrow so history chords are unchanged.
-                        let dir: i16 = if line_up { -1 } else { 1 };
-                        let _ =
-                            SCROLL_LINES.try_update(Ordering::AcqRel, Ordering::Relaxed, |cur| {
-                                Some(cur.saturating_add(dir))
-                            });
+                        scroll_by_lines(if line_up { -1 } else { 1 });
                         None
                     } else {
                         decoded
@@ -246,6 +242,19 @@ pub fn set_active(tty: u8) {
 /// Takes accumulated Shift+Page scroll pages. Negative is older text.
 pub fn take_scroll() -> i8 {
     SCROLL.swap(0, Ordering::AcqRel)
+}
+
+/// Records `delta` lines of scrollback. Negative is older text.
+///
+/// The PS/2 chord and the headless `ESC [ 1 ; 5 A` / `B` sequence both
+/// call this. The main loop paints it; the bytes are not queued.
+pub fn scroll_by_lines(delta: i16) {
+    if delta == 0 {
+        return;
+    }
+    let _ = SCROLL_LINES.try_update(Ordering::AcqRel, Ordering::Relaxed, |cur| {
+        Some(cur.saturating_add(delta))
+    });
 }
 
 /// Takes accumulated Ctrl+Up / Ctrl+Down lines. Negative is older text.

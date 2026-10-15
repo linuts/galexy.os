@@ -273,6 +273,99 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     );
     galexy_os::drivers::keyboard::add_scancode(0x9D);
 
+    /* --- headless Ctrl+Up arrives as ESC [ 1 ; 5 A --- */
+
+    screen::clear_screen();
+    screen::set_pos(0, 0);
+    screen::out_str("A\n B\n");
+    for _ in 0..(text_rows - 1) {
+        screen::out_char('\n');
+    }
+    let serial_live = unsafe { region_max_intensity(addr, info, 0, 0, CHAR_WIDTH * 2, 16) };
+    assert_eq!(
+        serial_live, 0,
+        "serial scroll setup must leave the live view"
+    );
+
+    // A plain arrow from the terminal is still history, even split.
+    galexy_os::drivers::serial::test_rx(b"\x1b[");
+    galexy_os::drivers::serial::test_rx(b"A");
+    screen::apply_scrollback();
+    let plain_serial = [
+        galexy_os::drivers::keyboard::pop_key(),
+        galexy_os::drivers::keyboard::pop_key(),
+        galexy_os::drivers::keyboard::pop_key(),
+    ];
+    assert_eq!(plain_serial, [Some('\u{1b}'), Some('['), Some('A')]);
+    assert!(galexy_os::drivers::keyboard::pop_key().is_none());
+    let plain_top = unsafe { region_max_intensity(addr, info, 0, 0, CHAR_WIDTH * 2, 16) };
+    assert_eq!(plain_top, 0, "a terminal Up must not scroll");
+
+    // Ctrl+Shift+Up (`1;6`) stays a history key.
+    galexy_os::drivers::serial::test_rx(b"\x1b[1;6A");
+    screen::apply_scrollback();
+    let shift_serial = [
+        galexy_os::drivers::keyboard::pop_key(),
+        galexy_os::drivers::keyboard::pop_key(),
+        galexy_os::drivers::keyboard::pop_key(),
+        galexy_os::drivers::keyboard::pop_key(),
+        galexy_os::drivers::keyboard::pop_key(),
+        galexy_os::drivers::keyboard::pop_key(),
+    ];
+    assert_eq!(
+        shift_serial,
+        [
+            Some('\u{1b}'),
+            Some('['),
+            Some('1'),
+            Some(';'),
+            Some('6'),
+            Some('A')
+        ]
+    );
+    let shift_top = unsafe { region_max_intensity(addr, info, 0, 0, CHAR_WIDTH * 2, 16) };
+    assert_eq!(
+        shift_top, 0,
+        "Ctrl+Shift+Up from the terminal must not scroll"
+    );
+
+    // The xterm chord, delivered in two FIFO pulls.
+    galexy_os::drivers::serial::test_rx(b"\x1b[1;");
+    galexy_os::drivers::serial::test_rx(b"5A");
+    screen::apply_scrollback();
+    assert!(
+        galexy_os::drivers::keyboard::pop_key().is_none(),
+        "Ctrl+Up must not be queued"
+    );
+    let host_a = unsafe { region_max_intensity(addr, info, 0, 0, CHAR_WIDTH, 16) };
+    let host_b = unsafe { region_max_intensity(addr, info, CHAR_WIDTH, 0, CHAR_WIDTH, 16) };
+    assert_eq!(
+        host_a, 0,
+        "terminal Ctrl+Up must show the newer line, not 'A'"
+    );
+    assert!(
+        host_b >= 200,
+        "terminal Ctrl+Up should show 'B' (intensity {host_b})"
+    );
+
+    galexy_os::drivers::serial::test_rx(b"\x1b[1;5B");
+    screen::apply_scrollback();
+    let host_back = unsafe { region_max_intensity(addr, info, 0, 0, CHAR_WIDTH * 2, 16) };
+    assert_eq!(
+        host_back, 0,
+        "terminal Ctrl+Down must return to the live view"
+    );
+
+    // rxvt's Ctrl+Up is `ESC [ a`.
+    galexy_os::drivers::serial::test_rx(b"\x1b[a");
+    screen::apply_scrollback();
+    let rxvt_b = unsafe { region_max_intensity(addr, info, CHAR_WIDTH, 0, CHAR_WIDTH, 16) };
+    assert!(
+        rxvt_b >= 200,
+        "rxvt Ctrl+Up should show 'B' (intensity {rxvt_b})"
+    );
+    assert!(galexy_os::drivers::keyboard::pop_key().is_none());
+
     /* --- tab, CR, CSI color, erase leaves the status row --- */
 
     screen::clear_screen();

@@ -194,11 +194,105 @@ fn deliver_bytes(bytes: &[u8]) {
     }
 }
 
+/// Bytes of a host chord that might be Ctrl+Up / Ctrl+Down.
+///
+/// A terminal sends `ESC [ 1 ; 5 A` (modifier 5 is Ctrl). rxvt sends
+/// `ESC [ a`. Either one scrolls. Anything else, including a plain
+/// arrow and Ctrl+Shift (`1 ; 6`), is queued unchanged.
+struct RxSeq {
+    buf: [u8; 6],
+    len: u8,
+}
+
+static RX_SEQ: Mutex<RxSeq> = Mutex::new(RxSeq {
+    buf: [0; 6],
+    len: 0,
+});
+
+enum RxAction {
+    Hold,
+    Scroll(i16),
+    Bytes([u8; 6], usize),
+}
+
+fn classify(buf: &[u8]) -> RxAction {
+    if buf == b"\x1b[1;5A" || buf == b"\x1b[a" {
+        return RxAction::Scroll(-1);
+    }
+    if buf == b"\x1b[1;5B" || buf == b"\x1b[b" {
+        return RxAction::Scroll(1);
+    }
+    // Still assembling `ESC [ 1 ; 5`. The final `A` or `B` decides.
+    const PREFIX: &[u8] = b"\x1b[1;5";
+    if buf.len() <= PREFIX.len() && PREFIX.starts_with(buf) {
+        RxAction::Hold
+    } else {
+        RxAction::Bytes([0; 6], 0)
+    }
+}
+
+fn step(seq: &mut RxSeq, b: u8) -> RxAction {
+    if b == 0x1b && seq.len > 0 {
+        let n = seq.len as usize;
+        let buf = seq.buf;
+        seq.buf[0] = 0x1b;
+        seq.len = 1;
+        return RxAction::Bytes(buf, n);
+    }
+    if b != 0x1b && seq.len == 0 {
+        let mut buf = [0u8; 6];
+        buf[0] = b;
+        return RxAction::Bytes(buf, 1);
+    }
+    let i = seq.len as usize;
+    seq.buf[i] = b;
+    seq.len += 1;
+    let n = seq.len as usize;
+    match classify(&seq.buf[..n]) {
+        RxAction::Hold => RxAction::Hold,
+        RxAction::Scroll(delta) => {
+            seq.len = 0;
+            RxAction::Scroll(delta)
+        }
+        RxAction::Bytes(_, _) => {
+            let buf = seq.buf;
+            seq.len = 0;
+            RxAction::Bytes(buf, n)
+        }
+    }
+}
+
+fn deliver_byte(b: u8) {
+    // Drop the sequence lock before queueing. A full keyboard queue logs,
+    // and that log can harvest more receive bytes.
+    let action = interrupts::without_interrupts(|| {
+        let mut seq = RX_SEQ.lock();
+        step(&mut seq, b)
+    });
+    match action {
+        RxAction::Hold => {}
+        RxAction::Scroll(delta) => crate::drivers::keyboard::scroll_by_lines(delta),
+        RxAction::Bytes(buf, n) => {
+            for &byte in &buf[..n] {
+                push_host_byte(byte);
+            }
+        }
+    }
+}
+
+/// Feeds host bytes the way COM1 receive does. Test kernels use this
+/// for the headless Ctrl+arrow sequences.
+pub fn test_rx(bytes: &[u8]) {
+    for &b in bytes {
+        deliver_byte(b);
+    }
+}
+
 /// One host byte becomes one keyboard character. `\r` is Enter (a raw
 /// terminal sends CR); a following `\n` is swallowed so CRLF is one key.
 /// DEL and BS are both backspace. Bytes above ASCII are dropped — the
 /// line editor is ASCII.
-fn deliver_byte(b: u8) {
+fn push_host_byte(b: u8) {
     if b == b'\n' && DROP_LF.swap(false, Ordering::Relaxed) {
         return;
     }

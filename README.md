@@ -145,7 +145,7 @@ The next character you type returns to the bottom.
 | --- | --- |
 | F1–F12 | Switch consoles (each seat has its own login) |
 | ↑ / ↓ | Command history (`shell.history`) |
-| Ctrl+↑ / Ctrl+↓ | Scroll output one line; typing returns to the bottom |
+| Ctrl+↑ / Ctrl+↓ | Scroll output one line; typing returns to the bottom. Headless, the terminal sends `ESC [ 1 ; 5 A` / `B` |
 | ← / → · Ctrl-A · Ctrl-E · Ctrl-U | Move inside the line, jump to the ends, clear it |
 | Ctrl-C | Cancel a prompt, or kill the foreground job |
 | `fetch` | Re-show the login dashboard |
