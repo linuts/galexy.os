@@ -332,6 +332,13 @@ ported. `.eh_frame` stays out until `panic=unwind`. `std` closes every
 file cap in `rt::cleanup`: stdio is not a `File`, and `Command::output`
 reads the linker pipe to EOF before `Wait`.
 
+On Galexy the `gxld` CLI hops onto a 17 MiB thread before it reads
+inputs, the same size as `rustc`'s compile thread. The leader stack
+stays 4 pages. Linking a one-line `println!` dropped a `BTreeMap` of
+`gxld::link::Def` on that leader and wrote the unmapped guard
+(`err=0x6`, `rip=0xc8000069a07`, `cr2=0xc803ffff1f0`, 3600 bytes below
+the stack at image+1GiB).
+
 ### On the shell (Milestones 74–77, and the desk image)
 
 `test-rustc-hello` is not a seat. The login shell is:
