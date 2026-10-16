@@ -1,6 +1,7 @@
 //! Serial (COM1, 16550 UART) — debug output and the headless console.
 //!
-//! Transmit is the debug log plus the visible TTY's mirror (`console`).
+//! Transmit is the kernel log (off unless `--debug`) plus the visible
+//! TTY's mirror (`console`).
 //! Receive bytes are decoded into the active TTY's keyboard queue, so
 //! `cargo run` can be typed from the host terminal. The UART lock is never
 //! held while delivering a byte: delivery can log, and that log takes the
@@ -150,6 +151,24 @@ pub fn drain_rx() {
 
 /// The next `\n` is the second half of a `\r\n` and is not a second Enter.
 static DROP_LF: AtomicBool = AtomicBool::new(false);
+
+/// `serial_println!` reaches COM1 only while this is set.
+///
+/// `cargo run` leaves it clear. `--debug` (and the boot suite) publish
+/// fw_cfg `opt/galexy.debug`, which [`crate::init`] turns on. The dmesg
+/// ring still records every line. A panic forces the flag so `[PANIC]`
+/// is never silent.
+static DEBUG_LOG: AtomicBool = AtomicBool::new(false);
+
+/// Whether kernel log lines are copied to COM1.
+pub fn debug_log() -> bool {
+    DEBUG_LOG.load(Ordering::Relaxed)
+}
+
+/// Shows or hides kernel log lines on COM1. The dmesg ring is unaffected.
+pub fn set_debug_log(on: bool) {
+    DEBUG_LOG.store(on, Ordering::Relaxed);
+}
 
 /// Transmits `bytes` on a UART the caller already holds. Pulls receive
 /// bytes into `stash` while the transmitter FIFO is busy.
@@ -318,22 +337,33 @@ macro_rules! serial_print {
     };
 }
 
-/// Prints to the host console through COM1, with a newline.
+/// Prints a kernel log line, with a newline.
 ///
 /// Prefixed with monotonic uptime (`3s: …`) from the LAPIC/PIT tick
 /// counter so second-heartbeats are unnecessary and log lines stay
-/// ordered without a separate `[timer]` spam stream.
+/// ordered without a separate `[timer]` spam stream. Every line is
+/// stored in the dmesg ring. COM1 receives it only when
+/// [`crate::drivers::serial::debug_log`] is set (`cargo run -- --debug`,
+/// or the boot suite). Headless and `--display` share that UART.
 #[macro_export]
 macro_rules! serial_println {
-    () => ($crate::serial_print!("\n"));
+    () => {{
+        if $crate::drivers::serial::debug_log() {
+            $crate::serial_print!("\n");
+        }
+    }};
     ($fmt:expr) => {{
         let secs = $crate::arch::timer_ticks() / 1000;
         $crate::drivers::dmesg::record(format_args!(concat!("{}s: ", $fmt), secs));
-        $crate::serial_print!(concat!("{}s: ", $fmt, "\n"), secs);
+        if $crate::drivers::serial::debug_log() {
+            $crate::serial_print!(concat!("{}s: ", $fmt, "\n"), secs);
+        }
     }};
     ($fmt:expr, $($arg:tt)*) => {{
         let secs = $crate::arch::timer_ticks() / 1000;
         $crate::drivers::dmesg::record(format_args!(concat!("{}s: ", $fmt), secs, $($arg)*));
-        $crate::serial_print!(concat!("{}s: ", $fmt, "\n"), secs, $($arg)*);
+        if $crate::drivers::serial::debug_log() {
+            $crate::serial_print!(concat!("{}s: ", $fmt, "\n"), secs, $($arg)*);
+        }
     }};
 }

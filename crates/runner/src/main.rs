@@ -50,6 +50,7 @@ fn report_compilers(image: &str) {
 fn main() {
     let uefi = std::env::args().any(|arg| arg == "--uefi");
     let display = std::env::args().any(|arg| arg == "--display");
+    let debug = std::env::args().any(|arg| arg == "--debug");
     // `--rustc` and `--python` are accepted so older commands still boot.
     // They do not select a different image: `cargo run` already carries
     // whichever of those ELFs was built.
@@ -143,6 +144,12 @@ fn main() {
         eprintln!(
             "[runner] headless; type here. Ctrl-A X quits, Ctrl-A C is the QEMU monitor. --display opens the window"
         );
+    }
+    if debug {
+        runner::enable_kernel_log(&mut cmd);
+        eprintln!("[runner] kernel log on COM1 (--debug)");
+    } else {
+        eprintln!("[runner] kernel log hidden; --debug shows it on this terminal");
     }
     // Make triple faults visible instead of silently rebooting.
     cmd.arg("-no-reboot");
