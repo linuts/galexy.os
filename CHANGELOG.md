@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#142](https://github.com/linuts/galexy.os/pull/142) — Runner — Kernel log lines stay off COM1 unless
+  `cargo run -- --debug`. Headless and `--display` share that switch.
+  `dmesg` still records them, and a panic still prints.
 - [#141](https://github.com/linuts/galexy.os/pull/141) — Shell — Headless Ctrl+Up redraws the shell view on
   COM1. The chord was scrolling the framebuffer only, so the terminal
   stayed on the live tail.
