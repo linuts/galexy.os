@@ -5,11 +5,11 @@ mod common;
 
 use common::{
     boot, boot_and_type, boot_and_type_ps2, boot_and_type_uefi, boot_for, boot_galfs_once,
-    boot_galfs_once_virtio, boot_liveness_until, boot_uefi, boot_uefi_rng, boot_uefi_until,
-    boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
-    boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio,
-    boot_with_galfs_virtio_legacy, boot_with_tpm, image, uart_login_serial, use_kvm,
-    GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
+    boot_galfs_once_virtio, boot_liveness_until, boot_quiet_until, boot_uefi, boot_uefi_rng,
+    boot_uefi_until, boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache,
+    boot_with_galfs_crash, boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn,
+    boot_with_galfs_virtio, boot_with_galfs_virtio_legacy, boot_with_tpm, image, uart_login_serial,
+    use_kvm, GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
 };
 use std::time::Duration;
 
@@ -3149,6 +3149,28 @@ fn shell_password_paste_typing_e2e() {
         "overlong paste was not refused; serial:\n{serial}"
     );
     assert_passwords_masked(&serial);
+}
+
+/// `cargo run` leaves kernel log lines off COM1. The login prompt is the
+/// console mirror, so it still arrives headless. `--debug` is the suite's
+/// fw_cfg item, covered by every other boot that waits on `[boot]`.
+#[test]
+fn kernel_log_hidden_on_headless_console() {
+    let serial = boot_quiet_until(&image("galexy-os"), Duration::from_secs(90), |text| {
+        text.contains("Login as:")
+    });
+    assert!(
+        serial.contains("Login as:"),
+        "headless console never reached login; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[boot] main loop ready"),
+        "kernel log leaked onto the headless console; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[ioapic]"),
+        "kernel log leaked onto the headless console; serial:\n{serial}"
+    );
 }
 
 /// Headless COM1 is a console, not just a log: bytes written to the UART

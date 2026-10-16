@@ -188,9 +188,13 @@ prompt. Esc followed by `[` or `O` is a cursor sequence, not a cancel.
 
 ### serial — "the console on a wire" (`drivers/`)
 
-`uart_16550` at COM1. Panics, boot info, and debug output go here, and
-the console policy also mirrors the **visible** TTY's bytes here so a
-headless boot is readable. Receive is the other direction: IRQ4 (vector
+`uart_16550` at COM1. Panics always land here. Kernel log lines
+(`serial_println!`) are recorded in the dmesg ring and copied to COM1
+only when fw_cfg `opt/galexy.debug` is present: `cargo run -- --debug`,
+headless or with `--display` (both modes are this UART). A normal
+`cargo run` leaves them off the terminal; `dmesg` after login still
+shows them. The console policy also mirrors the **visible** TTY's bytes
+here so a headless boot is readable. Receive is the other direction: IRQ4 (vector
 36) drains the FIFO and `keyboard::push_char` delivers each byte to the
 active TTY. `\r` is Enter, a following `\n` is swallowed (CRLF is one
 key), DEL and BS are backspace, and bytes above ASCII are dropped. A
@@ -1279,6 +1283,7 @@ them on; `audit_strings` and the e2e boots run against that image.
 | `expect_panic` | runtime registration | `galexy_os::test` | a panic exits QEMU with `Success` instead of `Failed` | `bin/test-should-panic`, `bin/test-memory` (allocator exhaustion) |
 | Inline `login user pass` | shell command form | `userspace/shell` | password on the command line (no masked prompt) | scripted typing e2e; production UX is the masked prompt (`AUTH.md`) |
 | `GALEXY_GALFS_IMG`, `GALEXY_GALFS_IDE`, `GALEXY_ACCEL` | runner env | `runner/src/main.rs`, `runner/tests/common` | disk path / IDE-slave attach / `kvm` or `tcg` accel for `cargo run` and the suite | the developer; CI logs `[runner] accel=` |
+| `--debug` | `cargo run` argument, fw_cfg `opt/galexy.debug` | `drivers/fwcfg.rs`, `serial_println!` | kernel log lines on COM1 (headless and `--display`). Default `cargo run` keeps them in the dmesg ring only. Panics still print | the developer. The suite publishes the fw_cfg item on every boot so serial markers stay visible |
 | `OVMF_FD` | runner env | `runner` | UEFI firmware path | CI (`/usr/share/ovmf/OVMF.fd`), developers on non-Arch distros |
 | `OVMF_CODE`, `OVMF_VARS` | runner env | `runner` tests | split OVMF images for `rand_uefi_uses_firmware` (firmware must publish `EFI_RNG_PROTOCOL`) | unset: the test downloads edk2-stable202605 into `target/ovmf-rng` |
 | `pub fn test_*` seams | public kernel functions | `keyboard::test_inject` / `test_drain`; `screen::test_cursor_bar_lit` / `_clear` / `fill_shown_for_bench` / `repaint_shown`; `sched::test_push_token` / `test_revoke_token` / `test_auth_flags` / `test_backdate_input` / `test_poll_idle_all` / `test_set_idle_limit` / `test_session_locked`; `ramdisk::measure` | expose or poke internals a test kernel asserts on; never called by the main kernel | `bin/test-audit`, `test-galfs`, `test-cards`, `test-idle`, `test-mustchange`, `test-ramdisk`, `test-bench` |

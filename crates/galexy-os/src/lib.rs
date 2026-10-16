@@ -96,6 +96,12 @@ pub fn expect_panic(marker: &'static str) {
 /// Brings up subsystems shared by every kernel binary.
 pub fn init() {
     drivers::serial::init();
+    // Before any `serial_println!`. Absent on a normal `cargo run`, so
+    // the headless terminal stays the console. `--debug` publishes the
+    // item; the suite does too.
+    if drivers::fwcfg::debug_requested() {
+        drivers::serial::set_debug_log(true);
+    }
 }
 
 /// Panic handler: reports over serial (safe while other locks may be held),
@@ -116,6 +122,7 @@ fn panic(info: &PanicInfo) -> ! {
         drivers::serial::force_unlock_for_panic();
         drivers::dmesg::force_unlock_for_panic();
     }
+    drivers::serial::set_debug_log(true);
     serial_println!("[PANIC] {}", info);
     let expected = EXPECTED_PANIC.lock().take();
     let location = info.location().map(|loc| loc.file());

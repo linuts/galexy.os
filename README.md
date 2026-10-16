@@ -78,6 +78,7 @@ UEFI an OVMF image.
 sudo pacman -S --needed qemu-desktop ovmf
 
 cargo run --release                 # BIOS, headless; type on this terminal
+cargo run --release -- --debug      # also print kernel log lines on this terminal
 cargo run --release -- --display    # also open the framebuffer window (F1–F12)
 cargo run --release -- --uefi       # UEFI — set OVMF_FD if the default path is missing
 ```
@@ -115,7 +116,8 @@ the console). Quit with **Ctrl-A** then **X**. **Ctrl-A** then **C** is
 the QEMU monitor, so Ctrl-A does not reach the shell in this mode (the
 window's keyboard still sends it). F1–F12 need the window
 (`--display`); they are PS/2 keys and have no UART equivalent. Kernel
-log lines share this stream with the console.
+log lines stay off this stream unless you pass `--debug` (headless or
+with the window). After login, `dmesg` still shows them.
 
 ```text
 This disk has no passphrase yet.
@@ -246,6 +248,7 @@ OVMF image for UEFI. Nothing else.
 ```sh
 cargo build -p runner                       # every image under target/
 cargo run --release                         # BIOS, headless, -smp 2; KVM if a vCPU can be created, else TCG
+cargo run --release -- --debug              # kernel log on COM1; same flag with or without --display
 cargo run --release -- --display            # same, plus the framebuffer window
 OVMF_FD=/usr/share/ovmf/OVMF.fd cargo run --release -- --uefi   # UEFI; path varies per distro
 scripts/review-smoke.sh                     # focused subset: host suites + 11 boots (~10 min TCG)
@@ -279,7 +282,7 @@ is logged in at boot. `useradd`, `grant`, `share`, `su` are in
 
 | What | Where |
 | --- | --- |
-| Kernel log and the console | COM1 (this terminal under `cargo run`; type here). The same kernel lines via `dmesg` after login. `--display` adds the framebuffer window |
+| Kernel log and the console | COM1 (this terminal under `cargo run`; type here). Kernel log lines are hidden unless `--debug`; `dmesg` after login still shows them. `--display` adds the framebuffer window |
 | Runner serial logs | `$TMPDIR/galexy-serial-<image>-<n>.log` (`/tmp` on Linux), one per boot; uploaded as a CI artifact on failure |
 | Ramdisk measurement | `cargo:warning=ramdisk.tar sha256=…` at build; `[test-ramdisk] sha256 …` at boot |
 | Images | `target/debug/build/runner-*/out/galexy-os-{bios,uefi}.img` is the main kernel; `galexy-os-gxld-*.img` carries the `gxld`-linked ramdisk; `galexy-os-crashseam-*.img` the `crash-seam` shell; `galexy-os-test-*-*.img` one per test kernel |

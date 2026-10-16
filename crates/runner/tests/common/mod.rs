@@ -94,7 +94,7 @@ fn apply_accel(cmd: &mut Command) {
 pub use runner::use_kvm;
 
 fn qemu_command(img_path: &str, serial_path: &Path) -> Command {
-    qemu_command_opts(img_path, serial_path, "q35", true)
+    qemu_command_opts(img_path, serial_path, "q35", true, true)
 }
 
 /// `machine` is `q35` (default) or `pc` (legacy IDE). `virtio_kbd` attaches
@@ -104,6 +104,7 @@ fn qemu_command_opts(
     serial_path: &Path,
     machine: &str,
     virtio_kbd: bool,
+    kernel_log: bool,
 ) -> Command {
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.arg("-M")
@@ -130,6 +131,9 @@ fn qemu_command_opts(
         .arg("isa-debug-exit,iobase=0xf4,iosize=0x04")
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    if kernel_log {
+        runner::enable_kernel_log(&mut cmd);
+    }
     cmd
 }
 
@@ -225,6 +229,7 @@ fn qemu_command_with_galfs(
         .arg("isa-debug-exit,iobase=0xf4,iosize=0x04")
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    runner::enable_kernel_log(&mut cmd);
     cmd
 }
 
@@ -718,8 +723,7 @@ pub fn uart_login_serial(image: &Image) -> String {
         .arg("2");
     apply_accel(&mut cmd);
     cmd.arg("-device").arg("virtio-keyboard-pci");
-    let mut child = cmd
-        .arg("-display")
+    cmd.arg("-display")
         .arg("none")
         .arg("-monitor")
         .arg("none")
@@ -727,7 +731,9 @@ pub fn uart_login_serial(image: &Image) -> String {
         .arg("-serial")
         .arg(format!("unix:{},server=on,wait=off", sock_path.display()))
         .arg("-device")
-        .arg("isa-debug-exit,iobase=0xf4,iosize=0x04")
+        .arg("isa-debug-exit,iobase=0xf4,iosize=0x04");
+    runner::enable_kernel_log(&mut cmd);
+    let mut child = cmd
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -926,6 +932,18 @@ pub fn boot_liveness_until(
 ) -> String {
     let serial_path = serial_log_path(&image.name);
     let child = qemu_command(&image.bios, &serial_path)
+        .spawn()
+        .expect("failed to launch qemu-system-x86_64");
+    run_until(child, &serial_path, timeout, &ready)
+}
+
+/// Headless boot with the kernel log left off, the `cargo run` default.
+///
+/// The suite's other boots publish fw_cfg `opt/galexy.debug`. This one
+/// does not, so COM1 is the console mirror only.
+pub fn boot_quiet_until(image: &Image, timeout: Duration, ready: impl Fn(&str) -> bool) -> String {
+    let serial_path = serial_log_path(&format!("{}-quiet", image.name));
+    let child = qemu_command_opts(&image.bios, &serial_path, "q35", true, false)
         .spawn()
         .expect("failed to launch qemu-system-x86_64");
     run_until(child, &serial_path, timeout, &ready)
@@ -1200,7 +1218,7 @@ fn boot_and_type_on(
     timeout: Duration,
 ) -> String {
     let serial_path = serial_log_path("typing");
-    let mut cmd = qemu_command_opts(&img_path, &serial_path, "q35", virtio_kbd);
+    let mut cmd = qemu_command_opts(&img_path, &serial_path, "q35", virtio_kbd, true);
     if uefi {
         const OVMF_FD_DEFAULT: &str = "/usr/share/ovmf/x64/OVMF.4m.fd";
         let ovmf_fd = std::env::var("OVMF_FD").unwrap_or_else(|_| OVMF_FD_DEFAULT.into());

@@ -1,6 +1,7 @@
 //! Fixed ring of recent kernel log lines (`dmesg`).
 //!
-//! [`crate::serial_println!`] appends one line here, then writes COM1.
+//! [`crate::serial_println!`] appends one line here. COM1 gets a copy
+//! only while the debug log is on (`cargo run -- --debug`).
 //! The ring is the operator view: a query cap copies the newest lines
 //! that fit in the caller's buffer. Consecutive `login fail` lines
 //! collapse so a lockout storm cannot push faults out of the ring.
