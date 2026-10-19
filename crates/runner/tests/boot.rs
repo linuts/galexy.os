@@ -2854,7 +2854,7 @@ const QUERY_AFTER_LOGIN: &[(&str, &str)] = &[
     ("ret", "cooperative tasks:"),
     ("l", "l"),
     ("s", "s"),
-    ("ret", "testing/"),
+    ("ret", "wc"),
 ];
 
 /// `cat`, redirection, `mkdir` / `cd` / `ls`. Enter syncs on text that
@@ -3408,7 +3408,7 @@ const USERLAND_KEYS: &[(&str, &str)] = &[
     ("b", "b"),
     ("e", "e"),
     ("tab", "bell "),
-    ("ret", "bell: reserved"),
+    ("ret", "admin@galexy> "),
     ("e", "e"),
     ("c", "c"),
     ("h", "h"),
