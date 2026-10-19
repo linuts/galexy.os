@@ -2621,12 +2621,15 @@ fn with_login<'a>(keys: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
         .collect()
 }
 
-/// After each `Password:` / `Confirm:`, console echo must be `*` only.
-/// Kernel log lines (`Ns: …`) may interleave on COM1 and are ignored.
+/// After each `Password:` / `Confirm:` / `Admin password:`, console echo
+/// must be `*` only. Kernel log lines (`Ns: …`) may interleave on COM1
+/// and are ignored. The sentence after a volume confirm is the next prompt,
+/// not leaked passphrase text.
 fn assert_passwords_masked(serial: &str) {
     for marker in [
         "Password: ",
         "Confirm: ",
+        "Admin password: ",
         "New passphrase: ",
         "Volume passphrase: ",
         "Current volume passphrase: ",
@@ -2649,8 +2652,16 @@ fn assert_passwords_masked(serial: &str) {
                     || line.starts_with("Login")
                     || line.starts_with("Password:")
                     || line.starts_with("Confirm:")
+                    || line.starts_with("Admin password:")
+                    || line.starts_with("Choose the admin password")
+                    || line.starts_with("Choose a different password")
+                    || line.starts_with("A password is required")
+                    || line.starts_with("A passphrase is required")
+                    || line.starts_with("New volume.")
+                    || line.starts_with("Volume unlock failed")
                     || line.starts_with("passwd:")
                     || line.starts_with("password too long")
+                    || line.starts_with("passwords do not match")
                     || line.starts_with("New passphrase:")
                     || line.starts_with("New volume passphrase:")
                     || line.starts_with("Current volume passphrase:")
@@ -4044,8 +4055,7 @@ fn rustc_after_unlock_typing_e2e() {
     }
     let disk = common::fresh_galfs_image("rustc-unlock");
     let mut seal: Vec<(&str, &str)> = CREATE_VOLUME_KEYS.to_vec();
-    seal.extend(LOGIN_ADMIN_KEYS.iter().copied());
-    seal.extend(CLEAR_DEFAULT_PASSWD.iter().copied());
+    seal.extend(LOGIN_ADMIN_TESTPASS_KEYS.iter().copied());
     seal.extend_from_slice(&SYNC_WHOAMI_KEYS[..5]);
     // The copy runs after `sync` has already echoed the prompt. An empty
     // final marker returns at that echo and kills the guest while the
@@ -4713,7 +4723,8 @@ fn volume_locked_blocks_login_typing_e2e() {
     );
 }
 
-/// Fresh disk: choose a passphrase and confirm it. Masked.
+/// Fresh disk: volume passphrase `galfs`, then admin password `testpass`.
+/// Masked. The format password `admin` is refused by this prompt.
 const CREATE_VOLUME_KEYS: &[(&str, &str)] = &[
     ("g", "*"),
     ("a", "*"),
@@ -4725,6 +4736,24 @@ const CREATE_VOLUME_KEYS: &[(&str, &str)] = &[
     ("a", "*"),
     ("l", "*"),
     ("f", "*"),
+    ("s", "*"),
+    ("ret", "Admin password: "),
+    ("t", "*"),
+    ("e", "*"),
+    ("s", "*"),
+    ("t", "*"),
+    ("p", "*"),
+    ("a", "*"),
+    ("s", "*"),
+    ("s", "*"),
+    ("ret", "Confirm: "),
+    ("t", "*"),
+    ("e", "*"),
+    ("s", "*"),
+    ("t", "*"),
+    ("p", "*"),
+    ("a", "*"),
+    ("s", "*"),
     ("s", "*"),
     ("ret", "Login as: "),
 ];
@@ -4810,7 +4839,7 @@ fn cargo_run_compilers_typing_e2e() {
 fn compiler_missing_typing_e2e() {
     let disk = common::fresh_galfs_image("nocompiler");
     let mut owned: Vec<(String, String)> = Vec::new();
-    for pairs in [CREATE_VOLUME_KEYS, LOGIN_ADMIN_KEYS, CLEAR_DEFAULT_PASSWD] {
+    for pairs in [CREATE_VOLUME_KEYS, LOGIN_ADMIN_TESTPASS_KEYS] {
         for (code, echo) in pairs {
             owned.push(((*code).to_string(), (*echo).to_string()));
         }
@@ -4872,13 +4901,13 @@ const SYNC_WHOAMI_KEYS: &[(&str, &str)] = &[
 fn passwd_on_sealed_disk_typing_e2e() {
     // galexy.os#86: on the production image with the data disk attached
     // (the `cargo run` shape), `passwd` froze the guest after the audit
-    // line. Boot 1 chooses a volume passphrase, logs in with the default
-    // account password, changes it, changes the volume passphrase, and
-    // must see the commit. Boot 2 reopens the same disk with the new
-    // volume passphrase and the new account password.
+    // line. Boot 1 chooses a volume passphrase and the admin password,
+    // logs in with that password, changes it again, changes the volume
+    // passphrase, and must see the commit. Boot 2 reopens the same disk
+    // with the new volume passphrase and that account password.
     let disk = common::fresh_galfs_image("passwd");
     let mut keys: Vec<(&str, &str)> = CREATE_VOLUME_KEYS.to_vec();
-    keys.extend(LOGIN_ADMIN_KEYS.iter().copied());
+    keys.extend(LOGIN_ADMIN_TESTPASS_KEYS.iter().copied());
     keys.extend(CLEAR_DEFAULT_PASSWD.iter().copied());
     keys.extend(SYNC_WHOAMI_KEYS.iter().copied());
     keys.extend(VOLPASS_KEYS.iter().copied());
@@ -4905,8 +4934,12 @@ fn passwd_on_sealed_disk_typing_e2e() {
         "fresh disk did not guide the passphrase choice; serial:\n{serial}"
     );
     assert!(
-        serial.contains("Log in as admin with password admin"),
+        serial.contains("Log in as admin with the password you just chose"),
         "fresh volume did not guide the first login; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("Admin password:"),
+        "fresh volume did not ask for an admin password; serial:\n{serial}"
     );
     assert!(
         serial.contains("[galfs] volume passphrase changed"),
@@ -4929,8 +4962,8 @@ fn passwd_on_sealed_disk_typing_e2e() {
         "unlocked volume must not skip its sync; serial:\n{serial}"
     );
     assert!(
-        serial.contains("passwd: change the default password"),
-        "boot 1 must have started on the default password; serial:\n{serial}"
+        !serial.contains("passwd: change the default password"),
+        "a chosen admin password must not raise the default-password gate; serial:\n{serial}"
     );
 
     // Boot 2: same disk, new volume passphrase, new account password.
@@ -4981,12 +5014,7 @@ fn passwd_on_sealed_disk_typing_e2e() {
 fn reviewer_demo_typing_e2e() {
     let disk = common::fresh_galfs_image("demo");
     let mut owned: Vec<(String, String)> = Vec::new();
-    for pairs in [
-        CREATE_VOLUME_KEYS,
-        LOGIN_ADMIN_KEYS,
-        CLEAR_DEFAULT_PASSWD,
-        VOLPASS_KEYS,
-    ] {
+    for pairs in [CREATE_VOLUME_KEYS, LOGIN_ADMIN_TESTPASS_KEYS, VOLPASS_KEYS] {
         for (code, echo) in pairs {
             owned.push(((*code).to_string(), (*echo).to_string()));
         }

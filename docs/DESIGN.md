@@ -816,8 +816,10 @@ RAM-only. Production boot does not auto-unlock. An empty image asks
 the operator to choose a passphrase (`USER_UNLOCK` formats it); a
 sealed image asks for the one already on the disk. The login screen
 waits until that passphrase opens the volume. An empty line asks
-again, and `USER_LOGIN` is refused while the volume is locked. There
-is no production passphrase to type on a fresh disk. `USER_VOLPASS`
+again, and `USER_LOGIN` is refused while the volume is locked. A
+fresh disk also chooses the admin password before the first seal, so
+the image does not store the format password. There is no production
+passphrase to type on a fresh disk. `USER_VOLPASS`
 (admin) re-wraps the volume key. A wrong passphrase keeps the RAM
 table and refuses disk sync. The last logout
 and power-off zero the volume key (cold-boot remanence accepted). The

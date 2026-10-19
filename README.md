@@ -123,19 +123,22 @@ with the window). After login, `dmesg` still shows them.
 This disk has no passphrase yet.
 New passphrase: *****
 Confirm: *****
+Admin password: *****
+Confirm: *****
 
 Galexy.OS v0.1.0 (tty1)
 
-New volume. Log in as admin with password admin, then run passwd.
+New volume. Log in as admin with the password you just chose.
 
 Login as: admin
 Password: *****
 ```
 
-A fresh disk has no volume passphrase until that prompt. An empty
-line asks again; the login screen waits until the volume is open.
-Later boots ask `Volume passphrase:` for the one you chose. The account on a fresh
-format is **`admin`** / **`admin`**. After login a
+A fresh disk has no volume passphrase until that prompt, and no
+account password until the one after it. An empty line asks again.
+The login screen waits until the volume is open. The account name is
+**`admin`**. The password is the one you chose, not a default. Later
+boots ask `Volume passphrase:` for the one you chose. After login a
 fastfetch-style **command center** dashboard prints (OS / TTY / user /
 uptime / heap / galfs / tasks), then the prompt is `admin@galexy> `.
 The bottom status bar keeps a live strip (uptime, heap, galfs, tasks,

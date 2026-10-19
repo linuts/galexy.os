@@ -47,8 +47,9 @@ payload, see `GALFS.md`):
 4. Test kernels and the disk harness auto-unlock with `galfs`.
    Production `galexy-os` calls `set_auto_unlock(false)` before
    `galfs::init`. An empty image (no GALF magic) stays locked until
-   the seat chooses a passphrase and confirms it; `USER_UNLOCK` then
-   formats the disk. A sealed image asks for the existing passphrase
+   the seat chooses a passphrase and confirms it, then chooses the
+   admin password. `USER_UNLOCK` formats the disk with that password
+   in place of the format default. A sealed image asks for the existing passphrase
    (`Volume passphrase:`). The login screen does not appear until that
    passphrase opens the volume. An empty line asks again. A wrong
    passphrase logs `[galfs] unlock failed; RAM-only`, does **not** mark
@@ -103,14 +104,20 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
    Choose a passphrase. It seals the filesystem. Login waits until it is set.
    New passphrase: ********
    Confirm: ********
+   Admin password: ********
+   Confirm: ********
 
    Galexy.OS v0.1.0 (tty1)
 
-   New volume. Log in as admin with password admin, then run passwd.
+   New volume. Log in as admin with the password you just chose.
 
    Login as: _
    Password: ********
    ```
+
+   The sealed image does not contain the format password `admin`.
+   Choosing that word at the admin prompt is refused. A diskless boot
+   still formats a RAM admin with that password and requires `passwd`.
 
    A later boot of that disk:
 

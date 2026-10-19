@@ -239,9 +239,10 @@ the password hash.
    passphrase (`volume_query` returns 2). A header means the existing
    passphrase (`volume_query` returns 1).
 2. Empty zeros (no GALF magic) → format: immortal `admin` + `Desktop/`,
-   default password `admin`, new volume key, sync sealed image.
-   Test kernels seal with `galfs`. Interactive unlock of an empty image
-   formats with the passphrase the operator chose. `USER_VOLPASS`
+   new volume key, sync sealed image. Test kernels and a diskless
+   boot still use password `admin`. An interactive fresh disk takes
+   the admin password in the same `USER_UNLOCK` and seals that hash
+   instead. `USER_VOLPASS`
    re-wraps an unlocked volume.
 3. Both slots carry GALF magic but fail decode/validate → **refuse
    silent format**; galfs stays unavailable (`Unsupported` on sync /

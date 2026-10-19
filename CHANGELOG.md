@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#144](https://github.com/linuts/galexy.os/pull/144) — Shell — A new disk asks for the admin password
+  before the first seal. The format password `admin` is refused, so the
+  image does not keep `admin`/`admin`. A diskless boot still uses that
+  password and the must-change gate.
 - [#143](https://github.com/linuts/galexy.os/pull/143) — Shell — Login stays closed until the volume passphrase
   opens the disk. An empty line asks again, and `USER_LOGIN` is refused
   while the volume is locked.

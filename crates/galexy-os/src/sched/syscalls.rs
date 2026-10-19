@@ -895,7 +895,19 @@ fn syscall_user(frame: &Context) -> SyscallResult {
                 galexy_crypto::wipe_bytes(&mut pass);
                 return SyscallResult::err(SysError::BadValue);
             };
-            let result = crate::sched::galfs::unlock_volume(&pass[..p]);
+            let result = if crate::sched::galfs::volume_query() == 2 {
+                let mut admin = [0u8; 64];
+                let Some(a) = copy_user_str(frame.rdi, frame.rsi, &mut admin, false) else {
+                    galexy_crypto::wipe_bytes(&mut pass);
+                    galexy_crypto::wipe_bytes(&mut admin);
+                    return SyscallResult::err(SysError::BadValue);
+                };
+                let result = crate::sched::galfs::unlock_with(&pass[..p], Some(&admin[..a]));
+                galexy_crypto::wipe_bytes(&mut admin);
+                result
+            } else {
+                crate::sched::galfs::unlock_volume(&pass[..p])
+            };
             galexy_crypto::wipe_bytes(&mut pass);
             match result {
                 Ok(()) => SyscallResult::ok(0),
