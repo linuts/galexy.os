@@ -343,8 +343,11 @@ and it is not a GALF version bump unless the slot layout changes.
 - Default `admin`/`admin` is for format bring-up only; the must-change
   flag (Milestone 43) blocks galfs mutation until `passwd`.
 - A production disk has no volume passphrase until the seat chooses
-  one. Login waits for that unlock. `volpass` changes it afterward.
-  Test kernels still auto-unlock with `galfs`.
+  one, and the first seal stores the admin password chosen in that
+  same step. The format password `admin` is not written to the image.
+  Login waits for that unlock. `volpass` changes the volume passphrase
+  afterward. Test kernels still auto-unlock with `galfs` and password
+  `admin`. A diskless boot does too.
 
 ## On-disk formats (GALF and friends)
 

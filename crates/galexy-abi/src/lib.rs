@@ -585,7 +585,9 @@ pub enum Syscall {
     /// optional actor name there; setquota takes max_objects/max_bytes.
     /// [`USER_UNLOCK`] with `R9 = 0` reports the volume (`0` open, `1`
     /// sealed and locked, `2` no passphrase yet); a passphrase in
-    /// `R8`/`R9` tries to mount. [`USER_VOLPASS`] replaces the passphrase
+    /// `R8`/`R9` tries to mount. A fresh volume (`2`) also takes the
+    /// admin password in `RDI`/`RSI` and refuses the format default.
+    /// [`USER_VOLPASS`] replaces the passphrase
     /// (`RDI`/`RSI` current, `R8`/`R9` new) and re-wraps the volume key.
     /// [`USER_LOCK`] freezes the seat.
     /// [`USER_UNLOCK_SESSION`] resumes it with the same actor's password.

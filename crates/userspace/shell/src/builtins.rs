@@ -108,7 +108,7 @@ pub(crate) fn show_help() {
     write_console(b"  *                  names in the current directory\n");
     write_console(b"  a bare program shares this console (no background)\n");
     write_console(b"  default admin/admin must passwd before other commands\n");
-    write_console(b"  a new disk asks for a volume passphrase before login\n");
+    write_console(b"  a new disk asks for a volume passphrase, then an admin password\n");
     write_console(b"  su admin restores a born-admin seat; login always needs a password\n");
     write_console(b"  a bare program name loads it from the ramdisk\n");
     write_console(b"  sample programs are under testing/ (testing/hello)\n");

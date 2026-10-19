@@ -289,6 +289,12 @@ pub fn user_unlock(passphrase: &[u8]) -> SyscallResult {
     user_name_pass(&[], passphrase, galexy_abi::USER_UNLOCK)
 }
 
+/// Format a fresh disk. `admin_password` replaces the format default
+/// before the first seal. A sealed disk uses [`user_unlock`].
+pub fn user_unlock_new(passphrase: &[u8], admin_password: &[u8]) -> SyscallResult {
+    user_name_pass(admin_password, passphrase, galexy_abi::USER_UNLOCK)
+}
+
 /// Change the volume passphrase. `current` is empty when the disk has
 /// no passphrase yet. Admin only. The caller confirms `new`.
 pub fn user_volpass(current: &[u8], new: &[u8]) -> SyscallResult {

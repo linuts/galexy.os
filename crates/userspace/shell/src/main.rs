@@ -38,7 +38,7 @@ extern crate alloc;
 use galexy_abi::{Cap, SysError};
 use galexy_rt::{
     arg, entry, keyboard_cap, read, stats_cap, tasks_cap, user, user_login, user_unlock,
-    user_unlock_session, volume_query, write_console, yield_now,
+    user_unlock_new, user_unlock_session, volume_query, write_console, yield_now,
 };
 
 mod builtins;
@@ -121,7 +121,7 @@ fn login_screen(kbd: Cap, tty: u8) -> Option<bool> {
         write_tty_digits(tty);
         write_console(b")\n\n");
         if fresh {
-            write_console(b"New volume. Log in as admin with password admin, then run passwd.\n\n");
+            write_console(b"New volume. Log in as admin with the password you just chose.\n\n");
             fresh = false;
         }
         write_console(b"Login as: ");
@@ -282,20 +282,90 @@ fn prompt_new_volume(kbd: Cap) -> bool {
             write_console(b"\npassphrases do not match\n");
             continue;
         }
+        wipe(&mut confirm);
         if volume_query() == 0 {
             wipe(&mut pass);
-            wipe(&mut confirm);
             write_console(b"\n");
             return false;
         }
-        let result = user_unlock(&pass[..n]);
+        let mut admin = [0u8; PASS_MAX];
+        let Some(admin_len) = prompt_admin_password(kbd, &mut admin) else {
+            wipe(&mut pass);
+            wipe(&mut admin);
+            if volume_query() == 0 {
+                write_console(b"\n");
+                return false;
+            }
+            return false;
+        };
+        if volume_query() == 0 {
+            wipe(&mut pass);
+            wipe(&mut admin);
+            write_console(b"\n");
+            return false;
+        }
+        let result = user_unlock_new(&pass[..n], &admin[..admin_len]);
         wipe(&mut pass);
-        wipe(&mut confirm);
+        wipe(&mut admin);
         if result.ok {
             write_console(b"\n");
             return true;
         }
         write_console(b"\nVolume unlock failed\n");
+    }
+}
+
+/// Account password for the fresh volume. `None` when the keyboard is
+/// denied or another seat already opened the disk.
+fn prompt_admin_password(kbd: Cap, out: &mut [u8; PASS_MAX]) -> Option<usize> {
+    loop {
+        if volume_query() == 0 {
+            return None;
+        }
+        write_console(b"Choose the admin password. The account name is admin.\n");
+        write_console(b"Admin password: ");
+        let n = match read_line(kbd, out, true) {
+            LineRead::Denied => return None,
+            LineRead::Cancel | LineRead::Overlong => {
+                wipe(out);
+                continue;
+            }
+            LineRead::Line(0) => {
+                wipe(out);
+                write_console(b"\nA password is required.\n");
+                continue;
+            }
+            LineRead::Line(n) => n,
+        };
+        if &out[..n] == ADMIN_DEFAULT_PASS {
+            wipe(out);
+            write_console(b"\nChoose a different password.\n");
+            continue;
+        }
+        write_console(b"Confirm: ");
+        let mut confirm = [0u8; PASS_MAX];
+        let c = match read_line(kbd, &mut confirm, true) {
+            LineRead::Denied => {
+                wipe(out);
+                wipe(&mut confirm);
+                return None;
+            }
+            LineRead::Cancel | LineRead::Overlong | LineRead::Line(0) => {
+                wipe(out);
+                wipe(&mut confirm);
+                write_console(b"\npasswords do not match\n");
+                continue;
+            }
+            LineRead::Line(c) => c,
+        };
+        if n != c || out[..n] != confirm[..c] {
+            wipe(out);
+            wipe(&mut confirm);
+            write_console(b"\npasswords do not match\n");
+            continue;
+        }
+        wipe(&mut confirm);
+        return Some(n);
     }
 }
 

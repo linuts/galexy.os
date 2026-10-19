@@ -665,8 +665,19 @@ fn volume_fresh() -> bool {
 /// [`disk_corrupt`]: the RAM table stays, disk sync fails, and a later
 /// passphrase can retry. Already-unlocked and diskless boots succeed.
 pub fn unlock_volume(passphrase: &[u8]) -> Result<(), SysError> {
+    unlock_with(passphrase, None)
+}
+
+/// Like [`unlock_volume`], and on a fresh disk installs `admin_password`
+/// before the first seal. The format default is not written to the image.
+pub fn unlock_with(passphrase: &[u8], admin_password: Option<&[u8]>) -> Result<(), SysError> {
     if passphrase.is_empty() || passphrase.len() > PASSPHRASE_MAX {
         return Err(SysError::BadValue);
+    }
+    if let Some(password) = admin_password {
+        if !password_ok(password) || password == ADMIN_DEFAULT_PASSWORD.as_bytes() {
+            return Err(SysError::BadValue);
+        }
     }
     if disk_corrupt() {
         return Err(SysError::Unsupported);
@@ -696,6 +707,9 @@ pub fn unlock_volume(passphrase: &[u8]) -> Result<(), SysError> {
             Ok(())
         }
         DiskLoad::Empty => {
+            if let Some(password) = admin_password {
+                set_password(ADMIN_NAME, password)?;
+            }
             store_passphrase(passphrase);
             let mut vk = [0u8; KEY_LEN];
             crate::arch::rand::fill_bytes(&mut vk);

@@ -18,16 +18,17 @@ another account is `/admin@Desktop`, with no slash after `@`.
 error.
 
 1. On a fresh disk, tty1 asks for a volume passphrase and a
-   confirmation before the login screen. Choose one. An empty line
-   asks again; login does not start while the volume is locked. The
-   next screen says to log in as `admin`
-   with password `admin`, then run `passwd`. Type `admin`, then
-   `admin`. The password line shows stars. A later boot asks
-   `Volume passphrase:` for the passphrase from this step.
-2. The shell requires `passwd` before other commands. Enter a new
-   password twice. COM1 records `[auth] passwd user=admin` and not the
-   secret. `volpass` then changes the volume passphrase (current, new,
-   confirm). COM1 records `[galfs] volume passphrase changed`.
+   confirmation, then an admin password and a confirmation, before
+   the login screen. Choose both. An empty line asks again; login
+   does not start while the volume is locked. The account name is
+   `admin` and the password is the one just chosen, not `admin`. The
+   next screen says to log in as `admin` with that password. Type
+   `admin`, then the password. The password line shows stars. A later
+   boot asks `Volume passphrase:` for the passphrase from this step.
+2. `volpass` changes the volume passphrase (current, new, confirm).
+   COM1 records `[galfs] volume passphrase changed` and not the secret.
+   `passwd` changes the account password later; it is not required
+   before other commands on this disk.
 3. `cd Desktop`, then `echo hi > note`, then `cd /`. The file has to
    exist or the later `ls` has nothing to show. `echo` only redirects
    to a name in the current directory, not to `Desktop/note`.
