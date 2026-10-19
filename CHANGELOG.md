@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#145](https://github.com/linuts/galexy.os/pull/145) — Shell — The release root lists commands,
+  `Desktop/`, `lib/`, and one target file. Test programs stay on the
+  ramdisk `cargo test` boots. The banner is `1.0.0`.
 - [#144](https://github.com/linuts/galexy.os/pull/144) — Shell — A new disk asks for the admin password
   before the first seal. The format password `admin` is refused, so the
   image does not keep `admin`/`admin`. A diskless boot still uses that

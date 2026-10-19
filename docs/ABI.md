@@ -119,7 +119,7 @@ Unknown codes decode to `Unsupported`. New codes append.
 | Python | no syscall and no reserved index. RustPython is a ring-3 program (`docs/PYTHON.md`) | **planned** — Milestones 91–96. Not implemented |
 | `USER_IMAGE_BASE` | `0x0000_0C80_0000_0000`; every ELF links here; the loader accepts PT_LOADs inside `[base, base + 512 MiB)` | stable (no user ASLR — `THREAT.md`) |
 | Exit status of a killed task | `137` to Cap-waiters; the cancelled waiter's own syscall returns `Interrupted` | stable (M58) |
-| `OS_VERSION` | `"0.1.0"` banner string | informational |
+| `OS_VERSION` | `"1.0.0"` banner string | informational |
 
 ## What is not ABI
 

@@ -3270,6 +3270,10 @@ fn shell_query_typing_e2e() {
         "typed `tasks` never listed a process Cap label; serial:\n{serial}"
     );
     assert!(
+        serial.contains("Galexy.OS v1.0.0"),
+        "login banner is not 1.0.0; serial:\n{serial}"
+    );
+    assert!(
         serial.contains("bell\n"),
         "typed `ls` never listed bell; serial:\n{serial}"
     );
