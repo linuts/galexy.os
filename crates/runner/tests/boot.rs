@@ -2621,12 +2621,15 @@ fn with_login<'a>(keys: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
         .collect()
 }
 
-/// After each `Password:` / `Confirm:`, console echo must be `*` only.
-/// Kernel log lines (`Ns: …`) may interleave on COM1 and are ignored.
+/// After each `Password:` / `Confirm:` / `Admin password:`, console echo
+/// must be `*` only. Kernel log lines (`Ns: …`) may interleave on COM1
+/// and are ignored. The sentence after a volume confirm is the next prompt,
+/// not leaked passphrase text.
 fn assert_passwords_masked(serial: &str) {
     for marker in [
         "Password: ",
         "Confirm: ",
+        "Admin password: ",
         "New passphrase: ",
         "Volume passphrase: ",
         "Current volume passphrase: ",
@@ -2649,8 +2652,16 @@ fn assert_passwords_masked(serial: &str) {
                     || line.starts_with("Login")
                     || line.starts_with("Password:")
                     || line.starts_with("Confirm:")
+                    || line.starts_with("Admin password:")
+                    || line.starts_with("Choose the admin password")
+                    || line.starts_with("Choose a different password")
+                    || line.starts_with("A password is required")
+                    || line.starts_with("A passphrase is required")
+                    || line.starts_with("New volume.")
+                    || line.starts_with("Volume unlock failed")
                     || line.starts_with("passwd:")
                     || line.starts_with("password too long")
+                    || line.starts_with("passwords do not match")
                     || line.starts_with("New passphrase:")
                     || line.starts_with("New volume passphrase:")
                     || line.starts_with("Current volume passphrase:")
