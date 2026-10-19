@@ -1201,7 +1201,8 @@ Protect the ATA image at rest (password hashes and file bytes).
       `volpass` (`USER_VOLPASS`, admin) re-wraps the volume key.
       A wrong passphrase logs `[galfs] unlock failed; RAM-only`, does
       not mark the disk corrupt, and `sync` returns `Unsupported`.
-      RAM login still works. An empty line skips to that fallback.
+      Login is refused while the volume is locked. An empty line
+      stays on the passphrase prompt.
       Test kernels and disk harnesses keep auto-unlock with
       `VOLUME_PASSPHRASE` (`galfs`). `bin/test-unlock`
 - [x] **Key wipe**: last logout and the power path sync, then zero the

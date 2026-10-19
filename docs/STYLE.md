@@ -342,8 +342,9 @@ and it is not a GALF version bump unless the slot layout changes.
   production UX is the interactive masked prompt (Milestone 43).
 - Default `admin`/`admin` is for format bring-up only; the must-change
   flag (Milestone 43) blocks galfs mutation until `passwd`.
-- A production disk has no volume passphrase until first login chooses
-  one. `volpass` changes it. Test kernels still auto-unlock with `galfs`.
+- A production disk has no volume passphrase until the seat chooses
+  one. Login waits for that unlock. `volpass` changes it afterward.
+  Test kernels still auto-unlock with `galfs`.
 
 ## On-disk formats (GALF and friends)
 

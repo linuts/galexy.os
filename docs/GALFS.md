@@ -216,11 +216,13 @@ scope initially.
 Test kernels auto-unlock with the fixed passphrase `galfs`. Production
 boot leaves the volume locked. An empty image asks the operator to
 choose a passphrase and confirm it; there is no passphrase to type
-until that choice. A sealed image prompts `Volume passphrase:` before
-`Login as:`. Admin changes it later with `volpass`, which re-wraps the
+until that choice. A sealed image prompts `Volume passphrase:` and
+does not show `Login as:` until the volume opens. An empty line asks
+again. Admin changes it later with `volpass`, which re-wraps the
 volume key. A wrong passphrase refuses disk sync and keeps the RAM
-table (not a corrupt image). The last logout and power-off zero the
-volume key in RAM; cold-boot remanence is accepted. The MAC stays
+table (not a corrupt image). Login is refused until unlock. The last
+logout and power-off zero the volume key in RAM; cold-boot remanence
+is accepted. The MAC stays
 HMAC-SHA256 (Poly1305 needs a versioned cutover). Per-file keys,
 secure erase, and TPM seal are non-goals. Details: `AUTH.md` → Sealed GALF.
 

@@ -1806,13 +1806,20 @@ pub(crate) fn task_useradd(name: &str, password: &[u8]) -> Result<(), SysError> 
 
 /// Password login: replace the caller's session with `ALL` on `name`'s root.
 ///
-/// After `LOCKOUT_MAX_FAILS` misses on this actor or this TTY, further
-/// attempts return [`SysError::Locked`] until the monotonic cool-down
-/// elapses. That check runs before the password KDF.
+/// A locked volume returns [`SysError::AccessDenied`] before the password
+/// is checked, so the seat cannot open a session on the pre-unlock RAM
+/// table. After `LOCKOUT_MAX_FAILS` misses on this actor or this TTY,
+/// further attempts return [`SysError::Locked`] until the monotonic
+/// cool-down elapses. That check runs before the password KDF.
 pub(crate) fn task_login(name: &str, password: &[u8]) -> Result<(), SysError> {
     let slot = current_slot();
     if slot == 0 {
         return Err(SysError::BadCap);
+    }
+    // The RAM admin exists before a sealed disk is open. A session on
+    // that table would start the seat with nothing committed to disk.
+    if galfs::volume_locked() {
+        return Err(SysError::AccessDenied);
     }
     let tty = current_tty();
     if lockout::blocked(name, tty) {

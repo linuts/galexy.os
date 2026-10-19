@@ -108,6 +108,11 @@ fn session_logged_in() -> bool {
 /// uses the format default password.
 fn login_screen(kbd: Cap, tty: u8) -> Option<bool> {
     let mut fresh = prompt_volume(kbd);
+    // A denied keyboard returns here while the disk is still locked.
+    // Do not open a login against the RAM table.
+    if volume_query() != 0 {
+        return None;
+    }
     loop {
         write_console(&[0x0c]);
         write_console(b"Galexy.OS v");
@@ -206,9 +211,10 @@ fn lock_screen(kbd: Cap, tty: u8) {
 /// Ask for the volume passphrase when the disk is locked.
 ///
 /// A disk with no passphrase yet asks the operator to choose one and
-/// confirm it. An existing seal asks for that passphrase. An empty line
-/// skips to the RAM-only login. Returns whether this call sealed a new
-/// volume, so the login screen can say what to do next.
+/// confirm it. An existing seal asks for that passphrase. Login does
+/// not start until the volume is open. An empty line asks again.
+/// Returns whether this call sealed a new volume, so the login screen
+/// can say what to do next.
 fn prompt_volume(kbd: Cap) -> bool {
     match volume_query() {
         2 => prompt_new_volume(kbd),
@@ -230,7 +236,7 @@ fn prompt_new_volume(kbd: Cap) -> bool {
         }
         write_console(b"This disk has no passphrase yet.\n");
         write_console(
-            b"Choose one. It seals the filesystem. An empty line leaves the disk locked.\n",
+            b"Choose a passphrase. It seals the filesystem. Login waits until it is set.\n",
         );
         write_console(b"New passphrase: ");
         let mut pass = [0u8; PASS_MAX];
@@ -249,8 +255,8 @@ fn prompt_new_volume(kbd: Cap) -> bool {
                     write_console(b"\n");
                     return false;
                 }
-                write_console(b"\nVolume stays locked (RAM-only)\n");
-                return false;
+                write_console(b"\nA passphrase is required.\n");
+                continue;
             }
             LineRead::Line(n) => n,
         };
@@ -315,8 +321,8 @@ fn prompt_existing_volume(kbd: Cap) {
                     write_console(b"\n");
                     return;
                 }
-                write_console(b"\nVolume stays locked (RAM-only)\n");
-                return;
+                write_console(b"\nA passphrase is required.\n");
+                continue;
             }
             LineRead::Line(n) => {
                 if volume_query() == 0 {

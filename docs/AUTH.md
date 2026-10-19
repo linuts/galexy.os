@@ -49,17 +49,17 @@ payload, see `GALFS.md`):
    `galfs::init`. An empty image (no GALF magic) stays locked until
    the seat chooses a passphrase and confirms it; `USER_UNLOCK` then
    formats the disk. A sealed image asks for the existing passphrase
-   (`Volume passphrase:`). An empty line skips the prompt and keeps
-   the RAM table. A wrong passphrase logs
-   `[galfs] unlock failed; RAM-only`, does **not** mark the disk
-   corrupt (a later passphrase can retry), and `sync` returns
-   `Unsupported`. Login against the RAM admin still works; disk
-   mutates are not committed until unlock.
+   (`Volume passphrase:`). The login screen does not appear until that
+   passphrase opens the volume. An empty line asks again. A wrong
+   passphrase logs `[galfs] unlock failed; RAM-only`, does **not** mark
+   the disk corrupt (a later passphrase can retry), and `sync` returns
+   `Unsupported`. `USER_LOGIN` is `AccessDenied` while the volume is
+   locked, so the pre-unlock RAM admin cannot start a session.
 5. Admin changes the passphrase with `volpass` (`USER_VOLPASS`).
    The volume must already be unlocked. The shell confirms the new
    passphrase, the kernel checks the current one, and the next seal
-   re-wraps the volume key. Skipping the first prompt leaves the disk
-   fresh: `volpass` with an empty current passphrase formats it.
+   re-wraps the volume key. A fresh locked disk is formatted by the
+   passphrase prompt, not by logging in first.
    Logs are `[galfs] volume passphrase changed` or
    `[galfs] volume passphrase rejected`. Neither line carries the secret.
 6. The volume key and stored passphrase are wiped (`[galfs] volume key
@@ -100,7 +100,7 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
 
    ```text
    This disk has no passphrase yet.
-   Choose one. It seals the filesystem. An empty line leaves the disk locked.
+   Choose a passphrase. It seals the filesystem. Login waits until it is set.
    New passphrase: ********
    Confirm: ********
 
