@@ -126,7 +126,7 @@ Confirm: *****
 Admin password: *****
 Confirm: *****
 
-Galexy.OS v0.1.0 (tty1)
+Galexy.OS v1.0.0 (tty1)
 
 New volume. Log in as admin with the password you just chose.
 

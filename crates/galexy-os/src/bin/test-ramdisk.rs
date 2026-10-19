@@ -1,5 +1,5 @@
 //! Integration test kernel: the ramdisk lands in memory and its tar
-//! archive is readable. Asserts `banner.txt` (packed by the runner's
+//! archive is readable. Asserts `testing/banner.txt` (packed by the runner's
 //! build.rs) round-trips byte-for-byte through the phys map.
 
 #![no_std]
@@ -53,12 +53,15 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
             name,
             body.len()
         );
-        if name == "banner.txt" {
+        if name == "testing/banner.txt" {
             found_banner = true;
             assert_eq!(body, BANNER_TEXT, "ramdisk banner.txt must roundtrip");
         }
     }
-    assert!(found_banner, "banner.txt missing from the ramdisk tar");
+    assert!(
+        found_banner,
+        "testing/banner.txt missing from the ramdisk tar"
+    );
 
     // Measurement: the boot-time SHA-256 must match what build.rs printed
     // when it packed this tar (the runner compares the two).

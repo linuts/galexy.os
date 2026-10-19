@@ -154,7 +154,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
 fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let note = b"note";
-    let banner = b"banner.txt";
+    let banner = b"testing/banner.txt";
     let extra = b"extra";
     let mut code: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
     let data_len = note.len() + banner.len() + PAYLOAD.len() + extra.len();

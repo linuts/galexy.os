@@ -23,7 +23,7 @@
 mod tests;
 
 /// Marketing / banner version string for the OS (shell login screen, about).
-pub const OS_VERSION: &str = "0.1.0";
+pub const OS_VERSION: &str = "1.0.0";
 
 /* ---------------- capabilities ---------------- */
 

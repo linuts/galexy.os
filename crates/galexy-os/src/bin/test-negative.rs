@@ -227,14 +227,19 @@ fn build_bare(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let [banner, evil, secret, top] = embed(
         &mut code,
         code_base,
-        [b"banner.txt", b"Desktop/evil", b"Desktop/secret", b"loot"],
+        [
+            b"testing/banner.txt",
+            b"Desktop/evil",
+            b"Desktop/secret",
+            b"loot",
+        ],
     );
     mov_r64_imm(&mut code, 15, scratch);
 
     // open banner.txt (ramdisk) — allowed.
     mov_eax(&mut code, Syscall::Open as u32);
     mov_r64_imm(&mut code, 7, banner);
-    mov_r64_imm(&mut code, 6, 10);
+    mov_r64_imm(&mut code, 6, b"testing/banner.txt".len() as u64);
     syscall(&mut code);
     store(&mut code, 2, 0x08);
     store(&mut code, 0, 0x10);

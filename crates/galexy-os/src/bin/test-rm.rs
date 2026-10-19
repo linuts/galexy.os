@@ -147,7 +147,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
 fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let note = b"note";
-    let banner = b"banner.txt";
+    let banner = b"testing/banner.txt";
     let missing = b"missing";
     let dir = b"box/";
     let leaf = b"box/leaf";

@@ -36,8 +36,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     sched::ramdisk::init(archive);
 
     let gxld = sched::ramdisk::find("gxldos").expect("gxldos missing");
-    let obj_a = sched::ramdisk::find("a.o").expect("a.o missing");
-    let obj_b = sched::ramdisk::find("b.o").expect("b.o missing");
+    let obj_a = sched::ramdisk::find("testing/a.o").expect("testing/a.o missing");
+    let obj_b = sched::ramdisk::find("testing/b.o").expect("testing/b.o missing");
 
     let root = sched::galfs::admin_root();
     let a = sched::galfs::create_file_under(root, "a.o").expect("create a.o");

@@ -107,7 +107,7 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
    Admin password: ********
    Confirm: ********
 
-   Galexy.OS v0.1.0 (tty1)
+   Galexy.OS v1.0.0 (tty1)
 
    New volume. Log in as admin with the password you just chose.
 
@@ -124,7 +124,7 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
    ```text
    Volume passphrase: ********
 
-   Galexy.OS v0.1.0 (tty1)
+   Galexy.OS v1.0.0 (tty1)
 
    Login as: _
    Password: ********
