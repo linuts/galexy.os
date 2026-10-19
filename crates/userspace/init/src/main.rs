@@ -1,13 +1,16 @@
 //! init — orphan root, service table, and ordered shutdown (Milestone 67).
 //!
-//! The fixed table is v1. `/etc/init` is not read. Seats restart. `stamp`
-//! runs once at boot. `probe` is the restart-storm fixture: it is not
-//! started until `svc start`, then a fast exit backs off (250, 500, 1000,
-//! then 2000 ms). `spare` is ignore: not started, and a later start does
-//! not restart it. `bell` starts when the notice `ring` rises. `chime`
-//! is a beat: `svc every` arms a monotonic interval, and `svc at` arms
-//! one civil UTC minute per day. `Clock` is not that clock. Operators
-//! talk to this program over the init Cap. They never receive a service Cap.
+//! The fixed table is v1. `/etc/init` is not read. Seats restart. A row
+//! whose program is not in the ramdisk is omitted, so a release image
+//! that ships only `shell` answers `svc` for the twelve seats. `stamp`
+//! runs once at boot when it is packed. `probe` is the restart-storm
+//! fixture: it is not started until `svc start`, then a fast exit backs
+//! off (250, 500, 1000, then 2000 ms). `spare` is ignore: not started,
+//! and a later start does not restart it. `bell` starts when the notice
+//! `ring` rises. `chime` is a beat: `svc every` arms a monotonic interval,
+//! and `svc at` arms one civil UTC minute per day. `Clock` is not that
+//! clock. Operators talk to this program over the init Cap. They never
+//! receive a service Cap.
 //!
 //! Silent on the console on purpose. Init shares TTY 0 with the F1 seat, so
 //! log lines go out through the console Cap and the kernel writes them to
@@ -21,8 +24,8 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use galexy_abi::{Cap, SysError};
 use galexy_core::{format_utc, parse_utc, utc_to_civil};
 use galexy_rt::{
-    chan_recv_poll, chan_send, channel, clock_ms, date, date_set, entry, kill, reboot, shutdown,
-    sleep_ms, spawn_with, sync, wait, wait_poll, write_console,
+    chan_recv_poll, chan_send, channel, clock_ms, date, date_set, entry, files_cap, kill, read,
+    reboot, shutdown, sleep_ms, spawn_with, sync, wait, wait_poll, write_console,
 };
 
 entry!(main);
@@ -188,6 +191,9 @@ static WATCH: AtomicU8 = AtomicU8::new(NONE);
 static RX: AtomicU64 = AtomicU64::new(0);
 /// One `[init] date unset` line per boot, not one per slice.
 static DATE_UNSET_LOGGED: AtomicBool = AtomicBool::new(false);
+/// A row whose ELF is not in this ramdisk. The release image omits the
+/// fixture programs; the test image packs them.
+static OMIT: [AtomicBool; 17] = [const { AtomicBool::new(false) }; 17];
 
 fn main() -> i32 {
     let mut ends = [0u64; 2];
@@ -201,8 +207,9 @@ fn main() -> i32 {
     // end; closing it would make every `svc` / shutdown `Unsupported`.
     let _peer = ends[1];
 
+    note_omissions();
     for (i, svc) in SERVICES.iter().enumerate() {
-        if svc.autostart {
+        if svc.autostart && !OMIT[i].load(Ordering::Acquire) {
             let _ = spawn_svc(i);
         }
     }
@@ -431,7 +438,60 @@ fn handle(msg: &[u8]) {
 }
 
 fn find(name: &[u8]) -> Option<usize> {
-    SERVICES.iter().position(|svc| svc.name == name)
+    let i = SERVICES.iter().position(|svc| svc.name == name)?;
+    if OMIT[i].load(Ordering::Acquire) {
+        None
+    } else {
+        Some(i)
+    }
+}
+
+/// `shell2` loads the ramdisk file `shell`. Every other row loads a
+/// file of the same name.
+fn program_file(name: &[u8]) -> &[u8] {
+    let Some(rest) = name.strip_prefix(b"shell") else {
+        return name;
+    };
+    if rest.iter().all(|b| b.is_ascii_digit()) {
+        b"shell"
+    } else {
+        name
+    }
+}
+
+fn line_eq(snap: &[u8], name: &[u8]) -> bool {
+    let mut i = 0usize;
+    while i < snap.len() {
+        let rest = &snap[i..];
+        let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());
+        if &rest[..end] == name {
+            return true;
+        }
+        if end == rest.len() {
+            break;
+        }
+        i += end + 1;
+    }
+    false
+}
+
+/// Marks rows whose program is absent. A failed or empty snapshot keeps
+/// every row, so a query glitch does not drop the seats.
+fn note_omissions() {
+    static mut SNAP: [u8; galexy_abi::FILES_SNAPSHOT_MAX] = [0; galexy_abi::FILES_SNAPSHOT_MAX];
+    // SAFETY: init is one thread and does not re-enter this buffer.
+    let buf = unsafe { &mut *core::ptr::addr_of_mut!(SNAP) };
+    let got = read(files_cap(), buf);
+    if !got.ok || got.value == 0 {
+        return;
+    }
+    let n = (got.value as usize).min(buf.len());
+    let snap = &buf[..n];
+    for (i, svc) in SERVICES.iter().enumerate() {
+        if !line_eq(snap, program_file(svc.name)) {
+            OMIT[i].store(true, Ordering::Release);
+        }
+    }
 }
 
 fn status(name: &[u8]) {

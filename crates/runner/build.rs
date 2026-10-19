@@ -44,9 +44,11 @@ fn main() {
         for (name, bytes) in build_userspace(&out_dir) {
             entries.push((name, bytes));
         }
-        // Standing file: proof-of-plumbing marker for tests.
+        // Plumbing marker. It lives under testing/ so `ls /` on a
+        // release image does not show it, and the desk archive drops
+        // the whole testing/ prefix.
         entries.push((
-            "banner.txt".into(),
+            "testing/banner.txt".into(),
             b"galexy ramdisk plumbing works".to_vec(),
         ));
 
@@ -213,20 +215,23 @@ fn main() {
             variants.push(("galexy-os-python", &login_python));
         }
         // `cargo run` boots this image when either ELF was built. Test
-        // kernels keep the small ramdisk. CI, which has neither ELF,
-        // still builds `galexy-os` and skips the desk.
+        // kernels keep the small ramdisk. The desk drops testing fixtures
+        // and the init stand-ins. CI, which has neither ELF, still builds
+        // `galexy-os` and skips the desk.
+        let release_base = out_dir.join("ramdisk-release.tar");
+        filter_ramdisk(&ramdisk_path, &release_base, release_name);
         let desk = out_dir.join("ramdisk-desk.tar");
         let have_desk = if have_rustc && have_python {
             let mid = out_dir.join("ramdisk-desk-rustc.tar");
-            append_ramdisk(&ramdisk_path, &rustc_ramdisk, &mid, keep_rustc_login, 5);
+            append_ramdisk(&release_base, &rustc_ramdisk, &mid, keep_rustc_login, 5);
             append_ramdisk(&mid, &python_ramdisk, &desk, |name| name == "python", 1);
             true
         } else if have_rustc {
-            append_ramdisk(&ramdisk_path, &rustc_ramdisk, &desk, keep_rustc_login, 5);
+            append_ramdisk(&release_base, &rustc_ramdisk, &desk, keep_rustc_login, 5);
             true
         } else if have_python {
             append_ramdisk(
-                &ramdisk_path,
+                &release_base,
                 &python_ramdisk,
                 &desk,
                 |name| name == "python",
@@ -581,6 +586,38 @@ fn read_tar(path: &Path) -> Vec<(String, Vec<u8>)> {
         entries.push((name, body));
     }
     entries
+}
+
+/// Names the desk archive keeps. Test programs, the plumbing marker,
+/// the sample objects, and the init fixtures stay on the shared ramdisk.
+fn release_name(name: &str) -> bool {
+    if name.starts_with("testing/") {
+        return false;
+    }
+    !matches!(
+        name,
+        "gxldos" | "bell" | "chime" | "probe" | "spare" | "stamp" | "a.o" | "b.o" | "banner.txt"
+    )
+}
+
+/// Re-pack `source` as `dest`, dropping entries `keep` rejects.
+fn filter_ramdisk(source: &Path, dest: &Path, keep: impl Fn(&str) -> bool) {
+    let entries = read_tar(source);
+    let mut tar = tar::Builder::new(std::fs::File::create(dest).unwrap());
+    let mut kept = 0usize;
+    for (name, body) in &entries {
+        if !keep(name) {
+            continue;
+        }
+        kept += 1;
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, name, body as &[u8]).unwrap();
+    }
+    tar.finish().unwrap();
+    assert!(kept >= 8, "release ramdisk kept only {kept} names");
 }
 
 /// Re-pack `source` as `dest`, letting `swap(name, body)` replace entries.
@@ -1031,102 +1068,10 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
         assert!(bytes.starts_with(b"\x7fELF"), "{pkg} is not an ELF");
         bins.insert(ramdisk_entry_name(pkg), bytes);
     }
-    // Milestone 71: the sysroot the on-OS compiler will read, under `rust/`.
-    pack_sysroot(&std_target, profile, &mut bins);
     let (obj_a, obj_b) = gxld::sample_objects();
-    bins.insert("a.o".into(), obj_a);
-    bins.insert("b.o".into(), obj_b);
+    bins.insert("testing/a.o".into(), obj_a);
+    bins.insert("testing/b.o".into(), obj_b);
     bins
-}
-
-/// Copies std `.rlib` files into the ramdisk map as `rust/<file>`.
-///
-/// `-Zbuild-std` with the PAL overlay writes them under
-/// `build/<crate>/<hash>/out`, not `deps/`. Only the newest file for
-/// each crate is packed. `.rmeta` stays out: a debug `libcore.rmeta`
-/// is tens of megabytes, and every BIOS/UEFI image embeds the ramdisk.
-fn pack_sysroot(
-    std_target: &Path,
-    profile: &str,
-    bins: &mut std::collections::BTreeMap<String, Vec<u8>>,
-) {
-    let profile_dir = std_target.join(galexy_target_dir_name()).join(profile);
-    let mut best: std::collections::BTreeMap<&str, (std::time::SystemTime, std::path::PathBuf)> =
-        std::collections::BTreeMap::new();
-    let mut consider = |path: &Path| {
-        if !path.is_file() {
-            return;
-        }
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            return;
-        };
-        if path.extension().and_then(|e| e.to_str()) != Some("rlib") {
-            return;
-        }
-        let Some(stem) = is_sysroot_artifact(name) else {
-            return;
-        };
-        let mtime = path
-            .metadata()
-            .and_then(|m| m.modified())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        match best.get(stem) {
-            Some((prev, _)) if *prev >= mtime => {}
-            _ => {
-                best.insert(stem, (mtime, path.to_path_buf()));
-            }
-        }
-    };
-    if let Ok(entries) = std::fs::read_dir(profile_dir.join("deps")) {
-        for entry in entries.flatten() {
-            consider(&entry.path());
-        }
-    }
-    if let Ok(crates) = std::fs::read_dir(profile_dir.join("build")) {
-        for crate_dir in crates.flatten() {
-            let Ok(hashes) = std::fs::read_dir(crate_dir.path()) else {
-                continue;
-            };
-            for hash in hashes.flatten() {
-                let Ok(files) = std::fs::read_dir(hash.path().join("out")) else {
-                    continue;
-                };
-                for file in files.flatten() {
-                    consider(&file.path());
-                }
-            }
-        }
-    }
-    for (_mtime, path) in best.values() {
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap();
-        let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        bins.insert(format!("rust/{name}"), bytes);
-    }
-    if !best.contains_key("libstd-") {
-        panic!(
-            "sysroot libstd rlib missing under {}",
-            profile_dir.display()
-        );
-    }
-}
-
-fn is_sysroot_artifact(name: &str) -> Option<&'static str> {
-    const STEMS: &[&str] = &[
-        "libstd-",
-        "libcore-",
-        "liballoc-",
-        "libpanic_abort-",
-        "libpanic_unwind-",
-        "libcompiler_builtins-",
-        "libstd_detect-",
-        "librustc_std_workspace_core-",
-        "librustc_std_workspace_alloc-",
-        "librustc_std_workspace_std-",
-        "libhashbrown-",
-        "libcfg_if-",
-        "libunwind-",
-    ];
-    STEMS.iter().copied().find(|stem| name.starts_with(stem))
 }
 
 /// Shell ELF with the `crash` test seam. A separate target dir so this

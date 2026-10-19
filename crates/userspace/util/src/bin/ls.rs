@@ -56,16 +56,11 @@ fn ls_plain(cwd: &[u8]) -> i32 {
         let _ = write_console(b"ls: denied\n");
         return 1;
     };
-    let mut i = 0usize;
-    let n = buf.len();
-    while i < n {
-        let rest = &buf[i..n];
-        let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());
-        if let Some(shown) = ls_name(cwd, &rest[..end]) {
-            let _ = write_std(shown);
-            let _ = write_std(b"\n");
-        }
-        i += end + 1;
+    let (off, len, n) = collect(buf, cwd);
+    for i in 0..n {
+        let shown = &buf[off[i] as usize..off[i] as usize + len[i] as usize];
+        let _ = write_std(shown);
+        let _ = write_std(b"\n");
     }
     0
 }
@@ -75,17 +70,72 @@ fn ls_long(cwd: &[u8]) -> i32 {
         let _ = write_console(b"ls: denied\n");
         return 1;
     };
+    let (off, len, n) = collect(buf, cwd);
+    for i in 0..n {
+        let shown = &buf[off[i] as usize..off[i] as usize + len[i] as usize];
+        print_long(cwd, shown);
+    }
+    0
+}
+
+/// Visible names in this directory. Directories come first, then files,
+/// each group in byte order. A ramdisk name that the volume also has is
+/// listed once.
+fn collect(buf: &[u8], cwd: &[u8]) -> ([u16; 160], [u16; 160], usize) {
+    let mut off = [0u16; 160];
+    let mut len = [0u16; 160];
+    let mut n = 0usize;
     let mut i = 0usize;
-    let n = buf.len();
-    while i < n {
-        let rest = &buf[i..n];
+    let total = buf.len();
+    let base = buf.as_ptr() as usize;
+    while i < total {
+        let rest = &buf[i..total];
         let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());
         if let Some(shown) = ls_name(cwd, &rest[..end]) {
-            print_long(cwd, shown);
+            if shown.len() <= u16::MAX as usize && n < off.len() {
+                let at = shown.as_ptr() as usize - base;
+                let mut dup = false;
+                let mut k = 0usize;
+                while k < n {
+                    let prev = &buf[off[k] as usize..off[k] as usize + len[k] as usize];
+                    if prev == shown {
+                        dup = true;
+                        break;
+                    }
+                    k += 1;
+                }
+                if !dup {
+                    off[n] = at as u16;
+                    len[n] = shown.len() as u16;
+                    n += 1;
+                }
+            }
         }
         i += end + 1;
     }
-    0
+    let mut a = 1usize;
+    while a < n {
+        let mut b = a;
+        while b > 0 && name_before(buf, off[b], len[b], off[b - 1], len[b - 1]) {
+            off.swap(b, b - 1);
+            len.swap(b, b - 1);
+            b -= 1;
+        }
+        a += 1;
+    }
+    (off, len, n)
+}
+
+fn name_before(buf: &[u8], a_off: u16, a_len: u16, b_off: u16, b_len: u16) -> bool {
+    let a = &buf[a_off as usize..a_off as usize + a_len as usize];
+    let b = &buf[b_off as usize..b_off as usize + b_len as usize];
+    let ad = a.ends_with(b"/");
+    let bd = b.ends_with(b"/");
+    match (ad, bd) {
+        (true, false) => true,
+        (false, true) => false,
+        _ => a < b,
+    }
 }
 
 fn print_long(cwd: &[u8], shown: &[u8]) {

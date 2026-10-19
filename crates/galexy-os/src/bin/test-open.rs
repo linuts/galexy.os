@@ -150,7 +150,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
 fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let missing = b"no-such";
-    let banner = b"banner.txt";
+    let banner = b"testing/banner.txt";
     let mut code: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
     // jmp over the two names.
     code.push(0xEB);

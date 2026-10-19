@@ -1804,7 +1804,7 @@ fn ramdisk_test_passes() {
         "test-ramdisk success marker missing; serial:\n{serial}"
     );
     assert!(
-        serial.contains("tar entry: 'banner.txt'"),
+        serial.contains("tar entry: 'testing/banner.txt'"),
         "ramdisk entry marker missing; serial:\n{serial}"
     );
     // Measurement: the kernel's boot-time SHA-256 of the archive equals the
@@ -2854,7 +2854,7 @@ const QUERY_AFTER_LOGIN: &[(&str, &str)] = &[
     ("ret", "cooperative tasks:"),
     ("l", "l"),
     ("s", "s"),
-    ("ret", "banner.txt"),
+    ("ret", "testing/"),
 ];
 
 /// `cat`, redirection, `mkdir` / `cd` / `ls`. Enter syncs on text that
@@ -2867,6 +2867,14 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("a", "a"),
     ("t", "t"),
     ("spc", " "),
+    ("t", "t"),
+    ("e", "e"),
+    ("s", "s"),
+    ("t", "t"),
+    ("i", "i"),
+    ("n", "n"),
+    ("g", "g"),
+    ("slash", "/"),
     ("b", "b"),
     ("a", "a"),
     ("n", "n"),
@@ -2997,6 +3005,14 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("a", "a"),
     ("t", "t"),
     ("spc", " "),
+    ("t", "t"),
+    ("e", "e"),
+    ("s", "s"),
+    ("t", "t"),
+    ("i", "i"),
+    ("n", "n"),
+    ("g", "g"),
+    ("slash", "/"),
     ("h", "h"),
     ("e", "e"),
     ("l", "l"),
@@ -3014,15 +3030,9 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("shift+dot", ">"),
     ("spc", " "),
     ("b", "b"),
-    ("a", "a"),
-    ("n", "n"),
-    ("n", "n"),
     ("e", "e"),
-    ("r", "r"),
-    ("dot", "."),
-    ("t", "t"),
-    ("x", "x"),
-    ("t", "t"),
+    ("l", "l"),
+    ("l", "l"),
     ("ret", "echo: cannot replace"),
     ("r", "r"),
     ("m", "m"),
@@ -3222,7 +3232,7 @@ fn shell_secret_prompt_typing_e2e() {
 
 /// The ring-3 shell's query caps: typed `stats` / `threads` / `tasks` /
 /// `ls` come back as console text (screen + serial), including a live
-/// thread and the ramdisk's `banner.txt`.
+/// thread and the `testing/` directory.
 #[test]
 fn shell_query_typing_e2e() {
     let keys = with_login(QUERY_AFTER_LOGIN);
@@ -3260,8 +3270,8 @@ fn shell_query_typing_e2e() {
         "typed `tasks` never listed a process Cap label; serial:\n{serial}"
     );
     assert!(
-        serial.contains("banner.txt"),
-        "typed `ls` never listed banner.txt; serial:\n{serial}"
+        serial.contains("bell\n"),
+        "typed `ls` never listed bell; serial:\n{serial}"
     );
     assert!(
         serial.contains("testing/\n"),
@@ -3396,10 +3406,9 @@ const PIPE_GLOB_KEYS: &[(&str, &str)] = &[
 /// Pipelines, `uptime`, `ls -l`, `history`, and a background job.
 const USERLAND_KEYS: &[(&str, &str)] = &[
     ("b", "b"),
-    ("a", "a"),
-    ("n", "n"),
-    ("tab", "banner.txt "),
-    ("ret", "banner.txt: reserved"),
+    ("e", "e"),
+    ("tab", "bell "),
+    ("ret", "bell: reserved"),
     ("e", "e"),
     ("c", "c"),
     ("h", "h"),
@@ -3444,7 +3453,7 @@ const USERLAND_KEYS: &[(&str, &str)] = &[
     ("spc", " "),
     ("minus", "-"),
     ("l", "l"),
-    ("ret", "banner.txt"),
+    ("ret", "? 0 bell"),
     ("e", "e"),
     ("c", "c"),
     ("h", "h"),
@@ -3535,8 +3544,9 @@ fn shell_pipeline_glob_typing_e2e() {
     );
 }
 
-/// `cat banner.txt`, a scratch file written with `echo`, and `mkdir` /
-/// `cd` / `ls`. `hello` is not console text. A tar name cannot be replaced.
+/// `cat testing/banner.txt`, a scratch file written with `echo`, and
+/// `mkdir` / `cd` / `ls`. `testing/hello` is not console text. A tar
+/// name cannot be replaced.
 /// `rm` drops a scratch file and refuses a directory that still has a child.
 #[test]
 fn shell_util_typing_e2e() {
@@ -4330,7 +4340,7 @@ fn util_typing_e2e_on(image_name: &str) {
     );
     assert!(
         serial.contains("plumbing works"),
-        "typed `cat banner.txt` missed the archive text; serial:\n{serial}"
+        "typed `cat testing/banner.txt` missed the archive text; serial:\n{serial}"
     );
     assert!(
         serial.contains("scratch-hi\n"),
@@ -4354,11 +4364,11 @@ fn util_typing_e2e_on(image_name: &str) {
     );
     assert!(
         serial.contains("cat: not text"),
-        "typed `cat hello` should fail the console charset; serial:\n{serial}"
+        "typed `cat testing/hello` should fail the console charset; serial:\n{serial}"
     );
     assert!(
         serial.contains("echo: cannot replace"),
-        "typed `echo > banner.txt` should be rejected; serial:\n{serial}"
+        "typed `echo > bell` should be rejected; serial:\n{serial}"
     );
     assert!(
         serial.contains("cat: no such file"),
@@ -4831,6 +4841,103 @@ fn cargo_run_compilers_typing_e2e() {
         !serial.contains("[PANIC]") && !serial.contains("double fault"),
         "kernel panicked; serial:\n{serial}"
     );
+}
+
+/// After the first unlock, `ls` on the desk image is the command set,
+/// `Desktop/`, `lib/`, and one target file.
+#[test]
+fn release_root_typing_e2e() {
+    if env!("GALEXY_HAVE_DESK") != "1" {
+        eprintln!("release_root_typing_e2e: skipped (no desk image)");
+        return;
+    }
+    let disk = common::fresh_galfs_image("release-root");
+    let mut owned: Vec<(String, String)> = Vec::new();
+    for pairs in [CREATE_VOLUME_KEYS, LOGIN_ADMIN_TESTPASS_KEYS] {
+        for (code, echo) in pairs {
+            owned.push(((*code).to_string(), (*echo).to_string()));
+        }
+    }
+    owned.extend(type_line("ls", "x86_64-unknown-galexy.json"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os-desk"),
+        &disk,
+        &keys,
+        "New passphrase: ",
+        "",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    let _ = std::fs::remove_file(&disk);
+    assert!(
+        !serial.contains("[PANIC]"),
+        "desk image panicked; serial:\n{serial}"
+    );
+    let names = [
+        "Desktop/",
+        "lib/",
+        "cat",
+        "cp",
+        "echo",
+        "edit",
+        "grep",
+        "gxld",
+        "head",
+        "init",
+        "ls",
+        "mkdir",
+        "mv",
+        "python",
+        "rm",
+        "rustc",
+        "shell",
+        "stat",
+        "tail",
+        "touch",
+        "truncate",
+        "uptime",
+        "wc",
+        "x86_64-unknown-galexy.json",
+    ];
+    let mut prev = 0usize;
+    for name in names {
+        let needle = format!("\n{name}\n");
+        let at = serial.find(&needle).unwrap_or_else(|| {
+            panic!("ls missed {name}; serial:\n{serial}");
+        });
+        assert!(
+            at >= prev,
+            "{name} is out of order in ls; serial:\n{serial}"
+        );
+        prev = at;
+    }
+    assert_eq!(
+        serial.matches("x86_64-unknown-galexy.json").count(),
+        1,
+        "the target file was listed twice; serial:\n{serial}"
+    );
+    for gone in [
+        "testing/",
+        "banner.txt",
+        "a.o",
+        "b.o",
+        "gxldos",
+        "bell",
+        "chime",
+        "probe",
+        "spare",
+        "stamp",
+    ] {
+        let needle = format!("\n{gone}\n");
+        assert!(
+            !serial.contains(&needle),
+            "ls still listed {gone}; serial:\n{serial}"
+        );
+    }
 }
 
 /// The small login image has no compiler. The shell names the host

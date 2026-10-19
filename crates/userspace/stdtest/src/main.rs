@@ -197,7 +197,7 @@ fn time_checks() {
 }
 
 fn fs_checks() {
-    let banner = fs::read_to_string("banner.txt").unwrap();
+    let banner = fs::read_to_string("testing/banner.txt").unwrap();
     check_eq(
         "ramdisk read",
         banner.as_str(),
@@ -205,7 +205,10 @@ fn fs_checks() {
     );
     check(
         "ramdisk read-only",
-        OpenOptions::new().write(true).open("banner.txt").is_err(),
+        OpenOptions::new()
+            .write(true)
+            .open("testing/banner.txt")
+            .is_err(),
     );
 
     let _ = fs::remove_dir_all("stdbox");
@@ -278,7 +281,7 @@ fn fs_checks() {
     );
     check(
         "read_dir root has ramdisk",
-        names.iter().any(|n| n == "banner.txt"),
+        names.iter().any(|n| n == "testing"),
     );
 
     fs::create_dir("stdbox").unwrap();

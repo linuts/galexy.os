@@ -17,10 +17,17 @@ use x86_64::{PhysAddr, VirtAddr};
 
 /// Opens a file for the current user task.
 ///
-/// An exact ramdisk name (`banner.txt`, `hello`) grants READ. Any other
-/// path is a galfs file and grants READ and WRITE when a token covers it.
-/// A directory is `Unsupported`. A path with no token is `AccessDenied`.
+/// An exact ramdisk name (`cat`, `testing/banner.txt`) grants READ. Any
+/// other path is a galfs file and grants READ and WRITE when a token
+/// covers it. A directory is `Unsupported`. A path with no token is
+/// `AccessDenied`.
 pub(crate) fn task_open(name: &str) -> Result<Cap, SysError> {
+    if crate::sched::ramdisk::is_testing_path(name) {
+        let Some(bytes) = crate::sched::ramdisk::testing_elf(name) else {
+            return Err(SysError::NotFound);
+        };
+        return install_open(FileBody::Archive(bytes), CapRights::READ);
+    }
     if !name.contains('/') && !name.contains('@') {
         if let Some(bytes) = crate::sched::ramdisk::find(name) {
             return install_open(FileBody::Archive(bytes), CapRights::READ);
@@ -218,12 +225,16 @@ pub(crate) fn task_write_ex(cap: Cap, src: &[u8]) -> Result<IoOp, SysError> {
     Ok(op)
 }
 
-/// True when `name` is a bare ramdisk label (`hello`).
+/// True when `name` is a ramdisk file: a bare label (`cat`) or a
+/// `testing/` entry (`testing/banner.txt`).
 ///
-/// A path that contains `/` is a galfs object even when the last
-/// component matches (`/hello`). Spawn of the bare label still loads
-/// the ramdisk program.
+/// Any other path that contains `/` is a galfs object even when the
+/// last component matches (`/hello`). Spawn of the bare label still
+/// loads the ramdisk program.
 fn shadows_ramdisk(name: &str) -> bool {
+    if crate::sched::ramdisk::is_testing_path(name) {
+        return crate::sched::ramdisk::testing_elf(name).is_some();
+    }
     if name.contains('/') || name.contains('@') {
         return false;
     }
