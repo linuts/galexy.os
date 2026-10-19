@@ -132,8 +132,9 @@ Login as: admin
 Password: *****
 ```
 
-A fresh disk has no volume passphrase until that prompt. Later boots
-ask `Volume passphrase:` for the one you chose. The account on a fresh
+A fresh disk has no volume passphrase until that prompt. An empty
+line asks again; the login screen waits until the volume is open.
+Later boots ask `Volume passphrase:` for the one you chose. The account on a fresh
 format is **`admin`** / **`admin`**. After login a
 fastfetch-style **command center** dashboard prints (OS / TTY / user /
 uptime / heap / galfs / tasks), then the prompt is `admin@galexy> `.

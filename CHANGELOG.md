@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#143](https://github.com/linuts/galexy.os/pull/143) — Shell — Login stays closed until the volume passphrase
+  opens the disk. An empty line asks again, and `USER_LOGIN` is refused
+  while the volume is locked.
 - [#142](https://github.com/linuts/galexy.os/pull/142) — Runner — Kernel log lines stay off COM1 unless
   `cargo run -- --debug`. Headless and `--display` share that switch.
   `dmesg` still records them, and a panic still prints.

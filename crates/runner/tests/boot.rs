@@ -4641,6 +4641,78 @@ fn shell_command_center_typing_e2e() {
     );
 }
 
+/// An empty passphrase does not open the login screen.
+///
+/// Boot 1 is a fresh disk: Enter stays on the passphrase prompt, then
+/// `galfs` seals it and `Login as:` appears. Boot 2 is that sealed
+/// disk: Enter stays on `Volume passphrase:`, then the same passphrase
+/// reaches login.
+#[test]
+fn volume_locked_blocks_login_typing_e2e() {
+    let disk = common::fresh_galfs_image("volume-gate");
+    let mut keys: Vec<(&str, &str)> = vec![("ret", "A passphrase is required.")];
+    keys.extend(CREATE_VOLUME_KEYS.iter().copied());
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &keys,
+        "New passphrase: ",
+        "Login as: ",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    assert!(
+        !serial.contains("[PANIC]"),
+        "boot 1 panicked; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("Volume stays locked"),
+        "empty passphrase still skipped to a RAM login; serial:\n{serial}"
+    );
+    let required = serial
+        .find("A passphrase is required.")
+        .expect("empty passphrase was accepted");
+    let login = serial.find("Login as:").expect("login never appeared");
+    assert!(
+        login > required,
+        "login appeared before a passphrase was required; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[galfs] formatted sealed disk"),
+        "fresh disk was not sealed; serial:\n{serial}"
+    );
+
+    let mut again: Vec<(&str, &str)> = vec![("ret", "A passphrase is required.")];
+    again.extend(UNLOCK_GALFS_KEYS.iter().copied());
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &again,
+        "Volume passphrase: ",
+        "Login as: ",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    assert!(
+        !serial.contains("[PANIC]"),
+        "boot 2 panicked; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("Volume stays locked"),
+        "empty passphrase still skipped a sealed disk; serial:\n{serial}"
+    );
+    let required = serial
+        .find("A passphrase is required.")
+        .expect("empty passphrase was accepted on the sealed disk");
+    let login = serial
+        .rfind("Login as:")
+        .expect("login never appeared after unlock");
+    assert!(
+        login > required,
+        "login appeared while the sealed volume was locked; serial:\n{serial}"
+    );
+}
+
 /// Fresh disk: choose a passphrase and confirm it. Masked.
 const CREATE_VOLUME_KEYS: &[(&str, &str)] = &[
     ("g", "*"),

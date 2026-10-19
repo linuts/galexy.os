@@ -19,7 +19,8 @@ error.
 
 1. On a fresh disk, tty1 asks for a volume passphrase and a
    confirmation before the login screen. Choose one. An empty line
-   leaves the disk locked. The next screen says to log in as `admin`
+   asks again; login does not start while the volume is locked. The
+   next screen says to log in as `admin`
    with password `admin`, then run `passwd`. Type `admin`, then
    `admin`. The password line shows stars. A later boot asks
    `Volume passphrase:` for the passphrase from this step.
