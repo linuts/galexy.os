@@ -20,7 +20,7 @@ pub(crate) fn show_help() {
     write_console(b"===============\n\n");
 
     help_section(b"files");
-    help_row(b"ls", b"list directory");
+    help_row(b"ls [path]", b"list directory");
     help_row(b"cd <path>", b"change directory (.. / /name)");
     help_row(b"echo [text]", b"print, or echo text >|>> file");
     help_row(b"echo $?", b"last Cap-wait exit status");
@@ -32,7 +32,7 @@ pub(crate) fn show_help() {
     help_row(b"rm <path>", b"remove file or empty dir");
     help_row(b"cp <src> <dst>", b"copy");
     help_row(b"mv <src> <dst>", b"rename / move");
-    help_row(b"ls -l", b"size and kind");
+    help_row(b"ls -l [path]", b"size and kind");
     help_row(b"head <name>", b"first 10 lines");
     help_row(b"tail <name>", b"last 10 lines");
     help_row(b"wc <name>", b"lines words bytes");
@@ -228,14 +228,7 @@ pub(crate) fn dispatch(
         return None;
     }
     if let Some(rest) = arg_of(line, b"ls") {
-        if rest.is_empty() {
-            ls(cwd, false);
-        } else if rest == b"-l" {
-            ls(cwd, true);
-        } else {
-            write_console(b"ls: usage: ls [-l]\n");
-            prompt(cwd);
-        }
+        ls(cwd, rest);
         return None;
     }
     if line == b"stats" {
@@ -1592,18 +1585,27 @@ pub(crate) fn cd(cwd: &mut Cwd, name: &[u8]) {
     prompt(cwd);
 }
 
-pub(crate) fn ls(cwd: &Cwd, long: bool) {
-    if !long {
-        launch_util(cwd, b"ls", &cwd.buf[..cwd.len], true);
-        return;
+pub(crate) fn ls(cwd: &Cwd, rest: &[u8]) {
+    let mut arg = [0u8; PATH_MAX + 3];
+    match ls_arg(cwd, rest, &mut arg) {
+        LsArg::Ready(n) => launch_util(cwd, b"ls", &arg[..n], true),
+        LsArg::Usage => {
+            write_console(b"ls: usage: ls [-l] [path]\n");
+            prompt(cwd);
+        }
+        LsArg::Missing => {
+            write_console(b"ls: no such directory\n");
+            prompt(cwd);
+        }
+        LsArg::NotDir => {
+            write_console(b"ls: not a directory\n");
+            prompt(cwd);
+        }
+        LsArg::TooLong => {
+            write_console(b"ls: path too long\n");
+            prompt(cwd);
+        }
     }
-    let mut arg = [0u8; 80];
-    let Some(n) = ls_arg(cwd, b"-l", &mut arg) else {
-        write_console(b"ls: path too long\n");
-        prompt(cwd);
-        return;
-    };
-    launch_util(cwd, b"ls", &arg[..n], true);
 }
 
 /// Edition a bare `rustc file.rs` compiles with.

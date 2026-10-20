@@ -1,4 +1,4 @@
-//! ls — list the current directory. The argument is that path, or empty at `/`.
+//! ls — list one directory. The argument is that path, or empty at `/`.
 //!
 //! Trust: the shell spawns this with `SPAWN_INHERIT` (the caller's galfs
 //! cards) and the files snapshot. The ramdisk is trusted code.

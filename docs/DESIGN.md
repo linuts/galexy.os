@@ -881,6 +881,9 @@ one per line. The shell keeps the current directory and accepts a leading
 programs: the shell composes the path and `spawn`s them. `ls` and `rm`
 also receive the query grant, so they can read the files snapshot.
 `edit` also receives the keyboard grant and the shell Cap-waits on it.
+`ls [path]` lists that directory (`ls Desktop`, `ls -l testing`).
+The shell composes the path onto the current directory and passes it
+as the program argument. A missing name is `ls: no such directory`.
 `ls` reads the whole files snapshot (`FILES_SNAPSHOT_MAX`). A 1 KiB
 read stopped inside the sysroot names, so a file created at `/` after
 that import (`test.rs`, the `test` binary) was missing from `ls` while
