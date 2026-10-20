@@ -433,7 +433,7 @@ pub(crate) fn dispatch(
     }
     // `python` with no file is the REPL. It needs the keyboard, and the
     // prompt waits until `exit()`. `python FILE` takes the argv path
-    // below and does not take the keyboard.
+    // below, which also grants the keyboard and Cap-waits.
     if line == b"python" {
         let grants = galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_KEYBOARD;
         spawn_and_prompt(cwd, b"python", b"", grants, true);
@@ -468,6 +468,8 @@ pub(crate) fn dispatch(
         if !program.contains(&b'/') {
             grants |= galexy_abi::SPAWN_GRANT_LOADER;
         }
+        // Foreground console stdin. A pipe is `try_pipeline`, not this path.
+        grants |= galexy_abi::SPAWN_GRANT_KEYBOARD;
         spawn_and_prompt(cwd, program, &arg[..n], grants, true);
         return None;
     }
@@ -1684,7 +1686,26 @@ pub(crate) fn launch(cwd: &Cwd, name: &[u8]) {
     }
     let mut path = [0u8; PATH_MAX];
     let program = program_name(cwd, name, &mut path);
-    spawn_and_prompt(cwd, program, b"", 0, false);
+    // A user's ELF (`/hello`, `./hello`) owns the keyboard and the prompt
+    // waits. Ramdisk names (`testing/linger`) stay fire-and-forget.
+    if user_elf(program) {
+        let grants = galexy_abi::SPAWN_INHERIT
+            | galexy_abi::SPAWN_GRANT_QUERY
+            | galexy_abi::SPAWN_GRANT_KEYBOARD;
+        spawn_and_prompt(cwd, program, b"", grants, true);
+    } else {
+        spawn_and_prompt(cwd, program, b"", 0, false);
+    }
+}
+
+/// A galfs program, not a ramdisk sample under `testing/`.
+fn user_elf(program: &[u8]) -> bool {
+    program.contains(&b'/') && !testing_program(program)
+}
+
+fn testing_program(name: &[u8]) -> bool {
+    let name = name.strip_prefix(b"/").unwrap_or(name);
+    name == b"testing" || name.starts_with(b"testing/")
 }
 
 /// A ramdisk label stays as typed. A name with `/` becomes a galfs path:
@@ -1754,7 +1775,7 @@ pub(crate) fn spawn_and_prompt(
     program: &[u8],
     arg: &[u8],
     grants: u64,
-    wait_exit: bool,
+    mut wait_exit: bool,
 ) {
     let bg = BACKGROUND.load(Ordering::Relaxed);
     let mut grants = if bg {
@@ -1762,6 +1783,10 @@ pub(crate) fn spawn_and_prompt(
     } else {
         grants
     };
+    // A background job must not take the seat keyboard away from the shell.
+    if bg {
+        grants &= !galexy_abi::SPAWN_GRANT_KEYBOARD;
+    }
     let typed = program;
     let mut path_buf = [0u8; PATH_MAX];
     let mut result = spawn_with(program, arg, grants);
@@ -1775,6 +1800,14 @@ pub(crate) fn spawn_and_prompt(
     {
         if let Some(n) = absolute_spawn_path(cwd, program, &mut path_buf) {
             grants &= !galexy_abi::SPAWN_GRANT_LOADER;
+            // `rustc test.rs` wrote `test`. That file is the foreground
+            // program: it inherits the session and reads stdin.
+            if !bg {
+                grants |= galexy_abi::SPAWN_INHERIT
+                    | galexy_abi::SPAWN_GRANT_QUERY
+                    | galexy_abi::SPAWN_GRANT_KEYBOARD;
+                wait_exit = true;
+            }
             result = spawn_with(&path_buf[..n], arg, grants);
         }
     }

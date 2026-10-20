@@ -1039,6 +1039,7 @@ const TESTING_PROGRAMS: &[&str] = &[
     "linger",
     "nap",
     "stdmin",
+    "stdline",
     "stdtest",
     "bigtest",
     "thread-test",
@@ -1129,6 +1130,15 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
         let bytes = std::fs::read(&elf).unwrap_or_else(|e| panic!("read {}: {e}", elf.display()));
         assert!(bytes.starts_with(b"\x7fELF"), "{pkg} is not an ELF");
         bins.insert(ramdisk_entry_name(pkg), strip_debug(bytes));
+        // `stdline` is a second bin of the `stdmin` package, so one
+        // `cargo build -p stdmin` produces both ELFs.
+        if pkg == "stdmin" {
+            let line = elf.with_file_name("stdline");
+            let line_bytes =
+                std::fs::read(&line).unwrap_or_else(|e| panic!("read {}: {e}", line.display()));
+            assert!(line_bytes.starts_with(b"\x7fELF"), "stdline is not an ELF");
+            bins.insert(ramdisk_entry_name("stdline"), strip_debug(line_bytes));
+        }
     }
     let (obj_a, obj_b) = gxld::sample_objects();
     bins.insert("testing/a.o".into(), obj_a);

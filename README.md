@@ -87,7 +87,11 @@ cargo run --release -- --uefi       # UEFI — set OVMF_FD if the default path i
 `target/galexy-python/python` or `target/galexy-rustc/rustc` is
 missing, then boots the image that contains them. The first run is
 that host build. Later runs reuse the ELFs. `python` with no file
-is the REPL. `GALEXY_SKIP_COMPILERS=1` boots the small image
+is the REPL. A foreground program reads the keyboard through
+`std::io::stdin` (one cooked line). A pipe replaces that. The
+on-OS `libstd` and the `python` ELF pick up the cooked line after
+`cargo xtask sysroot` and `scripts/build-galexy-python.sh`.
+`GALEXY_SKIP_COMPILERS=1` boots the small image
 instead, and the shell then names the script it did not run.
 `cargo test` does not build them, so CI stays on the small image.
 

@@ -5469,6 +5469,68 @@ fn shell_stdmin_typing_e2e() {
     );
 }
 
+/// A foreground `std` program reads one cooked line from `stdin`.
+///
+/// The argument is what makes the shell Cap-wait and hand over the
+/// keyboard. A bare `testing/` name stays fire-and-forget, the way
+/// `testing/linger` does. The PAL echoes each key; Enter returns the
+/// line with its newline.
+#[test]
+fn shell_stdline_typing_e2e() {
+    const KEYS: &[(&str, &str)] = &[
+        ("t", "t"),
+        ("e", "e"),
+        ("s", "s"),
+        ("t", "t"),
+        ("i", "i"),
+        ("n", "n"),
+        ("g", "g"),
+        ("slash", "/"),
+        ("s", "s"),
+        ("t", "t"),
+        ("d", "d"),
+        ("l", "l"),
+        ("i", "i"),
+        ("n", "n"),
+        ("e", "e"),
+        ("spc", " "),
+        ("x", "x"),
+        ("ret", "line? "),
+        ("h", "h"),
+        ("i", "i"),
+        ("ret", "got hi"),
+    ];
+    let keys = with_login(KEYS);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "exited (syscall)",
+        Duration::from_millis(30),
+        Duration::from_secs(90),
+    );
+    assert!(
+        serial.contains("got hi"),
+        "typed line never came back from stdin; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("exited (syscall)"),
+        "stdline exit marker missing; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[pf] ring-3 task fault"),
+        "stdline faulted; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[user task panicked]"),
+        "stdline panicked; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("eof"),
+        "stdin was closed before Enter; serial:\n{serial}"
+    );
+}
+
 /// F2 runs a command on the second shell; F1 returns to the first.
 #[test]
 fn shell_tty_switch_e2e() {

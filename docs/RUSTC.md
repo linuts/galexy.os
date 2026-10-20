@@ -159,7 +159,7 @@ after a PAL change should `rm target/.rustc_info.json` too.
 | Module | Backed by |
 |---|---|
 | `alloc` | dlmalloc over `Map` (Milestone 66) |
-| `stdio` | console Cap `write`; stdin from the keyboard / pipe Cap handed at spawn |
+| `stdio` | console Cap `write`; stdin is one cooked line from the keyboard Cap when the shell handed it over, or raw bytes from a pipe Cap |
 | `time` | `Clock` |
 | `args` | argv v2 blob |
 | `os` | env empty; cwd in-process; `Exit`; `SysError` → `io::Error` |
@@ -179,6 +179,14 @@ that header. No program shipped today carries a TLS block.
 Every PAL and `galexy-rt` stub that contains `asm!` is
 `#[inline(never)] extern "C"`, so a code generator without inline
 assembly links an ordinary function.
+
+A foreground program's `std::io::stdin` reads one cooked line from
+the seat keyboard (echo, backspace, left and right, Enter, Ctrl-D
+on an empty line). The shell grants that keyboard and Cap-waits.
+A pipe stays raw. Programs linked against the sysroot already
+installed still read the line; the echo and the editing land in
+those binaries the next time `cargo xtask sysroot` rebuilds
+`libstd`.
 
 Ship the way Xous did, without a separate compiler checkout:
 `cargo xtask sysroot` builds `library/sysroot` for
