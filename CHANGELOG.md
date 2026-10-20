@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#151](https://github.com/linuts/galexy.os/pull/151) — Shell — A foreground program reads one
+  cooked line from `std::io::stdin` (echo, backspace, arrows, Enter, Ctrl-D).
+  The shell grants the keyboard and waits. A pipe stays raw.
 - [#149](https://github.com/linuts/galexy.os/pull/149) — Runner — `cargo build` writes the
   `galexy-os` images, not one BIOS and UEFI image per test kernel. Guest
   programs are packed without debug info. A leftover `nano` ELF is removed

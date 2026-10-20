@@ -25,8 +25,10 @@ one galfs file and writes another. That is the whole requirement.
 `python` is a ramdisk program. `cargo run` carries it, and `rustc`
 with its sysroot, whenever those ELFs were built. No flag selects
 the image. The test kernels keep the small ramdisk, so CI does not
-download RustPython. The shell passes argv and Cap-waits. `python`
-with no file also takes the keyboard, because that is the REPL.
+download RustPython. The shell passes argv and Cap-waits. `python` with no file is the
+REPL, and `python FILE` is a program: both take the keyboard when
+they are in the foreground, so `input()` reads the seat.
+`std::io::stdin` cooks that into a line. A pipe replaces it.
 This phase does not add a syscall, a reserved Cap, or an init row.
 
 | Word | What it is |
@@ -38,7 +40,11 @@ This phase does not add a syscall, a reserved Cap, or an init row.
 
 The shell path for `python hello.py` is the existing one: inherit
 the session, the query grant, the loader grant every ramdisk label
-gets, and a Cap-wait. The interpreter build does not call `Spawn`.
+gets, the keyboard, and a Cap-wait. The interpreter build does not call `Spawn`.
+The REPL reads that line with `stdin.read_line`. Rebuild
+`cargo xtask sysroot` before `scripts/build-galexy-python.sh` so the
+linked `libstd` is the cooked one. An already-built `python` keeps
+its previous std until that pair of host builds is run again.
 Milestone 96 checks that the run did not leave a child task.
 
 ## What this refuses

@@ -8,9 +8,11 @@
 //! (`/hello`, and `./hello` from `/`). A bare name the ramdisk does not
 //! have is the file in the current directory (`rustc test.rs` writes
 //! `test`; typing `test` runs it). Sample programs are `testing/hello`.
-//! A bare program name returns once
+//! A bare ramdisk name returns once
 //! the load finishes (Cap dropped) and keeps running.
-//! A bare launch shares this console. `cmd &` is a background job (`jobs`
+//! A galfs program (`/hello`, or the file `rustc` just wrote) Cap-waits
+//! and receives the keyboard, so `std::io::stdin` reads the seat.
+//! `cmd &` is a background job (`jobs`
 //! / `fg`); Ctrl-Z is not implemented. Pipelines are up to four stages
 //! joined by ` | `. A `*` word expands to
 //! names in the current directory from the files snapshot.
@@ -18,7 +20,9 @@
 //! `ls` and `ls -l` take a directory path (`ls Desktop`); with none, they
 //! list the current directory.
 //! `edit` (and `nano`, the same program) also receives the keyboard grant
-//! and Cap-waits, so it can edit.
+//! and Cap-waits, so it can edit. So does `python FILE`, `rustc`, and any
+//! other foreground program whose stdin is the console. A pipe keeps the
+//! pipe as stdin.
 //! The kernel keeps the status bar and the screen, and loads this shell
 //! again if it faults. The current directory lives here and starts over
 //! at `/` after a restart. Archive names stay at `/`. A path may begin

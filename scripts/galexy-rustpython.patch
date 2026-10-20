@@ -198,7 +198,7 @@ new file mode 100644
 index 0000000..7d72cf0
 --- /dev/null
 +++ b/crates/galexy-python/src/main.rs
-@@ -0,0 +1,444 @@
+@@ -0,0 +1,258 @@
 +//! Run one Python file on the Galexy RustPython VM.
 +//!
 +//! `python PATH` reads the file and executes it with builtins and `sys`.
@@ -399,210 +399,24 @@ index 0000000..7d72cf0
 +    paren > 0 || bracket > 0 || brace > 0 || quote.is_some() || src.trim_end().ends_with(':')
 +}
 +
-+/// Echoed line from the seat keyboard. `None` is Ctrl-D on an empty line.
-+///
-+/// Backspace is BS or DEL and deletes the character before the cursor.
-+/// Left and right are `ESC [ C`/`D`, `ESC [ <n> C`/`D`, and `ESC O C`/`D`.
++/// One line from `stdin`. The PAL cooks the seat keyboard (echo,
++/// backspace, arrows, Enter). `None` is EOF, including Ctrl-D on an
++/// empty line. A pipe is raw bytes and still ends at a newline.
 +fn read_console_line() -> Option<String> {
-+    use std::io::{Read, Write};
 +    let mut line = String::new();
-+    let mut pos = 0usize;
-+    let mut byte = [0u8; 1];
-+    let mut input = std::io::stdin();
-+    let mut output = std::io::stdout();
-+    let mut phase = 0u8;
-+    let mut num: u16 = 0;
-+    let mut semi = false;
-+    loop {
-+        if input.read(&mut byte).ok()? == 0 {
-+            return None;
++    match std::io::stdin().read_line(&mut line) {
++        Ok(0) => None,
++        Ok(_) => {
++            if line.ends_with('\n') {
++                line.pop();
++                if line.ends_with('\r') {
++                    line.pop();
++                }
++            }
++            Some(line)
 +        }
-+        match py_key(&mut phase, &mut num, &mut semi, byte[0]) {
-+            PyAct::More => {}
-+            PyAct::Submit => {
-+                let _ = output.write_all(b"\n");
-+                let _ = output.flush();
-+                return Some(line);
-+            }
-+            PyAct::Eof => {
-+                if line.is_empty() {
-+                    return None;
-+                }
-+            }
-+            PyAct::Backspace => {
-+                if pos > 0 && pos <= line.len() {
-+                    pos -= 1;
-+                    line.remove(pos);
-+                    py_paint_backspace(&mut output, &line, pos);
-+                }
-+            }
-+            PyAct::Left => {
-+                if pos > 0 {
-+                    pos -= 1;
-+                    py_move(&mut output, 1, b'D');
-+                }
-+            }
-+            PyAct::Right => {
-+                if pos < line.len() {
-+                    pos += 1;
-+                    py_move(&mut output, 1, b'C');
-+                }
-+            }
-+            PyAct::Char(b) => {
-+                if pos > line.len() {
-+                    pos = line.len();
-+                }
-+                line.insert(pos, b as char);
-+                pos += 1;
-+                py_paint_insert(&mut output, &line, pos);
-+            }
-+        }
++        Err(_) => None,
 +    }
-+}
-+
-+enum PyAct {
-+    More,
-+    Submit,
-+    Eof,
-+    Backspace,
-+    Left,
-+    Right,
-+    Char(u8),
-+}
-+
-+fn py_key(phase: &mut u8, num: &mut u16, semi: &mut bool, byte: u8) -> PyAct {
-+    match *phase {
-+        1 => {
-+            if byte == b'[' {
-+                *phase = 2;
-+                *num = 0;
-+                *semi = false;
-+                return PyAct::More;
-+            }
-+            if byte == b'O' {
-+                *phase = 3;
-+                return PyAct::More;
-+            }
-+            if byte == 0x1b {
-+                return PyAct::More;
-+            }
-+            *phase = 0;
-+            py_ground(byte)
-+        }
-+        2 => match byte {
-+            b'0'..=b'9' => {
-+                if !*semi {
-+                    *num = num.saturating_mul(10).saturating_add((byte - b'0') as u16);
-+                }
-+                PyAct::More
-+            }
-+            b';' => {
-+                *semi = true;
-+                PyAct::More
-+            }
-+            0x1b => {
-+                *phase = 1;
-+                PyAct::More
-+            }
-+            0x20..=0x3f => PyAct::More,
-+            b'D' => {
-+                *phase = 0;
-+                PyAct::Left
-+            }
-+            b'C' => {
-+                *phase = 0;
-+                PyAct::Right
-+            }
-+            b'~' if *num == 3 => {
-+                *phase = 0;
-+                PyAct::Backspace
-+            }
-+            b'u' if *num == 8 || *num == 127 => {
-+                *phase = 0;
-+                PyAct::Backspace
-+            }
-+            _ => {
-+                *phase = 0;
-+                PyAct::More
-+            }
-+        },
-+        3 => {
-+            *phase = 0;
-+            match byte {
-+                b'D' => PyAct::Left,
-+                b'C' => PyAct::Right,
-+                _ => PyAct::More,
-+            }
-+        }
-+        _ => {
-+            if byte == 0x1b {
-+                *phase = 1;
-+                return PyAct::More;
-+            }
-+            py_ground(byte)
-+        }
-+    }
-+}
-+
-+fn py_ground(byte: u8) -> PyAct {
-+    match byte {
-+        b'\n' | b'\r' => PyAct::Submit,
-+        0x04 => PyAct::Eof,
-+        0x08 | 0x7f => PyAct::Backspace,
-+        b if b.is_ascii_graphic() || b == b' ' => PyAct::Char(b),
-+        _ => PyAct::More,
-+    }
-+}
-+
-+fn py_paint_backspace(output: &mut impl std::io::Write, line: &str, pos: usize) {
-+    if pos == line.len() {
-+        let _ = output.write_all(b"\x08 \x08");
-+        let _ = output.flush();
-+        return;
-+    }
-+    py_move(output, 1, b'D');
-+    let tail = line.get(pos..).unwrap_or("");
-+    let _ = output.write_all(tail.as_bytes());
-+    let _ = output.write_all(b" ");
-+    py_move(output, tail.len() + 1, b'D');
-+}
-+
-+fn py_paint_insert(output: &mut impl std::io::Write, line: &str, pos: usize) {
-+    if pos == 0 {
-+        return;
-+    }
-+    let ch = line.as_bytes()[pos - 1];
-+    let _ = output.write_all(&[ch]);
-+    let tail = line.get(pos..).unwrap_or("");
-+    if tail.is_empty() {
-+        let _ = output.flush();
-+        return;
-+    }
-+    let _ = output.write_all(tail.as_bytes());
-+    py_move(output, tail.len(), b'D');
-+}
-+
-+fn py_move(output: &mut impl std::io::Write, n: usize, dir: u8) {
-+    if n == 0 {
-+        return;
-+    }
-+    let mut raw = [0u8; 16];
-+    raw[0] = 0x1b;
-+    raw[1] = b'[';
-+    let mut tmp = [0u8; 8];
-+    let mut t = tmp.len();
-+    let mut v = n;
-+    while v > 0 && t > 0 {
-+        t -= 1;
-+        tmp[t] = b'0' + (v % 10) as u8;
-+        v /= 10;
-+    }
-+    let digits = &tmp[t..];
-+    raw[2..2 + digits.len()].copy_from_slice(digits);
-+    let end = 2 + digits.len();
-+    raw[end] = dir;
-+    let _ = output.write_all(&raw[..=end]);
-+    let _ = output.flush();
 +}
 +
 +fn run(

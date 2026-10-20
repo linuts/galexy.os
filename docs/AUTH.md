@@ -326,16 +326,16 @@ the flag because it lives in the sealed actor record.
 | Spawn kind | galfs credentials |
 | --- | --- |
 | Utility (`SPAWN_INHERIT`, or legacy `SPAWN_WAIT`) | Parent’s tokens, optionally ANDed with the `r10` rights mask (bits 8..15). Mask `0` keeps the full set |
-| Bare program (`testing/hello`, `testing/linger`, `/hello` with no arguments) | Parent’s `fs_root`, **empty tokens** (the mask does not apply). No loader |
-| `edit` | Same cards as a utility, plus `SPAWN_GRANT_KEYBOARD` (bit 3). The shell Cap-waits, so it is not reading that seat's keys at the same time |
-| Ramdisk program with arguments (`rustc hello.rs -o /hello`) | Same cards as a utility, plus `SPAWN_GRANT_QUERY` and `SPAWN_GRANT_LOADER` (bit 6). `rustc` lists the sysroot and spawns `gxld`. Power stays with the shell. Named utilities (`echo`, `ls`) do not get the loader |
-| galfs path with arguments | Same cards as a utility, plus `SPAWN_GRANT_QUERY`. No loader: a program the user wrote cannot spawn |
+| Bare program (`testing/hello`, `testing/linger`) | Parent’s `fs_root`, **empty tokens** (the mask does not apply). No loader, no keyboard. The prompt returns when the load finishes |
+| Foreground console program (`edit`, `python`, `rustc`, `python FILE`, a galfs ELF such as `/hello`) | Same cards as a utility, plus `SPAWN_GRANT_KEYBOARD` (bit 3). The shell Cap-waits, so it is not reading that seat's keys at the same time. `std::io::stdin` cooks the line. A background job clears the bit |
+| Ramdisk program with arguments (`rustc hello.rs -o /hello`) | Same cards as a utility, plus `SPAWN_GRANT_QUERY`, `SPAWN_GRANT_KEYBOARD`, and `SPAWN_GRANT_LOADER` (bit 6). `rustc` lists the sysroot and spawns `gxld`. Power stays with the shell. Named utilities (`echo`, `ls`) do not get the loader or the keyboard |
+| galfs path (`/hello`, with or without arguments) | Same cards as a utility, plus `SPAWN_GRANT_QUERY` and the keyboard. No loader: a program the user wrote cannot spawn |
 
 Every `SPAWN_WAIT` / `SPAWN_INHERIT` ramdisk binary is trusted code
-running with the caller’s cards. A galfs path with arguments inherits
-those cards too, because the user named it, and it does not receive
-the loader. A path with no arguments stays bare. The ramdisk is **measured, not
-signed**: `runner/build.rs` prints the tar’s SHA-256 at build and the
+running with the caller’s cards. A galfs path inherits those cards
+too, because the user named it, and it does not receive the loader.
+A ramdisk sample with no arguments (`testing/hello`) stays bare.
+The ramdisk is **measured, not signed**: `runner/build.rs` prints the tar’s SHA-256 at build and the
 kernel re-hashes it at boot (`ramdisk_test_passes` asserts equality).
 There is no allowlist; a hostile utility is a hostile operator
 (`THREAT.md` → Trust assumptions). Before any page is mapped the ELF

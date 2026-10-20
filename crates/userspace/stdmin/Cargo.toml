@@ -8,6 +8,10 @@ description = "Smallest std program on x86_64-unknown-galexy: plain fn main, Has
 name = "stdmin"
 path = "src/main.rs"
 
+[[bin]]
+name = "stdline"
+path = "src/stdline.rs"
+
 [dependencies]
 
 [build-dependencies]

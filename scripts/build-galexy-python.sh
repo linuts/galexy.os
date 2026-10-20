@@ -41,6 +41,12 @@ git -C "$SRC" checkout --detach "$REV"
 if [[ ! -f "$SRC/crates/galexy-python/Cargo.toml" ]]; then
     patch -d "$SRC" -p1 < "$ROOT/scripts/galexy-rustpython.patch"
 fi
+# The REPL calls `stdin.read_line`. That line is cooked only after
+# `cargo xtask sysroot` has rebuilt libstd. A checkout that still has
+# its own byte editor (`fn py_key`) will echo twice against that sysroot.
+if [[ -f "$SRC/crates/galexy-python/src/main.rs" ]] && grep -q 'fn py_key' "$SRC/crates/galexy-python/src/main.rs"; then
+    echo "build-galexy-python: checkout still has the old REPL editor; re-apply scripts/galexy-rustpython.patch before building against a cooked sysroot" >&2
+fi
 # The allow-list in this repo wins over the copy the patch planted.
 cp "$ROOT/scripts/python-allow.txt" "$SRC/crates/galexy-python/allow.txt"
 python3 - "$SRC" "$ROOT/scripts/python-frozen.txt" "$ROOT/scripts/python-allow.txt" <<'PY'

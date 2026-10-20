@@ -882,7 +882,11 @@ one per line. The shell keeps the current directory and accepts a leading
 `/` plus `owner@` on the first component. `echo`, `cat`, `edit`, `touch`, `mkdir`, `rm`, and `ls` are ramdisk
 programs: the shell composes the path and `spawn`s them. `ls` and `rm`
 also receive the query grant, so they can read the files snapshot.
-`edit` also receives the keyboard grant and the shell Cap-waits on it.
+`edit` receives the keyboard grant and the shell Cap-waits on it. So does
+any other foreground program whose stdin is the console (`python`,
+`rustc`, `python FILE`, a galfs ELF such as `/hello`). The PAL cooks
+that keyboard into one line for `std::io::stdin` (echo, backspace,
+arrows, Enter, Ctrl-D). A pipeline does not: the pipe is stdin, raw.
 `ls [path]` lists that directory (`ls Desktop`, `ls -l testing`).
 The shell composes the path onto the current directory and passes it
 as the program argument. A missing name is `ls: no such directory`.
@@ -924,8 +928,9 @@ rejects a name that already has a live task (`NoResource`), so typing
 `shell` cannot start a second keyboard-less shell that spins. The child
 always receives the console, and it writes the console of the task that
 spawned it. `SPAWN_GRANT_KEYBOARD` also gives the child the keyboard
-so an interactive program (`edit`) can read keys while the shell
-Cap-waits. The loader stays with the shell except when the spawn
+so a foreground program (`edit`, `python`, `rustc`, a galfs ELF) can
+read keys while the shell Cap-waits. `std::io::stdin` cooks that
+stream into a line. A pipe spawn leaves the bit clear. The loader stays with the shell except when the spawn
 sets `SPAWN_GRANT_LOADER`: a ramdisk program with arguments
 (`rustc hello.rs -o /hello`) receives it so the compiler can start
 `gxld`. A galfs path does not, and neither do named utilities (`echo`,
@@ -1476,8 +1481,9 @@ must land at init with wait rights once Milestone 53 lands.
 
 **Landed (spawn Cap + self/inspect).** `spawn` returns a process Cap
 (`PROC_CAP_BASE`…); `wait(cap)` / `kill(cap)` are syscalls. Shell
-utilities use `SPAWN_INHERIT` + Cap-wait; bare launches drop the Cap so
-zombies can reap. `SPAWN_WAIT` remains a park-until-exit convenience
+utilities use `SPAWN_INHERIT` + Cap-wait; bare ramdisk launches
+(`testing/hello`) drop the Cap so zombies can reap. A galfs program
+Cap-waits and receives the keyboard. `SPAWN_WAIT` remains a park-until-exit convenience
 (Cap still installed). Wait is by Cap/slot generation, not by name.
 `SELF_INDEX` is an inspect Cap (`read` → `id=… name=… state=…`);
 `getpid` is not the API. `tasks` / `threads` listings show debug ids;

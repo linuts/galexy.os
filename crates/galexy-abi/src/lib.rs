@@ -270,8 +270,9 @@ pub const SPAWN_INHERIT: u64 = 4;
 /// `spawn` grant bit (`r10`, bit 3): also give the new task the keyboard.
 ///
 /// The parent is expected to Cap-wait, so it is not reading keys at the
-/// same time. The shell sets this for `edit` (and `nano`, the same
-/// program) and for the Python REPL.
+/// same time. The shell sets this for a foreground program whose stdin
+/// is the console (`edit`, `python`, `rustc`, a galfs ELF), and for the
+/// Python REPL. A pipeline does not: the pipe is stdin.
 pub const SPAWN_GRANT_KEYBOARD: u64 = 8;
 /// `spawn` grant bit (`r10`, bit 4): move up to two of the caller's file
 /// or pipe Caps into the child before it runs.
