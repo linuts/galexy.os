@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#149](https://github.com/linuts/galexy.os/pull/149) — Runner — `cargo build` writes the
+  `galexy-os` images, not one BIOS and UEFI image per test kernel. Guest
+  programs are packed without debug info. A leftover `nano` ELF is removed
+  instead of warned about on every build.
 - [#150](https://github.com/linuts/galexy.os/pull/150) — Shell — `tasks` lists each live
   program with its tty, why it waits, cpu ticks, and parent. The status
   bar counts those programs. It used to count the cooperative queue, so

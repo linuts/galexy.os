@@ -290,7 +290,7 @@ is logged in at boot. `useradd`, `grant`, `share`, `su` are in
 | Kernel log and the console | COM1 (this terminal under `cargo run`; type here). Kernel log lines are hidden unless `--debug`; `dmesg` after login still shows them. `--display` adds the framebuffer window |
 | Runner serial logs | `$TMPDIR/galexy-serial-<image>-<n>.log` (`/tmp` on Linux), one per boot; uploaded as a CI artifact on failure |
 | Ramdisk measurement | `cargo:warning=ramdisk.tar sha256=…` at build; `[test-ramdisk] sha256 …` at boot |
-| Images | `target/debug/build/runner-*/out/galexy-os-{bios,uefi}.img` is the main kernel; `galexy-os-gxld-*.img` carries the `gxld`-linked ramdisk; `galexy-os-crashseam-*.img` the `crash-seam` shell; `galexy-os-test-*-*.img` one per test kernel |
+| Images | `target/debug/build/runner-*/out/galexy-os-{bios,uefi}.img` is the main kernel; `galexy-os-gxld-*.img` carries the `gxld`-linked ramdisk; `galexy-os-crashseam-*.img` the `crash-seam` shell. `cargo build` writes those. A `test-*` image is written the first time that test boots |
 | Screen | `scripts/boot-test.sh <image> <secs>` dumps `shot.ppm` and `serial.log` under `$WORKDIR` |
 
 **What to read while it boots.** `docs/ABI.md` (which syscalls are

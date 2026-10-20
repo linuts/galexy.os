@@ -155,8 +155,6 @@ fn main() {
     );
 
     for (name, kernel) in &bins {
-        let bios_path = out_dir.join(format!("{}-bios.img", name));
-        let uefi_path = out_dir.join(format!("{}-uefi.img", name));
         let ramdisk = if have_rustc && (name == "test-rustc" || name == "test-rustc-hello") {
             &rustc_ramdisk
         } else if have_python && name == "test-python" {
@@ -164,25 +162,13 @@ fn main() {
         } else {
             &ramdisk_path
         };
-
-        bootloader::BiosBoot::new(kernel)
-            .set_ramdisk(ramdisk)
-            .create_disk_image(&bios_path)
-            .unwrap();
-        bootloader::UefiBoot::new(kernel)
-            .set_ramdisk(ramdisk)
-            .create_disk_image(&uefi_path)
-            .unwrap();
-
-        if !manifest.is_empty() {
-            manifest.push(';');
-        }
-        manifest.push_str(&format!(
-            "{}:{},{}",
-            name,
-            bios_path.display(),
-            uefi_path.display()
-        ));
+        // `cargo run` boots `galexy-os` (or a variant below). Writing a
+        // BIOS and a UEFI image for every test kernel copies the ramdisk
+        // twice per kernel, which is what holds `runner(build)`. The
+        // boot test creates a missing `test-*` image from the paths in
+        // the manifest.
+        let pack = !name.starts_with("test-");
+        emit_image(&mut manifest, &out_dir, name, kernel, ramdisk, pack);
     }
 
     if let Some((_, kernel)) = bins.iter().find(|(name, _)| name == "galexy-os") {
@@ -249,24 +235,7 @@ fn main() {
             variants.push(("galexy-os-desk", &desk));
         }
         for (variant, ramdisk) in variants {
-            let bios_path = out_dir.join(format!("{variant}-bios.img"));
-            let uefi_path = out_dir.join(format!("{variant}-uefi.img"));
-            bootloader::BiosBoot::new(kernel)
-                .set_ramdisk(ramdisk)
-                .create_disk_image(&bios_path)
-                .unwrap();
-            bootloader::UefiBoot::new(kernel)
-                .set_ramdisk(ramdisk)
-                .create_disk_image(&uefi_path)
-                .unwrap();
-            if !manifest.is_empty() {
-                manifest.push(';');
-            }
-            manifest.push_str(&format!(
-                "{variant}:{},{}",
-                bios_path.display(),
-                uefi_path.display()
-            ));
+            emit_image(&mut manifest, &out_dir, variant, kernel, ramdisk, true);
         }
     } else {
         println!("cargo:rustc-env=GALEXY_HAVE_DESK=0");
@@ -805,6 +774,95 @@ fn is_release() -> bool {
     std::env::var("PROFILE").as_deref() == Ok("release")
 }
 
+/// Dev debuginfo made the ramdisk ~100 MiB. Every image copies that
+/// archive, so guest builds keep no debug info.
+fn guest_debug_off(cmd: &mut Command) {
+    cmd.env("CARGO_PROFILE_DEV_DEBUG", "0");
+    cmd.env("CARGO_PROFILE_RELEASE_DEBUG", "0");
+}
+
+/// `name:bios,uefi,kernel,ramdisk`. `pack` writes the two images now.
+fn emit_image(
+    manifest: &mut String,
+    out_dir: &Path,
+    name: &str,
+    kernel: &Path,
+    ramdisk: &Path,
+    pack: bool,
+) {
+    let bios_path = out_dir.join(format!("{name}-bios.img"));
+    let uefi_path = out_dir.join(format!("{name}-uefi.img"));
+    if pack {
+        bootloader::BiosBoot::new(kernel)
+            .set_ramdisk(ramdisk)
+            .create_disk_image(&bios_path)
+            .unwrap();
+        bootloader::UefiBoot::new(kernel)
+            .set_ramdisk(ramdisk)
+            .create_disk_image(&uefi_path)
+            .unwrap();
+    }
+    if !manifest.is_empty() {
+        manifest.push(';');
+    }
+    manifest.push_str(&format!(
+        "{name}:{},{},{},{}",
+        bios_path.display(),
+        uefi_path.display(),
+        kernel.display(),
+        ramdisk.display()
+    ));
+}
+
+fn llvm_objcopy() -> Option<PathBuf> {
+    use std::sync::OnceLock;
+    static TOOL: OnceLock<Option<PathBuf>> = OnceLock::new();
+    TOOL.get_or_init(|| {
+        let rustc = std::env::var_os("RUSTC")?;
+        let out = Command::new(rustc)
+            .arg("--print")
+            .arg("sysroot")
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let sysroot = String::from_utf8(out.stdout).ok()?;
+        let host = std::env::var("HOST").ok()?;
+        let tool =
+            PathBuf::from(sysroot.trim()).join(format!("lib/rustlib/{host}/bin/llvm-objcopy"));
+        tool.is_file().then_some(tool)
+    })
+    .clone()
+}
+
+/// Drop DWARF from a guest ELF. The ramdisk only needs the code.
+fn strip_debug(bytes: Vec<u8>) -> Vec<u8> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let Some(tool) = llvm_objcopy() else {
+        return bytes;
+    };
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("galexy-strip-{}-{n}", std::process::id()));
+    if std::fs::write(&path, &bytes).is_err() {
+        return bytes;
+    }
+    let ok = Command::new(tool)
+        .arg("--strip-debug")
+        .arg(&path)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    let stripped = if ok {
+        std::fs::read(&path).unwrap_or(bytes)
+    } else {
+        bytes
+    };
+    let _ = std::fs::remove_file(&path);
+    stripped
+}
+
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -959,15 +1017,17 @@ fn read_elf_dir(
         if name.starts_with('.') {
             continue;
         }
+        if !allow.contains(&name) {
+            // A removed bin (nano, when it became `edit`) stays in the
+            // target dir and was re-read on every `cargo build`.
+            let _ = std::fs::remove_file(&path);
+            continue;
+        }
         let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         if !bytes.starts_with(b"\x7fELF") {
             continue;
         }
-        if !allow.contains(&name) {
-            println!("cargo:warning=skipping stale userspace ELF {name} (not a current bin)");
-            continue;
-        }
-        bins.insert(ramdisk_entry_name(&name), bytes);
+        bins.insert(ramdisk_entry_name(&name), strip_debug(bytes));
     }
     bins
 }
@@ -1020,6 +1080,7 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
     }
     cmd.env_remove("RUSTC_WRAPPER");
     cmd.env_remove("GALEXY_SYSROOT");
+    guest_debug_off(&mut cmd);
     let status = cmd.status().expect("spawn cargo for galexy userspace");
     if !status.success() {
         panic!("galexy userspace build failed");
@@ -1054,6 +1115,7 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
             repo_root().join("scripts/galexy-rustc-wrapper.py"),
         );
         cmd.env("GALEXY_SYSROOT", &sysroot);
+        guest_debug_off(&mut cmd);
         let status = cmd
             .status()
             .unwrap_or_else(|e| panic!("spawn cargo for {pkg}: {e}"));
@@ -1066,7 +1128,7 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
             .join(pkg);
         let bytes = std::fs::read(&elf).unwrap_or_else(|e| panic!("read {}: {e}", elf.display()));
         assert!(bytes.starts_with(b"\x7fELF"), "{pkg} is not an ELF");
-        bins.insert(ramdisk_entry_name(pkg), bytes);
+        bins.insert(ramdisk_entry_name(pkg), strip_debug(bytes));
     }
     let (obj_a, obj_b) = gxld::sample_objects();
     bins.insert("testing/a.o".into(), obj_a);
@@ -1092,6 +1154,7 @@ fn build_crash_shell(out_dir: &Path) -> Vec<u8> {
     if release {
         cmd.arg("--release");
     }
+    guest_debug_off(&mut cmd);
     let status = cmd.status().expect("spawn cargo for crash-seam shell");
     if !status.success() {
         panic!("crash-seam shell build failed");
@@ -1101,7 +1164,8 @@ fn build_crash_shell(out_dir: &Path) -> Vec<u8> {
         .join(galexy_target_dir_name())
         .join(profile)
         .join("shell");
-    std::fs::read(&elf).unwrap_or_else(|e| panic!("read {}: {e}", elf.display()))
+    let bytes = std::fs::read(&elf).unwrap_or_else(|e| panic!("read {}: {e}", elf.display()));
+    strip_debug(bytes)
 }
 
 /// Build the host `gxld` binary, then every userspace program with
@@ -1144,6 +1208,7 @@ fn build_gxld_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Ve
         "RUSTFLAGS",
         format!("-Clinker={} -Clinker-flavor=ld", gxld.display()),
     );
+    guest_debug_off(&mut cmd);
     let status = cmd.status().expect("spawn cargo for gxld-linked userspace");
     if !status.success() {
         panic!("gxld-linked userspace build failed");

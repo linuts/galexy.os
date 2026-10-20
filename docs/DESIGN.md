@@ -1281,9 +1281,10 @@ Two tiers, chosen after studying the bootloader crate's own test suite:
 - **QEMU integration tests** (`cargo test -p runner`): each test is a small
   kernel *binary* under `crates/galexy-os/src/bin/` that boots the full
   stack, asserts, and exits via `exit_qemu` (`isa-debug-exit`, port 0xF4).
-  `runner/build.rs` builds one disk image per kernel binary and exposes them
-  via the `GALEXY_IMAGES` manifest; `runner/tests/boot.rs` boots each
-  headless and asserts exit codes + serial markers. Any panic in a test
+  `runner/build.rs` records one manifest entry per kernel binary and writes
+  the `galexy-os` images (and the desk / gxld / crash variants). A `test-*`
+  image is written the first time that test boots. `runner/tests/boot.rs`
+  boots each headless and asserts exit codes + serial markers. Any panic in a test
   kernel becomes a Failed exit automatically (Success instead when
   `expect_panic` was registered).
 - Headless interactive verification (`scripts/boot-test.sh`): injects HMP
