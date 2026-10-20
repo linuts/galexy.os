@@ -213,72 +213,153 @@ fn deliver_bytes(bytes: &[u8]) {
     }
 }
 
-/// Bytes of a host chord that might be Ctrl+Up / Ctrl+Down.
+/// Bytes of a host chord that might be Ctrl+Up / Ctrl+Down, or the
+/// terminal-size reply `ESC [ 8 ; rows ; cols t`.
 ///
 /// A terminal sends `ESC [ 1 ; 5 A` (modifier 5 is Ctrl). rxvt sends
-/// `ESC [ a`. Either one scrolls. Anything else, including a plain
-/// arrow and Ctrl+Shift (`1 ; 6`), is queued unchanged.
+/// `ESC [ a`. Either one scrolls. The size reply is how the status
+/// strip learns the host's last row; it is not queued as keys.
+/// Anything else, including a plain arrow and Ctrl+Shift (`1 ; 6`),
+/// is queued unchanged.
+const RX_CAP: usize = 16;
+
 struct RxSeq {
-    buf: [u8; 6],
+    buf: [u8; RX_CAP],
     len: u8,
 }
 
 static RX_SEQ: Mutex<RxSeq> = Mutex::new(RxSeq {
-    buf: [0; 6],
+    buf: [0; RX_CAP],
     len: 0,
 });
 
 enum RxAction {
     Hold,
     Scroll(i16),
-    Bytes([u8; 6], usize),
+    Size(usize, usize),
+    Bytes([u8; RX_CAP], usize),
 }
 
-fn classify(buf: &[u8]) -> RxAction {
+fn known_scroll(buf: &[u8]) -> Option<i16> {
     if buf == b"\x1b[1;5A" || buf == b"\x1b[a" {
-        return RxAction::Scroll(-1);
-    }
-    if buf == b"\x1b[1;5B" || buf == b"\x1b[b" {
-        return RxAction::Scroll(1);
-    }
-    // Still assembling `ESC [ 1 ; 5`. The final `A` or `B` decides.
-    const PREFIX: &[u8] = b"\x1b[1;5";
-    if buf.len() <= PREFIX.len() && PREFIX.starts_with(buf) {
-        RxAction::Hold
+        Some(-1)
+    } else if buf == b"\x1b[1;5B" || buf == b"\x1b[b" {
+        Some(1)
     } else {
-        RxAction::Bytes([0; 6], 0)
+        None
     }
+}
+
+fn scroll_prefix(buf: &[u8]) -> bool {
+    const SEQS: [&[u8]; 4] = [b"\x1b[1;5A", b"\x1b[1;5B", b"\x1b[a", b"\x1b[b"];
+    SEQS.iter()
+        .any(|seq| seq.starts_with(buf) && buf.len() < seq.len())
+}
+
+/// `ESC [ 8 ; <rows> ; <cols> t`, the reply to `CSI 18 t`.
+fn size_report(buf: &[u8]) -> Option<(usize, usize)> {
+    let rest = buf.strip_prefix(b"\x1b[8;")?;
+    let (rows, rest) = take_num(rest)?;
+    let rest = rest.strip_prefix(b";")?;
+    let (cols, rest) = take_num(rest)?;
+    if rest == b"t" && rows > 0 && cols > 0 {
+        Some((rows, cols))
+    } else {
+        None
+    }
+}
+
+fn take_num(bytes: &[u8]) -> Option<(usize, &[u8])> {
+    if bytes.is_empty() || !bytes[0].is_ascii_digit() {
+        return None;
+    }
+    let mut n = 0usize;
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        if i >= 4 {
+            return None;
+        }
+        n = n * 10 + (bytes[i] - b'0') as usize;
+        i += 1;
+    }
+    Some((n, &bytes[i..]))
+}
+
+fn size_prefix(buf: &[u8]) -> bool {
+    const STEM: &[u8] = b"\x1b[8;";
+    if buf.len() <= STEM.len() {
+        return STEM.starts_with(buf);
+    }
+    if !buf.starts_with(STEM) {
+        return false;
+    }
+    let mut i = STEM.len();
+    let start = i;
+    while i < buf.len() && buf[i].is_ascii_digit() {
+        if i - start >= 4 {
+            return false;
+        }
+        i += 1;
+    }
+    if i == start || i == buf.len() {
+        return i != start;
+    }
+    if buf[i] != b';' {
+        return false;
+    }
+    i += 1;
+    if i == buf.len() {
+        return true;
+    }
+    let start = i;
+    while i < buf.len() && buf[i].is_ascii_digit() {
+        if i - start >= 4 {
+            return false;
+        }
+        i += 1;
+    }
+    i != start && i == buf.len()
 }
 
 fn step(seq: &mut RxSeq, b: u8) -> RxAction {
     if b == 0x1b && seq.len > 0 {
         let n = seq.len as usize;
         let buf = seq.buf;
+        seq.buf = [0; RX_CAP];
         seq.buf[0] = 0x1b;
         seq.len = 1;
         return RxAction::Bytes(buf, n);
     }
     if b != 0x1b && seq.len == 0 {
-        let mut buf = [0u8; 6];
+        let mut buf = [0u8; RX_CAP];
         buf[0] = b;
         return RxAction::Bytes(buf, 1);
+    }
+    if seq.len as usize >= RX_CAP {
+        let n = seq.len as usize;
+        let buf = seq.buf;
+        seq.len = 0;
+        return RxAction::Bytes(buf, n);
     }
     let i = seq.len as usize;
     seq.buf[i] = b;
     seq.len += 1;
     let n = seq.len as usize;
-    match classify(&seq.buf[..n]) {
-        RxAction::Hold => RxAction::Hold,
-        RxAction::Scroll(delta) => {
-            seq.len = 0;
-            RxAction::Scroll(delta)
-        }
-        RxAction::Bytes(_, _) => {
-            let buf = seq.buf;
-            seq.len = 0;
-            RxAction::Bytes(buf, n)
-        }
+    let buf = &seq.buf[..n];
+    if let Some(delta) = known_scroll(buf) {
+        seq.len = 0;
+        return RxAction::Scroll(delta);
     }
+    if let Some((rows, cols)) = size_report(buf) {
+        seq.len = 0;
+        return RxAction::Size(rows, cols);
+    }
+    if scroll_prefix(buf) || size_prefix(buf) {
+        return RxAction::Hold;
+    }
+    let full = seq.buf;
+    seq.len = 0;
+    RxAction::Bytes(full, n)
 }
 
 fn deliver_byte(b: u8) {
@@ -291,6 +372,7 @@ fn deliver_byte(b: u8) {
     match action {
         RxAction::Hold => {}
         RxAction::Scroll(delta) => crate::drivers::keyboard::scroll_by_lines(delta),
+        RxAction::Size(rows, cols) => crate::drivers::screen::note_host_size(rows, cols),
         RxAction::Bytes(buf, n) => {
             for &byte in &buf[..n] {
                 push_host_byte(byte);

@@ -381,11 +381,12 @@ fn about() {
     ]);
 }
 
-/// Renders the live status bar on the screen's last line.
+/// Renders the live status bar on the screen's last line, and on COM1.
 ///
 /// IRQ-gated as a whole: this touches the sched table, the heap and the
 /// screen while rewriting pixels — none of these locks may be held across a
-/// preemption (lock-audit rule, docs/DESIGN.md).
+/// preemption (lock-audit rule, docs/DESIGN.md). The headless terminal
+/// gets the same text on its last row; see `screen::draw_status_bar`.
 pub fn render_status_bar() {
     use x86_64::instructions::interrupts;
     interrupts::without_interrupts(render_status_bar_inner);
@@ -429,8 +430,9 @@ fn render_status_bar_inner() {
     }
 
     // Paint the status row without moving the text cursor — see
-    // `screen::draw_status_bar`. Using set_pos/out_plain here could leave
-    // the input cursor on the status row so typed keys never appear above it.
+    // `screen::draw_status_bar`, which also mirrors this string to COM1.
+    // Using set_pos/out_plain here could leave the input cursor on the
+    // status row so typed keys never appear above it.
     screen::draw_status_bar(BAR_BG, BAR_FG, &text);
 }
 

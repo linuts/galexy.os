@@ -11,6 +11,7 @@
 
 use crate::sync::Mutex;
 use core::fmt;
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use crate::serial_println;
 use noto_sans_mono_bitmap::{get_raster, FontWeight, RasterHeight};
@@ -197,8 +198,9 @@ const MIRROR_CAP: usize = 48 * 1024;
 /// Pending host-terminal bytes. Filled while [`SCREEN`] is held, sent
 /// after that lock drops so the UART wait is not an IF=0 section.
 ///
-/// Lock order: [`SCREEN`], then this, then [`GRIDS`]. [`flush_serial_view`]
-/// takes this alone and must not take [`SCREEN`].
+/// Lock order: [`SCREEN`], then [`STATUS_TEXT`] (dropped before this),
+/// then this, then [`GRIDS`]. [`flush_serial_view`] takes this alone
+/// and must not take [`SCREEN`].
 struct MirrorBuf {
     bytes: [u8; MIRROR_CAP],
     /// Start of bytes not yet handed to the UART.
@@ -206,6 +208,8 @@ struct MirrorBuf {
     len: usize,
     /// The host is on the alternate screen, showing a scroll view.
     alt: bool,
+    /// Scroll-region height last sent to the host. `0` means none yet.
+    region: usize,
 }
 
 static MIRROR: Mutex<MirrorBuf> = Mutex::new(MirrorBuf {
@@ -213,7 +217,59 @@ static MIRROR: Mutex<MirrorBuf> = Mutex::new(MirrorBuf {
     pos: 0,
     len: 0,
     alt: false,
+    region: 0,
 });
+
+/// Host terminal size from `CSI 18 t` (`CSI 8 ; rows ; cols t` on the way back).
+///
+/// `0` until the host answers. Receive stores these; the main loop paints.
+static HOST_ROWS: AtomicUsize = AtomicUsize::new(0);
+static HOST_COLS: AtomicUsize = AtomicUsize::new(0);
+static HOST_DIRTY: AtomicBool = AtomicBool::new(false);
+/// Second of the last `CSI 18 t`. `u64::MAX` means none has been sent.
+static LAST_QUERY_SEC: AtomicU64 = AtomicU64::new(u64::MAX);
+
+/// Last status line, sanitized to printable ASCII. The scroll redraw
+/// paints this same text on the host's bottom row.
+///
+/// Lock order: [`SCREEN`], then this, then [`MIRROR`].
+struct StatusText {
+    bytes: [u8; 200],
+    len: usize,
+}
+
+static STATUS_TEXT: Mutex<StatusText> = Mutex::new(StatusText {
+    bytes: [0; 200],
+    len: 0,
+});
+
+/// Records the host terminal's character size. The receive path calls
+/// this; it does not take the screen lock.
+pub fn note_host_size(rows: usize, cols: usize) {
+    if rows == 0 || cols == 0 || rows > 9999 || cols > 9999 {
+        return;
+    }
+    let prev_rows = HOST_ROWS.swap(rows, Ordering::Relaxed);
+    let prev_cols = HOST_COLS.swap(cols, Ordering::Relaxed);
+    if prev_rows != rows || prev_cols != cols {
+        HOST_DIRTY.store(true, Ordering::Release);
+    }
+}
+
+/// Rows the host reported. `0` until [`note_host_size`].
+pub fn host_rows() -> usize {
+    HOST_ROWS.load(Ordering::Relaxed)
+}
+
+/// Columns the host reported. `0` until [`note_host_size`].
+pub fn host_cols() -> usize {
+    HOST_COLS.load(Ordering::Relaxed)
+}
+
+/// True once when the host size changes. The main loop repaints the strip.
+pub fn take_host_resize() -> bool {
+    HOST_DIRTY.swap(false, Ordering::AcqRel)
+}
 
 impl MirrorBuf {
     fn reset(&mut self) {
@@ -325,6 +381,116 @@ fn row_width(cells: &[Cell]) -> usize {
     width
 }
 
+fn copy_status(dst: &mut [u8]) -> usize {
+    let cache = STATUS_TEXT.lock();
+    let n = cache.len.min(dst.len());
+    dst[..n].copy_from_slice(&cache.bytes[..n]);
+    n
+}
+
+fn store_status(text: &str) {
+    let mut cache = STATUS_TEXT.lock();
+    let mut n = 0;
+    for byte in text.bytes() {
+        if n >= cache.bytes.len() {
+            break;
+        }
+        cache.bytes[n] = if (0x20..=0x7e).contains(&byte) {
+            byte
+        } else {
+            b' '
+        };
+        n += 1;
+    }
+    cache.len = n;
+}
+
+fn push_region(mirror: &mut MirrorBuf, rows: usize) -> bool {
+    let mut buf = [0u8; 16];
+    let mut n = 0;
+    buf[n] = 0x1b;
+    n += 1;
+    buf[n] = b'[';
+    n += 1;
+    buf[n] = b'1';
+    n += 1;
+    buf[n] = b';';
+    n += 1;
+    n += write_dec(&mut buf[n..], rows.saturating_sub(1).max(1));
+    buf[n] = b'r';
+    n += 1;
+    mirror.push(&buf[..n])
+}
+
+fn push_size_query(mirror: &mut MirrorBuf) {
+    let sec = crate::arch::timer_ticks() / 1000;
+    let rows = HOST_ROWS.load(Ordering::Relaxed);
+    let last = LAST_QUERY_SEC.load(Ordering::Relaxed);
+    let due = if rows == 0 {
+        last != sec
+    } else {
+        last == u64::MAX || sec.saturating_sub(last) >= 5
+    };
+    if due && mirror.push(b"\x1b[18t") {
+        LAST_QUERY_SEC.store(sec, Ordering::Relaxed);
+    }
+}
+
+/// Draws `text` on the host's last row and restores the cursor.
+///
+/// The framebuffer already reserves its last row. A headless terminal
+/// does not, until it tells us the height: `CSI 18 t` answers with
+/// `CSI 8 ; rows ; cols t`, and the scroll region then keeps every
+/// later line above the strip. Row 999 clamps to the last row on a
+/// terminal that has not answered yet. The whole paint sits between
+/// cursor saves so a prompt on screen stays where it was.
+fn paint_status_line(mirror: &mut MirrorBuf, text: &[u8]) {
+    if text.is_empty() || !mirror.push(b"\x1b7\x1b[s") {
+        return;
+    }
+    let rows = HOST_ROWS.load(Ordering::Relaxed);
+    let cols = HOST_COLS.load(Ordering::Relaxed);
+    if !mirror.alt && rows >= 2 && mirror.region != rows && push_region(mirror, rows) {
+        mirror.region = rows;
+    }
+    let row = if rows >= 2 { rows } else { 999 };
+    if !push_cup(mirror, row, 1) || !mirror.push(b"\x1b[2K\x1b[7m") {
+        let _ = mirror.push(b"\x1b[0m\x1b[u\x1b8");
+        return;
+    }
+    let known = cols >= 2;
+    let width = if known {
+        cols.min(200)
+    } else {
+        text.len().min(40)
+    };
+    if !push_clipped(mirror, text, width, known) {
+        let _ = mirror.push(b"\x1b[0m\x1b[u\x1b8");
+        return;
+    }
+    let _ = mirror.push(b"\x1b[0m\x1b[u\x1b8");
+}
+
+fn push_clipped(mirror: &mut MirrorBuf, text: &[u8], width: usize, pad: bool) -> bool {
+    let shown = text.len().min(width);
+    if !mirror.push(&text[..shown]) {
+        return false;
+    }
+    if !pad {
+        return true;
+    }
+    let mut left = width - shown;
+    let spaces = [b' '; 32];
+    while left > 0 {
+        let n = left.min(spaces.len());
+        if !mirror.push(&spaces[..n]) {
+            return false;
+        }
+        left -= n;
+    }
+    true
+}
+
 fn push_row(mirror: &mut MirrorBuf, cells: &[Cell]) -> bool {
     let mut rev = false;
     let mut code = 39u8;
@@ -353,7 +519,9 @@ fn push_row(mirror: &mut MirrorBuf, cells: &[Cell]) -> bool {
 /// deadlock a write syscall that queues the next frame.
 fn flush_serial_view() {
     loop {
-        let mut chunk = [0u8; 256];
+        // One status paint fits in a single burst, so a console write
+        // cannot land between its cursor save and restore.
+        let mut chunk = [0u8; 512];
         let n = x86_64::instructions::interrupts::without_interrupts(|| {
             let mut mirror = MIRROR.lock();
             if mirror.pos >= mirror.len {
@@ -1067,6 +1235,8 @@ impl ScreenWriter {
         if self.focus != self.shown {
             return;
         }
+        let mut text = [0u8; 200];
+        let n = copy_status(&mut text);
         let mut mirror = MIRROR.lock();
         if !mirror.alt {
             return;
@@ -1074,6 +1244,10 @@ impl ScreenWriter {
         mirror.reset();
         if mirror.push(b"\x1b[?1049l\x1b[0m") {
             mirror.alt = false;
+            // The alternate screen saved the main margins. Re-send them
+            // with the strip so the next mirrored line stays above it.
+            mirror.region = 0;
+            paint_status_line(&mut mirror, &text[..n]);
         }
     }
 
@@ -1116,6 +1290,8 @@ impl ScreenWriter {
                 break;
             }
         }
+        // The 1 Hz strip paint draws the bottom row on this screen too.
+        // Folding it into this frame would split it across UART bursts.
         let _ = mirror.push(b"\x1b[H");
     }
 
@@ -1496,6 +1672,15 @@ pub fn init(boot_info: &mut bootloader_api::info::BootInfo) {
     };
     writer.clear();
     *SCREEN.lock() = Some(writer);
+    // Ask the host how tall it is before the login prompt fills the
+    // window, so the scroll region can reserve the status row.
+    {
+        let mut mirror = MIRROR.lock();
+        if mirror.push(b"\x1b[18t") {
+            LAST_QUERY_SEC.store(crate::arch::timer_ticks() / 1000, Ordering::Relaxed);
+        }
+    }
+    flush_serial_view();
 }
 
 /// Runs `f` with exclusive access to the screen, if initialized.
@@ -1621,6 +1806,12 @@ pub fn draw_status_bar(bg: Color, fg: Color, text: &str) {
         screen.char_y = saved_y;
         screen.fg = saved_fg;
         screen.clamp_to_text();
+        store_status(text);
+        let mut cached = [0u8; 200];
+        let n = copy_status(&mut cached);
+        let mut mirror = MIRROR.lock();
+        push_size_query(&mut mirror);
+        paint_status_line(&mut mirror, &cached[..n]);
     });
 }
 

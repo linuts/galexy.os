@@ -209,8 +209,22 @@ moves, the shown cells are written to COM1 on the alternate screen
 height clamp, so the top of the view — the line just revealed — stays
 visible. Returning to the live rows, or the next glyph, leaves that
 screen (`ESC [ ? 1049 l`) and the following mirrored bytes continue
-the transcript. The redraw is queued under the screen lock and sent
-after the lock drops, so the UART wait is not an IF=0 section. The
+the transcript. The status strip is drawn on that view's last row
+too. The redraw is queued under the screen lock and sent
+after the lock drops, so the UART wait is not an IF=0 section.
+
+The live strip uses the same UART. At screen init the kernel sends
+`CSI 18 t`. A terminal answers `CSI 8 ; rows ; cols t`, which the
+receive path stores and does not queue as keys. The next status
+redraw saves the cursor (`ESC 7` and `CSI s`), sets the scroll
+region to every row but the last (`CSI 1 ; rows-1 r`), erases that
+last row, writes the strip in reverse, and restores the cursor.
+Later console lines scroll inside the region, so the strip stays
+put under the prompt. Until the host answers, the strip is written
+at row 999, which a terminal clamps to its last row. A resize is
+picked up by asking again every five seconds. The bytes of one
+paint sit between the cursor saves, with no newline, so a password
+line on COM1 stays a password line. The
 UART lock is dropped before a received byte is delivered. One `_print` holds the lock
 for the whole line, so two CPUs cannot tear it, and transmit harvests
 pending receive bytes while the FIFO is busy so a paste during that hold
@@ -1011,7 +1025,8 @@ line. The ring-3 shell returns its prompt when the load finishes.
 The status bar (`render_status_bar`) redraws the bottom line
 in-place once per second: TTY, uptime, heap used/size, galfs blocks,
 active tasks, free frames, then abbreviated per-thread ticks when they
-fit — via `screen::draw_status_bar`. It never moves the text cursor
+fit — via `screen::draw_status_bar`. The same string is mirrored to
+COM1 on the host's last row (see serial). It never moves the text cursor
 (hijacking `set_pos` for the bar could leave typing on the status row so
 input vanished on the next redraw). That row is not part of the text
 scroll, and the bar is drawn without feeding the CSI parser. Arrow keys
@@ -1216,7 +1231,10 @@ IRQ that already has IF=0) around the acquire.
 | Frame `USED` then `USABLE` | nothing else | yes |
 | Heap `INNER` | nothing else; growth drops it before shootdown. A second grower that lost the race polls `shootdown::service_pending()` while it waits and never re-enables IF (galexy.os#86) | yes |
 | `ATA` / virtio `DEV` then `DMA` | nothing else. The timer may take `DMA` alone to read `used.idx`; it never takes `DEV`. The waiter holds `DEV` across the halt and stays on that CPU (`xfer_wait_cpu`) so a same-CPU switch cannot spin on it | with the caller (syscall or BSP); `used.idx` disables interrupts around `DMA` |
-| Screen `SCREEN` / `GRIDS` | nothing else | BSP; IRQ handlers do not take it |
+| Screen `SCREEN` | `STATUS_TEXT`, then `MIRROR`, then `GRIDS` | BSP; IRQ handlers do not take it. COM1 receive records the host's row count in atomics and does not take these |
+| `STATUS_TEXT` | nothing else | with `SCREEN` |
+| `MIRROR` | `GRIDS` while a scroll frame is queued. `flush_serial_view` takes `MIRROR` alone and does not take `SCREEN` | queued inside the screen section; the UART wait is after that section |
+| `GRIDS` | nothing else | with `SCREEN` |
 | Keyboard queue | nothing else (drop warning takes `DMESG` after the queue lock drops) | IRQ may push; readers gate |
 | `DMESG` | nothing else | with `serial_println!`; never acquired before `THREADS` |
 | COM1 `SERIAL1` | nothing (received bytes are delivered after it drops) | TX path gates; the receive IRQ takes it |
