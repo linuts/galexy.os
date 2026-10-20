@@ -142,9 +142,8 @@ boots ask `Volume passphrase:` for the one you chose. After login a
 fastfetch-style **command center** dashboard prints (OS / TTY / user /
 uptime / heap / galfs / tasks), then the prompt is `admin@galexy> `.
 The bottom status bar keeps a live strip (uptime, heap, galfs, tasks,
-frames). Headless, that strip is the terminal's last row: the kernel
-asks the host for its height, later lines scroll above the strip, and
-the cursor stays on the prompt. Up/down arrows recall session history
+frames). Headless, that strip is the terminal's last row. The input
+line stays on the row above it, and the cursor stays on that line. Up/down arrows recall session history
 (written to `shell.history` on `logout`). Ctrl+Up and Ctrl+Down scroll
 that output one line, so a long command does not need `more` or `less`.
 The next character you type returns to the bottom.

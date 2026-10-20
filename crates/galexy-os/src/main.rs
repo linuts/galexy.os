@@ -47,6 +47,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Hand the framebuffer to the seats: wipe the banner so init/shell
     // cannot race mid-glyph with leftover [ok] lines beside Login as:.
     screen::clear_screen();
+    // Reserve the host's bottom row before the login prompt is mirrored,
+    // when the cursor sample is still the one taken at screen init.
+    shell::render_status_bar();
     // One ring-3 shell per F-key, each pinned to the BSP. F1 stays named
     // `shell`. The kernel loop paints a console switch, drains launches,
     // and keeps the status bar. Without that ELF, the in-kernel line

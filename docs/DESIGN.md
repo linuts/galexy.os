@@ -214,17 +214,19 @@ too. The redraw is queued under the screen lock and sent
 after the lock drops, so the UART wait is not an IF=0 section.
 
 The live strip uses the same UART. At screen init the kernel sends
-`CSI 18 t`. A terminal answers `CSI 8 ; rows ; cols t`, which the
-receive path stores and does not queue as keys. The next status
-redraw saves the cursor (`ESC 7` and `CSI s`), sets the scroll
-region to every row but the last (`CSI 1 ; rows-1 r`), erases that
-last row, writes the strip in reverse, and restores the cursor.
-Later console lines scroll inside the region, so the strip stays
-put under the prompt. Until the host answers, the strip is written
-at row 999, which a terminal clamps to its last row. A resize is
-picked up by asking again every five seconds. The bytes of one
-paint sit between the cursor saves, with no newline, so a password
-line on COM1 stays a password line. The
+`CSI 18 t` and `CSI 6 n`. The terminal answers `CSI 8 ; rows ; cols t`
+and `CSI row ; col R`. The receive path stores both and does not
+queue them as keys. A sample taken before later console output is
+discarded, so the cursor is not moved back onto a stale cell.
+When the cursor is already on the last row, that line is scrolled
+up and the cursor follows it. The scroll region is then every row
+but the last. The strip is drawn there between a cursor save and
+restore (`ESC 7`, text, `ESC 8`), which puts the cursor back on the
+input line above the strip. The region is not sent again on later
+redraws: setting it homes the cursor. Until both replies are in,
+nothing is painted, so the strip is not written onto the prompt.
+A resize asks for the size again every five seconds. One paint has
+no newline, so a password line on COM1 stays a password line. The
 UART lock is dropped before a received byte is delivered. One `_print` holds the lock
 for the whole line, so two CPUs cannot tear it, and transmit harvests
 pending receive bytes while the FIFO is busy so a paste during that hold

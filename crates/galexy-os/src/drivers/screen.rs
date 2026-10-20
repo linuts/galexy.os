@@ -226,8 +226,21 @@ static MIRROR: Mutex<MirrorBuf> = Mutex::new(MirrorBuf {
 static HOST_ROWS: AtomicUsize = AtomicUsize::new(0);
 static HOST_COLS: AtomicUsize = AtomicUsize::new(0);
 static HOST_DIRTY: AtomicBool = AtomicBool::new(false);
+/// Cursor position from `CSI 6 n` (`CSI row ; col R`). `0` until a sample
+/// matches the console generation that asked for it.
+static HOST_CUR_ROW: AtomicUsize = AtomicUsize::new(0);
+static HOST_CUR_COL: AtomicUsize = AtomicUsize::new(0);
+/// Bumps on every mirrored console byte run, so a cursor sample taken
+/// before that output is not applied on top of the new input line.
+static HOST_OUTPUT: AtomicU64 = AtomicU64::new(0);
+/// `HOST_OUTPUT` value when the last `CSI 6 n` was sent.
+static CURSOR_QUERY_AT: AtomicU64 = AtomicU64::new(u64::MAX);
+/// `HOST_OUTPUT` value captured with the current cursor sample.
+static CURSOR_SAMPLE_GEN: AtomicU64 = AtomicU64::new(u64::MAX);
 /// Second of the last `CSI 18 t`. `u64::MAX` means none has been sent.
 static LAST_QUERY_SEC: AtomicU64 = AtomicU64::new(u64::MAX);
+/// `timer_ticks` of the last `CSI 6 n`.
+static LAST_CPR_TICK: AtomicU64 = AtomicU64::new(0);
 
 /// Last status line, sanitized to printable ASCII. The scroll redraw
 /// paints this same text on the host's bottom row.
@@ -251,9 +264,50 @@ pub fn note_host_size(rows: usize, cols: usize) {
     }
     let prev_rows = HOST_ROWS.swap(rows, Ordering::Relaxed);
     let prev_cols = HOST_COLS.swap(cols, Ordering::Relaxed);
+    if prev_rows != 0 && prev_rows != rows {
+        // The old sample pointed at a different grid.
+        HOST_CUR_ROW.store(0, Ordering::Relaxed);
+        CURSOR_SAMPLE_GEN.store(u64::MAX, Ordering::Relaxed);
+    }
     if prev_rows != rows || prev_cols != cols {
         HOST_DIRTY.store(true, Ordering::Release);
     }
+}
+
+/// Records a cursor-position reply. Ignored when console output moved
+/// the cursor after the query, so the sample is not applied late.
+pub fn note_host_cursor(row: usize, col: usize) {
+    if row == 0 || col == 0 || row > 9999 || col > 9999 {
+        return;
+    }
+    let now = HOST_OUTPUT.load(Ordering::Relaxed);
+    if CURSOR_QUERY_AT.load(Ordering::Relaxed) != now {
+        HOST_CUR_ROW.store(0, Ordering::Relaxed);
+        return;
+    }
+    HOST_CUR_ROW.store(row, Ordering::Relaxed);
+    HOST_CUR_COL.store(col, Ordering::Relaxed);
+    CURSOR_SAMPLE_GEN.store(now, Ordering::Relaxed);
+    HOST_DIRTY.store(true, Ordering::Release);
+}
+
+/// Console bytes just moved the host cursor. A cursor sample from
+/// before this write no longer describes the input line.
+pub fn note_console_output() {
+    HOST_OUTPUT.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Latest cursor sample. `(0, 0)` until [`note_host_cursor`] keeps one.
+pub fn host_cursor() -> (usize, usize) {
+    (
+        HOST_CUR_ROW.load(Ordering::Relaxed),
+        HOST_CUR_COL.load(Ordering::Relaxed),
+    )
+}
+
+/// Lets a test kernel deliver a cursor reply the receive path will keep.
+pub fn test_expect_cursor() {
+    CURSOR_QUERY_AT.store(HOST_OUTPUT.load(Ordering::Relaxed), Ordering::Relaxed);
 }
 
 /// Rows the host reported. `0` until [`note_host_size`].
@@ -405,7 +459,7 @@ fn store_status(text: &str) {
     cache.len = n;
 }
 
-fn push_region(mirror: &mut MirrorBuf, rows: usize) -> bool {
+fn push_margins(mirror: &mut MirrorBuf, bottom: usize) -> bool {
     let mut buf = [0u8; 16];
     let mut n = 0;
     buf[n] = 0x1b;
@@ -416,7 +470,7 @@ fn push_region(mirror: &mut MirrorBuf, rows: usize) -> bool {
     n += 1;
     buf[n] = b';';
     n += 1;
-    n += write_dec(&mut buf[n..], rows.saturating_sub(1).max(1));
+    n += write_dec(&mut buf[n..], bottom.max(1));
     buf[n] = b'r';
     n += 1;
     mirror.push(&buf[..n])
@@ -436,39 +490,102 @@ fn push_size_query(mirror: &mut MirrorBuf) {
     }
 }
 
-/// Draws `text` on the host's last row and restores the cursor.
-///
-/// The framebuffer already reserves its last row. A headless terminal
-/// does not, until it tells us the height: `CSI 18 t` answers with
-/// `CSI 8 ; rows ; cols t`, and the scroll region then keeps every
-/// later line above the strip. Row 999 clamps to the last row on a
-/// terminal that has not answered yet. The whole paint sits between
-/// cursor saves so a prompt on screen stays where it was.
-fn paint_status_line(mirror: &mut MirrorBuf, text: &[u8]) {
-    if text.is_empty() || !mirror.push(b"\x1b7\x1b[s") {
+fn push_cursor_query(mirror: &mut MirrorBuf) {
+    let now = crate::arch::timer_ticks();
+    let last = LAST_CPR_TICK.load(Ordering::Relaxed);
+    if now.saturating_sub(last) < 100 {
         return;
     }
+    if mirror.push(b"\x1b[6n") {
+        LAST_CPR_TICK.store(now, Ordering::Relaxed);
+        CURSOR_QUERY_AT.store(HOST_OUTPUT.load(Ordering::Relaxed), Ordering::Relaxed);
+    }
+}
+
+/// Cursor sample that still matches the console output it was taken against.
+fn fresh_cursor() -> Option<(usize, usize)> {
+    let row = HOST_CUR_ROW.load(Ordering::Relaxed);
+    let col = HOST_CUR_COL.load(Ordering::Relaxed);
+    let gen = CURSOR_SAMPLE_GEN.load(Ordering::Relaxed);
+    if row == 0 || col == 0 || gen != HOST_OUTPUT.load(Ordering::Relaxed) {
+        return None;
+    }
+    Some((row, col))
+}
+
+/// Puts the input cursor on a row above the status line and reserves
+/// that line. Returns false when the host has not reported a cursor
+/// that still matches the console.
+///
+/// Setting the scroll region homes the cursor on xterm, so the input
+/// position is written back explicitly. A cursor already on the last
+/// row is scrolled up with the line it sits on; restoring it there
+/// would paint the strip on top of the prompt.
+fn establish_status_row(mirror: &mut MirrorBuf, rows: usize, cols: usize) -> bool {
+    let Some((row, col)) = fresh_cursor() else {
+        push_cursor_query(mirror);
+        return false;
+    };
+    let col = col.clamp(1, cols);
+    let on_last = row >= rows;
+    if on_last {
+        // Full-screen margins, then index at the bottom: the input line
+        // moves up one and the cursor follows it.
+        if !push_margins(mirror, rows)
+            || !push_cup(mirror, rows, col)
+            || !mirror.push(b"\x1bD\x1b[A")
+        {
+            return false;
+        }
+    }
+    let park = if on_last { rows - 1 } else { row.min(rows - 1) };
+    if !push_margins(mirror, rows - 1) || !push_cup(mirror, park.max(1), col) {
+        return false;
+    }
+    mirror.region = rows;
+    true
+}
+
+/// Redraws the reserved status row and restores the cursor that was
+/// already sitting above it. No scroll-region change: that homes the
+/// cursor and drops the input line.
+fn repaint_status_row(mirror: &mut MirrorBuf, text: &[u8], rows: usize, cols: usize) {
+    if text.is_empty() || !mirror.push(b"\x1b7") {
+        return;
+    }
+    // One short of the width: a character in the last column wraps on
+    // xterm and scrolls the input line.
+    let width = cols.min(200).saturating_sub(1).max(1);
+    if !push_cup(mirror, rows, 1) || !mirror.push(b"\x1b[2K\x1b[7m") {
+        let _ = mirror.push(b"\x1b[0m\x1b8");
+        return;
+    }
+    if !push_clipped(mirror, text, width, true) {
+        let _ = mirror.push(b"\x1b[0m\x1b8");
+        return;
+    }
+    let _ = mirror.push(b"\x1b[0m\x1b8");
+}
+
+/// Draws `text` on the host's last row without taking the input cursor.
+///
+/// Nothing is painted until the host reports its size and a cursor
+/// position that still matches the console. Guessing row 999 lands on
+/// the prompt once the window has scrolled.
+fn paint_status_line(mirror: &mut MirrorBuf, text: &[u8]) {
+    if mirror.alt {
+        return;
+    }
+    push_size_query(mirror);
     let rows = HOST_ROWS.load(Ordering::Relaxed);
     let cols = HOST_COLS.load(Ordering::Relaxed);
-    if !mirror.alt && rows >= 2 && mirror.region != rows && push_region(mirror, rows) {
-        mirror.region = rows;
-    }
-    let row = if rows >= 2 { rows } else { 999 };
-    if !push_cup(mirror, row, 1) || !mirror.push(b"\x1b[2K\x1b[7m") {
-        let _ = mirror.push(b"\x1b[0m\x1b[u\x1b8");
+    if rows < 2 || cols < 2 {
         return;
     }
-    let known = cols >= 2;
-    let width = if known {
-        cols.min(200)
-    } else {
-        text.len().min(40)
-    };
-    if !push_clipped(mirror, text, width, known) {
-        let _ = mirror.push(b"\x1b[0m\x1b[u\x1b8");
+    if mirror.region != rows && !establish_status_row(mirror, rows, cols) {
         return;
     }
-    let _ = mirror.push(b"\x1b[0m\x1b[u\x1b8");
+    repaint_status_row(mirror, text, rows, cols);
 }
 
 fn push_clipped(mirror: &mut MirrorBuf, text: &[u8], width: usize, pad: bool) -> bool {
@@ -1244,9 +1361,9 @@ impl ScreenWriter {
         mirror.reset();
         if mirror.push(b"\x1b[?1049l\x1b[0m") {
             mirror.alt = false;
-            // The alternate screen saved the main margins. Re-send them
-            // with the strip so the next mirrored line stays above it.
-            mirror.region = 0;
+            // The main screen kept its scroll region across the
+            // alternate buffer. Re-sending it would home the cursor
+            // onto the status row.
             paint_status_line(&mut mirror, &text[..n]);
         }
     }
@@ -1672,12 +1789,18 @@ pub fn init(boot_info: &mut bootloader_api::info::BootInfo) {
     };
     writer.clear();
     *SCREEN.lock() = Some(writer);
-    // Ask the host how tall it is before the login prompt fills the
-    // window, so the scroll region can reserve the status row.
+    // Ask the host how tall it is, and where the cursor sits, before the
+    // login prompt fills the window. The status row is reserved only
+    // after both answers, so it is not painted over the input line.
     {
         let mut mirror = MIRROR.lock();
+        let ticks = crate::arch::timer_ticks();
         if mirror.push(b"\x1b[18t") {
-            LAST_QUERY_SEC.store(crate::arch::timer_ticks() / 1000, Ordering::Relaxed);
+            LAST_QUERY_SEC.store(ticks / 1000, Ordering::Relaxed);
+        }
+        if mirror.push(b"\x1b[6n") {
+            LAST_CPR_TICK.store(ticks, Ordering::Relaxed);
+            CURSOR_QUERY_AT.store(HOST_OUTPUT.load(Ordering::Relaxed), Ordering::Relaxed);
         }
     }
     flush_serial_view();

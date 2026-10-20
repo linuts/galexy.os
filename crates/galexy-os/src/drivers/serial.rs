@@ -121,6 +121,8 @@ pub fn _print(args: fmt::Arguments) {
     if got > 0 {
         deliver_bytes(&stash[..got]);
     }
+    // Kernel log lines move the host cursor the same way console output does.
+    crate::drivers::screen::note_console_output();
 }
 
 /// COM1 receive interrupt (vector 36, ISA IRQ4). Drains the FIFO and
@@ -213,14 +215,14 @@ fn deliver_bytes(bytes: &[u8]) {
     }
 }
 
-/// Bytes of a host chord that might be Ctrl+Up / Ctrl+Down, or the
-/// terminal-size reply `ESC [ 8 ; rows ; cols t`.
+/// Bytes of a host chord that might be Ctrl+Up / Ctrl+Down, the
+/// terminal-size reply `ESC [ 8 ; rows ; cols t`, or the cursor reply
+/// `ESC [ row ; col R`.
 ///
 /// A terminal sends `ESC [ 1 ; 5 A` (modifier 5 is Ctrl). rxvt sends
-/// `ESC [ a`. Either one scrolls. The size reply is how the status
-/// strip learns the host's last row; it is not queued as keys.
-/// Anything else, including a plain arrow and Ctrl+Shift (`1 ; 6`),
-/// is queued unchanged.
+/// `ESC [ a`. Either one scrolls. The size and cursor replies place
+/// the status strip; they are not queued as keys. Anything else,
+/// including a plain arrow and Ctrl+Shift (`1 ; 6`), is queued unchanged.
 const RX_CAP: usize = 16;
 
 struct RxSeq {
@@ -237,6 +239,7 @@ enum RxAction {
     Hold,
     Scroll(i16),
     Size(usize, usize),
+    Cursor(usize, usize),
     Bytes([u8; RX_CAP], usize),
 }
 
@@ -321,6 +324,57 @@ fn size_prefix(buf: &[u8]) -> bool {
     i != start && i == buf.len()
 }
 
+/// `ESC [ <row> ; <col> R`, the reply to `CSI 6 n`.
+fn cursor_report(buf: &[u8]) -> Option<(usize, usize)> {
+    let rest = buf.strip_prefix(b"\x1b[")?;
+    let (row, rest) = take_num(rest)?;
+    let rest = rest.strip_prefix(b";")?;
+    let (col, rest) = take_num(rest)?;
+    if rest == b"R" && row > 0 && col > 0 {
+        Some((row, col))
+    } else {
+        None
+    }
+}
+
+/// A cursor report that has not reached its final `R` yet.
+fn cursor_prefix(buf: &[u8]) -> bool {
+    let Some(rest) = buf.strip_prefix(b"\x1b[") else {
+        return buf.len() < 2 && b"\x1b[".starts_with(buf);
+    };
+    if rest.is_empty() {
+        return true;
+    }
+    if !rest[0].is_ascii_digit() {
+        return false;
+    }
+    let mut i = 0;
+    while i < rest.len() && rest[i].is_ascii_digit() {
+        if i >= 4 {
+            return false;
+        }
+        i += 1;
+    }
+    if i == rest.len() {
+        return true;
+    }
+    if rest[i] != b';' {
+        return false;
+    }
+    i += 1;
+    if i == rest.len() {
+        return true;
+    }
+    let start = i;
+    while i < rest.len() && rest[i].is_ascii_digit() {
+        if i - start >= 4 {
+            return false;
+        }
+        i += 1;
+    }
+    i == rest.len()
+}
+
 fn step(seq: &mut RxSeq, b: u8) -> RxAction {
     if b == 0x1b && seq.len > 0 {
         let n = seq.len as usize;
@@ -354,7 +408,11 @@ fn step(seq: &mut RxSeq, b: u8) -> RxAction {
         seq.len = 0;
         return RxAction::Size(rows, cols);
     }
-    if scroll_prefix(buf) || size_prefix(buf) {
+    if let Some((row, col)) = cursor_report(buf) {
+        seq.len = 0;
+        return RxAction::Cursor(row, col);
+    }
+    if scroll_prefix(buf) || size_prefix(buf) || cursor_prefix(buf) {
         return RxAction::Hold;
     }
     let full = seq.buf;
@@ -373,6 +431,7 @@ fn deliver_byte(b: u8) {
         RxAction::Hold => {}
         RxAction::Scroll(delta) => crate::drivers::keyboard::scroll_by_lines(delta),
         RxAction::Size(rows, cols) => crate::drivers::screen::note_host_size(rows, cols),
+        RxAction::Cursor(row, col) => crate::drivers::screen::note_host_cursor(row, col),
         RxAction::Bytes(buf, n) => {
             for &byte in &buf[..n] {
                 push_host_byte(byte);

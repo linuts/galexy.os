@@ -49,5 +49,6 @@ fn emit_tty(tty: u8, bytes: &[u8]) {
     crate::drivers::screen::out_str_tty(tty, text);
     if crate::drivers::screen::shown_tty() == tty {
         crate::drivers::serial::write_bytes(bytes);
+        crate::drivers::screen::note_console_output();
     }
 }
