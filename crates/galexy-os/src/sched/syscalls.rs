@@ -1319,21 +1319,11 @@ fn render_stats(out: &mut TextBuf<'_>) {
 }
 
 fn render_tasks(out: &mut TextBuf<'_>) {
-    out.push(b"cooperative tasks: ");
-    out.push_u64(crate::sched::active_tasks() as u64);
-    out.push(b" active, ");
-    out.push_u64(crate::sched::spawned_total() as u64);
-    out.push(b" spawned since boot\npreemption: timer @ ~1kHz, round-robin incl. main loop\n");
-    // Process labels: debug id is for listings only (not a handle).
-    crate::sched::for_user_tasks(|id, name, state| {
-        out.push(b"id=");
-        out.push_u64(id);
-        out.push(b" name=");
-        out.push(name.as_bytes());
-        out.push(b" state=");
-        out.push(state.as_bytes());
-        out.push(b"\n");
-    });
+    // Same ceiling as the staged query buffer. The headline is written
+    // first, so a short read still carries the live count.
+    let mut raw = [0u8; MAX_READ as usize];
+    let n = crate::sched::write_user_tasks(&mut raw);
+    out.push(&raw[..n]);
 }
 
 fn render_files(out: &mut TextBuf<'_>) {

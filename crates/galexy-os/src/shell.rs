@@ -349,14 +349,15 @@ fn stats() {
 }
 
 fn tasks() {
-    out_lines(&[
-        alloc::format!(
-            "cooperative tasks: {} active, {} spawned since boot",
-            crate::sched::active_tasks(),
-            crate::sched::spawned_total()
-        ),
-        "preemption: timer @ ~1kHz, round-robin incl. main loop".into(),
-    ]);
+    let mut raw = [0u8; 1024];
+    let n = crate::sched::write_user_tasks(&mut raw);
+    let text = core::str::from_utf8(&raw[..n]).unwrap_or("");
+    let lines: Vec<String> = text
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(String::from)
+        .collect();
+    out_lines(&lines);
 }
 
 fn threads() {
@@ -410,7 +411,7 @@ fn render_status_bar_inner() {
         heap_size / 1024,
         crate::sched::galfs::blocks_used(),
         crate::sched::galfs::BLOCK_SLOTS,
-        crate::sched::active_tasks(),
+        crate::sched::live_user_tasks(),
         mm::free_frames(),
     );
     for (name, thread_ticks) in crate::sched::thread_stats() {

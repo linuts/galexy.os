@@ -73,7 +73,7 @@ pub(crate) fn show_help() {
     help_row(b"fetch", b"dashboard (alias: dashboard)");
     help_row(b"stats", b"uptime / frames / heap / galfs");
     help_row(b"dmesg", b"recent kernel log lines");
-    help_row(b"tasks", b"cooperative tasks");
+    help_row(b"tasks", b"tty, state, cpu, parent");
     help_row(b"threads", b"preemptive thread ticks");
     help_row(b"about", b"version blurb");
     help_row(b"clear", b"clear screen");
