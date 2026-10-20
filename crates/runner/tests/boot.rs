@@ -2626,6 +2626,8 @@ fn with_login<'a>(keys: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
 /// and are ignored. The sentence after a volume confirm is the next prompt,
 /// not leaked passphrase text.
 fn assert_passwords_masked(serial: &str) {
+    let serial = common::strip_host_chrome(serial);
+    let serial = serial.as_str();
     for marker in [
         "Password: ",
         "Confirm: ",
@@ -3170,6 +3172,40 @@ fn shell_password_paste_typing_e2e() {
         "overlong paste was not refused; serial:\n{serial}"
     );
     assert_passwords_masked(&serial);
+}
+
+/// Headless `cargo run` is COM1. The status strip has to show up there,
+/// not only on the framebuffer's last row.
+#[test]
+fn headless_status_bar_on_com1() {
+    let serial = boot_quiet_until(&image("galexy-os"), Duration::from_secs(90), |text| {
+        let Some(at) = text.find("F1 | up ") else {
+            return false;
+        };
+        let rest = &text[at..];
+        rest.contains("heap ") && rest.contains("\u{1b}8")
+    });
+    assert!(
+        serial.contains("F1 | up "),
+        "headless status strip missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("heap "),
+        "headless status strip missing the heap field; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("\u{1b}7"),
+        "status strip was not drawn around a saved cursor; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("\u{1b}[18t"),
+        "headless console did not ask the terminal for its size; serial:\n{serial}"
+    );
+    let visible = common::strip_host_chrome(&serial);
+    assert!(
+        !visible.contains("F1 | up "),
+        "status strip leaked into the console transcript:\n{visible}"
+    );
 }
 
 /// `cargo run` leaves kernel log lines off COM1. The login prompt is the

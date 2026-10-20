@@ -68,11 +68,16 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     loop {
         // Status bar refresh, once per second (timer-driven).
         let second = galexy_os::arch::timer_ticks() / 1000;
-        if second != last_second {
-            last_second = second;
+        let resized = screen::take_host_resize();
+        if second != last_second || resized {
+            if second != last_second {
+                last_second = second;
+                // Write-back: coalesce dirty galfs mutates into one dual-slot flush/sec.
+                sched::galfs::sync_if_dirty();
+            }
+            // Once a second, and again when the host reports its height,
+            // so the headless strip can reserve the bottom row.
             shell::render_status_bar();
-            // Write-back: coalesce dirty galfs mutates into one dual-slot flush/sec.
-            sched::galfs::sync_if_dirty();
         }
         // A queued launch loads on this loop (kernel page table). The
         // in-kernel editor only consumes keys when no ring-3 shell owns them.

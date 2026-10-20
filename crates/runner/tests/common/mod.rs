@@ -1051,6 +1051,45 @@ fn qmp_read_until(reader: &mut BufReader<UnixStream>, needle: &[u8], deadline: I
     }
 }
 
+/// Drops the headless status strip and the host-size query.
+///
+/// The strip is one cursor-save / cursor-restore burst (`ESC 7` … `ESC 8`)
+/// with no newline, so it lands in the middle of whatever line the console
+/// was writing — including `Password:`. The size query is `CSI 18 t`.
+pub fn strip_host_chrome(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = String::with_capacity(raw.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            if let Some(n) = chrome_span(&bytes[i..]) {
+                i += n;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+fn chrome_span(bytes: &[u8]) -> Option<usize> {
+    if bytes.starts_with(b"\x1b[18t") {
+        return Some(5);
+    }
+    if bytes.len() >= 2 && bytes[0] == 0x1b && bytes[1] == b'7' {
+        let window = bytes.len().min(512);
+        let mut j = 2;
+        while j + 1 < window {
+            if bytes[j] == 0x1b && bytes[j + 1] == b'8' {
+                return Some(j + 2);
+            }
+            j += 1;
+        }
+    }
+    None
+}
+
 /// Shell transcript with kernel timestamp lines and NUL padding removed.
 ///
 /// Kernel `serial_println!` prefixes lines with `Ns: …` (uptime seconds).
@@ -1059,6 +1098,7 @@ fn qmp_read_until(reader: &mut BufReader<UnixStream>, needle: &[u8], deadline: I
 /// past the prompt. Indexes into this string stay stable as the log grows:
 /// only shell and boot text remain, in order.
 fn typing_visible(raw: &str) -> String {
+    let raw = strip_host_chrome(raw);
     let bytes = raw.as_bytes();
     let mut out = String::with_capacity(raw.len());
     let mut i = 0;
@@ -1425,4 +1465,10 @@ fn boot_and_type_cmd(
     let _ = child.wait();
     let _ = std::fs::remove_file(&sock);
     std::fs::read_to_string(serial_path).unwrap_or_default()
+}
+
+#[test]
+fn strip_host_chrome_keeps_the_password_line() {
+    let raw = "Password: *\u{1b}7\u{1b}[s\u{1b}[1;23r\u{1b}[24;1H\u{1b}[2K\u{1b}[7mF1 | up 1.0s | heap 12/1024K | frames 3\u{1b}[0m\u{1b}[u\u{1b}8*\nLogin as:\u{1b}[18t";
+    assert_eq!(strip_host_chrome(raw), "Password: **\nLogin as:");
 }

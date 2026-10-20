@@ -366,6 +366,19 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     );
     assert!(galexy_os::drivers::keyboard::pop_key().is_none());
 
+    // `CSI 18 t` is answered with `CSI 8 ; rows ; cols t`. That reply
+    // sizes the headless status row; it must not become keystrokes.
+    galexy_os::drivers::serial::test_rx(b"\x1b[8;");
+    galexy_os::drivers::serial::test_rx(b"30;100t");
+    assert_eq!(screen::host_rows(), 30, "host rows were not recorded");
+    assert_eq!(screen::host_cols(), 100, "host cols were not recorded");
+    assert!(
+        galexy_os::drivers::keyboard::pop_key().is_none(),
+        "the size reply was queued as keys"
+    );
+    galexy_os::drivers::serial::test_rx(b"Z");
+    assert_eq!(galexy_os::drivers::keyboard::pop_key(), Some('Z'));
+
     /* --- tab, CR, CSI color, erase leaves the status row --- */
 
     screen::clear_screen();
