@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#146](https://github.com/linuts/galexy.os/pull/146) — Shell — The live status strip is drawn
+  on the headless terminal's last row. The framebuffer bar was the only
+  copy, so `cargo run` never showed it.
 - [#145](https://github.com/linuts/galexy.os/pull/145) — Shell — The release root lists commands,
   `Desktop/`, `lib/`, and one target file. Test programs stay on the
   ramdisk `cargo test` boots. The banner is `1.0.0`.
