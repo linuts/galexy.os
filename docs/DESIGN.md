@@ -1029,8 +1029,14 @@ the program's output always lands on its own line, never on an input
 line. The ring-3 shell returns its prompt when the load finishes.
 The status bar (`render_status_bar`) redraws the bottom line
 in-place once per second: TTY, uptime, heap used/size, galfs blocks,
-active tasks, free frames, then abbreviated per-thread ticks when they
-fit — via `screen::draw_status_bar`. The same string is mirrored to
+live user programs, free frames, then abbreviated per-thread ticks when they
+fit — via `screen::draw_status_bar`. That count is running and waiting
+ring-3 programs (`live_user_tasks`), the same set `tasks` lists. Each
+`tasks` line carries the debug id, tty, why the program is parked
+(`run`, `key`, `sleep`, `pipe-r`, `pipe-w`, `disk`, `chan`, `init`,
+`futex`, `child`, `load`, or `wait`), cpu ticks, parent, and name.
+The cooperative step queue is a separate counter and stays empty on a
+normal boot. The same string is mirrored to
 COM1 on the host's last row (see serial). It never moves the text cursor
 (hijacking `set_pos` for the bar could leave typing on the status row so
 input vanished on the next redraw). That row is not part of the text

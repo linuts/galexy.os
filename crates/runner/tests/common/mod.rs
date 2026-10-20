@@ -1130,6 +1130,7 @@ pub fn boot_status_terminal(image: &Image) -> String {
             && text.contains("\x1b[23;8H")
             && text.contains("F1 | up ")
             && text.contains("\x1b8")
+            && status_strip_live_tasks(&text)
         {
             break;
         }
@@ -1139,6 +1140,23 @@ pub fn boot_status_terminal(image: &Image) -> String {
     let _ = child.wait();
     let _ = std::fs::remove_file(&sock_path);
     String::from_utf8_lossy(&raw).into_owned()
+}
+
+/// True when a status-strip paint counted at least one live program.
+///
+/// The field is `tasks N` (a space, then digits). The `tasks` command
+/// prints `tasks:` and does not match.
+pub fn status_strip_live_tasks(text: &str) -> bool {
+    let mut rest = text;
+    while let Some(at) = rest.find("tasks ") {
+        let after = &rest[at + "tasks ".len()..];
+        let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if digits.parse::<u32>().ok().is_some_and(|n| n > 0) {
+            return true;
+        }
+        rest = &rest[at + "tasks ".len()..];
+    }
+    false
 }
 
 fn windows_count(haystack: &[u8], needle: &[u8]) -> usize {
