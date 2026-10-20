@@ -8,6 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#148](https://github.com/linuts/galexy.os/pull/148) — Shell — `ls Desktop` and `ls -l Desktop`
+  list that directory. The shell used to reject every argument except `-l`.
 - [#146](https://github.com/linuts/galexy.os/pull/146) — Shell — The live status strip is drawn
   on the headless terminal's last row. The framebuffer bar was the only
   copy, so `cargo run` never showed it.
