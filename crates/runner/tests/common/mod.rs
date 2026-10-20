@@ -9,6 +9,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Parsed entry from the `GALEXY_IMAGES` manifest emitted by build.rs.
@@ -19,6 +20,25 @@ pub struct Image {
     pub bios: String,
     /// UEFI boot image path.
     pub uefi: String,
+    /// Kernel ELF. Empty when the manifest has no source path.
+    kernel: String,
+    /// Ramdisk the image boots. Empty when the manifest has no source path.
+    ramdisk: String,
+}
+
+/// Parses one `name:bios,uefi,kernel,ramdisk` manifest entry.
+fn parse_image(entry: &str) -> Image {
+    let (name, rest) = entry.split_once(':').expect("manifest entry has ':'");
+    let mut parts = rest.split(',');
+    let bios = parts.next().expect("manifest has bios");
+    let uefi = parts.next().expect("manifest has uefi");
+    Image {
+        name: name.to_string(),
+        bios: bios.to_string(),
+        uefi: uefi.to_string(),
+        kernel: parts.next().unwrap_or("").to_string(),
+        ramdisk: parts.next().unwrap_or("").to_string(),
+    }
 }
 
 /// Parses the build-script manifest into image entries.
@@ -26,24 +46,64 @@ pub fn images() -> Vec<Image> {
     env!("GALEXY_IMAGES")
         .split(';')
         .filter(|entry| !entry.is_empty())
-        .map(|entry| {
-            let (name, rest) = entry.split_once(':').expect("manifest entry has ':'");
-            let (bios, uefi) = rest.split_once(',').expect("manifest has bios,uefi");
-            Image {
-                name: name.to_string(),
-                bios: bios.to_string(),
-                uefi: uefi.to_string(),
-            }
-        })
+        .map(parse_image)
         .collect()
 }
 
-/// Finds the image for `name`, panicking the test if absent.
+/// Finds the image for `name`, creating a `test-*` disk image when
+/// `cargo build` left that file unwritten.
 pub fn image(name: &str) -> Image {
-    images()
+    let img = images()
         .into_iter()
         .find(|img| img.name == name)
-        .unwrap_or_else(|| panic!("no image built for kernel binary '{name}'"))
+        .unwrap_or_else(|| panic!("no image built for kernel binary '{name}'"));
+    ensure_image(&img);
+    img
+}
+
+fn ensure_image(img: &Image) {
+    if img.kernel.is_empty() || img.ramdisk.is_empty() {
+        return;
+    }
+    static GATE: Mutex<()> = Mutex::new(());
+    let _hold = GATE.lock().unwrap_or_else(|err| err.into_inner());
+    let kernel = Path::new(&img.kernel);
+    let ramdisk = Path::new(&img.ramdisk);
+    let bios = Path::new(&img.bios);
+    let uefi = Path::new(&img.uefi);
+    if !image_fresh(bios, kernel, ramdisk) {
+        bootloader::BiosBoot::new(kernel)
+            .set_ramdisk(ramdisk)
+            .create_disk_image(bios)
+            .unwrap_or_else(|err| panic!("bios image {}: {err}", img.name));
+    }
+    if !image_fresh(uefi, kernel, ramdisk) {
+        bootloader::UefiBoot::new(kernel)
+            .set_ramdisk(ramdisk)
+            .create_disk_image(uefi)
+            .unwrap_or_else(|err| panic!("uefi image {}: {err}", img.name));
+    }
+}
+
+fn image_fresh(image: &Path, kernel: &Path, ramdisk: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(image) else {
+        return false;
+    };
+    let Ok(img_t) = meta.modified() else {
+        return false;
+    };
+    for src in [kernel, ramdisk] {
+        let Ok(src_meta) = std::fs::metadata(src) else {
+            return false;
+        };
+        let Ok(src_t) = src_meta.modified() else {
+            return false;
+        };
+        if src_t > img_t {
+            return false;
+        }
+    }
+    true
 }
 
 /// Exit code the `isa-debug-exit` device produces for `QemuExitCode::Success`.
