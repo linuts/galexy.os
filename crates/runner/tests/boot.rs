@@ -2220,9 +2220,9 @@ fn python_hello_typing_e2e() {
             ),
             ("python copy.py", "admin@galexy>"),
             ("cat out.txt", "alpha"),
-            ("tasks", "spawned since boot"),
+            ("tasks", "tasks: "),
         ],
-        "spawned since boot",
+        "tasks: ",
         Duration::from_secs(900),
     );
     let typed = serial
@@ -2233,9 +2233,7 @@ fn python_hello_typing_e2e() {
         "python hello.py did not print; serial:\n{serial}"
     );
     let copied = serial.rfind("alpha").expect("cat did not print the copy");
-    let tasks_at = serial
-        .rfind("spawned since boot")
-        .expect("tasks did not answer");
+    let tasks_at = serial.rfind("tasks: ").expect("tasks did not answer");
     assert!(copied < tasks_at, "cat ran after tasks; serial:\n{serial}");
     assert!(
         !serial[tasks_at..].contains("name=python"),
@@ -2853,7 +2851,7 @@ const QUERY_AFTER_LOGIN: &[(&str, &str)] = &[
     ("s", "s"),
     ("k", "k"),
     ("s", "s"),
-    ("ret", "cooperative tasks:"),
+    ("ret", "tasks: "),
     ("l", "l"),
     ("s", "s"),
     ("ret", "wc"),
@@ -3203,6 +3201,10 @@ fn headless_status_bar_on_com1() {
         "headless status strip missing the heap field; serial:\n{serial}"
     );
     assert!(
+        common::status_strip_live_tasks(&serial),
+        "status bar tasks stayed at 0; serial:\n{serial}"
+    );
+    assert!(
         !serial.contains("\u{1b}[999;"),
         "status strip guessed row 999 and covered the prompt; serial:\n{serial}"
     );
@@ -3302,13 +3304,42 @@ fn shell_query_typing_e2e() {
         serial.contains("thread-a:"),
         "typed `threads` never listed thread-a; serial:\n{serial}"
     );
+    let tasks_at = serial
+        .rfind("tasks: ")
+        .unwrap_or_else(|| panic!("typed `tasks` never produced the task line; serial:\n{serial}"));
+    let listing = &serial[tasks_at..];
+    let live: String = listing["tasks: ".len()..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     assert!(
-        serial.contains("cooperative tasks:"),
-        "typed `tasks` never produced the task line; serial:\n{serial}"
+        live.parse::<u32>().ok().is_some_and(|n| n > 0),
+        "tasks listing reported no live programs; serial:\n{serial}"
     );
     assert!(
-        serial.contains("id=") && serial.contains("name=shell"),
-        "typed `tasks` never listed a process Cap label; serial:\n{serial}"
+        listing.contains("id=")
+            && listing.contains("name=shell")
+            && listing.contains("name=init")
+            && listing.contains("tty=")
+            && listing.contains("cpu=")
+            && listing.contains("parent=init")
+            && listing.contains(" key cpu="),
+        "typed `tasks` never listed tty, wait, cpu, and parent; serial:\n{serial}"
+    );
+    let dash = serial
+        .find("command center")
+        .unwrap_or_else(|| panic!("login dashboard missing; serial:\n{serial}"));
+    let glance = &serial[dash..tasks_at];
+    let label = glance
+        .find("Tasks")
+        .unwrap_or_else(|| panic!("login dashboard did not show tasks; serial:\n{serial}"));
+    let line_end = glance[label..]
+        .find('\n')
+        .map(|n| label + n)
+        .unwrap_or(glance.len());
+    assert!(
+        glance[label..line_end].chars().any(|c| c.is_ascii_digit()),
+        "login dashboard tasks line had no count; serial:\n{serial}"
     );
     assert!(
         serial.contains("Galexy.OS v1.0.0"),

@@ -463,7 +463,7 @@ pub(crate) fn show_dashboard(tty: u8) {
     let tasks = read(tasks_cap(), &mut buf);
     if tasks.ok && tasks.value > 0 {
         let n = (tasks.value as usize).min(buf.len());
-        for_stat_line(&buf[..n], b"cooperative tasks:", b"Tasks    ");
+        for_stat_line(&buf[..n], b"tasks:", b"Tasks    ");
     }
 
     write_console(b"\nlive strip: status bar (bottom)  |  history: up/down\n\n");

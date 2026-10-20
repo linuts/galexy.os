@@ -124,7 +124,10 @@ Unknown codes decode to `Unsupported`. New codes append.
 ## What is not ABI
 
 - Task names and debug ids seen in `tasks` / `threads` / self
-  snapshots. Programs address each other by Cap, never by id.
+  snapshots. Programs address each other by Cap, never by id. The
+  `tasks` text starts with `tasks: N live` and one line per running or
+  waiting user program (`id`, `tty`, a wait label, `cpu`, `parent`,
+  `name`). That shape can grow.
 - Serial markers (`[init] …`, `[sched] reap …`). The runner reads them;
   programs must not.
 - The ramdisk tar layout and the GALF on-disk format (`GALFS.md` owns

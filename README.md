@@ -141,8 +141,8 @@ The login screen waits until the volume is open. The account name is
 boots ask `Volume passphrase:` for the one you chose. After login a
 fastfetch-style **command center** dashboard prints (OS / TTY / user /
 uptime / heap / galfs / tasks), then the prompt is `admin@galexy> `.
-The bottom status bar keeps a live strip (uptime, heap, galfs, tasks,
-frames). Headless, that strip is the terminal's last row. The input
+The bottom status bar keeps a live strip (uptime, heap, galfs, live
+programs, frames). Headless, that strip is the terminal's last row. The input
 line stays on the row above it, and the cursor stays on that line. Up/down arrows recall session history
 (written to `shell.history` on `logout`). Ctrl+Up and Ctrl+Down scroll
 that output one line, so a long command does not need `more` or `less`.
@@ -161,7 +161,7 @@ The next character you type returns to the bottom.
 | `echo hi \| cat` · `echo *` | One pipeline (pipe + `give`); one `*` per word in the current directory |
 | `whoami` / `users` / `useradd` / `passwd` / `volpass` / `quota` / `tokens` | Identity, cards, limits. `volpass` changes the volume passphrase |
 | `grant` / `revoke` / `share` / `unshare` / `su` | Access cards (see AUTH.md) |
-| `stats` / `tasks` / `threads` / `dmesg` / `sync` | Queries and the kernel log (after login) |
+| `stats` / `tasks` / `threads` / `dmesg` / `sync` | Queries and the kernel log (after login). `tasks` lists each live program: tty, why it waits, cpu ticks, and parent |
 | `echo $?` | Exit status of the last Cap-waited program |
 | `logout` | Back to the login screen |
 | `testing/hello` / `testing/linger` / `testing/nap` | Sample programs kept for tests |

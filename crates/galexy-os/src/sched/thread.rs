@@ -1629,22 +1629,158 @@ pub(crate) fn for_running_threads(mut each: impl FnMut(u64, &str, u64)) {
     });
 }
 
-/// Calls `each` for every non-freed user task: debug id, name, state label.
-pub(crate) fn for_user_tasks(mut each: impl FnMut(u64, &str, &str)) {
+/// User programs that still exist: running, or parked on sleep, a key,
+/// a pipe, a child, or another wait. Exited slots are zombies and are
+/// omitted. The cooperative queue ([`super::active_tasks`]) is a
+/// different counter and stays empty on a normal boot.
+fn user_is_live(thread: &Thread) -> bool {
+    if !thread.is_user {
+        return false;
+    }
+    matches!(
+        thread.state.load(Ordering::Relaxed),
+        STATE_RUNNING | STATE_WAITING
+    )
+}
+
+/// How many user programs are running or waiting.
+///
+/// This is the status-bar `tasks` count. It does not allocate, and it
+/// does not count the cooperative step queue.
+pub fn live_user_tasks() -> usize {
+    interrupts::without_interrupts(|| THREADS.lock().iter().filter(|t| user_is_live(t)).count())
+}
+
+/// Writes the `tasks` snapshot into `dst` and returns the byte count.
+///
+/// The first line is `tasks: N live`. Each following line is one live
+/// user program: `id`, `tty`, why it is parked (or `run`), `cpu` ticks,
+/// `parent`, and `name`. No heap: the query path calls this with
+/// interrupts clear.
+pub fn write_user_tasks(dst: &mut [u8]) -> usize {
     interrupts::without_interrupts(|| {
-        for thread in THREADS.lock().iter() {
-            if !thread.is_user {
+        let threads = THREADS.lock();
+        let live = threads.iter().filter(|t| user_is_live(t)).count() as u64;
+        let mut n = 0usize;
+        n += push_bytes(dst, n, b"tasks: ");
+        n += push_dec(dst, n, live);
+        n += push_bytes(dst, n, b" live\n");
+        for i in 0..threads.len() {
+            if !user_is_live(&threads[i]) {
                 continue;
             }
-            let state = match thread.state.load(Ordering::Relaxed) {
-                STATE_RUNNING => "running",
-                STATE_WAITING => "waiting",
-                STATE_EXITED => "exited",
-                _ => continue,
-            };
-            each(thread.debug_id, thread.name(), state);
+            n += push_task_line(dst, n, &threads, i);
         }
-    });
+        n
+    })
+}
+
+fn push_task_line(dst: &mut [u8], n: usize, threads: &[Thread], index: usize) -> usize {
+    let thread = &threads[index];
+    let id = thread.debug_id;
+    let ticks = thread.ticks.load(Ordering::Relaxed);
+    let state = thread.state.load(Ordering::Relaxed);
+    let io = thread.io_kind.load(Ordering::Relaxed);
+    let sleeping = thread.sleep_deadline.load(Ordering::Relaxed) != 0;
+    let wait_exit = thread.wait_for_exit.load(Ordering::Relaxed);
+    let wait_child = thread.wait_child_slot.load(Ordering::Relaxed);
+    let tty = thread.tty;
+    let is_init = thread.is_init;
+    let name_len = thread.name_len as usize;
+    let mut name = [0u8; NAME_CAP];
+    name[..name_len].copy_from_slice(&thread.name_bytes[..name_len]);
+    let parent_slot = thread.parent_slot;
+    let (parent, parent_len) = parent_name(threads, parent_slot);
+
+    let start = n;
+    let mut n = n;
+    n += push_bytes(dst, n, b"id=");
+    n += push_dec(dst, n, id);
+    n += push_bytes(dst, n, b" tty=");
+    if is_init {
+        n += push_bytes(dst, n, b"-");
+    } else {
+        n += push_dec(dst, n, u64::from(tty) + 1);
+    }
+    n += push_bytes(dst, n, b" ");
+    n += push_bytes(
+        dst,
+        n,
+        wait_label(state, sleeping, io, wait_exit, wait_child),
+    );
+    n += push_bytes(dst, n, b" cpu=");
+    n += push_dec(dst, n, ticks);
+    n += push_bytes(dst, n, b" parent=");
+    if parent_len == 0 {
+        n += push_bytes(dst, n, b"-");
+    } else {
+        n += push_bytes(dst, n, &parent[..parent_len]);
+    }
+    n += push_bytes(dst, n, b" name=");
+    n += push_bytes(dst, n, &name[..name_len]);
+    n += push_bytes(dst, n, b"\n");
+    n - start
+}
+
+fn parent_name(threads: &[Thread], slot: u8) -> ([u8; NAME_CAP], usize) {
+    if slot == 0 {
+        return ([0; NAME_CAP], 0);
+    }
+    let Some(parent) = threads.get(slot as usize - 1) else {
+        return ([0; NAME_CAP], 0);
+    };
+    let len = parent.name_len as usize;
+    let mut name = [0u8; NAME_CAP];
+    name[..len].copy_from_slice(&parent.name_bytes[..len]);
+    (name, len)
+}
+
+fn wait_label(state: u8, sleeping: bool, io: u8, wait_exit: bool, wait_child: u8) -> &'static [u8] {
+    if state == STATE_RUNNING {
+        return b"run";
+    }
+    if sleeping {
+        return b"sleep";
+    }
+    match io {
+        IO_KEYBOARD => b"key",
+        IO_PIPE_READ => b"pipe-r",
+        IO_PIPE_WRITE => b"pipe-w",
+        IO_BLOCK => b"disk",
+        IO_CHAN_RECV => b"chan",
+        IO_INIT_RPC => b"init",
+        IO_FUTEX => b"futex",
+        _ => {
+            if wait_exit {
+                b"child"
+            } else if wait_child != 0 {
+                b"load"
+            } else {
+                b"wait"
+            }
+        }
+    }
+}
+
+fn push_bytes(dst: &mut [u8], n: usize, bytes: &[u8]) -> usize {
+    let room = dst.len().saturating_sub(n);
+    let take = bytes.len().min(room);
+    dst[n..n + take].copy_from_slice(&bytes[..take]);
+    take
+}
+
+fn push_dec(dst: &mut [u8], n: usize, mut value: u64) -> usize {
+    if value == 0 {
+        return push_bytes(dst, n, b"0");
+    }
+    let mut tmp = [0u8; 20];
+    let mut i = tmp.len();
+    while value > 0 {
+        i -= 1;
+        tmp[i] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    push_bytes(dst, n, &tmp[i..])
 }
 
 /// Writes the current task's inspect line into `dst` (`id=… name=… state=…\n`).
