@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#150](https://github.com/linuts/galexy.os/pull/150) — Shell — `tasks` lists each live
+  program with its tty, why it waits, cpu ticks, and parent. The status
+  bar counts those programs. It used to count the cooperative queue, so
+  the strip stayed at `tasks 0`.
 - [#148](https://github.com/linuts/galexy.os/pull/148) — Shell — `ls Desktop` and `ls -l Desktop`
   list that directory. The shell used to reject every argument except `-l`.
 - [#147](https://github.com/linuts/galexy.os/pull/147) — Shell — The headless status strip
