@@ -977,6 +977,120 @@ fn run_until(
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 
+/// Headless boot that answers the status-bar queries.
+///
+/// The guest asks `CSI 18 t` and `CSI 6 n`. This replies with a 24×80
+/// terminal whose cursor is on the last row, column 8 — the case where
+/// painting the strip on that row would cover the input line. The
+/// returned bytes are everything the guest transmitted.
+pub fn boot_status_terminal(image: &Image) -> String {
+    let sock_path = scratch_path("status", "sock");
+    let _ = std::fs::remove_file(&sock_path);
+
+    let mut cmd = Command::new("qemu-system-x86_64");
+    cmd.arg("-M")
+        .arg("q35")
+        .arg("-m")
+        .arg("2G")
+        .arg("-drive")
+        .arg(format!(
+            "format=raw,file={},if=ide,index=0,snapshot=on",
+            image.bios
+        ))
+        .arg("-smp")
+        .arg("2");
+    apply_accel(&mut cmd);
+    cmd.arg("-device")
+        .arg("virtio-keyboard-pci")
+        .arg("-display")
+        .arg("none")
+        .arg("-monitor")
+        .arg("none")
+        .arg("-no-reboot")
+        .arg("-serial")
+        .arg(format!("unix:{},server=on,wait=off", sock_path.display()))
+        .arg("-device")
+        .arg("isa-debug-exit,iobase=0xf4,iosize=0x04");
+    let mut child = cmd
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to launch qemu-system-x86_64 (status terminal)");
+
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let stream = loop {
+        if child.try_wait().expect("try_wait failed").is_some() {
+            let _ = std::fs::remove_file(&sock_path);
+            panic!("qemu exited before the status serial socket connected");
+        }
+        if let Ok(stream) = UnixStream::connect(&sock_path) {
+            break stream;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&sock_path);
+            panic!("status serial socket never appeared");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .expect("status serial read timeout");
+    let mut stream = stream;
+    let mut raw = Vec::new();
+    let mut size_replies = 0usize;
+    let mut cursor_replies = 0usize;
+    let mut buf = [0u8; 1024];
+    while Instant::now() < deadline {
+        if child.try_wait().expect("try_wait failed").is_some() {
+            break;
+        }
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => raw.extend_from_slice(&buf[..n]),
+            Err(err)
+                if err.kind() == std::io::ErrorKind::WouldBlock
+                    || err.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(_) => break,
+        }
+        let size_asks = windows_count(&raw, b"\x1b[18t");
+        let cursor_asks = windows_count(&raw, b"\x1b[6n");
+        while size_replies < size_asks {
+            let _ = stream.write_all(b"\x1b[8;24;80t");
+            size_replies += 1;
+        }
+        while cursor_replies < cursor_asks {
+            // Last row, column 8: the input line occupies the status row.
+            let _ = stream.write_all(b"\x1b[24;8R");
+            cursor_replies += 1;
+        }
+        let text = String::from_utf8_lossy(&raw);
+        if text.contains("\x1b[1;23r")
+            && text.contains("\x1b[23;8H")
+            && text.contains("F1 | up ")
+            && text.contains("\x1b8")
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_file(&sock_path);
+    String::from_utf8_lossy(&raw).into_owned()
+}
+
+fn windows_count(haystack: &[u8], needle: &[u8]) -> usize {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return 0;
+    }
+    haystack
+        .windows(needle.len())
+        .filter(|window| *window == needle)
+        .count()
+}
+
 /// Types `qcodes` into the guest through QEMU's QMP `send-key`, asserting
 /// each key was accepted (QMP replies `{"return":{}}` per command).
 ///
@@ -1055,7 +1169,8 @@ fn qmp_read_until(reader: &mut BufReader<UnixStream>, needle: &[u8], deadline: I
 ///
 /// The strip is one cursor-save / cursor-restore burst (`ESC 7` … `ESC 8`)
 /// with no newline, so it lands in the middle of whatever line the console
-/// was writing — including `Password:`. The size query is `CSI 18 t`.
+/// was writing — including `Password:`. The size and cursor queries are
+/// CSI, as is the sequence that parks the input line above the strip.
 pub fn strip_host_chrome(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut out = String::with_capacity(raw.len());
@@ -1074,15 +1189,31 @@ pub fn strip_host_chrome(raw: &str) -> String {
 }
 
 fn chrome_span(bytes: &[u8]) -> Option<usize> {
-    if bytes.starts_with(b"\x1b[18t") {
-        return Some(5);
-    }
     if bytes.len() >= 2 && bytes[0] == 0x1b && bytes[1] == b'7' {
         let window = bytes.len().min(512);
         let mut j = 2;
         while j + 1 < window {
             if bytes[j] == 0x1b && bytes[j + 1] == b'8' {
                 return Some(j + 2);
+            }
+            j += 1;
+        }
+    }
+    // Index: the status row scrolls the input line up once.
+    if bytes.len() >= 2 && bytes[0] == 0x1b && bytes[1] == b'D' {
+        return Some(2);
+    }
+    // CSI, including the size query, the cursor query, and the park.
+    if bytes.len() >= 2 && bytes[0] == 0x1b && bytes[1] == b'[' {
+        let mut j = 2;
+        let limit = bytes.len().min(j + 32);
+        while j < limit {
+            let b = bytes[j];
+            if (0x40..=0x7e).contains(&b) {
+                return Some(j + 1);
+            }
+            if !(0x20..=0x3f).contains(&b) {
+                return None;
             }
             j += 1;
         }
@@ -1469,6 +1600,6 @@ fn boot_and_type_cmd(
 
 #[test]
 fn strip_host_chrome_keeps_the_password_line() {
-    let raw = "Password: *\u{1b}7\u{1b}[s\u{1b}[1;23r\u{1b}[24;1H\u{1b}[2K\u{1b}[7mF1 | up 1.0s | heap 12/1024K | frames 3\u{1b}[0m\u{1b}[u\u{1b}8*\nLogin as:\u{1b}[18t";
+    let raw = "Password: *\u{1b}[6n\u{1b}[24;8H\u{1b}D\u{1b}7\u{1b}[24;1H\u{1b}[7mF1 | up 1.0s | heap 12/1024K\u{1b}[0m\u{1b}8*\nLogin as:\u{1b}[18t";
     assert_eq!(strip_host_chrome(raw), "Password: **\nLogin as:");
 }

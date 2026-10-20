@@ -5,11 +5,11 @@ mod common;
 
 use common::{
     boot, boot_and_type, boot_and_type_ps2, boot_and_type_uefi, boot_for, boot_galfs_once,
-    boot_galfs_once_virtio, boot_liveness_until, boot_quiet_until, boot_uefi, boot_uefi_rng,
-    boot_uefi_until, boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache,
-    boot_with_galfs_crash, boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn,
-    boot_with_galfs_virtio, boot_with_galfs_virtio_legacy, boot_with_tpm, image, uart_login_serial,
-    use_kvm, GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
+    boot_galfs_once_virtio, boot_liveness_until, boot_quiet_until, boot_status_terminal, boot_uefi,
+    boot_uefi_rng, boot_uefi_until, boot_with_galfs, boot_with_galfs_both_corrupt,
+    boot_with_galfs_cache, boot_with_galfs_crash, boot_with_galfs_part, boot_with_galfs_recover,
+    boot_with_galfs_torn, boot_with_galfs_virtio, boot_with_galfs_virtio_legacy, boot_with_tpm,
+    image, uart_login_serial, use_kvm, GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
 };
 use std::time::Duration;
 
@@ -3174,32 +3174,37 @@ fn shell_password_paste_typing_e2e() {
     assert_passwords_masked(&serial);
 }
 
-/// Headless `cargo run` is COM1. The status strip has to show up there,
-/// not only on the framebuffer's last row.
+/// Headless `cargo run` is COM1. The strip has to show on the last row
+/// while the cursor stays on the input line above it. The fake terminal
+/// reports the cursor already on that last row.
 #[test]
 fn headless_status_bar_on_com1() {
-    let serial = boot_quiet_until(&image("galexy-os"), Duration::from_secs(90), |text| {
-        let Some(at) = text.find("F1 | up ") else {
-            return false;
-        };
-        let rest = &text[at..];
-        rest.contains("heap ") && rest.contains("\u{1b}8")
-    });
+    let serial = boot_status_terminal(&image("galexy-os"));
+    let park = serial
+        .find("\u{1b}[23;8H")
+        .unwrap_or_else(|| panic!("cursor was not parked above the status row; serial:\n{serial}"));
+    let paint = serial
+        .find("F1 | up ")
+        .unwrap_or_else(|| panic!("headless status strip missing; serial:\n{serial}"));
     assert!(
-        serial.contains("F1 | up "),
-        "headless status strip missing; serial:\n{serial}"
+        park < paint,
+        "status paint ran before the cursor left the last row; serial:\n{serial}"
+    );
+    assert!(
+        serial[paint..].contains("\u{1b}8"),
+        "status paint did not restore the cursor; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("\u{1b}[1;23r"),
+        "scroll region did not reserve the status row; serial:\n{serial}"
     );
     assert!(
         serial.contains("heap "),
         "headless status strip missing the heap field; serial:\n{serial}"
     );
     assert!(
-        serial.contains("\u{1b}7"),
-        "status strip was not drawn around a saved cursor; serial:\n{serial}"
-    );
-    assert!(
-        serial.contains("\u{1b}[18t"),
-        "headless console did not ask the terminal for its size; serial:\n{serial}"
+        !serial.contains("\u{1b}[999;"),
+        "status strip guessed row 999 and covered the prompt; serial:\n{serial}"
     );
     let visible = common::strip_host_chrome(&serial);
     assert!(
