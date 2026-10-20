@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#147](https://github.com/linuts/galexy.os/pull/147) — Shell — The headless status strip
+  stays on the row under the input line. The cursor stays on the prompt
+  instead of being left in the bar.
 - [#146](https://github.com/linuts/galexy.os/pull/146) — Shell — The live status strip is drawn
   on the headless terminal's last row. The framebuffer bar was the only
   copy, so `cargo run` never showed it.

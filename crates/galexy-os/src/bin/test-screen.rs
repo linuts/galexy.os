@@ -376,6 +376,18 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         galexy_os::drivers::keyboard::pop_key().is_none(),
         "the size reply was queued as keys"
     );
+    screen::test_expect_cursor();
+    galexy_os::drivers::serial::test_rx(b"\x1b[12;");
+    galexy_os::drivers::serial::test_rx(b"4R");
+    assert_eq!(
+        screen::host_cursor(),
+        (12, 4),
+        "host cursor was not recorded"
+    );
+    assert!(
+        galexy_os::drivers::keyboard::pop_key().is_none(),
+        "the cursor reply was queued as keys"
+    );
     galexy_os::drivers::serial::test_rx(b"Z");
     assert_eq!(galexy_os::drivers::keyboard::pop_key(), Some('Z'));
 
