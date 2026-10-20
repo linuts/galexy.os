@@ -177,32 +177,143 @@ pub(crate) fn push_dec(out: &mut alloc::string::String, mut n: u64) {
     }
 }
 
-pub(crate) fn ls_arg(cwd: &Cwd, rest: &[u8], out: &mut [u8]) -> Option<usize> {
+pub(crate) enum LsArg {
+    Ready(usize),
+    Usage,
+    Missing,
+    NotDir,
+    TooLong,
+}
+
+/// Argv for `ls`. A path lists that directory; empty lists `cwd`.
+/// Long form stays `-l`, then NUL, then the same path the plain form uses.
+pub(crate) fn ls_arg(cwd: &Cwd, rest: &[u8], out: &mut [u8]) -> LsArg {
+    let Some((long, name)) = ls_words(rest) else {
+        return LsArg::Usage;
+    };
+    let mut dir = [0u8; PATH_MAX];
+    let n = match resolve_ls_dir(cwd, name, &mut dir) {
+        Resolved::Dir(n) => n,
+        Resolved::Usage => return LsArg::Usage,
+        Resolved::Missing => return LsArg::Missing,
+        Resolved::NotDir => return LsArg::NotDir,
+        Resolved::TooLong => return LsArg::TooLong,
+    };
+    match write_ls_argv(long, &dir[..n], out) {
+        Some(len) => LsArg::Ready(len),
+        None => LsArg::TooLong,
+    }
+}
+
+/// `-l` may lead. One path may follow. Anything else is usage.
+fn ls_words(rest: &[u8]) -> Option<(bool, &[u8])> {
     let rest = trim(rest);
     if rest.is_empty() {
-        if cwd.len > out.len() {
+        return Some((false, b""));
+    }
+    let (first, tail) = split_word(rest)?;
+    if first == b"-l" {
+        if tail.is_empty() {
+            return Some((true, b""));
+        }
+        if tail.contains(&b' ') || tail.starts_with(b"-") {
             return None;
         }
-        out[..cwd.len].copy_from_slice(&cwd.buf[..cwd.len]);
-        return Some(cwd.len);
+        return Some((true, tail));
     }
-    if rest != b"-l" {
+    if first.starts_with(b"-") || !tail.is_empty() {
         return None;
+    }
+    Some((false, first))
+}
+
+enum Resolved {
+    Dir(usize),
+    Usage,
+    Missing,
+    NotDir,
+    TooLong,
+}
+
+/// Directory prefix `ls` filters on, without a trailing slash. `/` is empty.
+fn resolve_ls_dir(cwd: &Cwd, name: &[u8], path: &mut [u8; PATH_MAX]) -> Resolved {
+    if name.is_empty() || name == b"." {
+        return copy_cwd(cwd, path);
+    }
+    if name.iter().all(|b| *b == b'/') {
+        return Resolved::Dir(0);
+    }
+    let name = name.strip_suffix(b"/").unwrap_or(name);
+    if name.is_empty() || name == b"." {
+        return copy_cwd(cwd, path);
+    }
+    if name == b".." {
+        let n = cwd.buf[..cwd.len]
+            .iter()
+            .rposition(|b| *b == b'/')
+            .unwrap_or_default();
+        if n == 0 {
+            return Resolved::Dir(0);
+        }
+        if n + 1 > path.len() {
+            return Resolved::TooLong;
+        }
+        path[..n].copy_from_slice(&cwd.buf[..n]);
+        path[n] = b'/';
+        if !snapshot_has(&path[..n + 1]) {
+            return Resolved::Missing;
+        }
+        return Resolved::Dir(n);
+    }
+    if !path_arg_ok(name) {
+        return Resolved::Usage;
+    }
+    let Some(n) = compose(cwd, name, true, path) else {
+        return Resolved::TooLong;
+    };
+    if snapshot_has(&path[..n]) {
+        return Resolved::Dir(n - 1);
+    }
+    let Some(n) = compose(cwd, name, false, path) else {
+        return Resolved::TooLong;
+    };
+    if snapshot_has(&path[..n]) {
+        Resolved::NotDir
+    } else {
+        Resolved::Missing
+    }
+}
+
+fn copy_cwd(cwd: &Cwd, path: &mut [u8; PATH_MAX]) -> Resolved {
+    if cwd.len > path.len() {
+        return Resolved::TooLong;
+    }
+    path[..cwd.len].copy_from_slice(&cwd.buf[..cwd.len]);
+    Resolved::Dir(cwd.len)
+}
+
+fn write_ls_argv(long: bool, dir: &[u8], out: &mut [u8]) -> Option<usize> {
+    if !long {
+        if dir.len() > out.len() {
+            return None;
+        }
+        out[..dir.len()].copy_from_slice(dir);
+        return Some(dir.len());
     }
     if out.len() < 2 {
         return None;
     }
     out[0] = b'-';
     out[1] = b'l';
-    if cwd.len == 0 {
+    if dir.is_empty() {
         return Some(2);
     }
-    if 3 + cwd.len > out.len() {
+    if 3 + dir.len() > out.len() {
         return None;
     }
     out[2] = 0;
-    out[3..3 + cwd.len].copy_from_slice(&cwd.buf[..cwd.len]);
-    Some(3 + cwd.len)
+    out[3..3 + dir.len()].copy_from_slice(dir);
+    Some(3 + dir.len())
 }
 
 pub(crate) fn grep_arg(cwd: &Cwd, rest: &[u8], has_in: bool, out: &mut [u8]) -> Option<usize> {
@@ -523,7 +634,10 @@ pub(crate) fn stage_arg(
         return Some(2 + rest.len());
     }
     if prog == b"ls" {
-        return ls_arg(cwd, rest, out);
+        return match ls_arg(cwd, rest, out) {
+            LsArg::Ready(n) => Some(n),
+            _ => None,
+        };
     }
     if prog == b"grep" {
         return grep_arg(cwd, rest, has_in, out);

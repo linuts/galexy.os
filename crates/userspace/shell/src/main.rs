@@ -15,6 +15,8 @@
 //! joined by ` | `. A `*` word expands to
 //! names in the current directory from the files snapshot.
 //! `echo`, `cat`, `edit`, `touch`, `mkdir`, `rm`, and `ls` are those utilities.
+//! `ls` and `ls -l` take a directory path (`ls Desktop`); with none, they
+//! list the current directory.
 //! `edit` (and `nano`, the same program) also receives the keyboard grant
 //! and Cap-waits, so it can edit.
 //! The kernel keeps the status bar and the screen, and loads this shell

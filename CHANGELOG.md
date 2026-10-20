@@ -8,6 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#148](https://github.com/linuts/galexy.os/pull/148) — Shell — `ls Desktop` and `ls -l Desktop`
+  list that directory. The shell used to reject every argument except `-l`.
 - [#147](https://github.com/linuts/galexy.os/pull/147) — Shell — The headless status strip
   stays on the row under the input line. The cursor stays on the prompt
   instead of being left in the bar.

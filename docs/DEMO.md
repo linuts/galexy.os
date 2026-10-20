@@ -12,10 +12,10 @@ Headless `cargo run --release` types in this terminal. Steps that
 press F1 or F2 need the window. Those keys are PS/2. Quit a headless
 session with Ctrl-A then X.
 
-`ls` lists the current directory only (`ls` or `ls -l`). A path in
+`ls` and `ls -l` list the current directory, or the directory named
+on the line (`ls Desktop`, `ls -l /admin@Desktop`). A path in
 another account is `/admin@Desktop`, with no slash after `@`.
-`/admin@/Desktop` is not a path, and `ls /admin@Desktop` is a usage
-error.
+`/admin@/Desktop` is not a path.
 
 1. On a fresh disk, tty1 asks for a volume passphrase and a
    confirmation, then an admin password and a confirmation, before

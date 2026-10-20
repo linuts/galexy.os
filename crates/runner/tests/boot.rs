@@ -3598,6 +3598,39 @@ fn shell_util_typing_e2e() {
     util_typing_e2e_on("galexy-os");
 }
 
+/// `ls testing` lists that directory. The shell used to reject every
+/// argument except `-l`, so a subdirectory never reached the program.
+#[test]
+fn shell_ls_subdir_typing_e2e() {
+    let serial = boot_typed(
+        "galexy-os",
+        &[
+            ("ls testing", "banner.txt\n"),
+            ("ls -l testing", "? 0 banner.txt"),
+            ("ls testing/", "banner.txt\n"),
+            ("ls /", "testing/\n"),
+            ("ls testing/banner.txt", "ls: not a directory"),
+            ("ls missing", "ls: no such directory"),
+            ("ls -x", "ls: usage: ls [-l] [path]"),
+        ],
+        "ls: usage: ls [-l] [path]",
+        Duration::from_secs(120),
+    );
+    assert_passwords_masked(&serial);
+    assert!(
+        !serial.contains("[PANIC]"),
+        "ls subdir panicked; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("banner.txt\n"),
+        "ls testing did not list banner.txt; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("? 0 banner.txt"),
+        "ls -l testing did not stat the child; serial:\n{serial}"
+    );
+}
+
 /// `edit note`: type two lines, move with the arrows, save, leave, reopen,
 /// append `!`, save again, then `cat` the file. Tab is one byte drawn to
 /// the next column of 8 (`hi` then Tab lands on `@1,9@`; one backspace
@@ -5160,8 +5193,7 @@ fn passwd_on_sealed_disk_typing_e2e() {
 }
 
 /// The reviewer tour: a fresh disk, two seats, and a card that makes
-/// admin's Desktop visible to eve. `ls` lists the current directory
-/// only. The foreign path is `/admin@Desktop`.
+/// admin's Desktop visible to eve. The foreign path is `/admin@Desktop`.
 #[test]
 fn reviewer_demo_typing_e2e() {
     let disk = common::fresh_galfs_image("demo");
