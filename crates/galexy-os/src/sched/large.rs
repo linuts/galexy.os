@@ -1,7 +1,7 @@
-//! Files that do not fit the v12 pool.
+//! Files that do not fit the durable extent cap.
 //!
-//! v12 keeps 512-byte blocks and a `u16` length (32 KiB). A write past
-//! that promotes the file here: 4 KiB blocks, one indirect block per
+//! v15 keeps 4 KiB extents and a 64 MiB file. A write past that
+//! promotes the file here: 4 KiB blocks, one indirect block per
 //! 4 MiB, length `u32`. The pool grows on the kernel heap up to
 //! [`LARGE_POOL_BYTES`] of file data, plus indirect blocks. One file
 //! is still capped at [`LARGE_FILE_MAX`]. A sysroot import can attach
@@ -30,7 +30,7 @@ pub const LARGE_FILE_MAX: u32 = 80 * 1024 * 1024;
 /// 128 MiB leaves room for the linked ELF and rustc's temps.
 pub const LARGE_POOL_BYTES: usize = 128 * 1024 * 1024;
 /// Object slots. Matches `galfs::OBJECT_SLOTS`.
-pub const SLOTS: usize = 128;
+pub const SLOTS: usize = 384;
 
 const PTRS: usize = LARGE_BLOCK / 4;
 const NONE: u32 = u32::MAX;

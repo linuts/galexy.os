@@ -732,15 +732,13 @@ only indexes a slot on the IF=0 path. Indexes from `FILE_CAP_BASE`
 `read` copies the next bytes of an open file
 (short-read at 1 KiB, 0 at EOF);
 `close` drops the slot. `create(name, len, flags)` (syscall 9) puts a
-path in a fixed galfs table (128 objects, 32 actors with one root each,
-64-byte component names, shared 256×512-byte block pool with 8 direct
-pointers plus one single-indirect block per file / 32 KiB on the v12
-image — Milestone 45 / GALF v12). A write past 32 KiB promotes that
+path in a fixed galfs table (384 objects, 32 actors with one root each,
+64-byte component names, 4 KiB extents, eight per file, 64 MiB on the
+v15 image). A write past 64 MiB promotes that
 file into the RAM large store (4 KiB blocks, 80 MiB per file, 128 MiB
 pool; Milestones 72–73). A compiler sysroot file can name its ramdisk
 bytes instead of copying them; the first write copies that file into
-blocks.
-that promotion allocates on the kernel heap while the write syscall
+blocks. Promotion past 64 MiB allocates on the kernel heap while the write syscall
 holds the thread table. A path ending in `/` is a directory and
 returns 0. A file returns
 READ|WRITE. `RDX == 1` empties an existing file; any other value creates
@@ -813,11 +811,11 @@ owner, held token rights; needs LIST). Directory listing remains the
 exposes `whoami`, `users`, `useradd`, `userdel`, `su`, `truncate`, and
 `stat` (and resets cwd on `su`). Boot formats one immortal actor,
 `admin`, with Desktop. When the primary IDE slave is present,
-`galfs::init` loads the newest valid GALF **v12** sealed slot (dual
-288-sector images: wrapped volume key + ChaCha20-HMAC payload of
-actors/objects/shares/bitmap/blocks + per-actor quotas and PBKDF2
-counts + single-indirect pointers, generation + ciphertext CRC +
-structural checks) or formats
+`galfs::init` loads the newest valid GALF **v15** sealed slot (dual
+64 KiB images: wrapped volume key + ChaCha20-HMAC payload of
+actors/objects/shares + per-actor quotas and PBKDF2
+counts + eight extents per file, generation + ciphertext CRC +
+structural checks; file bytes are 4 KiB blocks after the slots) or formats
 that admin tree under a fresh volume key; create/remove/append/rename/
 truncate/useradd/userdel/share/unshare sync to the inactive slot and
 flush the cache; `sync()` (syscall 20) is an explicit barrier (shell

@@ -1,4 +1,4 @@
-//! Integration test: single-indirect file blocks (GALF v11).
+//! Integration test: extent-mapped file blocks (more than one 4 KiB block).
 
 #![no_std]
 #![no_main]
@@ -33,62 +33,57 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     };
     sched::ramdisk::init(archive);
 
-    assert_eq!(galfs::FILE_BYTES, 32 * 1024);
-    const _: () = assert!(galfs::FILE_BYTES > galfs::DIRECT_BLOCKS * galfs::BLOCK_SIZE);
-
     let admin = galfs::admin_root();
     let desktop = galfs::find_under(admin, "Desktop").expect("Desktop");
     assert!(galfs::fsck_ok(), "fresh table");
 
-    // Past the 8 direct blocks: 8×512 + 200 = 4296 bytes.
-    const PAST_DIRECT: usize = galfs::DIRECT_BLOCKS * galfs::BLOCK_SIZE + 200;
+    const WIDE: usize = galfs::BLOCK_SIZE + 200;
     let file = galfs::create_file_under(desktop, "wide").expect("create wide");
-    let mut pattern = [0u8; PAST_DIRECT];
+    let mut pattern = [0u8; WIDE];
     for (i, b) in pattern.iter_mut().enumerate() {
         *b = (i % 251) as u8;
     }
-    let n = galfs::append_file(file, &pattern).expect("append past direct");
-    assert_eq!(n, PAST_DIRECT, "must cross into indirect");
-    // 9 data blocks + 1 indirect block.
-    assert_eq!(galfs::blocks_used(), 10, "indirect adds one pointer block");
-    assert!(galfs::fsck_ok(), "after indirect append");
+    let n = galfs::append_file(file, &pattern).expect("append two blocks");
+    assert_eq!(n, WIDE);
+    assert_eq!(galfs::blocks_used(), 2, "two extents, no pointer block");
+    assert!(galfs::fsck_ok(), "after multi-block append");
 
-    let mut got = [0u8; PAST_DIRECT];
+    let mut got = [0u8; WIDE];
     let rn = galfs::read_file_bytes(file, &mut got).expect("read wide");
-    assert_eq!(rn, PAST_DIRECT);
-    assert_eq!(&got[..], &pattern[..], "indirect bytes round-trip");
+    assert_eq!(rn, WIDE);
+    assert_eq!(&got[..], &pattern[..], "extent bytes round-trip");
 
-    // Truncate back into the direct region frees the indirect block.
-    galfs::truncate_file(file, 100).expect("truncate into directs");
-    assert_eq!(galfs::blocks_used(), 1, "indirect + unused data freed");
+    galfs::truncate_file(file, 100).expect("truncate into first block");
+    assert_eq!(galfs::blocks_used(), 1, "second block freed");
     assert!(galfs::fsck_ok(), "after truncate shrink");
 
-    // Grow through truncate into indirect again (new bytes are zero-filled).
-    galfs::truncate_file(file, PAST_DIRECT).expect("truncate grow past direct");
-    assert_eq!(galfs::blocks_used(), 10, "grow reallocates indirect");
-    let mut buf = [0u8; PAST_DIRECT];
+    galfs::truncate_file(file, WIDE).expect("truncate grow");
+    assert_eq!(galfs::blocks_used(), 2, "grow reallocates the second block");
+    let mut buf = [0u8; WIDE];
     let zn = galfs::read_file_bytes(file, &mut buf).expect("read grown");
-    assert_eq!(zn, PAST_DIRECT);
+    assert_eq!(zn, WIDE);
     assert_eq!(&buf[..100], &pattern[..100], "prefix survives shrink+grow");
     assert!(
         buf[100..].iter().all(|&b| b == 0),
-        "truncate grow zero-fills the new region"
+        "truncate grow zero-fills"
     );
 
-    // Full 32 KiB file.
     let full = galfs::create_file_under(desktop, "full").expect("full");
-    let chunk = [0xA5u8; galfs::FILE_BYTES];
-    let wn = galfs::append_file(full, &chunk).expect("append full");
-    assert_eq!(wn, galfs::FILE_BYTES);
-    // 64 data + 1 indirect.
-    assert_eq!(galfs::blocks_used(), 10 + 65);
+    let chunk = [0xA5u8; galfs::BLOCK_SIZE];
+    for _ in 0..8 {
+        assert_eq!(
+            galfs::append_file(full, &chunk).expect("append"),
+            chunk.len()
+        );
+    }
+    assert_eq!(galfs::blocks_used(), 2 + 8);
     assert!(galfs::fsck_ok(), "after 32 KiB file");
 
     galfs::remove_as_admin("Desktop/full").expect("remove full");
-    assert_eq!(galfs::blocks_used(), 10, "remove frees indirect file");
+    assert_eq!(galfs::blocks_used(), 2, "remove frees the file");
     assert!(galfs::fsck_ok(), "after remove");
 
-    println!("[test-indirect] single-indirect 32 KiB ok");
+    println!("[test-indirect] extent file ok");
     serial_println!("[test-indirect] passed");
     exit_qemu(QemuExitCode::Success);
 }

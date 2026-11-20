@@ -222,17 +222,21 @@ fn data_block_round_trips_outside_the_seal() {
     file.name[..4].copy_from_slice(b"note");
     file.name_len = 4;
     file.len = 4;
-    file.blocks[0] = 0;
+    file.extent_count = 1;
+    file.extents[0] = Extent { start: 0, count: 1 };
     file.next = NO_PARENT;
     file.child = NO_PARENT;
-    table.bitmap[0] |= 1;
-    table.block_gen[0] = 3;
-    table.blocks[0][..4].copy_from_slice(b"galf");
+    table.pool_blocks = 1;
 
-    let mut image = vec![0u8; data_byte_offset(1)];
+    let mut image = vec![0u8; data_byte_offset(1) + BLOCK_SIZE];
     let nonces = rng.nonces();
-    let mut sealed = table.blocks[0];
-    assert!(seal_block(&VK, 0, 3, &mut sealed, &mut table.block_tag[0]));
+    let mut sealed = [0u8; BLOCK_SIZE];
+    sealed[..4].copy_from_slice(b"galf");
+    let mut tag = [0u8; TAG_LEN];
+    assert!(seal_block(&VK, 0, 3, &mut sealed, &mut tag));
+    let tag_off = block_tag_offset(0);
+    image[tag_off..tag_off + 4].copy_from_slice(&3u32.to_le_bytes());
+    image[tag_off + 4..tag_off + 4 + TAG_LEN].copy_from_slice(&tag);
     image[data_byte_offset(0)..data_byte_offset(0) + BLOCK_SIZE].copy_from_slice(&sealed);
     let flat = &mut image[..SLOT_BYTES];
     assert!(encode_slot(&table, 4, PASS, &VK, &nonces, flat));
@@ -247,9 +251,13 @@ fn data_block_round_trips_outside_the_seal() {
     let report = check_image(&image, PASS, &mut slot_buf, &mut best, &mut cand);
     assert!(report.ok, "{:?}", issues(&report));
     assert_eq!(report.generation, Some(4));
-    assert_eq!(&best.blocks[0][..4], b"galf");
+    assert_eq!(best.objects[2].extents[0].count, 1);
     assert_eq!(best.objects[0].child, 1);
     assert_eq!(best.objects[2].parent, 1);
+    assert!(open_stored_block(&image, 0, &VK));
+    let mut plain = sealed;
+    assert!(open_block(&VK, 0, 3, &mut plain, &tag));
+    assert_eq!(&plain[..4], b"galf");
 }
 
 #[test]

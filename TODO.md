@@ -2921,26 +2921,26 @@ file bytes: two 64 KiB metadata slots, then a 4 KiB pool
 file). Its payload names 32 files and does not carry actors,
 shares, or quotas.
 
-- [ ] **Layout**: two 64 KiB sealed metadata slots, then a 4 KiB
+- [x] **Layout**: two 64 KiB sealed metadata slots, then a 4 KiB
       data pool sized to the disk. A commit writes the changed
       blocks, seals the inactive metadata slot, flushes, then
       publishes. Unchanged blocks stay where they are
-- [ ] **The login volume stays galfs**: actors, objects, shares,
+- [x] **The login volume stays galfs**: actors, objects, shares,
       and quotas are in that metadata. Do not mount the 32-file
       map as the volume `cargo run` uses. If the live table plus
       extents does not fit the current v13 payload, the version
       moves past 13 in this same change, with `galexy-galf`
-- [ ] **Version**: `DISK_VERSION` moves in the kernel and in
+- [x] **Version**: `DISK_VERSION` moves in the kernel and in
       `galexy-galf` together. A v12 image is refused with the
       existing foreign-version line. The operator deletes
       `galfs.img`. There is no silent migrate
-- [ ] **Survive**: a 1 MiB file is still there after reboot. The
+- [x] **Survive**: a 1 MiB file is still there after reboot. The
       commit's data is that file's blocks plus one 64 KiB metadata
       slot, not the other actors' bytes
-- [ ] **Still RAM**: `core`'s metadata is about 66 MiB, past the
+- [x] **Still RAM**: `core`'s metadata is about 66 MiB, past the
       64 MiB file cap, so it stays in the RAM store. `GALFS.md`
       and `RUSTC.md` say so in this change
-- [ ] **Extents**: eight per file, as in host v13. A file that
+- [x] **Extents**: eight per file, as in host v13. A file that
       needs a ninth is `NoResource` unless this milestone raises
       that cap in the same version bump
 
