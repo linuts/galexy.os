@@ -343,7 +343,7 @@ fn stats() {
         alloc::format!(
             "galfs: {} / {} blocks",
             crate::sched::galfs::blocks_used(),
-            crate::sched::galfs::BLOCK_SLOTS
+            crate::sched::galfs::pool_blocks()
         ),
     ]);
 }
@@ -410,7 +410,7 @@ fn render_status_bar_inner() {
         mm::heap::used_bytes() / 1024,
         heap_size / 1024,
         crate::sched::galfs::blocks_used(),
-        crate::sched::galfs::BLOCK_SLOTS,
+        crate::sched::galfs::pool_blocks(),
         crate::sched::live_user_tasks(),
         mm::free_frames(),
     );

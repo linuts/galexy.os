@@ -98,7 +98,10 @@ fn encode_decode_round_trip() {
     let mut flat = vec![0u8; SLOT_BYTES];
     assert!(encode_slot(&table, 7, PASS, &VK, &rng.nonces(), &mut flat));
     let mut decoded = Box::new(Table::empty());
-    assert_eq!(decode_slot(&mut flat, PASS, &mut decoded), Some(7));
+    let opened = decode_slot(&mut flat, PASS, &mut decoded).expect("decode");
+    assert_eq!(opened.generation, 7);
+    let mut key = opened.volume_key;
+    galexy_crypto::wipe_bytes(&mut key);
     assert!(decoded.actors[0].name_is(ADMIN_NAME));
     assert_eq!(decoded.objects[0].kind, KIND_DIR);
     assert_eq!(decoded.actors[0].max_bytes, 7);
@@ -115,13 +118,16 @@ fn encode_decode_round_trip() {
         &rng.nonces(),
         &mut flat_old
     ));
-    assert_eq!(decode_slot(&mut flat_old, PASS, &mut decoded), Some(7));
+    let opened = decode_slot(&mut flat_old, PASS, &mut decoded).expect("decode old cost");
+    assert_eq!(opened.generation, 7);
+    let mut key = opened.volume_key;
+    galexy_crypto::wipe_bytes(&mut key);
     assert_eq!(decoded.actors[0].kdf_iters, 1_000);
 
     // Wrong passphrase: the KEK does not unwrap the volume key.
     let mut flat2 = vec![0u8; SLOT_BYTES];
     assert!(encode_slot(&table, 7, PASS, &VK, &rng.nonces(), &mut flat2));
-    assert_eq!(decode_slot(&mut flat2, b"wrong", &mut decoded), None);
+    assert!(decode_slot(&mut flat2, b"wrong", &mut decoded).is_none());
 
     // Too short a buffer is refused, not panicked on.
     let mut tiny = vec![0u8; 64];
@@ -193,6 +199,65 @@ fn foreign_version_slot_is_ignored_not_corrupt() {
     image[4..6].copy_from_slice(&(DISK_VERSION + 1).to_le_bytes());
     let report = check(&image);
     assert_eq!(issues(&report), vec![Issue::NoValidSlot]);
+}
+
+#[test]
+fn data_block_round_trips_outside_the_seal() {
+    let mut rng = Rng(0x5EED_0006);
+    let mut table = minimal_table();
+    // Desktop is a child of the admin root. One file hangs off Desktop.
+    table.objects[0].child = 1;
+    let desk = &mut table.objects[1];
+    desk.kind = KIND_DIR;
+    desk.parent = 0;
+    desk.actor = 0;
+    desk.child = 2;
+    desk.next = NO_PARENT;
+    desk.name[..7].copy_from_slice(b"Desktop");
+    desk.name_len = 7;
+    let file = &mut table.objects[2];
+    file.kind = KIND_FILE;
+    file.parent = 1;
+    file.actor = 0;
+    file.name[..4].copy_from_slice(b"note");
+    file.name_len = 4;
+    file.len = 4;
+    file.extent_count = 1;
+    file.extents[0] = Extent { start: 0, count: 1 };
+    file.next = NO_PARENT;
+    file.child = NO_PARENT;
+    table.pool_blocks = 1;
+
+    let mut image = vec![0u8; data_byte_offset(1) + BLOCK_SIZE];
+    let nonces = rng.nonces();
+    let mut sealed = [0u8; BLOCK_SIZE];
+    sealed[..4].copy_from_slice(b"galf");
+    let mut tag = [0u8; TAG_LEN];
+    assert!(seal_block(&VK, 0, 3, &mut sealed, &mut tag));
+    let tag_off = block_tag_offset(0);
+    image[tag_off..tag_off + 4].copy_from_slice(&3u32.to_le_bytes());
+    image[tag_off + 4..tag_off + 4 + TAG_LEN].copy_from_slice(&tag);
+    image[data_byte_offset(0)..data_byte_offset(0) + BLOCK_SIZE].copy_from_slice(&sealed);
+    let flat = &mut image[..SLOT_BYTES];
+    assert!(encode_slot(&table, 4, PASS, &VK, &nonces, flat));
+
+    assert!(
+        !image.windows(4).any(|w| w == b"galf"),
+        "plaintext file bytes must not sit in the image"
+    );
+    let mut slot_buf = vec![0u8; SLOT_BYTES];
+    let mut best = Box::new(Table::empty());
+    let mut cand = Box::new(Table::empty());
+    let report = check_image(&image, PASS, &mut slot_buf, &mut best, &mut cand);
+    assert!(report.ok, "{:?}", issues(&report));
+    assert_eq!(report.generation, Some(4));
+    assert_eq!(best.objects[2].extents[0].count, 1);
+    assert_eq!(best.objects[0].child, 1);
+    assert_eq!(best.objects[2].parent, 1);
+    assert!(open_stored_block(&image, 0, &VK));
+    let mut plain = sealed;
+    assert!(open_block(&VK, 0, 3, &mut plain, &tag));
+    assert_eq!(&plain[..4], b"galf");
 }
 
 #[test]

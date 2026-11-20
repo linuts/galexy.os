@@ -55,10 +55,10 @@ Stage 4 (Milestone 71) is the capacity a compiler process needs. What
 | Hundreds of MB of heap | `Map` up to 1 GiB per task; QEMU `-m 2G`; frame bitmap covers 4 GiB | — |
 | At least one spawned thread with an 8 MiB stack, TLS, locks | `ThreadSpawn` shares CR3; `Futex`; key TLS via `wrfsbase`. A spawned thread may ask for 4352 pages (17 MiB); the default stays 16 pages | — |
 | Read a 30–60 MB sysroot | Ramdisk `open` + `read` + `seek`; sysroot `.rlib`s are packed under `rust/` | The packed set is the crates the PAL links, not a full 60 MB sysroot |
-| Write multi-MB `.o` / `.rlib` / ELF outputs | 64 open files. Writes past 32 KiB promote into a RAM store: 4 KiB blocks, 80 MiB per file, 128 MiB shared pool | Those bytes are not sealed into a v12 disk. Host v13 (`check_image`) is the on-disk large format; the kernel still syncs v12 |
+| Write multi-MB `.o` / `.rlib` / ELF outputs | 64 open files. Files up to 64 MiB are 4 KiB extents on the v15 volume. Past that they promote into a RAM store: 80 MiB per file, 128 MiB shared pool | `core`'s metadata is about 66 MiB, so it stays in the RAM store and is not sealed |
 | Long command lines | `SPAWN_ARG_MAX` = 4096 | — |
 | Spawn the linker, capture its exit status / stderr | `gxldos` receives input and output Caps at spawn and does not open a path; `test-gxld` links two objects into a program that exits `0x71` | stderr capture is the existing pipe path; `test-gxld` checks the exit code |
-| `fs`: open / read / write / seek / stat / create / remove / rename / readdir | All present. `write` is positional; readdir is the files snapshot; files past 32 KiB use the RAM store | — |
+| `fs`: open / read / write / seek / stat / create / remove / rename / readdir | All present. `write` is positional; readdir is the files snapshot; files past 64 MiB use the RAM store | — |
 | Clock | `Clock` reads `timer_ticks` | — |
 | Environment variables, cwd | None | Waive: PAL returns empty env; cwd lives in the process |
 
@@ -222,17 +222,17 @@ monotonic, and `toml` 1.x parsing a ramdisk file with zero patches.
   ask for 8 MiB (`THREAD_STACK_PAGES_MAX`); the leader's stack stays
   4 pages and the thread default stays 16 pages. Milestone 72 raised
   the maximum to 17 MiB.
-- **Storage**: writes past the v12 32 KiB file promote into a RAM
-  store with the same file body: 4 KiB blocks, `u32` length, double
-  indirection, 64 MiB (80 MiB per file since Milestone 72, for
-  `core`'s metadata; 128 MiB shared pool since Milestone 73). v12
-  disks still load and sync; promoted bytes
-  stay in RAM. Host `galexy-galf` v13 is the sealed large-volume
-  image (extent map, pool sized to the disk, files of 64 MiB).
-  `check_image` dispatches on the version, so v12 and v13 both fsck.
-  The kernel does not format or load v13 yet. Milestone 98 is that
-  load, and it keeps the actor table. Milestone 99 sizes the object
-  table to one desk compile (`docs/GALFS.md` → Scheduled commits).
+- **Storage**: files up to 64 MiB are 4 KiB extents on the v15 volume.
+  A longer write promotes into a RAM store with the same file body:
+  4 KiB blocks, `u32` length, double indirection (80 MiB per file
+  since Milestone 72, for `core`'s metadata; 128 MiB shared pool
+  since Milestone 73). Older images are refused; promoted bytes
+  stay in RAM. The kernel volume is GALF v15: the same 4 KiB pool
+  and eight extents, with actors, shares, and quotas in the metadata.
+  `check_image` dispatches on the version (v15 is the login image;
+  v13 remains the 32-file map). A v15 image is refused if it is any
+  older version. 384 objects is what fits the 64 KiB slot; it is not
+  a counted desk-compile tree.
 - **Ring-3 `gxld`**: `gxldos` is a thin `main` over the Stage 2 crate.
   The kernel test installs read Caps and one write Cap at spawn;
   the program does not open a path. `test-gxld` links two objects

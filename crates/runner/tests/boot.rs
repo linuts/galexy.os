@@ -1297,7 +1297,7 @@ fn galfs_disk_refuses_format_when_both_slots_corrupt() {
     );
     // Host broke only the AEAD tag; refuse-format must leave gens + magic alone.
     for slot in 0..2 {
-        let off = slot * 288 * 512;
+        let off = slot * galexy_galf::DISK_SECTORS * galexy_galf::SECTOR;
         assert!(
             img_after.len() >= off + 113 && img.len() >= off + 113,
             "galfs.img too short for slot {slot}"
