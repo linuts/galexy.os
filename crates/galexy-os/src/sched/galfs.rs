@@ -5,10 +5,13 @@
 //! set of rights; the path is only a lookup. Boot creates one immortal
 //! actor, [`ADMIN_NAME`]. Lock order: [`THREADS`] then this table.
 //!
-//! When a [`BlockDevice`] large enough for both dual slots is present,
-//! the table is loaded from a GALF image (checksum + generation) or
-//! formatted if both slots are bad. Mutates mark the table dirty; a
-//! coalesced sync (inactive slot + flush) runs on the 1 Hz main-loop
+//! When a [`BlockDevice`] large enough for both metadata slots and the
+//! data region is present, the table is loaded from a GALF v14 image or
+//! formatted if both slots are bad. File bytes live in encrypted pool
+//! blocks after the slots. A directory is the sibling list on its inode;
+//! a card still names an object and covers descendants through `parent`.
+//! Mutates mark the table dirty; a coalesced sync (changed blocks, then
+//! the inactive metadata slot, then flush) runs on the 1 Hz main-loop
 //! tick, on `Syscall::Sync`, and before power-off. Without a usable disk
 //! the table stays RAM-only. Backends: virtio-blk (preferred when
 //! present), else ATA primary slave.
@@ -244,6 +247,10 @@ pub(crate) struct Object {
     /// Single-indirect block holding further data-block indexes (`NO_BLOCK` none).
     indirect: u16,
     pub(crate) len: u16,
+    /// First child of a directory. [`NO_OBJECT`] when this is a file or empty.
+    child: u16,
+    /// Next object in the parent's directory list.
+    next: u16,
 }
 
 impl Object {
@@ -257,6 +264,8 @@ impl Object {
             blocks: [NO_BLOCK; DIRECT_BLOCKS],
             indirect: NO_BLOCK,
             len: 0,
+            child: NO_OBJECT,
+            next: NO_OBJECT,
         }
     }
 
@@ -293,6 +302,19 @@ struct Table {
     shares: [Share; SHARE_SLOTS],
     blocks: [[u8; BLOCK_SIZE]; BLOCK_SLOTS],
     bitmap: [u8; BITMAP_BYTES],
+    /// Generation stamped into the nonce when this block was allocated.
+    block_gen: [u32; BLOCK_SLOTS],
+    /// Tag of the ciphertext last sealed for this block.
+    block_tag: [[u8; TAG_LEN]; BLOCK_SLOTS],
+    /// Block is named by the last committed metadata. Writes must copy it.
+    stable: [bool; BLOCK_SLOTS],
+    /// Ciphertext differs from what the data region holds.
+    dirty: [bool; BLOCK_SLOTS],
+    /// Commits remaining before this index may be reused. A freed block
+    /// stays reserved until both metadata slots have dropped it.
+    hold_ttl: [u8; BLOCK_SLOTS],
+    /// Next allocation generation. Zero is never a live generation.
+    alloc_clock: u32,
 }
 
 const fn empty_table() -> Table {
@@ -302,6 +324,12 @@ const fn empty_table() -> Table {
         shares: [Share::empty(); SHARE_SLOTS],
         blocks: [[0u8; BLOCK_SIZE]; BLOCK_SLOTS],
         bitmap: [0u8; BITMAP_BYTES],
+        block_gen: [0; BLOCK_SLOTS],
+        block_tag: [[0u8; TAG_LEN]; BLOCK_SLOTS],
+        stable: [false; BLOCK_SLOTS],
+        dirty: [false; BLOCK_SLOTS],
+        hold_ttl: [0; BLOCK_SLOTS],
+        alloc_clock: 1,
     }
 }
 
@@ -335,9 +363,9 @@ static ADMIN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16
 /// gen+1 and a CRC, then flushes — a crash mid-write leaves the previous
 /// slot intact.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-/// Bumped for the per-actor PBKDF2 iteration count (Milestone 63). Older
-/// images are refused with a serial line; there is no silent migrate.
-pub const DISK_VERSION: u16 = 12;
+/// Card volume (directory lists + out-of-slot data blocks). Older images
+/// are refused with a serial line; there is no silent migrate.
+pub const DISK_VERSION: u16 = 14;
 /// Sectors per dual-slot image (must cover header + sealed payload).
 pub const DISK_SECTORS: usize = 288;
 pub const DISK_SLOT_COUNT: usize = 2;
@@ -361,19 +389,24 @@ const _: () = assert!(ACTOR_ON_DISK == galexy_galf::ACTOR_ON_DISK);
 const _: () = assert!(DISK_HEADER == galexy_galf::DISK_HEADER);
 const _: () = assert!(SHARE_SLOTS == galexy_galf::SHARE_SLOTS);
 const _: () = assert!(SHARE_ON_DISK == galexy_galf::SHARE_ON_DISK);
-/// kind+actor+name_len+pad + parent+len + name + directs + indirect.
-const OBJECT_ON_DISK: usize = 8 + NAME_CAP + DIRECT_BLOCKS * 2 + 2; // 90
+/// kind+actor+name_len+pad + parent+len + name + directs + indirect
+/// + child + next sibling.
+const OBJECT_ON_DISK: usize = 8 + NAME_CAP + DIRECT_BLOCKS * 2 + 2 + 4; // 94
 const _: () = assert!(OBJECT_ON_DISK == galexy_galf::OBJECT_ON_DISK);
+const GEN_BYTES: usize = BLOCK_SLOTS * 4;
+const TAG_BYTES: usize = BLOCK_SLOTS * TAG_LEN;
 const PAYLOAD_LEN: usize = ACTOR_ON_DISK * ACTOR_SLOTS
     + OBJECT_ON_DISK * OBJECT_SLOTS
     + SHARE_ON_DISK * SHARE_SLOTS
     + BITMAP_BYTES
-    + BLOCK_SLOTS * BLOCK_SIZE;
+    + GEN_BYTES
+    + TAG_BYTES;
+const _: () = assert!(PAYLOAD_LEN == galexy_galf::PAYLOAD_LEN);
 const _: () = assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * block::SECTOR);
 const _: () = assert!(BLOCK_SLOTS.is_multiple_of(8));
 const _: () = assert!(FILE_BYTES <= u16::MAX as usize);
-/// Sectors both dual slots need past the LBA base (capacity gate).
-const DISK_MIN_SECTORS: u64 = (DISK_SECTORS * DISK_SLOT_COUNT) as u64;
+/// Sectors both metadata slots and the data region need past the LBA base.
+const DISK_MIN_SECTORS: u64 = (DISK_SECTORS * DISK_SLOT_COUNT + BLOCK_SLOTS) as u64;
 /// Default password for the immortal admin account at format.
 pub const ADMIN_DEFAULT_PASSWORD: &str = "admin";
 /// Bring-up volume passphrase (wraps the disk key). Test kernels and the
@@ -406,6 +439,18 @@ impl core::ops::DerefMut for SectorBuf {
 }
 
 static DISK_BUF: Mutex<SectorBuf> = Mutex::new(SectorBuf([[0u8; block::SECTOR]; DISK_SECTORS]));
+
+/// Ciphertext snapshot of dirty pool blocks. Plaintext stays in the table.
+#[repr(C, align(4096))]
+struct DataBuf {
+    blocks: [[u8; BLOCK_SIZE]; BLOCK_SLOTS],
+    dirty: [bool; BLOCK_SLOTS],
+}
+
+static DATA_BUF: Mutex<DataBuf> = Mutex::new(DataBuf {
+    blocks: [[0u8; BLOCK_SIZE]; BLOCK_SLOTS],
+    dirty: [false; BLOCK_SLOTS],
+});
 const _: () = assert!(core::mem::align_of::<SectorBuf>() == 4096);
 /// First LBA of slot 0 (partition offset). Default 0; set before [`init`].
 static LBA_BASE: AtomicU32 = AtomicU32::new(0);
@@ -922,9 +967,15 @@ fn sync_to_disk_gated() -> bool {
     let next_gen = ACTIVE_GEN.load(Ordering::Relaxed).wrapping_add(1);
     let next_slot = 1 - ACTIVE_SLOT.load(Ordering::Relaxed);
     let lba = slot_lba(next_slot);
+    let mut data = DATA_BUF.lock();
     let mut buf = DISK_BUF.lock();
     {
-        let table = TABLE.lock();
+        let mut table = TABLE.lock();
+        if let Some(vk) = *VOLUME_KEY.lock() {
+            seal_dirty(&mut data, &mut table, &vk);
+            let mut vk = vk;
+            wipe_bytes(&mut vk);
+        }
         if !encode_table(&table, next_gen, &mut buf.0) {
             // A dirty RAM table on a locked volume stays dirty (nothing
             // can seal it) and the 1 Hz tick retries forever. Say so once
@@ -940,6 +991,17 @@ fn sync_to_disk_gated() -> bool {
     LOCKED_SKIP_LOGGED.store(false, Ordering::Release);
     crate::serial_println!("[galfs] committing slot {}", next_slot);
     let d = disk();
+    for i in 0..BLOCK_SLOTS {
+        if !data.dirty[i] {
+            continue;
+        }
+        if d.write_sectors(data_lba(i as u32), &data.blocks[i..i + 1])
+            .is_err()
+        {
+            crate::serial_println!("[galfs] disk data write failed");
+            return false;
+        }
+    }
     if d.write_sectors(lba, &buf.0).is_err() {
         crate::serial_println!("[galfs] disk sync write failed");
         return false;
@@ -947,6 +1009,10 @@ fn sync_to_disk_gated() -> bool {
     if d.flush().is_err() {
         crate::serial_println!("[galfs] disk flush failed");
         return false;
+    }
+    {
+        let mut table = TABLE.lock();
+        publish_stable(&mut table);
     }
     ACTIVE_SLOT.store(next_slot, Ordering::Release);
     ACTIVE_GEN.store(next_gen, Ordering::Release);
@@ -961,6 +1027,28 @@ enum DiskLoad {
     Corrupt,
 }
 
+fn seal_dirty(data: &mut DataBuf, table: &mut Table, volume_key: &[u8; KEY_LEN]) {
+    data.dirty = [false; BLOCK_SLOTS];
+    for i in 0..BLOCK_SLOTS {
+        if !table.dirty[i] || !bitmap_set(&table.bitmap, i) {
+            continue;
+        }
+        data.blocks[i] = table.blocks[i];
+        let mut tag = [0u8; TAG_LEN];
+        if !galexy_galf::seal_block(
+            volume_key,
+            i,
+            table.block_gen[i],
+            &mut data.blocks[i],
+            &mut tag,
+        ) {
+            continue;
+        }
+        table.block_tag[i] = tag;
+        data.dirty[i] = true;
+    }
+}
+
 fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
     let mut best_gen = 0u64;
     let mut best_slot: Option<u32> = None;
@@ -968,6 +1056,9 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
     // is not the current one. Either case refuses silent format.
     let mut saw_corrupt_current = false;
     let mut bad_with_magic = 0u32;
+    let mut winner_key: Option<[u8; KEY_LEN]> = None;
+    let mut sibling: Option<[u8; BITMAP_BYTES]> = None;
+    let mut clock = 1u32;
     let mut buf = DISK_BUF.lock();
     let mut best = LOAD_BEST.lock();
     let mut cand = LOAD_CAND.lock();
@@ -992,7 +1083,7 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
             saw_corrupt_current = true;
             continue;
         }
-        let Some(gen) = decode_table(&mut buf.0, &mut cand, passphrase) else {
+        let Some((gen, key)) = decode_table(&mut buf.0, &mut cand, passphrase) else {
             if magic && version == DISK_VERSION {
                 saw_corrupt_current = true;
                 bad_with_magic += 1;
@@ -1000,28 +1091,57 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
             }
             continue;
         };
+        if !load_pool(&mut cand, &key) {
+            let mut key = key;
+            wipe_bytes(&mut key);
+            saw_corrupt_current = true;
+            bad_with_magic += 1;
+            crate::serial_println!("[galfs] slot {} rejected (data)", slot);
+            continue;
+        }
+        clock = clock.max(max_block_clock(&cand));
         if !validate_table(&cand) {
+            let mut key = key;
+            wipe_bytes(&mut key);
             saw_corrupt_current = true;
             bad_with_magic += 1;
             crate::serial_println!("[galfs] slot {} failed validation", slot);
             continue;
         }
         if best_slot.is_none() || gen >= best_gen {
+            if best_slot.is_some() {
+                sibling = Some(best.bitmap);
+            }
+            if let Some(mut old) = winner_key.take() {
+                wipe_bytes(&mut old);
+            }
+            winner_key = Some(key);
             best_gen = gen;
             best_slot = Some(slot);
             // Avoid `*best = *cand` — that materializes a Table on the stack.
             copy_table(&cand, &mut best);
+        } else {
+            sibling = Some(cand.bitmap);
+            let mut key = key;
+            wipe_bytes(&mut key);
         }
     }
     let Some(slot) = best_slot else {
+        if let Some(mut key) = winner_key.take() {
+            wipe_bytes(&mut key);
+        }
         return if saw_corrupt_current {
             DiskLoad::Corrupt
         } else {
             DiskLoad::Empty
         };
     };
+    if let Some(key) = winner_key {
+        *VOLUME_KEY.lock() = Some(key);
+    }
     let mut table = TABLE.lock();
     copy_table(&best, &mut table);
+    note_loaded(&mut table, sibling.as_ref(), clock);
     refresh_roots(&table);
     drop(table);
     // The pre-unlock import, if any, addressed the RAM table. Those
@@ -1131,6 +1251,8 @@ fn encode_table(
         }
         let ioff = boff + DIRECT_BLOCKS * 2;
         flat[ioff..ioff + 2].copy_from_slice(&obj.indirect.to_le_bytes());
+        flat[ioff + 2..ioff + 4].copy_from_slice(&obj.child.to_le_bytes());
+        flat[ioff + 4..ioff + 6].copy_from_slice(&obj.next.to_le_bytes());
         off += OBJECT_ON_DISK;
     }
     for share in &table.shares {
@@ -1143,9 +1265,13 @@ fn encode_table(
     }
     flat[off..off + BITMAP_BYTES].copy_from_slice(&table.bitmap);
     off += BITMAP_BYTES;
-    for block in &table.blocks {
-        flat[off..off + BLOCK_SIZE].copy_from_slice(block);
-        off += BLOCK_SIZE;
+    for gen in &table.block_gen {
+        flat[off..off + 4].copy_from_slice(&gen.to_le_bytes());
+        off += 4;
+    }
+    for tag in &table.block_tag {
+        flat[off..off + TAG_LEN].copy_from_slice(tag);
+        off += TAG_LEN;
     }
     debug_assert_eq!(off, DISK_HEADER + PAYLOAD_LEN);
     debug_assert!(off <= flat.len());
@@ -1205,13 +1331,14 @@ fn seal_aad(generation: u64) -> [u8; 14] {
     aad
 }
 
-/// Decodes a sealed slot. Returns the generation when unlock + AEAD succeed.
-/// Decrypts the payload in place in `sectors`.
+/// Decodes a sealed slot. Returns the generation and volume key when unlock
+/// and AEAD succeed. File bytes are loaded separately from the data region.
+/// Decrypts the payload in place in `sectors`. The caller wipes the key.
 fn decode_table(
     sectors: &mut [[u8; block::SECTOR]; DISK_SECTORS],
     table: &mut Table,
     passphrase: &[u8],
-) -> Option<u64> {
+) -> Option<(u64, [u8; KEY_LEN])> {
     let flat = sectors_flat_mut(sectors);
     if flat[0..4] != DISK_MAGIC {
         return None;
@@ -1309,6 +1436,8 @@ fn decode_table(
         }
         let ioff = boff + DIRECT_BLOCKS * 2;
         obj.indirect = u16::from_le_bytes([flat[ioff], flat[ioff + 1]]);
+        obj.child = u16::from_le_bytes([flat[ioff + 2], flat[ioff + 3]]);
+        obj.next = u16::from_le_bytes([flat[ioff + 4], flat[ioff + 5]]);
         if obj.len as usize > FILE_BYTES {
             let mut gone = vk;
             wipe_bytes(&mut gone);
@@ -1326,12 +1455,87 @@ fn decode_table(
     }
     table.bitmap.copy_from_slice(&flat[off..off + BITMAP_BYTES]);
     off += BITMAP_BYTES;
-    for block in &mut table.blocks {
-        block.copy_from_slice(&flat[off..off + BLOCK_SIZE]);
-        off += BLOCK_SIZE;
+    for gen in &mut table.block_gen {
+        *gen = u32::from_le_bytes([flat[off], flat[off + 1], flat[off + 2], flat[off + 3]]);
+        off += 4;
     }
-    *VOLUME_KEY.lock() = Some(vk);
-    Some(generation)
+    for tag in &mut table.block_tag {
+        tag.copy_from_slice(&flat[off..off + TAG_LEN]);
+        off += TAG_LEN;
+    }
+    for block in &mut table.blocks {
+        block.fill(0);
+    }
+    Some((generation, vk))
+}
+
+fn data_lba(index: u32) -> u32 {
+    disk_lba_base()
+        .saturating_add((DISK_SECTORS * DISK_SLOT_COUNT) as u32)
+        .saturating_add(index)
+}
+
+/// Decrypts allocated pool blocks from the data region into `table`.
+fn load_pool(table: &mut Table, volume_key: &[u8; KEY_LEN]) -> bool {
+    for i in 0..BLOCK_SLOTS {
+        if !bitmap_set(&table.bitmap, i) {
+            continue;
+        }
+        let gen = table.block_gen[i];
+        if gen == 0 {
+            return false;
+        }
+        let mut sector = [[0u8; block::SECTOR]; 1];
+        if disk()
+            .read_sectors(data_lba(i as u32), &mut sector)
+            .is_err()
+        {
+            return false;
+        }
+        if !galexy_galf::open_block(volume_key, i, gen, &mut sector[0], &table.block_tag[i]) {
+            return false;
+        }
+        table.blocks[i] = sector[0];
+    }
+    true
+}
+
+fn max_block_clock(table: &Table) -> u32 {
+    table
+        .block_gen
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
+        .max(1)
+}
+
+/// Marks committed blocks stable and reserves indexes the sibling slot
+/// still names, so the next commit can replace that slot before reuse.
+fn note_loaded(table: &mut Table, sibling: Option<&[u8; BITMAP_BYTES]>, clock: u32) {
+    table.alloc_clock = clock.max(1);
+    for i in 0..BLOCK_SLOTS {
+        let live = bitmap_set(&table.bitmap, i);
+        table.stable[i] = live;
+        table.dirty[i] = false;
+        table.hold_ttl[i] = 0;
+        if let Some(sib) = sibling {
+            if bitmap_set(sib, i) && !live {
+                table.hold_ttl[i] = 1;
+            }
+        }
+    }
+}
+
+fn publish_stable(table: &mut Table) {
+    for i in 0..BLOCK_SLOTS {
+        table.dirty[i] = false;
+        table.stable[i] = bitmap_set(&table.bitmap, i);
+        if table.hold_ttl[i] > 0 {
+            table.hold_ttl[i] -= 1;
+        }
+    }
 }
 
 /// Structural checks after CRC so a bit-flipped-but-checksum-ok image cannot
@@ -1423,7 +1627,57 @@ fn validate_table(table: &Table) -> bool {
             return false;
         }
     }
-    super::large::ok()
+    directories_ok(table) && super::large::ok()
+}
+
+/// Sibling lists are the directory. Parent pointers are what cards walk.
+/// The two have to name the same children, with no cycles and no orphans.
+fn directories_ok(table: &Table) -> bool {
+    let mut seen = [false; OBJECT_SLOTS];
+    for i in 0..OBJECT_SLOTS {
+        let obj = &table.objects[i];
+        if obj.kind == KIND_EMPTY {
+            continue;
+        }
+        if obj.kind != KIND_DIR && obj.child != NO_OBJECT {
+            return false;
+        }
+        if obj.kind != KIND_DIR {
+            continue;
+        }
+        let mut child = obj.child;
+        let mut guard = 0usize;
+        while child != NO_OBJECT {
+            if child as usize >= OBJECT_SLOTS || seen[child as usize] {
+                return false;
+            }
+            seen[child as usize] = true;
+            let entry = &table.objects[child as usize];
+            if entry.kind == KIND_EMPTY || entry.parent != i as u16 {
+                return false;
+            }
+            child = entry.next;
+            guard += 1;
+            if guard > OBJECT_SLOTS {
+                return false;
+            }
+        }
+    }
+    for (i, obj) in table.objects.iter().enumerate() {
+        if obj.kind == KIND_EMPTY {
+            continue;
+        }
+        if obj.parent == NO_PARENT {
+            if obj.next != NO_OBJECT {
+                return false;
+            }
+            continue;
+        }
+        if !seen[i] {
+            return false;
+        }
+    }
+    true
 }
 
 fn mark_block(seen: &mut [bool; BLOCK_SLOTS], bitmap: &[u8], b: u16) -> bool {
@@ -1687,6 +1941,7 @@ pub fn remove_user(name: &str) -> Result<(), SysError> {
         desktop = Some(i);
     }
     if let Some(di) = desktop {
+        unlink_child(&mut table, root, di as u16);
         table.objects[di] = Object::empty();
     }
     table.objects[root as usize] = Object::empty();
@@ -2082,6 +2337,7 @@ fn mkdir_locked(table: &mut Table, root: u16, name: &str) -> Result<u16, SysErro
     obj.parent = root;
     obj.actor = actor as u8;
     place_name(obj, name);
+    link_child(table, root, oi as u16);
     Ok(oi as u16)
 }
 
@@ -2112,6 +2368,7 @@ pub fn create_file_under(parent: u16, name: &str) -> Result<u16, SysError> {
     obj.blocks = [NO_BLOCK; DIRECT_BLOCKS];
     obj.indirect = NO_BLOCK;
     obj.len = 0;
+    link_child(&mut table, parent, oi as u16);
     drop(table);
     mark_dirty();
     Ok(oi as u16)
@@ -2201,17 +2458,70 @@ fn find_actor_root(table: &Table, name: &str) -> Result<u16, SysError> {
 }
 
 fn find_child(table: &Table, parent: u16, name: &str) -> Option<usize> {
-    table
-        .objects
-        .iter()
-        .position(|o| o.kind != KIND_EMPTY && o.parent == parent && o.name_is(name))
+    let mut child = table.objects.get(parent as usize)?.child;
+    for _ in 0..OBJECT_SLOTS {
+        if child == NO_OBJECT {
+            return None;
+        }
+        let index = child as usize;
+        let obj = table.objects.get(index)?;
+        if obj.name_is(name) {
+            return Some(index);
+        }
+        child = obj.next;
+    }
+    None
 }
 
 fn has_child(table: &Table, parent: u16) -> bool {
     table
         .objects
-        .iter()
-        .any(|o| o.kind != KIND_EMPTY && o.parent == parent)
+        .get(parent as usize)
+        .is_some_and(|obj| obj.kind == KIND_DIR && obj.child != NO_OBJECT)
+}
+
+/// Inserts `child` at the head of `parent`'s directory list.
+fn link_child(table: &mut Table, parent: u16, child: u16) {
+    let Some(dir) = table.objects.get_mut(parent as usize) else {
+        return;
+    };
+    let head = dir.child;
+    dir.child = child;
+    if let Some(obj) = table.objects.get_mut(child as usize) {
+        obj.next = head;
+    }
+}
+
+/// Removes `child` from `parent`'s directory list. The object itself stays.
+fn unlink_child(table: &mut Table, parent: u16, child: u16) {
+    let Some(dir) = table.objects.get(parent as usize) else {
+        return;
+    };
+    let mut prev = NO_OBJECT;
+    let mut cur = dir.child;
+    for _ in 0..OBJECT_SLOTS {
+        if cur == NO_OBJECT {
+            return;
+        }
+        let next = table
+            .objects
+            .get(cur as usize)
+            .map(|obj| obj.next)
+            .unwrap_or(NO_OBJECT);
+        if cur == child {
+            if prev == NO_OBJECT {
+                table.objects[parent as usize].child = next;
+            } else if let Some(obj) = table.objects.get_mut(prev as usize) {
+                obj.next = next;
+            }
+            if let Some(obj) = table.objects.get_mut(child as usize) {
+                obj.next = NO_OBJECT;
+            }
+            return;
+        }
+        prev = cur;
+        cur = next;
+    }
 }
 
 /// Walks every component except the last under `start`.
@@ -2352,6 +2662,7 @@ pub(crate) fn create(
     obj.blocks = [NO_BLOCK; DIRECT_BLOCKS];
     obj.indirect = NO_BLOCK;
     obj.len = 0;
+    link_child(&mut table, parent, oi as u16);
     if parsed.dir {
         Ok(None)
     } else {
@@ -2390,6 +2701,10 @@ pub(crate) fn remove(
     if kind == KIND_FILE {
         free_file_blocks(&mut table, found);
     }
+    let parent = table.objects[found].parent;
+    if parent != NO_PARENT {
+        unlink_child(&mut table, parent, index);
+    }
     table.objects[found] = Object::empty();
     Ok(index)
 }
@@ -2404,14 +2719,26 @@ pub(crate) fn with_file<R>(index: u16, f: impl FnOnce(&Object) -> R) -> Option<R
     Some(f(&table.objects[i]))
 }
 
+fn bitmap_set(bitmap: &[u8], index: usize) -> bool {
+    index < BLOCK_SLOTS && (bitmap[index / 8] >> (index % 8)) & 1 != 0
+}
+
 fn alloc_block(table: &mut Table) -> Option<u16> {
     for i in 0..BLOCK_SLOTS {
         let mask = 1u8 << (i % 8);
-        if table.bitmap[i / 8] & mask == 0 {
-            table.bitmap[i / 8] |= mask;
-            table.blocks[i] = [0; BLOCK_SIZE];
-            return Some(i as u16);
+        if table.bitmap[i / 8] & mask != 0 || table.hold_ttl[i] > 0 {
+            continue;
         }
+        table.bitmap[i / 8] |= mask;
+        table.blocks[i] = [0; BLOCK_SIZE];
+        table.stable[i] = false;
+        table.dirty[i] = true;
+        table.hold_ttl[i] = 0;
+        table.block_tag[i] = [0; TAG_LEN];
+        let gen = table.alloc_clock.max(1);
+        table.alloc_clock = gen.saturating_add(1).max(1);
+        table.block_gen[i] = gen;
+        return Some(i as u16);
     }
     None
 }
@@ -2421,8 +2748,40 @@ fn free_block(table: &mut Table, block: u16) {
     if block == NO_BLOCK || i >= BLOCK_SLOTS {
         return;
     }
+    let was_stable = table.stable[i];
     table.bitmap[i / 8] &= !(1u8 << (i % 8));
     table.blocks[i] = [0; BLOCK_SIZE];
+    table.dirty[i] = false;
+    table.stable[i] = false;
+    if was_stable {
+        // The other slot can still name this index until two commits replace
+        // both copies of the metadata that pointed here.
+        table.hold_ttl[i] = 2;
+    } else {
+        table.hold_ttl[i] = 0;
+        table.block_gen[i] = 0;
+    }
+}
+
+/// Returns a block the caller may overwrite. A block still named by the
+/// committed metadata is copied first; the old index stays reserved.
+fn make_mutable(table: &mut Table, oi: usize, slot: usize, existing: u16) -> Option<u16> {
+    let i = existing as usize;
+    if existing == NO_BLOCK || i >= BLOCK_SLOTS {
+        return None;
+    }
+    if !table.stable[i] {
+        table.dirty[i] = true;
+        return Some(existing);
+    }
+    let fresh = alloc_block(table)?;
+    table.blocks[fresh as usize] = table.blocks[i];
+    if !set_data_block(table, oi, slot, fresh) {
+        free_block(table, fresh);
+        return None;
+    }
+    free_block(table, existing);
+    Some(fresh)
 }
 
 fn free_file_blocks(table: &mut Table, index: usize) {
@@ -2483,8 +2842,17 @@ fn set_data_block(table: &mut Table, oi: usize, slot: usize, block: u16) -> bool
         // Pointer slots must be NO_BLOCK (0xffff), not zero (block 0).
         table.blocks[ib as usize].fill(0xff);
         table.objects[oi].indirect = ib;
+    } else if table.stable[table.objects[oi].indirect as usize] {
+        let old = table.objects[oi].indirect;
+        let Some(ib) = alloc_block(table) else {
+            return false;
+        };
+        table.blocks[ib as usize] = table.blocks[old as usize];
+        table.objects[oi].indirect = ib;
+        free_block(table, old);
     }
     let ib = table.objects[oi].indirect as usize;
+    table.dirty[ib] = true;
     let off = ii * 2;
     table.blocks[ib][off..off + 2].copy_from_slice(&block.to_le_bytes());
     true
@@ -2494,7 +2862,7 @@ fn set_data_block(table: &mut Table, oi: usize, slot: usize, block: u16) -> bool
 fn ensure_data_block(table: &mut Table, oi: usize, slot: usize) -> Option<u16> {
     let existing = data_block(table, oi, slot);
     if existing != NO_BLOCK {
-        return Some(existing);
+        return make_mutable(table, oi, slot, existing);
     }
     let b = alloc_block(table)?;
     if !set_data_block(table, oi, slot, b) {
@@ -2584,9 +2952,7 @@ pub(crate) fn write_at(index: u16, start: usize, src: &[u8]) -> Option<usize> {
             let slot = pos / BLOCK_SIZE;
             let off = pos % BLOCK_SIZE;
             let b = data_block(&table, i, slot);
-            if b == NO_BLOCK || b as usize >= BLOCK_SLOTS {
-                return None;
-            }
+            let b = make_mutable(&mut table, i, slot, b)?;
             let n = (BLOCK_SIZE - off).min(overwrite - done);
             table.blocks[b as usize][off..off + n].copy_from_slice(&src[done..done + n]);
             done += n;
@@ -2796,8 +3162,14 @@ pub(crate) fn rename(
             return Err(SysError::NoResource);
         }
     }
+    if new_parent != old_parent {
+        unlink_child(&mut table, old_parent, src);
+    }
     place_name(&mut table.objects[found], new_last);
     table.objects[found].parent = new_parent;
+    if new_parent != old_parent {
+        link_child(&mut table, new_parent, src);
+    }
     if table.objects[found].actor != new_actor {
         reassign_actor_subtree(&mut table, src, new_actor);
     }
@@ -2904,8 +3276,11 @@ pub(crate) fn truncate(index: u16, new_len: usize) -> Result<(), SysError> {
             let slot = (new_len - 1) / BLOCK_SIZE;
             let off = new_len % BLOCK_SIZE;
             if off != 0 {
-                let b = data_block(&table, i, slot) as usize;
-                table.blocks[b][off..].fill(0);
+                let b = data_block(&table, i, slot);
+                let Some(b) = make_mutable(&mut table, i, slot, b) else {
+                    return Err(SysError::NoResource);
+                };
+                table.blocks[b as usize][off..].fill(0);
             }
         }
         table.objects[i].len = new_len as u16;

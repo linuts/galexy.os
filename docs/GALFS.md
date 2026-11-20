@@ -129,11 +129,11 @@ confused-deputy share rules.
 
 ## Table limits (today)
 
-Milestone **45** shaped the tables; the on-disk version is GALF **v12**
-(Milestone 63 added `kdf_iters` on each actor). Actor/object tables
-plus a shared block pool, per-actor quotas, durable home shares, and
-single-indirect files. Empty files cost an inode only; bytes live in
-direct/indirect blocks.
+The on-disk version is GALF **v14**. Actor/object tables plus a shared
+block pool, per-actor quotas, durable home shares, and single-indirect
+files. A directory is the sibling list hung off its inode (cards still
+walk the parent pointer). Empty files cost an inode only; bytes live in
+direct/indirect blocks in the pool, not inside the sealed slot.
 
 | Resource | Cap |
 | --- | --- |
@@ -150,10 +150,12 @@ direct/indirect blocks.
 | Open files per task | 8 (IF=0: no heap on `open`) |
 | Path depth | 8 components |
 | Name length | 64 (object) / 32 (actor) |
-| Sectors per dual-slot image | 288 |
+| Sectors per metadata slot | 288 |
+| Data region | 256 sectors after the two slots |
 
 The IF=0 syscall path must not heap-allocate over this table. Double
-indirect / larger-than-u16 lengths remain open.
+indirect / larger-than-u16 lengths remain open. Files past 32 KiB still
+promote into the RAM store.
 
 ## On-disk: GALF slots
 
@@ -163,26 +165,32 @@ slave it stays RAM-only.
 ```text
 slot 0 @ LBA disk_lba_base()          (default 0; tests may use 2048)
 slot 1 @ LBA disk_lba_base() + DISK_SECTORS
+data   @ LBA disk_lba_base() + 2 × DISK_SECTORS   (one sector per pool block)
 ```
 
 Call `set_disk_lba_base` before `galfs::init` when the volume should not
 own absolute LBA 0 (e.g. after a protective MBR / GPT). Capacity must
-cover `base + 2 × DISK_SECTORS`.
+cover `base + 2 × DISK_SECTORS + BLOCK_SLOTS`.
 
 | Property | Behavior |
 | --- | --- |
-| Dual slot | Commit writes the **inactive** slot, then flush |
+| Dual slot | Commit writes changed data blocks, then the **inactive** metadata slot, then flush |
 | Generation | Newer gen wins on load |
-| Crash | Mid-write leaves the previous slot intact |
-| Version | Layout bump **refuses** old images (no silent reinterpret) |
+| Crash | A torn slot leaves the previous metadata, which still names its own blocks |
+| Version | Layout bump **refuses** old images (no silent reinterpret). v14 refuses v12 |
 
 ### Commit ordering and flush
 
 Mutates update the in-RAM table and mark it **dirty**. A coalesced
-commit (write-back) encodes the **whole** sealed slot (actors, objects,
-shares, bitmap, and data blocks) into the inactive LBA range, issues
-`BlockDevice::write_sectors`, then `BlockDevice::flush` **before**
-publishing the new generation in RAM. Commits run on:
+commit (write-back) seals changed pool blocks into the data region
+(ChaCha20-HMAC, nonce = block index ‖ allocation generation), then
+encodes the sealed metadata slot (actors, objects, directory links,
+shares, bitmap, per-block generation and tag — not the file bytes)
+into the inactive LBA range, then `BlockDevice::flush` **before**
+publishing the new generation in RAM. A block named by committed
+metadata is copied to a fresh index before it is overwritten. The old
+index stays reserved until both slots have dropped it, so falling back
+to the previous slot still opens the ciphertext it names. Commits run on:
 
 - the kernel main loop's 1 Hz tick (`sync_if_dirty`)
 - `Syscall::Sync` / shell `sync`
@@ -190,10 +198,10 @@ publishing the new generation in RAM. Commits run on:
 - explicit `galfs::sync()` in tests
 
 Crash window: up to about one second of unflushed mutates (plus any
-work after the last tick). There is no separate “data then metadata”
-path: file bytes and directory metadata share one AEAD payload, so a
-torn write cannot leave a newer directory pointing at uncommitted
-blocks.
+work after the last tick). Data blocks are written before the metadata
+that names them. A torn metadata slot fails AEAD and the previous slot
+remains the volume. New blocks the torn slot would have named are
+orphans; blocks the previous slot names were not overwritten.
 
 Flush matrix (runner): `boot_with_galfs` uses `cache=writethrough`;
 `galfs_disk_persists_writeback_cache` / `_none_cache` repeat the
@@ -208,8 +216,9 @@ scope initially.
 
 1. Format creates a random **volume key**.
 2. KEK = PBKDF2(volume passphrase); wrap the volume key (ChaCha20-HMAC).
-3. Encrypt the actor/object/**share/bitmap/block** payload under the volume key
-   (each object carries 8 directs + one single-indirect pointer).
+3. Encrypt the actor/object/**share/bitmap/generation/tag** payload under the volume key
+   (each object carries 8 directs, one single-indirect pointer, and its directory links).
+   File bytes are sealed per block in the data region, not inside that payload.
 4. AAD binds magic + version + generation (slot splice rejected).
 5. CRC of ciphertext is a cheap reject before AEAD open.
 
@@ -226,9 +235,10 @@ is accepted. The MAC stays
 HMAC-SHA256 (Poly1305 needs a versioned cutover). Per-file keys,
 secure erase, and TPM seal are non-goals. Details: `AUTH.md` → Sealed GALF.
 
-v12 refuses older images (including v11); delete `galfs.img` or let
+v14 refuses older images (including v12 and v11); delete `galfs.img` or let
 format recreate. The actor record carries `kdf_iters` (4 bytes) after
-the password hash.
+the password hash. Directory membership is a sibling list on the inode;
+a card still names an object id and covers descendants through `parent`.
 
 ## Boot and format
 
@@ -283,9 +293,9 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 
 ### Today (through review readiness)
 
-- GALF **v12**: 32 actors / 128 objects / 32 durable shares; per-actor
+- GALF **v14**: 32 actors / 128 objects / 32 durable shares; per-actor
   `kdf_iters`; 256×512 block
-  pool; 8 directs + single indirect/file (32 KiB on disk); per-actor object +
+  pool outside the seal; 8 directs + single indirect/file (32 KiB on disk); directory sibling lists; per-actor object +
   byte quotas (defaults for new users; admin at the large-file maximum
   on a fresh RAM table, or the stored quota on a loaded v12 disk). The
   compiler sysroot import raises a stored admin quota up to the object
@@ -299,9 +309,8 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
   **v13** (`galexy-galf::v13`) is the on-disk large format: two 64 KiB
   metadata slots holding a sealed extent map, then a 4 KiB data pool
   sized to the disk (`MIN_DISK_BYTES` = 8 MiB, files up to 64 MiB).
-  `check_image` looks at the version and checks v12 or v13. The kernel
-  still refuses a version other than 12, so it does not format or load
-  v13 yet. Phase 15 (Milestones **97–99**) is the plan for that load:
+  `check_image` looks at the version and checks v12 or v13.   The kernel speaks v14 and refuses any other version, including v12
+  and the host v13 extent map, so it does not format or load v13. Phase 15 (Milestones **97–99**) is the plan for that load:
   see Scheduled commits below. Host v13 names 32 files and does not
   carry the actor table; the login volume does not become that map
 - Sealed dual-slot image (288 sectors/slot) on the IDE slave

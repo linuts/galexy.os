@@ -184,7 +184,7 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 - **SMP kernel** — two CPUs, per-CPU deadline timers, tickless idle, work-stealing idle, TLB shootdown
 - **Ring-3 userland** — ELF from a tar ramdisk, per-task address spaces, W^X maps, SYSCALL ABI in `galexy-abi` (26 syscalls)
 - **Capabilities day one** — keyboard, console, loader, files, power, queries, dmesg; process Caps for wait / kill / give; no fd table, no PIDs
-- **galfs** — sealed dual-slot GALF v12 on virtio-blk or IDE; 32 actors, quotas, durable shares, rename / truncate / stat, host `fsck`
+- **galfs** — sealed dual-slot GALF v14 on virtio-blk or IDE; directory lists, encrypted data blocks, 32 actors, quotas, durable shares, rename / truncate / stat, host `fsck`
 - **Auth** — PBKDF2 passwords, lockout, idle lock, forced first `passwd`; every seat boots logged out; audit lines carry no secrets
 - **Init and seats** — userspace `init` is the orphan root and respawns F-key seats; Ctrl-C kills the TTY foreground job
 - **Scheduling** — RR + pin-at-spawn + idle steal; `sleep`; blocking keyboard and pipe reads park and wake (`docs/SCHEDULING.md`)

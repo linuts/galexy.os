@@ -26,8 +26,9 @@ pub const DISK_SECTORS: usize = 288;
 pub const DISK_SLOT_COUNT: usize = 2;
 /// On-disk magic.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-/// Current sealed layout (quotas + shares + single-indirect blocks).
-pub const DISK_VERSION: u16 = 12;
+/// Card volume: directory lists, single-indirect files, data blocks
+/// outside the sealed slots. v12 images are refused.
+pub const DISK_VERSION: u16 = 14;
 
 pub const OBJECT_SLOTS: usize = 128;
 pub const ACTOR_SLOTS: usize = 32;
@@ -46,17 +47,29 @@ pub const ACTOR_NAME: usize = 32;
 pub const DISK_HEADER: usize = 128;
 /// used + name_len + name + root + salt + hash + kdf_iters + quota.
 pub const ACTOR_ON_DISK: usize = 70;
-/// kind+actor+name_len+pad + parent+len + name + directs + indirect.
-pub const OBJECT_ON_DISK: usize = 8 + NAME_CAP + DIRECT_BLOCKS * 2 + 2;
+/// kind+actor+name_len+pad + parent+len + name + directs + indirect
+/// + child + next sibling.
+pub const OBJECT_ON_DISK: usize = 8 + NAME_CAP + DIRECT_BLOCKS * 2 + 2 + 4;
 /// used + rights + grantee + pad + object.
 pub const SHARE_ON_DISK: usize = 6;
+/// Per-block allocation generation stored in the sealed payload.
+pub const GEN_BYTES: usize = BLOCK_SLOTS * 4;
+/// Per-block AEAD tag stored in the sealed payload (file bytes are not).
+pub const TAG_BYTES: usize = BLOCK_SLOTS * TAG_LEN;
 pub const PAYLOAD_LEN: usize = ACTOR_ON_DISK * ACTOR_SLOTS
     + OBJECT_ON_DISK * OBJECT_SLOTS
     + SHARE_ON_DISK * SHARE_SLOTS
     + BITMAP_BYTES
-    + BLOCK_SLOTS * BLOCK_SIZE;
+    + GEN_BYTES
+    + TAG_BYTES;
+/// Byte offset of data block `index` from the start of the GALF image.
+/// Two metadata slots come first; each data block is one sector.
+pub const fn data_byte_offset(index: usize) -> usize {
+    DISK_SLOT_COUNT * DISK_SECTORS * SECTOR + index * BLOCK_SIZE
+}
 
 const _: () = assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * SECTOR);
+const _: () = assert!(OBJECT_ON_DISK == 94);
 
 pub const KIND_EMPTY: u8 = 0;
 pub const KIND_FILE: u8 = 1;
@@ -159,6 +172,10 @@ pub struct Object {
     pub blocks: [u16; DIRECT_BLOCKS],
     pub indirect: u16,
     pub len: u16,
+    /// First child, when `kind` is a directory. [`NO_PARENT`] if none.
+    pub child: u16,
+    /// Next sibling under the same parent. [`NO_PARENT`] if none.
+    pub next: u16,
 }
 
 impl Object {
@@ -172,6 +189,8 @@ impl Object {
             blocks: [NO_BLOCK; DIRECT_BLOCKS],
             indirect: NO_BLOCK,
             len: 0,
+            child: NO_PARENT,
+            next: NO_PARENT,
         }
     }
 }
@@ -203,6 +222,10 @@ pub struct Table {
     pub shares: [Share; SHARE_SLOTS],
     pub blocks: [[u8; BLOCK_SIZE]; BLOCK_SLOTS],
     pub bitmap: [u8; BITMAP_BYTES],
+    /// Allocation generation of each pool block. Zero means never sealed.
+    pub block_gen: [u32; BLOCK_SLOTS],
+    /// AEAD tag of the ciphertext stored in the data region.
+    pub block_tag: [[u8; TAG_LEN]; BLOCK_SLOTS],
 }
 
 impl Table {
@@ -213,6 +236,8 @@ impl Table {
             shares: [Share::empty(); SHARE_SLOTS],
             blocks: [[0u8; BLOCK_SIZE]; BLOCK_SLOTS],
             bitmap: [0u8; BITMAP_BYTES],
+            block_gen: [0; BLOCK_SLOTS],
+            block_tag: [[0u8; TAG_LEN]; BLOCK_SLOTS],
         }
     }
 }
@@ -310,9 +335,16 @@ pub fn check_image(
             continue;
         }
         match decode_slot(scratch, passphrase, cand) {
-            Some(gen) => {
-                if best_slot.is_none() || gen >= best_gen {
-                    best_gen = gen;
+            Some(decoded) => {
+                let blocks_ok = install_data_blocks(image, cand, &decoded.volume_key);
+                let mut key = decoded.volume_key;
+                wipe_bytes(&mut key);
+                if !blocks_ok {
+                    saw_corrupt_current = true;
+                    continue;
+                }
+                if best_slot.is_none() || decoded.generation >= best_gen {
+                    best_gen = decoded.generation;
                     best_slot = Some(slot);
                     copy_table(cand, best);
                 }
@@ -355,6 +387,90 @@ fn seal_aad(generation: u64) -> [u8; 14] {
     aad[4..6].copy_from_slice(&DISK_VERSION.to_le_bytes());
     aad[6..14].copy_from_slice(&generation.to_le_bytes());
     aad
+}
+
+/// Nonce for data block `index` allocated at `gen`. Unique per write
+/// because a rewritten block gets a new generation (and, while either
+/// metadata slot still names the old block, a new index).
+pub fn block_nonce(index: usize, gen: u32) -> [u8; NONCE_LEN] {
+    let mut nonce = [0u8; NONCE_LEN];
+    nonce[0..4].copy_from_slice(&(index as u32).to_le_bytes());
+    nonce[4..8].copy_from_slice(&gen.to_le_bytes());
+    nonce
+}
+
+/// AAD binding a data block to this GALF version, its index, and its generation.
+pub fn block_aad(index: usize, gen: u32) -> [u8; 14] {
+    let mut aad = [0u8; 14];
+    aad[0..4].copy_from_slice(&DISK_MAGIC);
+    aad[4..6].copy_from_slice(&DISK_VERSION.to_le_bytes());
+    aad[6..10].copy_from_slice(&(index as u32).to_le_bytes());
+    aad[10..14].copy_from_slice(&gen.to_le_bytes());
+    aad
+}
+
+/// Encrypts one plaintext pool block in place. `gen` must be non-zero.
+pub fn seal_block(
+    volume_key: &[u8; KEY_LEN],
+    index: usize,
+    gen: u32,
+    block: &mut [u8],
+    tag: &mut [u8; TAG_LEN],
+) -> bool {
+    if block.len() != BLOCK_SIZE || gen == 0 {
+        return false;
+    }
+    let nonce = block_nonce(index, gen);
+    let aad = block_aad(index, gen);
+    seal(volume_key, &nonce, &aad, block, tag);
+    true
+}
+
+/// Decrypts one pool block in place. Returns false on a bad tag or generation.
+pub fn open_block(
+    volume_key: &[u8; KEY_LEN],
+    index: usize,
+    gen: u32,
+    block: &mut [u8],
+    tag: &[u8; TAG_LEN],
+) -> bool {
+    if block.len() != BLOCK_SIZE || gen == 0 {
+        return false;
+    }
+    let nonce = block_nonce(index, gen);
+    let aad = block_aad(index, gen);
+    open(volume_key, &nonce, &aad, block, tag)
+}
+
+/// One opened metadata slot. The caller wipes [`DecodedSlot::volume_key`].
+pub struct DecodedSlot {
+    pub generation: u64,
+    pub volume_key: [u8; KEY_LEN],
+}
+
+/// Fills `table.blocks` from the encrypted data region of `image`.
+///
+/// Blocks the bitmap does not name are left untouched. A short image is
+/// fine when nothing is allocated.
+pub fn install_data_blocks(image: &[u8], table: &mut Table, volume_key: &[u8; KEY_LEN]) -> bool {
+    for i in 0..BLOCK_SLOTS {
+        let used = (table.bitmap[i / 8] >> (i % 8)) & 1 != 0;
+        if !used {
+            continue;
+        }
+        let gen = table.block_gen[i];
+        let off = data_byte_offset(i);
+        if gen == 0 || image.len() < off + BLOCK_SIZE {
+            return false;
+        }
+        let mut block = [0u8; BLOCK_SIZE];
+        block.copy_from_slice(&image[off..off + BLOCK_SIZE]);
+        if !open_block(volume_key, i, gen, &mut block, &table.block_tag[i]) {
+            return false;
+        }
+        table.blocks[i] = block;
+    }
+    true
 }
 
 /// Randomness one sealed slot consumes. The kernel draws these from
@@ -424,6 +540,8 @@ pub fn encode_slot(
         }
         let ioff = boff + DIRECT_BLOCKS * 2;
         flat[ioff..ioff + 2].copy_from_slice(&obj.indirect.to_le_bytes());
+        flat[ioff + 2..ioff + 4].copy_from_slice(&obj.child.to_le_bytes());
+        flat[ioff + 4..ioff + 6].copy_from_slice(&obj.next.to_le_bytes());
         off += OBJECT_ON_DISK;
     }
     for share in &table.shares {
@@ -436,9 +554,13 @@ pub fn encode_slot(
     }
     flat[off..off + BITMAP_BYTES].copy_from_slice(&table.bitmap);
     off += BITMAP_BYTES;
-    for block in &table.blocks {
-        flat[off..off + BLOCK_SIZE].copy_from_slice(block);
-        off += BLOCK_SIZE;
+    for gen in &table.block_gen {
+        flat[off..off + 4].copy_from_slice(&gen.to_le_bytes());
+        off += 4;
+    }
+    for tag in &table.block_tag {
+        flat[off..off + TAG_LEN].copy_from_slice(tag);
+        off += TAG_LEN;
     }
     debug_assert_eq!(off, DISK_HEADER + PAYLOAD_LEN);
 
@@ -471,8 +593,9 @@ pub fn encode_slot(
     true
 }
 
-/// Decrypt one slot buffer into `table`. Returns generation on success.
-pub fn decode_slot(flat: &mut [u8], passphrase: &[u8], table: &mut Table) -> Option<u64> {
+/// Decrypt one slot buffer into `table`. File bytes stay in the data region;
+/// [`install_data_blocks`] loads them. The returned key must be wiped.
+pub fn decode_slot(flat: &mut [u8], passphrase: &[u8], table: &mut Table) -> Option<DecodedSlot> {
     if flat.len() < DISK_HEADER + PAYLOAD_LEN {
         return None;
     }
@@ -572,6 +695,8 @@ pub fn decode_slot(flat: &mut [u8], passphrase: &[u8], table: &mut Table) -> Opt
         }
         let ioff = boff + DIRECT_BLOCKS * 2;
         obj.indirect = u16::from_le_bytes([flat[ioff], flat[ioff + 1]]);
+        obj.child = u16::from_le_bytes([flat[ioff + 2], flat[ioff + 3]]);
+        obj.next = u16::from_le_bytes([flat[ioff + 4], flat[ioff + 5]]);
         if obj.len as usize > FILE_BYTES {
             let mut gone = vk;
             wipe_bytes(&mut gone);
@@ -589,13 +714,21 @@ pub fn decode_slot(flat: &mut [u8], passphrase: &[u8], table: &mut Table) -> Opt
     }
     table.bitmap.copy_from_slice(&flat[off..off + BITMAP_BYTES]);
     off += BITMAP_BYTES;
-    for block in &mut table.blocks {
-        block.copy_from_slice(&flat[off..off + BLOCK_SIZE]);
-        off += BLOCK_SIZE;
+    for gen in &mut table.block_gen {
+        *gen = u32::from_le_bytes([flat[off], flat[off + 1], flat[off + 2], flat[off + 3]]);
+        off += 4;
     }
-    let mut gone = vk;
-    wipe_bytes(&mut gone);
-    Some(generation)
+    for tag in &mut table.block_tag {
+        tag.copy_from_slice(&flat[off..off + TAG_LEN]);
+        off += TAG_LEN;
+    }
+    for block in &mut table.blocks {
+        block.fill(0);
+    }
+    Some(DecodedSlot {
+        generation,
+        volume_key: vk,
+    })
 }
 
 fn collect_issues(table: &Table, report: &mut Report) {
@@ -687,6 +820,59 @@ fn collect_issues(table: &Table, report: &mut Report) {
         }
         if !bit && *used {
             report.push(Issue::BlockMissing { block: i as u16 });
+        }
+    }
+    check_directories(table, report);
+}
+
+/// Directory membership is a sibling list on the parent, not a scan of
+/// every object. The list and the parent pointers must name the same set.
+fn check_directories(table: &Table, report: &mut Report) {
+    let mut seen = [false; OBJECT_SLOTS];
+    for i in 0..OBJECT_SLOTS {
+        let obj = &table.objects[i];
+        if obj.kind == KIND_EMPTY {
+            continue;
+        }
+        if obj.kind != KIND_DIR && obj.child != NO_PARENT {
+            report.push(Issue::BadParent { object: i as u16 });
+        }
+        if obj.kind != KIND_DIR {
+            continue;
+        }
+        let mut child = obj.child;
+        let mut guard = 0usize;
+        while child != NO_PARENT {
+            if child as usize >= OBJECT_SLOTS || seen[child as usize] {
+                report.push(Issue::BadParent { object: i as u16 });
+                break;
+            }
+            seen[child as usize] = true;
+            let entry = &table.objects[child as usize];
+            if entry.kind == KIND_EMPTY || entry.parent != i as u16 {
+                report.push(Issue::BadParent { object: child });
+                break;
+            }
+            child = entry.next;
+            guard += 1;
+            if guard > OBJECT_SLOTS {
+                report.push(Issue::Cycle { object: i as u16 });
+                break;
+            }
+        }
+    }
+    for (i, obj) in table.objects.iter().enumerate() {
+        if obj.kind == KIND_EMPTY {
+            continue;
+        }
+        if obj.parent == NO_PARENT {
+            if obj.next != NO_PARENT {
+                report.push(Issue::BadParent { object: i as u16 });
+            }
+            continue;
+        }
+        if !seen[i] {
+            report.push(Issue::OrphanObject { object: i as u16 });
         }
     }
 }
@@ -806,10 +992,10 @@ mod tests {
     fn layout_constants_fit_slot() {
         // Slot fit is a `const _` assertion at the top of the crate.
         assert_eq!(ACTOR_ON_DISK, 70);
-        assert_eq!(OBJECT_ON_DISK, 90);
+        assert_eq!(OBJECT_ON_DISK, 94);
         assert_eq!(SHARE_ON_DISK, 6);
         assert_eq!(SHARE_SLOTS, 32);
         assert_eq!(FILE_BYTES, 32 * 1024);
-        assert_eq!(DISK_VERSION, 12);
+        assert_eq!(DISK_VERSION, 14);
     }
 }

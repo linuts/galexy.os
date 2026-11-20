@@ -842,9 +842,10 @@ and power-off zero the volume key (cold-boot remanence accepted). The
 payload MAC stays HMAC-SHA256; RFC 8439 Poly1305 waits for a versioned
 cutover. `bin/test-unlock` covers wipe, a rejected guess, and remount.
 Empty files allocate no blocks; append grows through direct
-then single-indirect pointers (32 KiB on the v12 image). Past that the
+then single-indirect pointers (32 KiB on the v14 image). File bytes are
+sealed in the data region, not inside the metadata slot. Past 32 KiB the
 file promotes into the RAM large store (Milestone 71). Remove frees
-v12 blocks back to the bitmap and drops the large body. `cargo run` attaches a persistent `galfs.img`.
+pool blocks back to the bitmap and drops the large body. `cargo run` attaches a persistent `galfs.img`.
 `bin/test-galfs-disk` proves multi-block persist and dual-slot recover;
 `test-galfs-corrupt` refuses format on a both-bad image; `test-fsck`
 runs live-table consistency after mutate; `test-quota` covers
