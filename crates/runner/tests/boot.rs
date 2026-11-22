@@ -5938,8 +5938,16 @@ fn usb_list_shows_the_keyboard() {
         "list should repeat the keyboard id (saw {hits}); serial:\n{serial}"
     );
     assert!(
+        serial.contains("claimed hid-kbd"),
+        "the boot keyboard should be claimed; serial:\n{serial}"
+    );
+    assert!(
         serial.contains("unclaimed"),
-        "an empty driver table leaves the keyboard unclaimed; serial:\n{serial}"
+        "the tablet is a different protocol and stays unclaimed; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[xhci] hid armed"),
+        "the interrupt pipe should arm; serial:\n{serial}"
     );
     assert!(
         serial.contains("usb running"),
@@ -6084,6 +6092,54 @@ fn fetch_grant_typing_e2e() {
     assert_eq!(
         n, 2,
         "expected the granted dial and the wrong-key dial, not the ungranted one; got {n}; serial:\n{serial}"
+    );
+}
+
+/// Milestone 103: `import lane` then `lane.read(name)` is the same dial
+/// `fetch` uses. `socket` stays off the allow-list. Skipped when the
+/// desk image was built without `target/galexy-python/python`.
+#[test]
+fn python_lane_typing_e2e() {
+    if env!("GALEXY_HAVE_PYTHON") != "1" || env!("GALEXY_HAVE_DESK") != "1" {
+        eprintln!("python_lane_typing_e2e: skipped (no desk image with python)");
+        return;
+    }
+    let (cert_der, key_der, pin) = host_echo_cert();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_bg = Arc::clone(&hits);
+    let server = std::thread::spawn(move || host_echo_serve(cert_der, key_der, hits_bg));
+    let save_pin = format!("echo {pin} > k");
+    let serial = boot_typed(
+        "galexy-os-desk",
+        &[
+            (save_pin.as_str(), "admin@galexy>"),
+            ("net allow echo 10.0.2.2:4582 k", "ok"),
+            ("net grant echo admin", "ok"),
+            ("echo print(lane.read(\"echo\")) > lane.py", "admin@galexy>"),
+            ("python lane.py", "lane ok"),
+            ("echo import socket > sock.py", "admin@galexy>"),
+            ("python sock.py", "ImportError"),
+        ],
+        "ImportError",
+        Duration::from_secs(900),
+    );
+    drop(server);
+    assert!(
+        serial.contains("lane ok"),
+        "lane.read did not print the body; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("ImportError"),
+        "import socket was not refused; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+    assert_eq!(
+        hits.load(Ordering::Relaxed),
+        1,
+        "the granted dial should be the only connection; serial:\n{serial}"
     );
 }
 

@@ -36,7 +36,7 @@ on a KVM pass (BIOS+UEFI, TCG+KVM, q35+pc, `PERF.md`).
 Phase 10 has landed ([`docs/NET.md`](docs/NET.md)): an address, a
 datagram, and a lane you can `fetch`.
 Phase 13 has landed ([`docs/USB.md`](docs/USB.md)): xHCI lists a
-QEMU keyboard, and the driver table ships empty.
+QEMU keyboard. Milestone 102 claims the boot protocol and types.
 Phase 15 (Milestones 97–99, [`docs/GALFS.md`](docs/GALFS.md)) is the
 sealed-commit plan: one virtio request, then a commit of the changed
 bytes plus one metadata seal. It does not gate `v1.0`.
@@ -46,8 +46,9 @@ we stand. Known gap today: the KVM column is empty on this host. When
 `target/galexy-python/python` were built, a normal `cargo run` logs
 into a seat that has both. The network is a ring-3 `net` service, DHCP, ICMP echo (`ping`),
 and a granted TLS 1.3 lane, not a socket API. USB lists the devices
-on xHCI and does not attach a vendor driver. Python is upstream RustPython
+on xHCI. The boot keyboard is claimed; a tablet is not. Python is upstream RustPython
 as a login-shell command, not CPython and not a socket module.
+`lane.read` dials a granted name when the interpreter was rebuilt.
 The inventory is
 [`docs/DEVICES.md`](docs/DEVICES.md). Legacy device paths
 (PIT, 8259, PS/2, PIO IDE, legacy virtio) remain as named fallbacks.
@@ -189,7 +190,7 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 - **SMP kernel** — two CPUs, per-CPU deadline timers, tickless idle, work-stealing idle, TLB shootdown
 - **Ring-3 userland** — ELF from a tar ramdisk, per-task address spaces, W^X maps, SYSCALL ABI in `galexy-abi` (26 syscalls)
 - **Capabilities day one** — keyboard, console, loader, files, power, queries, dmesg; process Caps for wait / kill / give; no fd table, no PIDs
-- **galfs** — sealed dual-slot GALF v17 on virtio-blk or IDE; directory lists, 4 KiB extents sized to the disk, up to 1,048,576 names and 64 GiB per file on a large enough disk, one desk compile is 41 names, quotas, durable shares, rename / truncate / stat, host `fsck`
+- **galfs** — sealed dual-slot GALF v17 on virtio-blk or IDE; directory lists, 4 KiB extents sized to the disk, up to 1,048,576 names and 64 GiB per file on a large enough disk, one desk compile is 41 names, quotas, durable shares, rename / truncate / stat, host `fsck` (`--repair` rewrites a bad share into the other slot)
 - **Auth** — PBKDF2 passwords, lockout, idle lock, forced first `passwd`; every seat boots logged out; audit lines carry no secrets
 - **Init and seats** — userspace `init` is the orphan root and respawns F-key seats; Ctrl-C kills the TTY foreground job
 - **Scheduling** — RR + pin-at-spawn + idle steal; `sleep`; blocking keyboard and pipe reads park and wake (`docs/SCHEDULING.md`)
@@ -358,13 +359,15 @@ crates/
   Milestones 78–85. `serve` attaches a gate and does not yet hand the
   next lane to that listener. Plan: [`docs/NET.md`](docs/NET.md)
 - **Phase 13** ✅ — USB. xHCI on q35, a list of devices, and one
-  driver table that ships empty. No vendor drivers. Milestones
-  86–88. Plan: [`docs/USB.md`](docs/USB.md). Inventory:
+  driver table. Milestone 102 is the boot keyboard. The example NIC
+  and CDC-NCM rows stay unwritten. Milestones
+  86–88 and 102. Plan: [`docs/USB.md`](docs/USB.md). Inventory:
   [`docs/DEVICES.md`](docs/DEVICES.md)
 - **Phase 14** ✅ — RustPython at the login shell. `cargo run` carries
   `python` and, when the compiler ELF was built, `rustc` with its
   sysroot. `python hello.py`, a file copy, and a REPL (`>>>`).
-  No new syscall, no `pip`, no sockets. Milestones 91–96. Plan:
+  No new syscall, no `pip`, no sockets. Milestone 103 adds
+  `import lane`. Milestones 91–96 and 103. Plan:
   [`docs/PYTHON.md`](docs/PYTHON.md)
 - **Phase 15** — sealed commits. A dirty sync becomes one virtio
   request, then a commit of the changed bytes plus one metadata

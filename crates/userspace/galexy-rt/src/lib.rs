@@ -798,6 +798,21 @@ pub fn usb_read(buf: &mut [u8]) -> SyscallResult {
     read(galexy_abi::reserved::usb(CapRights::READ), buf)
 }
 
+/// Asks the controller to arm the HID boot keyboard on `port`.
+///
+/// One byte, the port number. Only the task named `usb` succeeds. The
+/// kernel refuses a port whose stored descriptors are not class 3,
+/// subclass 1, protocol 1.
+pub fn usb_arm(port: u8) -> SyscallResult {
+    let byte = [port];
+    syscall(
+        Syscall::Write as u64,
+        galexy_abi::reserved::usb(CapRights::READ.union(CapRights::WRITE)).bits(),
+        byte.as_ptr() as u64,
+        1,
+    )
+}
+
 /// Asks the `usb` service to run `payload`. Parks until it replies.
 ///
 /// The reply is plain text. `Unsupported` means `usb` has not created

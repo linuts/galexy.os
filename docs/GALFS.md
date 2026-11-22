@@ -436,10 +436,14 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
   and return `Unsupported` (no panic). Absent slave: same error.
   `bin/test-ata`
 
-### Follow-ons (not this milestone)
+### Follow-ons
 
-- Double-indirect / lengths beyond u16
-- Optional fsck repair into a new slot
+- Milestone **101** clears a bad share and seals that metadata into
+  the inactive slot. A cycle, a missing block, or a missing admin
+  is still left on disk. The repair does not rewrite inode blocks
+- Object `len` is `u64` (64 GiB per file). The old note about
+  lengths past a `u16` described the v12 record. A second indirect
+  block is not scheduled
 
 ### Scheduled commits (Phase 15, Milestones 97–99)
 
@@ -513,7 +517,8 @@ and the legacy virtio I/O BAR (`disable-modern=on`, serial line
 | **97** ✅ | One virtio request for the 64 KiB slot, then one flush; sync time in `PERF.md` |
 | **98** ✅ | Kernel large volume: changed 4 KiB blocks plus one 64 KiB metadata seal; login table kept; v12 refused |
 | **99** ✅ | Object table covers one desk compile (41 names); v17 refuses v16; crash recovers the previous metadata slot |
+| **101** ✅ | Bad-share repair seals a new metadata slot. Anything else is left unwritten |
 
-Demo limits above are the shipped contract (double-indirect and fsck
-repair-into-new-slot are follow-ons). New code must not invent a second
-ambient “path implies permission” API beside tokens.
+Demo limits above are the shipped contract. A second indirect block
+is not scheduled; object `len` is already `u64`. New code must not
+invent a second ambient “path implies permission” API beside tokens.

@@ -387,6 +387,9 @@ fn syscall_write_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
     if cap.index() == galexy_abi::reserved::WIRE_INDEX {
         return IoResult::Done(syscall_wire_write(cap, addr, len));
     }
+    if cap.index() == galexy_abi::reserved::USB_INDEX {
+        return IoResult::Done(syscall_usb_arm(cap, addr, len));
+    }
     if cap.index() != galexy_abi::reserved::CONSOLE_INDEX {
         return syscall_write_file_ex(cap, addr, len);
     }
@@ -406,6 +409,27 @@ fn wire_holder(cap: Cap, write: bool) -> Result<(), SysError> {
         return Err(SysError::AccessDenied);
     }
     Ok(())
+}
+
+fn syscall_usb_arm(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+    if !cap.rights().contains(CapRights::WRITE) || !crate::sched::current_is_usb() {
+        return SyscallResult::err(SysError::AccessDenied);
+    }
+    if len != 1 {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if user_buffer(addr, 1, false).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut port = 0u8;
+    // SAFETY: `user_buffer` accepted the one port byte.
+    unsafe {
+        crate::arch::user_copy::copy_from_user(addr, &mut port, 1);
+    }
+    match crate::drivers::usb::xhci::arm_keyboard(port) {
+        Ok(()) => SyscallResult::ok(1),
+        Err(err) => SyscallResult::err(err),
+    }
 }
 
 fn syscall_usb_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {

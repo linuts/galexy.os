@@ -324,8 +324,9 @@ that is not virtio delivers Ethernet frames to this service. It
 does not grow its own stack. The `v1.0` tag waits on a KVM pass.
 
 RustPython landed as Phase 14 (`docs/PYTHON.md`), Milestones
-**91–96**. It sits beside this phase. Its `socket` module stays
-refused. A later Python milestone that wants a peer uses a lane.
+**91–96**. Milestone **103** is the later one: `lane.read(name)`
+dials a granted name and reads the body. `socket` stays refused.
+There is no new syscall.
 
 QUIC, 0-RTT, device checksum offload, and a CA bundle are later
 carriers and later rights. They attach to the lane. They do not add

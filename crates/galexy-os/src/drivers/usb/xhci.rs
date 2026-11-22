@@ -27,12 +27,14 @@ const CFG_STORE: usize = 256;
 const STR_STORE: usize = 64;
 const DEV_STORE: usize = 18;
 
+const TRB_NORMAL: u32 = 1;
 const TRB_SETUP: u32 = 2;
 const TRB_DATA: u32 = 3;
 const TRB_STATUS: u32 = 4;
 const TRB_LINK: u32 = 6;
 const TRB_ENABLE: u32 = 9;
 const TRB_ADDR: u32 = 11;
+const TRB_CONFIG: u32 = 12;
 const TRB_EVAL: u32 = 13;
 const TRB_NOOP: u32 = 23;
 const EVT_XFER: u32 = 32;
@@ -118,6 +120,7 @@ struct DevRec {
     used: bool,
     port: u8,
     addr: u8,
+    slot: u8,
     flags: u8,
     dev: [u8; DEV_STORE],
     cfg_len: u16,
@@ -132,6 +135,7 @@ impl DevRec {
             used: false,
             port: 0,
             addr: 0,
+            slot: 0,
             flags: 0,
             dev: [0; DEV_STORE],
             cfg_len: 0,
@@ -160,6 +164,11 @@ struct Ctrl {
     erst: Erst,
     dcbaa: Dcbaa,
     ep: [Ring; SLOTS],
+    hid: [Ring; SLOTS],
+    report: [u8; 8],
+    hid_prev: [u8; 6],
+    hid_slot: u8,
+    hid_on: bool,
     out_ctx: [Context; SLOTS],
     in_ctx: [Context; SLOTS],
     rec: [DevRec; SLOTS],
@@ -198,6 +207,11 @@ impl Ctrl {
                 ptr: [0; SLOTS + 1],
             },
             ep: [const { Ring::empty() }; SLOTS],
+            hid: [const { Ring::empty() }; SLOTS],
+            report: [0; 8],
+            hid_prev: [0; 6],
+            hid_slot: 0,
+            hid_on: false,
             out_ctx: [const { Context { bytes: [0; 2048] } }; SLOTS],
             in_ctx: [const { Context { bytes: [0; 2048] } }; SLOTS],
             rec: [const { DevRec::empty() }; SLOTS],
@@ -272,6 +286,7 @@ pub fn read_device(dst: &mut [u8]) -> Result<usize, SysError> {
     if !present() {
         return Err(SysError::Unsupported);
     }
+    poll_keyboard();
     pump(4);
     let mut ctrl = CTRL.lock();
     if ctrl.cursor >= ctrl.published {
@@ -618,7 +633,7 @@ fn enumerate(port: u8) -> bool {
     }
     if !control_in(slot, setup(0x80, 6, 0x0200, 0, 9), 9) {
         let mut ctrl = CTRL.lock();
-        publish(&mut ctrl, port, addr, 1, &dev, &[], &[]);
+        publish(&mut ctrl, slot, port, addr, 1, &dev, &[], &[]);
         return true;
     }
     let declared = {
@@ -627,7 +642,7 @@ fn enumerate(port: u8) -> bool {
     };
     if (declared as usize) > 4096 || declared < 9 {
         let mut ctrl = CTRL.lock();
-        publish(&mut ctrl, port, addr, 1, &dev, &[], &[]);
+        publish(&mut ctrl, slot, port, addr, 1, &dev, &[], &[]);
         return true;
     }
     let want = {
@@ -636,7 +651,7 @@ fn enumerate(port: u8) -> bool {
     };
     if !control_in(slot, setup(0x80, 6, 0x0200, 0, want as u16), want) {
         let mut ctrl = CTRL.lock();
-        publish(&mut ctrl, port, addr, 1, &dev, &[], &[]);
+        publish(&mut ctrl, slot, port, addr, 1, &dev, &[], &[]);
         return true;
     }
     let cfg_n = want.min(CFG_STORE);
@@ -657,6 +672,7 @@ fn enumerate(port: u8) -> bool {
     let mut ctrl = CTRL.lock();
     publish(
         &mut ctrl,
+        slot,
         port,
         addr,
         flags,
@@ -705,7 +721,17 @@ fn product_string(slot: u8, index: u8, text: &mut [u8]) -> Option<usize> {
     Some(len)
 }
 
-fn publish(ctrl: &mut Ctrl, port: u8, addr: u8, flags: u8, dev: &[u8], cfg: &[u8], text: &[u8]) {
+#[allow(clippy::too_many_arguments)]
+fn publish(
+    ctrl: &mut Ctrl,
+    slot: u8,
+    port: u8,
+    addr: u8,
+    flags: u8,
+    dev: &[u8],
+    cfg: &[u8],
+    text: &[u8],
+) {
     let i = ctrl.published as usize;
     if i >= SLOTS {
         return;
@@ -715,6 +741,7 @@ fn publish(ctrl: &mut Ctrl, port: u8, addr: u8, flags: u8, dev: &[u8], cfg: &[u8
     rec.used = true;
     rec.port = port;
     rec.addr = addr;
+    rec.slot = slot;
     rec.flags = flags;
     let dn = dev.len().min(DEV_STORE);
     rec.dev[..dn].copy_from_slice(&dev[..dn]);
@@ -1098,6 +1125,220 @@ fn wire_intx(dev: pci::Device) -> bool {
     }
     INTX.store(true, Ordering::Release);
     true
+}
+
+/// Arms the interrupt pipe for a HID boot keyboard on `port`.
+///
+/// The stored configuration must be class 3, subclass 1, protocol 1.
+/// A mouse or any other device is [`SysError::BadValue`]. The previous
+/// metadata slot is not involved: this only programs the controller.
+pub fn arm_keyboard(port: u8) -> Result<(), SysError> {
+    if !READY.load(Ordering::Acquire) {
+        return Err(SysError::Unsupported);
+    }
+    let slot = {
+        let ctrl = CTRL.lock();
+        let Some(rec) = ctrl.rec.iter().find(|r| r.used && r.port == port) else {
+            return Err(SysError::NotFound);
+        };
+        if !boot_keyboard_cfg(&rec.cfg[..rec.cfg_len as usize]) {
+            return Err(SysError::BadValue);
+        }
+        rec.slot
+    };
+    if slot == 0 || slot as usize > SLOTS {
+        return Err(SysError::BadValue);
+    }
+    {
+        let ctrl = CTRL.lock();
+        if ctrl.hid_on && ctrl.hid_slot == slot {
+            return Ok(());
+        }
+    }
+    if !control_status(slot, setup(0x00, 9, 1, 0, 0)) {
+        crate::serial_println!("[xhci] hid set config failed slot {}", slot);
+        return Err(SysError::Unsupported);
+    }
+    if !control_status(slot, setup(0x21, 0x0b, 0, 0, 0)) {
+        crate::serial_println!("[xhci] hid set protocol failed slot {}", slot);
+    }
+    if !control_status(slot, setup(0x21, 0x0a, 0, 0, 0)) {
+        crate::serial_println!("[xhci] hid set idle failed slot {}", slot);
+    }
+    let input = {
+        let mut ctrl = CTRL.lock();
+        if configure_hid(&mut ctrl, slot).is_err() {
+            return Err(SysError::Unsupported);
+        }
+        phys_of(&ctrl.in_ctx[slot as usize - 1])?
+    };
+    if !command(input, 0, (TRB_CONFIG << 10) | (u32::from(slot) << 24)) {
+        crate::serial_println!("[xhci] hid configure timed out slot {}", slot);
+        return Err(SysError::Unsupported);
+    }
+    {
+        let ctrl = CTRL.lock();
+        if ctrl.cmd_code != 1 {
+            crate::serial_println!(
+                "[xhci] hid configure failed slot {} code {}",
+                slot,
+                ctrl.cmd_code
+            );
+            return Err(SysError::Unsupported);
+        }
+    }
+    {
+        let mut ctrl = CTRL.lock();
+        ctrl.hid_slot = slot;
+        ctrl.hid_prev = [0; 6];
+        ctrl.hid_on = true;
+        if post_hid(&mut ctrl, slot).is_err() {
+            ctrl.hid_on = false;
+            return Err(SysError::Unsupported);
+        }
+    }
+    crate::serial_println!("[xhci] hid armed slot {}", slot);
+    Ok(())
+}
+
+fn boot_keyboard_cfg(cfg: &[u8]) -> bool {
+    if cfg.len() < 9 || cfg[1] != 2 {
+        return false;
+    }
+    let mut i = cfg[0] as usize;
+    while i + 8 < cfg.len() {
+        let len = cfg[i] as usize;
+        if len < 2 || i + len > cfg.len() {
+            return false;
+        }
+        if cfg[i + 1] == 4 && cfg[i + 5] == 3 && cfg[i + 6] == 1 && cfg[i + 7] == 1 {
+            return true;
+        }
+        i += len;
+    }
+    false
+}
+
+fn configure_hid(ctrl: &mut Ctrl, slot: u8) -> Result<(), SysError> {
+    let idx = slot as usize - 1;
+    let shift = ctrl.ctx as usize;
+    ctrl.hid[idx] = Ring::empty();
+    seal(&mut ctrl.hid[idx]);
+    // QEMU accepts a configure only when add-flag bit 0 (the slot) is
+    // set and bit 1 (EP0) is clear. Bit 3 is EP1 IN: the controller
+    // reads that endpoint at input offset 128 (context size 32).
+    // Context Entries is that same endpoint index.
+    write_ctx(&mut ctrl.in_ctx[idx].bytes, 0, 0);
+    write_ctx(&mut ctrl.in_ctx[idx].bytes, 1, 1 | (1 << 3));
+    let slot_at = shift;
+    if slot_at + 4 <= ctrl.in_ctx[idx].bytes.len() {
+        let word = u32::from_le_bytes(
+            ctrl.in_ctx[idx].bytes[slot_at..slot_at + 4]
+                .try_into()
+                .unwrap_or([0; 4]),
+        );
+        let word = (word & !(0x1f << 27)) | (3 << 27);
+        write_ctx(&mut ctrl.in_ctx[idx].bytes[slot_at..], 0, word);
+    }
+    let ep_off = shift * 4;
+    let dq = phys_of(&ctrl.hid[idx].trb)? | u64::from(ctrl.hid[idx].cycle);
+    // High-speed interrupt interval 6 (2^(6-1) * 125 us). The boot
+    // report is 8 bytes, so the max ESIT payload is 8.
+    write_ctx(&mut ctrl.in_ctx[idx].bytes[ep_off..], 0, 6 << 16);
+    write_ctx(
+        &mut ctrl.in_ctx[idx].bytes[ep_off..],
+        1,
+        (3 << 1) | (7 << 3) | (8 << 16),
+    );
+    write_ctx(&mut ctrl.in_ctx[idx].bytes[ep_off..], 2, dq as u32);
+    write_ctx(&mut ctrl.in_ctx[idx].bytes[ep_off..], 3, (dq >> 32) as u32);
+    write_ctx(&mut ctrl.in_ctx[idx].bytes[ep_off..], 4, 8 | (8 << 16));
+    Ok(())
+}
+
+fn post_hid(ctrl: &mut Ctrl, slot: u8) -> Result<(), SysError> {
+    let idx = slot as usize - 1;
+    let data = phys_of(&ctrl.report)?;
+    for b in &mut ctrl.report {
+        unsafe { core::ptr::write_volatile(b, 0) };
+    }
+    ctrl.xfer_done = false;
+    ctrl.xfer_code = 0;
+    push(&mut ctrl.hid[idx], data, 8, (TRB_NORMAL << 10) | (1 << 5));
+    ring_db(ctrl, slot, 3);
+    Ok(())
+}
+
+fn control_status(slot: u8, setup_data: u64) -> bool {
+    {
+        let mut ctrl = CTRL.lock();
+        if slot == 0 || slot as usize > SLOTS {
+            return false;
+        }
+        let idx = slot as usize - 1;
+        ctrl.xfer_done = false;
+        ctrl.xfer_code = 0;
+        push(
+            &mut ctrl.ep[idx],
+            setup_data,
+            8,
+            (TRB_SETUP << 10) | (1 << 6),
+        );
+        push(
+            &mut ctrl.ep[idx],
+            0,
+            0,
+            (TRB_STATUS << 10) | (1 << 5) | (1 << 16),
+        );
+        ring_db(&ctrl, slot, 1);
+    }
+    if !wait_flag(true) {
+        return false;
+    }
+    let ctrl = CTRL.lock();
+    ctrl.xfer_code == 1 || ctrl.xfer_code == 13
+}
+
+/// Drains one HID report into the keyboard queue and posts the next read.
+fn poll_keyboard() {
+    let ready = {
+        let mut ctrl = CTRL.lock();
+        drain(&mut ctrl);
+        if !ctrl.hid_on || !ctrl.xfer_done {
+            return;
+        }
+        let code = ctrl.xfer_code;
+        let mut raw = [0u8; 8];
+        if code == 1 || code == 13 {
+            for (i, byte) in raw.iter_mut().enumerate() {
+                *byte = unsafe { core::ptr::read_volatile(ctrl.report.as_ptr().add(i)) };
+            }
+        }
+        let prev = ctrl.hid_prev;
+        if code == 1 || code == 13 {
+            ctrl.hid_prev.copy_from_slice(&raw[2..8]);
+        }
+        let slot = ctrl.hid_slot;
+        ctrl.xfer_done = false;
+        let _ = post_hid(&mut ctrl, slot);
+        if code == 1 || code == 13 {
+            Some((raw, prev))
+        } else {
+            None
+        }
+    };
+    let Some((raw, prev)) = ready else {
+        return;
+    };
+    let shift = raw[0] & 0x22 != 0;
+    let ctrl = raw[0] & 0x11 != 0;
+    for usage in &raw[2..8] {
+        if *usage != 0 && !prev.contains(usage) {
+            if let Some(ch) = galexy_usb::key_char(*usage, shift, ctrl) {
+                crate::drivers::keyboard::push_char(ch);
+            }
+        }
+    }
 }
 
 fn phys_of<T: ?Sized>(r: &T) -> Result<u64, SysError> {

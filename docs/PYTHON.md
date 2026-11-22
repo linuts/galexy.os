@@ -54,7 +54,7 @@ Milestone 96 checks that the run did not leave a child task.
 | CPython, `libpython`, and C extensions | A second language runtime, and C in a Rust kernel tree. The interpreter is RustPython. |
 | Copying the RustPython tree into this repository | It is MIT or Apache-2.0. The pin stays a host checkout, the way `rustc` does. A patch, if one is required, is `scripts/galexy-rustpython.patch`. The license notices stay with the checkout. |
 | `pip`, `venv`, `ensurepip`, and a package index | Same non-goal as on-OS `cargo`. |
-| `socket`, `ssl`, and `asyncio` networks | `std::net` stays unsupported (`NET.md`). A later milestone may speak a lane. It is not this phase, and it is not a BSD socket with a Python name. |
+| `socket`, `ssl`, and `asyncio` networks | `std::net` stays unsupported (`NET.md`). Milestone 103 speaks a lane: `import lane` then `lane.read(name)`. That is the dial `fetch` already uses. It is not a BSD socket with a Python name. |
 | `sqlite3`, `ctypes`, `cffi` | Those need C. |
 | `os.fork`, `os.exec`, `os.system`, `os.environ`, `subprocess`, `multiprocessing` | There is no environment block and no fork. Spawn stays the kernel's, and this program does not call it. |
 | A second editor | `edit` is already the editor. The REPL reads the seat keyboard and does not draw a screen of its own. |
@@ -76,6 +76,7 @@ The gate needs these names, and they are the ones that list starts with:
 | `builtins` | The language, including `print` and `open`. |
 | `sys` | `argv`, `stdout`, `stderr`, `version`. No environment. |
 | `io` | `io.open`. The raw file is `_io.FileIO` over `std::fs`. Text mode is the buffered wrapper. |
+| `lane` | `lane.read(name)` dials a granted name and returns the body. Milestone 103. No socket. |
 
 Other pure modules may be added in that same milestone when they
 compile with the refused features off. Each one is a line in the
@@ -217,6 +218,29 @@ imported the sysroot.
 That boot is `python_hello_typing_e2e`. It is skipped when
 the ELF was absent at image build.
 
+### 103 A lane
+
+`lane` is on `scripts/python-allow.txt`. It is not a frozen
+stdlib module. The interpreter inserts it into `sys.modules`
+before the program runs. `lane.read(name)` is dial opcode 2 on
+Cap `0x800A` with WRITE, the same payload `fetch` sends: the
+name, then `whoami`. The reply's first eight bytes are the lane
+Cap. The function reads that lane to EOF and closes it. A missing
+grant, a bad name, or a timeout is `OSError`.
+
+`import socket` is still `ImportError`. There is no new syscall
+number. `Syscall::Lane` stays 35 and only `net` may call it.
+
+Prove: `python_allow::allow_list_covers_frozen_and_blocks_the_rest`
+requires `lane` and refuses `socket`. `python_lane_typing_e2e`
+grants `echo`, runs `print(lane.read("echo"))`, and expects
+`lane ok`, then expects `import socket` to raise `ImportError`.
+That boot is skipped when `target/galexy-python/python` was
+absent at image build. Rebuild with
+`scripts/build-galexy-python.sh` after `cargo xtask sysroot`.
+A checkout patched before this milestone is reset to the pin and
+the current patch is applied when `fn lane_read` is missing.
+
 ## Changing this subsystem
 
 1. One milestone in `TODO.md` and in this file.
@@ -241,7 +265,8 @@ the ELF was absent at image build.
 | Image | `galexy-os-desk` in the runner, beside `galexy-os-rustc` |
 | REPL | bare `python` in the shell, with the keyboard grant |
 | `io.open` | `_io.FileIO` in the RustPython patch, over `std::fs` |
-| Tests | `bin/test-python`, `python_repl_typing_e2e`, `python_hello_typing_e2e` |
+| Tests | `bin/test-python`, `python_repl_typing_e2e`, `python_hello_typing_e2e`, `python_lane_typing_e2e` |
+| Lane | `import lane` in `scripts/galexy-rustpython.patch` |
 
 The gate did not add a syscall. The stack budget that did change
 is Milestone 93: a 17 MiB heap stack, guest RAM still 2 GiB.

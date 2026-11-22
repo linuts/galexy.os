@@ -31,6 +31,7 @@ pub enum Bad {
 }
 
 /// One row in the driver table.
+#[derive(Clone, Copy)]
 pub struct Driver {
     pub id: Match,
     pub module: &'static str,
@@ -52,6 +53,55 @@ impl Match {
             Match::Class(c, s, p) => ids.class == c && ids.sub == s && ids.proto == p,
         }
     }
+}
+
+/// True when a row in `table` matches `ids`.
+pub fn claims(ids: &Ids, table: &[Driver]) -> bool {
+    table.iter().any(|row| row.id.hits(ids))
+}
+
+/// HID boot-protocol keyboard: class 3, subclass 1, protocol 1.
+pub fn is_boot_keyboard(ids: &Ids) -> bool {
+    ids.class == 3 && ids.sub == 1 && ids.proto == 1
+}
+
+/// One HID boot-keyboard usage. `shift` and `ctrl` are the modifier bits.
+/// A usage this keyboard does not type is `None`.
+pub fn key_char(usage: u8, shift: bool, ctrl: bool) -> Option<char> {
+    if usage == 0 {
+        return None;
+    }
+    if ctrl {
+        return if usage == 0x06 { Some('\u{3}') } else { None };
+    }
+    let c = match usage {
+        0x04..=0x1d => (b'a' + (usage - 0x04)) as char,
+        0x1e..=0x26 => (b'1' + (usage - 0x1e)) as char,
+        0x27 => '0',
+        0x28 => '\n',
+        0x2a => '\u{8}',
+        0x2c => ' ',
+        0x2d => '-',
+        _ => return None,
+    };
+    if !shift {
+        return Some(c);
+    }
+    Some(match c {
+        'a'..='z' => c.to_ascii_uppercase(),
+        '1' => '!',
+        '2' => '@',
+        '3' => '#',
+        '4' => '$',
+        '5' => '%',
+        '6' => '^',
+        '7' => '&',
+        '8' => '*',
+        '9' => '(',
+        '0' => ')',
+        '-' => '_',
+        other => other,
+    })
 }
 
 /// Walk `table` once. Each device is claimed by the first hit, or handed
@@ -278,6 +328,23 @@ mod tests {
 
     fn other(_: &Ids) {
         OTHER_CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn boot_keyboard_types_a_letter_and_ignores_a_mouse() {
+        assert!(is_boot_keyboard(&keyboard()));
+        assert!(!is_boot_keyboard(&Ids {
+            vendor: 0x0627,
+            product: 0x0001,
+            class: 3,
+            sub: 1,
+            proto: 2,
+        }));
+        assert_eq!(key_char(0x04, false, false), Some('a'));
+        assert_eq!(key_char(0x04, true, false), Some('A'));
+        assert_eq!(key_char(0x06, false, true), Some('\u{3}'));
+        assert_eq!(key_char(0x28, false, false), Some('\n'));
+        assert_eq!(key_char(0, false, false), None);
     }
 
     #[test]

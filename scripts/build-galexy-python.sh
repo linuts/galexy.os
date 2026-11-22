@@ -41,6 +41,14 @@ git -C "$SRC" checkout --detach "$REV"
 if [[ ! -f "$SRC/crates/galexy-python/Cargo.toml" ]]; then
     patch -d "$SRC" -p1 < "$ROOT/scripts/galexy-rustpython.patch"
 fi
+# A checkout patched before Milestone 103 has the crate and not
+# `lane.read`. Reset to the pin and apply the current patch.
+if ! grep -q 'fn lane_read' "$SRC/crates/galexy-python/src/main.rs" 2>/dev/null; then
+    echo "build-galexy-python: re-applying scripts/galexy-rustpython.patch" >&2
+    git -C "$SRC" checkout --detach "$REV"
+    git -C "$SRC" clean -fd
+    patch -d "$SRC" -p1 < "$ROOT/scripts/galexy-rustpython.patch"
+fi
 # The REPL calls `stdin.read_line`. That line is cooked only after
 # `cargo xtask sysroot` has rebuilt libstd. A checkout that still has
 # its own byte editor (`fn py_key`) will echo twice against that sysroot.

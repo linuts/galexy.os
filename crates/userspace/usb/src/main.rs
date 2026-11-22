@@ -1,14 +1,16 @@
 //! The `usb` service. It is the only task that reads the controller.
 //!
 //! The kernel moves transfer rings. This task checks descriptors and
-//! walks [`drivers::TABLE`]. The table ships empty, so a device is
-//! listed and left unclaimed.
+//! walks [`drivers::TABLE`]. A HID boot keyboard is claimed and armed.
+//! Any other device is listed and left unclaimed.
 
 #![no_std]
 #![no_main]
 
 use galexy_abi::{Cap, INIT_RPC_HDR, USB_OP_LIST};
-use galexy_rt::{chan_recv_poll, chan_send, channel, entry, sleep_ms, usb_read, write_console};
+use galexy_rt::{
+    chan_recv_poll, chan_send, channel, entry, sleep_ms, usb_arm, usb_read, write_console,
+};
 use galexy_usb::{decode_string, dispatch, ids_of, interface_count, list_line};
 
 mod drivers;
@@ -131,6 +133,9 @@ fn accept(buf: &[u8]) -> Option<([u8; LINE], usize)> {
     let name = core::str::from_utf8(&name[..name_len]).unwrap_or("");
     let mut line = [0u8; LINE];
     let n = list_line(port, addr, &ids, name, &mut line);
+    if galexy_usb::claims(&ids, drivers::TABLE) && !usb_arm(port).ok {
+        write_console(b"[usb] arm failed\n");
+    }
     write_console(&line[..n]);
     dispatch(core::slice::from_ref(&ids), drivers::TABLE, |_| {
         write_console(b"unclaimed\n");
