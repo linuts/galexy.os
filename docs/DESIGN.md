@@ -1160,10 +1160,9 @@ granted name through `net`. The value is still a lane. There is
 no socket syscall and no second stack. The PAL does not parse
 TCP, and rustls stays in `net`.
 
-This is not a Berkeley socket. `bind`, `listen`, UDP,
-`setsockopt`, and any call that passes an IP or a port are not
-part of these two milestones. Milestones 112–116 grant each of
-those calls with a card, except `setsockopt`, which stays refused.
+This is not a Berkeley socket. Milestones 112–116 grant bind,
+listen, one datagram, an address, and a port, each with a card.
+Both runtimes call those cards. `setsockopt` stays refused.
 `connect` on the login image is the Rust proof.
 `python_lane_typing_e2e` is the Python proof: `lane.read` prints
 the body, a denied `socket.connect` is `OSError`, and yes prints
@@ -1180,7 +1179,9 @@ dials. Write accepts. Logged-out is denied. A grant from the
 ask lasts for that run.
 
 A passed IP, a passed port, `bind`, `listen`, and one datagram
-are the cards from Milestones 112–116. `setsockopt` stays refused.
+are the cards from Milestones 112–116. Rust `std::net` and Python
+`socket` call them. A datagram receive uses that same card. Port
+53 stays refused. `setsockopt` stays refused.
 Inbound from outside is Milestone 115: write on the port card,
 then Milestone 83 hands the lane to that one listener. SSH is
 Milestone 117, after that stack: one ring-3 Rust service,

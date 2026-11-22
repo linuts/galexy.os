@@ -710,7 +710,9 @@ still a lane. The lane boot was run. There is no socket syscall
 and no second stack. The PAL does not parse TCP. Milestones
 112–114 grant one stored address, one stored port, and one
 local bind. Milestone 115 listens with write on the port card.
-Milestone 116 sends one datagram to the stored peer.
+Milestone 116 sends one datagram to the stored peer and receives
+one datagram from that same peer. Rust `std::net` and Python
+`socket` call the address, port, bind, listen, and datagram cards.
 `setsockopt` stays refused. That is not a Berkeley socket.
 Milestone 83's inbound handoff is
 `serve_hands_the_lane_to_its_listener`: the attaching seat
@@ -744,7 +746,7 @@ What this phase does not add:
 - iptables, nftables, eBPF, NAT, raw frames, raw sockets, or promiscuous mode
 - A second stack, a C stack, or a Berkeley socket. `setsockopt` stays refused.
   `TcpStream::connect` and `socket.connect` are the name layer above.
-  A passed IP, port, local bind, listen, or datagram is the card from 112–116. `setsockopt` stays refused
+  A passed IP, port, local bind, listen, or datagram is the card from 112–116, and both runtimes call it. A datagram receive is that same card. `setsockopt` stays refused
 - Plaintext DNS (UDP/53)
 - Telnet, FTP, rsh, SSHv1, `ssh-rsa`, CBC, SHA-1, or TLS before 1.3
 - OpenSSH, libssh, a crates.io SSH library, CPython, or a TCP stack inside `rustc` or Python

@@ -780,5 +780,16 @@ mod python_allow {
         assert!(allowed(&allow, "io"));
         assert!(allowed(&allow, "time"));
         assert!(allowed(&allow, "_io"));
+        let text = std::fs::read_to_string(root().join("scripts/python-allow.txt")).unwrap();
+        for op in [
+            "socket.connect",
+            "socket.bind",
+            "socket.listen",
+            "socket.send",
+            "socket.recv",
+        ] {
+            assert!(text.contains(op), "{op} is not named in the allow-list");
+        }
+        assert!(text.contains("ssl and asyncio stay off"));
     }
 }

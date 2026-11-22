@@ -47,6 +47,8 @@ fi
 main="$SRC/crates/galexy-python/src/main.rs"
 if ! grep -q 'name.to_str()' "$main" 2>/dev/null \
     || ! grep -q 'fn install_socket' "$main" 2>/dev/null \
+    || ! grep -q 'fn socket_bind' "$main" 2>/dev/null \
+    || ! grep -q 'fn socket_recv' "$main" 2>/dev/null \
     || ! grep -q 'value == 2' "$main" 2>/dev/null \
     || ! tail -n 1 "$main" | grep -q '^}'; then
     echo "build-galexy-python: re-applying scripts/galexy-rustpython.patch" >&2

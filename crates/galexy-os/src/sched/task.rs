@@ -1269,7 +1269,8 @@ fn net_name(bytes: &[u8]) -> &[u8] {
         | galexy_abi::NET_OP_RESOLVE
         | galexy_abi::NET_OP_BIND
         | galexy_abi::NET_OP_LISTEN
-        | galexy_abi::NET_OP_DGRAM => {
+        | galexy_abi::NET_OP_DGRAM
+        | galexy_abi::NET_OP_RECV => {
             if bytes.len() < 2 {
                 return b"";
             }
@@ -1376,7 +1377,9 @@ fn net_card(
         galexy_abi::NET_OP_BIND | galexy_abi::NET_OP_LISTEN => {
             (card_path(b"/admin@card/", name), galfs::RIGHT_WRITE)
         }
-        galexy_abi::NET_OP_DGRAM => (card_path(b"/admin@card/", name), galfs::RIGHT_READ),
+        galexy_abi::NET_OP_DGRAM | galexy_abi::NET_OP_RECV => {
+            (card_path(b"/admin@card/", name), galfs::RIGHT_READ)
+        }
         galexy_abi::NET_OP_PING => (card_path(b"/admin@card/", b"ping"), galfs::RIGHT_READ),
         galexy_abi::NET_OP_SERVE => (card_path(b"/admin@card/", name), galfs::RIGHT_WRITE),
         _ => return (0, 0, CardPath::empty()),
@@ -1466,8 +1469,13 @@ fn park_card_ask(
         ASK_DONE_STORAGE
     };
     let done = threads[slot - 1].ask_done.load(Ordering::Acquire);
+    // A second ask for the same path in this run does not print.
+    // A different card is a different right, so it still asks.
     if done & done_bit != 0 {
-        return false;
+        let n = threads[slot - 1].ask_len as usize;
+        if n == path.len() && &threads[slot - 1].ask_buf[..n] == path.as_bytes() {
+            return false;
+        }
     }
     let thread = &mut threads[slot - 1];
     thread.ask_buf[..path.len()].copy_from_slice(path.as_bytes());
@@ -1595,7 +1603,38 @@ fn finish_network_ask(threads: &mut [Thread], index: usize) {
     let owner = proc_index(threads, index + 1).unwrap_or(index);
     let root = threads[owner].fs_root;
     let tokens = threads[owner].fs_tokens;
-    let (held, _, _) = net_card(&tokens, root, &payload[..len]);
+    let (held, need, path) = net_card(&tokens, root, &payload[..len]);
+    // One call can need two cards, such as an address and a port.
+    // The first yes installs one token. A different missing card asks
+    // again. The same path does not.
+    if need != 0 && held & need == 0 && net_card_denied(root, &tokens, &path) {
+        let prev_len = threads[index].ask_len as usize;
+        let mut prev = [0u8; 96];
+        prev[..prev_len].copy_from_slice(&threads[index].ask_buf[..prev_len]);
+        let next = path.as_str().as_bytes();
+        if !next.is_empty() && next != &prev[..prev_len] {
+            let done = threads[index].ask_done.load(Ordering::Acquire);
+            threads[index]
+                .ask_done
+                .store(done & !ASK_DONE_NETWORK, Ordering::Release);
+            let rights = threads[index].ask_rights;
+            if park_card_ask(
+                threads,
+                index + 1,
+                ASK_NETWORK,
+                if rights == 0 { need } else { rights },
+                path.as_str(),
+                &payload[..len],
+                reply,
+                reply_len,
+            ) {
+                return;
+            }
+            threads[index].ask_done.store(done, Ordering::Release);
+        }
+        finish_ask_err(threads, index, SysError::AccessDenied);
+        return;
+    }
     let ctrl = NET_CTRL.load(Ordering::Acquire);
     if ctrl == 0xFF {
         finish_ask_err(threads, index, SysError::Unsupported);

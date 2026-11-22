@@ -151,7 +151,8 @@ index 0000000..bf65652
 +# The first four are the public surface. The rest are the VM's own
 +# frozen and builtin modules at the pin in scripts/rustpython.rev.
 +# ssl, asyncio, pip, venv, subprocess, ctypes, sqlite3, and os are absent.
-+# `lane` is the dial in Milestone 103. `socket.connect` is Milestone 109.
++# `lane` is the dial in Milestone 103. `socket` calls are cards:
++# connect, bind, listen, send, and recv. `ssl` and `asyncio` stay off.
 +builtins
 +sys
 +io
@@ -201,7 +202,7 @@ new file mode 100644
 index 0000000..7cc717f
 --- /dev/null
 +++ b/crates/galexy-python/src/main.rs
-@@ -0,0 +1,498 @@
+@@ -0,0 +1,622 @@
 +//! Run one Python file on the Galexy RustPython VM.
 +//!
 +//! `python PATH` reads the file and executes it with builtins and `sys`.
@@ -480,16 +481,28 @@ index 0000000..7cc717f
 +    let _ = modules.set_item("lane", module.into(), vm);
 +}
 +
-+/// `import socket` then `socket.connect(name)`. The dial is `lane.read`.
-+/// `bind`, `listen`, `setsockopt`, and `socket()` (UDP included) are
-+/// `OSError`. An address-shaped name is `OSError` before any syscall.
++/// `import socket`. `connect`, `bind`, `listen`, `send`, and `recv`
++/// are the net cards. The value is a lane or the card's reply text.
++/// `setsockopt` and `socket()` stay `OSError`. There is no Berkeley socket.
 +fn install_socket(vm: &VirtualMachine) {
 +    let module = vm.new_module("socket", vm.ctx.new_dict(), None);
 +    let connect = vm.new_function("connect", socket_connect);
-+    if module.set_attr("connect", connect, vm).is_err() {
-+        return;
++    let bind = vm.new_function("bind", socket_bind);
++    let listen = vm.new_function("listen", socket_listen);
++    let send = vm.new_function("send", socket_send);
++    let recv = vm.new_function("recv", socket_recv);
++    for (name, func) in [
++        ("connect", connect),
++        ("bind", bind),
++        ("listen", listen),
++        ("send", send),
++        ("recv", recv),
++    ] {
++        if module.set_attr(name, func, vm).is_err() {
++            return;
++        }
 +    }
-+    for name in ["bind", "listen", "setsockopt", "socket"] {
++    for name in ["setsockopt", "socket"] {
 +        let func = vm.new_function(name, socket_refused);
 +        if module.set_attr(name, func, vm).is_err() {
 +            return;
@@ -515,11 +528,97 @@ index 0000000..7cc717f
 +        let Some(text) = name.to_str() else {
 +            return Err(vm.new_os_error("bad name"));
 +        };
-+        if is_address(text) {
-+            return Err(vm.new_os_error("unsupported"));
-+        }
 +        match lane_body(text) {
 +            Ok(body) => Ok(vm.ctx.new_str(body)),
++            Err(msg) => Err(vm.new_os_error(msg.to_string())),
++        }
++    }
++}
++
++fn socket_bind(
++    name: rustpython_vm::builtins::PyStrRef,
++    vm: &VirtualMachine,
++) -> rustpython_vm::PyResult<rustpython_vm::builtins::PyStrRef> {
++    card_word(10, name, vm)
++}
++
++fn socket_listen(
++    name: rustpython_vm::builtins::PyStrRef,
++    vm: &VirtualMachine,
++) -> rustpython_vm::PyResult<rustpython_vm::builtins::PyStrRef> {
++    #[cfg(not(target_os = "galexy"))]
++    {
++        let _ = name;
++        return Err(vm.new_os_error("socket is only available on galexy"));
++    }
++    #[cfg(target_os = "galexy")]
++    {
++        let Some(text) = name.to_str() else {
++            return Err(vm.new_os_error("bad name"));
++        };
++        match card_call(11, text, &[]) {
++            Ok(CardReply::Text(body)) => Ok(vm.ctx.new_str(body.trim().to_string())),
++            Ok(CardReply::Lane(lane)) => Ok(vm.ctx.new_str(read_lane(lane))),
++            Err(msg) => Err(vm.new_os_error(msg.to_string())),
++        }
++    }
++}
++
++fn socket_send(
++    name: rustpython_vm::builtins::PyStrRef,
++    data: rustpython_vm::builtins::PyStrRef,
++    vm: &VirtualMachine,
++) -> rustpython_vm::PyResult<rustpython_vm::builtins::PyStrRef> {
++    #[cfg(not(target_os = "galexy"))]
++    {
++        let _ = (name, data);
++        return Err(vm.new_os_error("socket is only available on galexy"));
++    }
++    #[cfg(target_os = "galexy")]
++    {
++        let (Some(text), Some(payload)) = (name.to_str(), data.to_str()) else {
++            return Err(vm.new_os_error("bad name"));
++        };
++        match card_call(12, text, payload.as_bytes()) {
++            Ok(CardReply::Text(body)) => Ok(vm.ctx.new_str(body.trim().to_string())),
++            Ok(CardReply::Lane(_)) => Err(vm.new_os_error("unexpected lane")),
++            Err(msg) => Err(vm.new_os_error(msg.to_string())),
++        }
++    }
++}
++
++fn socket_recv(
++    name: rustpython_vm::builtins::PyStrRef,
++    vm: &VirtualMachine,
++) -> rustpython_vm::PyResult<rustpython_vm::builtins::PyStrRef> {
++    card_word(13, name, vm)
++}
++
++fn card_word(
++    op: u8,
++    name: rustpython_vm::builtins::PyStrRef,
++    vm: &VirtualMachine,
++) -> rustpython_vm::PyResult<rustpython_vm::builtins::PyStrRef> {
++    #[cfg(not(target_os = "galexy"))]
++    {
++        let _ = (op, name);
++        return Err(vm.new_os_error("socket is only available on galexy"));
++    }
++    #[cfg(target_os = "galexy")]
++    {
++        let Some(text) = name.to_str() else {
++            return Err(vm.new_os_error("bad name"));
++        };
++        match card_call(op, text, &[]) {
++            Ok(CardReply::Text(body)) => {
++                let shown = if op == 13 {
++                    body
++                } else {
++                    body.trim().to_string()
++                };
++                Ok(vm.ctx.new_str(shown))
++            }
++            Ok(CardReply::Lane(_)) => Err(vm.new_os_error("unexpected lane")),
 +            Err(msg) => Err(vm.new_os_error(msg.to_string())),
 +        }
 +    }
@@ -531,26 +630,6 @@ index 0000000..7cc717f
 +) -> rustpython_vm::PyResult<()> {
 +    let _ = args;
 +    Err(vm.new_os_error("unsupported"))
-+}
-+
-+/// A colon, a slash, all digits, or four numeric dotted parts is an
-+/// address. `socket.connect` refuses it. `lane.read` still dials a name.
-+#[cfg(target_os = "galexy")]
-+fn is_address(name: &str) -> bool {
-+    if name.contains(':') || name.contains('/') {
-+        return true;
-+    }
-+    if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
-+        return true;
-+    }
-+    let mut parts = 0usize;
-+    for part in name.split('.') {
-+        if part.is_empty() || part.len() > 3 || !part.bytes().all(|b| b.is_ascii_digit()) {
-+            return false;
-+        }
-+        parts += 1;
-+    }
-+    parts == 4
 +}
 +
 +fn lane_read(
@@ -574,28 +653,45 @@ index 0000000..7cc717f
 +    }
 +}
 +
-+/// Dial `name` and read the lane to EOF. Syscall numbers match `galexy-abi`:
-+/// User 16, Send 29, Read 5, Close 6. Net index `0x800A` with WRITE.
 +#[cfg(target_os = "galexy")]
-+fn lane_body(name: &str) -> Result<String, &'static str> {
++enum CardReply {
++    Text(String),
++    Lane(u64),
++}
++
++/// One net card call. Opcode numbers match `galexy-abi`: dial 2, bind 10,
++/// listen 11, datagram 12, receive 13. User 16, Send 29. Net index
++/// `0x800A` with WRITE. `extra` is the datagram payload.
++#[cfg(target_os = "galexy")]
++fn card_call(op: u8, name: &str, extra: &[u8]) -> Result<CardReply, &'static str> {
 +    if name.is_empty() || name.len() > 64 || name.bytes().any(|b| b < 0x21 || b > 0x7e) {
 +        return Err("bad name");
++    }
++    if extra.len() > 64 {
++        return Err("bad datagram");
 +    }
 +    let mut who = [0u8; 32];
 +    let who_n = galexy_syscall3(16, who.as_mut_ptr() as u64, who.len() as u64, 0)? as usize;
 +    let who_n = who_n.min(who.len());
-+    let mut payload = [0u8; 96];
++    let mut payload = [0u8; 160];
 +    let name_b = name.as_bytes();
-+    if name_b.len() + who_n + 3 > payload.len() {
++    let tail = if extra.is_empty() { 1 + who_n } else { 1 + extra.len() };
++    if name_b.len() + tail + 2 > payload.len() {
 +        return Err("bad name");
 +    }
-+    payload[0] = 2;
++    payload[0] = op;
 +    payload[1] = name_b.len() as u8;
 +    payload[2..2 + name_b.len()].copy_from_slice(name_b);
 +    let at = 2 + name_b.len();
-+    payload[at] = who_n as u8;
-+    payload[at + 1..at + 1 + who_n].copy_from_slice(&who[..who_n]);
-+    let n = at + 1 + who_n;
++    let n = if extra.is_empty() {
++        payload[at] = who_n as u8;
++        payload[at + 1..at + 1 + who_n].copy_from_slice(&who[..who_n]);
++        at + 1 + who_n
++    } else {
++        payload[at] = extra.len() as u8;
++        payload[at + 1..at + 1 + extra.len()].copy_from_slice(extra);
++        at + 1 + extra.len()
++    };
 +    let mut reply = [0u8; 256];
 +    let net = 0x800A | (2u64 << 48);
 +    let got = galexy_syscall5(
@@ -610,20 +706,40 @@ index 0000000..7cc717f
 +        return Err("bad reply");
 +    }
 +    let lane = u64::from_le_bytes(reply[..8].try_into().unwrap_or([0; 8]));
-+    if lane == 0 {
-+        let text = std::str::from_utf8(&reply[8..got.min(reply.len())]).unwrap_or("");
-+        return Err(if text.contains("denied") {
-+            "access denied"
-+        } else if text.contains("timed") {
-+            "timed out"
-+        } else {
-+            "dial failed"
-+        });
++    if lane != 0 {
++        return Ok(CardReply::Lane(lane));
 +    }
++    let text = std::str::from_utf8(&reply[8..got.min(reply.len())]).unwrap_or("");
++    if op == 13
++        && !text.is_empty()
++        && !text.contains("denied")
++        && !text.starts_with("timed")
++        && !text.starts_with("bad")
++        && !text.starts_with("unavailable")
++    {
++        return Ok(CardReply::Text(text.to_string()));
++    }
++    if text.contains("denied") {
++        return Err("access denied");
++    }
++    if text.contains("timed") {
++        return Err("timed out");
++    }
++    if text.is_empty() {
++        return Err("bad reply");
++    }
++    Ok(CardReply::Text(text.to_string()))
++}
++
++#[cfg(target_os = "galexy")]
++fn read_lane(lane: u64) -> String {
 +    let mut body = Vec::new();
 +    loop {
 +        let mut buf = [0u8; 256];
-+        let n = galexy_syscall3(5, lane, buf.as_mut_ptr() as u64, buf.len() as u64)? as usize;
++        let Ok(n) = galexy_syscall3(5, lane, buf.as_mut_ptr() as u64, buf.len() as u64) else {
++            break;
++        };
++        let n = n as usize;
 +        if n == 0 {
 +            break;
 +        }
@@ -633,7 +749,16 @@ index 0000000..7cc717f
 +        }
 +    }
 +    let _ = galexy_syscall3(6, lane, 0, 0);
-+    Ok(String::from_utf8_lossy(&body).into_owned())
++    String::from_utf8_lossy(&body).into_owned()
++}
++
++/// Dial `name` and read the lane to EOF.
++#[cfg(target_os = "galexy")]
++fn lane_body(name: &str) -> Result<String, &'static str> {
++    match card_call(2, name, &[])? {
++        CardReply::Lane(lane) => Ok(read_lane(lane)),
++        CardReply::Text(_) => Err("dial failed"),
++    }
 +}
 +
 +#[cfg(target_os = "galexy")]

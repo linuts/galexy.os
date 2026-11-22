@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use galexy_abi::{
     Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DGRAM, NET_OP_DIAL,
-    NET_OP_GRANT, NET_OP_LINK, NET_OP_LISTEN, NET_OP_PIN, NET_OP_PING, NET_OP_RESOLVE,
+    NET_OP_GRANT, NET_OP_LINK, NET_OP_LISTEN, NET_OP_PIN, NET_OP_PING, NET_OP_RECV, NET_OP_RESOLVE,
     NET_OP_REVOKE, NET_OP_SERVE,
 };
 use galexy_net::Engine;
@@ -193,6 +193,7 @@ fn handle(
         NET_OP_BIND => bind_local(rx, engine, record, msg[2], rest),
         NET_OP_LISTEN => listen(rx, engine, record, msg[2], actor_id, gates, rest),
         NET_OP_DGRAM => datagram(rx, engine, record, msg[2], rest),
+        NET_OP_RECV => datagram_recv(rx, engine, record, msg[2], rest),
         NET_OP_ALLOW if admin => allow(rx, record, rest),
         NET_OP_GRANT if admin => grant_op(rx, record, rest, true),
         NET_OP_REVOKE if admin => grant_op(rx, record, rest, false),
@@ -1154,27 +1155,11 @@ fn datagram(rx: Cap, engine: &mut Engine, record: &Record, held: u8, rest: &[u8]
         return;
     };
     // Read sends. Write does not capture, and it does not send.
-    if held & 1 == 0 {
-        reply(rx, b"access denied\n", 0);
-        return;
-    }
-    let Some(entry) = record.find(name) else {
+    let Some((ip, port)) = dgram_peer(record, held, name) else {
         reply(rx, b"access denied\n", 0);
         return;
     };
-    if entry.kind != KIND_DGRAM || entry.port == 0 || entry.port == 53 {
-        reply(rx, b"access denied\n", 0);
-        return;
-    }
-    let ip = [entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]];
-    if ip == [0, 0, 0, 0] || ip == [255, 255, 255, 255] {
-        reply(rx, b"access denied\n", 0);
-        return;
-    }
-    if engine
-        .udp_send(ip, entry.port, DGRAM_SPORT, payload)
-        .is_err()
-    {
+    if engine.udp_send(ip, port, DGRAM_SPORT, payload).is_err() {
         reply(rx, b"unavailable\n", 0);
         return;
     }
@@ -1191,9 +1176,61 @@ fn datagram(rx: Cap, engine: &mut Engine, record: &Record, held: u8, rest: &[u8]
     }
     log(&format!(
         "[net] dgram {}.{}.{}.{} {}",
-        ip[0], ip[1], ip[2], ip[3], entry.port
+        ip[0], ip[1], ip[2], ip[3], port
     ));
     reply(rx, b"ok\n", 0);
+}
+
+fn datagram_recv(rx: Cap, engine: &mut Engine, record: &Record, held: u8, rest: &[u8]) {
+    let Some(name) = one_name(rest) else {
+        reply(rx, b"bad\n", 0);
+        return;
+    };
+    // Read receives from the stored peer. Write does not capture.
+    let Some((ip, port)) = dgram_peer(record, held, name) else {
+        reply(rx, b"access denied\n", 0);
+        return;
+    };
+    if !engine.udp_arm(ip, port, DGRAM_SPORT) {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    let start = clock_ms();
+    loop {
+        let now = clock_ms();
+        if now.saturating_sub(start) >= 3_000 {
+            reply(rx, b"timed out\n", 0);
+            return;
+        }
+        pump(engine);
+        engine.poll(now);
+        pump(engine);
+        if let Some(payload) = engine.udp_take() {
+            log(&format!(
+                "[net] dgram in {}.{}.{}.{} {}",
+                ip[0], ip[1], ip[2], ip[3], port
+            ));
+            reply(rx, &payload, 0);
+            return;
+        }
+        let _ = sleep_ms(20);
+    }
+}
+
+/// Read on a datagram card names one peer. Port 53 is not that peer.
+fn dgram_peer(record: &Record, held: u8, name: &[u8]) -> Option<([u8; 4], u16)> {
+    if held & 1 == 0 {
+        return None;
+    }
+    let entry = record.find(name)?;
+    if entry.kind != KIND_DGRAM || entry.port == 0 || entry.port == 53 {
+        return None;
+    }
+    let ip = [entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]];
+    if ip == [0, 0, 0, 0] || ip == [255, 255, 255, 255] {
+        return None;
+    }
+    Some((ip, entry.port))
 }
 
 fn name_and_body(rest: &[u8]) -> Option<(&[u8], &[u8])> {

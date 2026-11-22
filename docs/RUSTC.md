@@ -168,7 +168,7 @@ after a PAL change should `rm target/.rustc_info.json` too.
 | `thread` + `thread_local_key` | `ThreadSpawn` (new slot, same CR3, fresh user stack, kernel stack); per-thread pointer in the FS base via user-mode `wrfsbase` (CR4.FSGSBASE is already on; the kernel never touches FS in ring 3). Join is process-Cap `Wait` |
 | `sync` | `std`'s generic futex implementations over `Futex` |
 | `random` | `rdrand` in the PAL |
-| `net` | `TcpStream::connect` dials a granted name, one stored address, or one stored port (Milestones 108 and 112–113). The value is a lane. `listen_port` and `send_card` are the listen and datagram cards. A receive and `setsockopt` stay `unsupported`. The PAL does not parse TCP (`docs/NET.md`) |
+| `net` | `TcpStream::connect` dials a granted name, one stored address, or one stored port (Milestones 108 and 112–113). The value is a lane. `TcpListener::bind` and `accept` are the bind and listen cards. `listen_port` is that same listen. `send_card` and `recv_card` are the datagram card. Port 53 stays refused. `setsockopt` stays `unsupported`. The PAL does not parse TCP (`docs/NET.md`) |
 
 Key-based TLS stays. `has-thread-local` is still false, so compiled
 code does not emit `#[thread_local]`. `gxld` does link `.tdata`/`.tbss`
@@ -472,6 +472,7 @@ testable in reasonable time. Those stages have since landed (Milestones
 were built. Phase 10 (`docs/NET.md`, Milestones 78–85) and Phase 13
 (`docs/USB.md`, Milestones 86–88) have landed. The `v1.0` tag waits
 on a KVM pass. `TcpStream::connect` and Python `socket.connect`
-are a granted name and the value is a lane. Bind, listen, and
-one datagram are the cards from Milestones 112–116. Socket
+are a granted name, a stored address, or a stored port, and the
+value is a lane. Bind, listen, and one datagram send and receive
+are the cards from Milestones 112–116, in both runtimes. Socket
 options stay unsupported.

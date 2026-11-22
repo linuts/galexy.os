@@ -999,6 +999,11 @@ pub const NET_OP_LISTEN: u8 = 11;
 /// Read on that card. The payload is the name, then the bytes. Write
 /// does not send and does not capture. Port 53 is refused.
 pub const NET_OP_DGRAM: u8 = 12;
+/// Net control: receive one datagram from the peer stored on the card.
+/// Read on that same card. The payload is the name. The reply is the
+/// datagram bytes and the lane Cap is zero. Write does not capture.
+/// Port 53 is refused. A packet from any other peer is ignored.
+pub const NET_OP_RECV: u8 = 13;
 
 /// USB control: list enumerated devices, one per line. The reply is
 /// plain text. It does not begin with a lane capability.

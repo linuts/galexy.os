@@ -54,7 +54,7 @@ Milestone 96 checks that the run did not leave a child task.
 | CPython, `libpython`, and C extensions | A second language runtime, and C in a Rust kernel tree. The interpreter is RustPython. |
 | Copying the RustPython tree into this repository | It is MIT or Apache-2.0. The pin stays a host checkout, the way `rustc` does. A patch, if one is required, is `scripts/galexy-rustpython.patch`. The license notices stay with the checkout. |
 | `pip`, `venv`, `ensurepip`, and a package index | Same non-goal as on-OS `cargo`. |
-| `ssl`, `asyncio`, and a Berkeley socket | `socket.connect(name)` asks, then dials a granted name, and the value is a lane (`NET.md`). The address, port, bind, listen, and datagram cards live in `net` (Milestones 112–116). Python `socket` still only connects by name. `bind`, `listen`, UDP, `setsockopt`, and any call that passes an IP or a port stay `OSError`. `ssl` and `asyncio` stay off the allow-list. TLS stays inside `net`. |
+| `ssl`, `asyncio`, and a Berkeley socket | `socket.connect` asks, then dials a granted name, one stored address, or one stored `address:port`. The value is a lane (`NET.md`). `socket.bind`, `socket.listen`, `socket.send`, and `socket.recv` are the bind, listen, and datagram cards. Port 53 stays refused. `setsockopt` stays `OSError`. `ssl` and `asyncio` stay off the allow-list. TLS stays inside `net`. |
 | `sqlite3`, `ctypes`, `cffi` | Those need C. |
 | `os.fork`, `os.exec`, `os.system`, `os.environ`, `subprocess`, `multiprocessing` | There is no environment block and no fork. Spawn stays the kernel's, and this program does not call it. |
 | A second editor | `edit` is already the editor. The REPL reads the seat keyboard and does not draw a screen of its own. |
@@ -77,7 +77,7 @@ The gate needs these names, and they are the ones that list starts with:
 | `sys` | `argv`, `stdout`, `stderr`, `version`. No environment. |
 | `io` | `io.open`. The raw file is `_io.FileIO` over `std::fs`. Text mode is the buffered wrapper. |
 | `lane` | `lane.read(name)` dials a granted name and returns the body. Milestone 103. |
-| `socket` | `socket.connect(name)` is that same body. Milestone 109. `bind`, `listen`, UDP, and `setsockopt` are `OSError`. |
+| `socket` | `socket.connect` is that same body, for a name, an address, or `address:port`. `socket.bind`, `socket.listen`, `socket.send`, and `socket.recv` are the cards. `setsockopt` and `socket()` are `OSError`. |
 
 Other pure modules may be added in that same milestone when they
 compile with the refused features off. Each one is a line in the
@@ -255,13 +255,13 @@ through `net`. The value is still a lane, the same body
 The seat prints `python wants the network`. Yes installs a token
 for this run. No is `OSError` and the interpreter stays up.
 There is no socket syscall and no second stack. This is not a
-Berkeley socket. `bind`, `listen`, UDP, `setsockopt`, and any
-call that passes an IP or a port stay refused in this milestone.
-Milestones 112–116 grant each exact call with a card in `net`
-(`NET.md`). Python does not grow those calls. `ssl` and `asyncio`
-stay refused. TLS
-stays inside `net`. Reaching a host past `10.0.2.2` is
-Milestone 111, not this section.
+Berkeley socket. Milestones 112–116 grant each exact call with a
+card in `net` (`NET.md`). Python calls those cards:
+`socket.bind`, `socket.listen`, `socket.send`, `socket.recv`, and
+`socket.connect` with an address or a port. A missing card asks.
+No is `OSError`. `setsockopt` stays refused. `ssl` and `asyncio`
+stay refused. TLS stays inside `net`. Reaching a host past
+`10.0.2.2` is Milestone 111, not this section.
 
 ## Changing this subsystem
 
@@ -269,13 +269,14 @@ Milestone 111, not this section.
 2. A new module is a line in `scripts/python-allow.txt` in the
    same change. A refused module stays refused until a milestone
    names it.
-3. `socket.connect` is Milestone 109. The name stays, the call
-   asks, then dials a granted name, and the value is a lane
-   (`NET.md` → Phase 16). `bind`, `listen`, UDP, `setsockopt`, and
-   any call that passes an IP or a port stay `OSError` in Python.
-   The cards for those calls are Milestones 112–116, and they live
-   in `net`. It does not add a socket syscall. `ssl` and `asyncio`
-   stay off the allow-list.
+3. `socket.connect`, `socket.bind`, `socket.listen`, `socket.send`,
+   and `socket.recv` are the cards in `net` (`NET.md` → Phase 16).
+   The name stays. The call asks, then uses the card, and the value
+   is a lane or the card reply. An address or a port is the address
+   card and the port card. `setsockopt` stays `OSError`. It does
+   not add a socket syscall. `ssl` and `asyncio` stay off the
+   allow-list. A socket operation that is enabled is named in
+   `scripts/python-allow.txt` in the same change.
 4. `docs/ABI.md` gains a row only if a number appears. This phase
    has none. `docs/STYLE.md` carries the rules below.
 5. The wiki page Python stays in step with this file.

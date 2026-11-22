@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-PATCH_VERSION = "4"
+PATCH_VERSION = "5"
 REPO = Path(__file__).resolve().parent.parent
 STD_PAL = REPO / "std-pal"
 ABI_SRC = REPO / "crates/galexy-abi/src/lib.rs"
@@ -457,6 +457,13 @@ mod common;
     #[cfg(target_os = "galexy")]
     pub fn send_card(name: &str, payload: &[u8]) -> io::Result<()> {
         net_imp::UdpSocket::send_card(name, payload)
+    }
+
+    /// Receive one datagram from the peer stored on `name`.
+    #[stable(feature = "rust1", since = "1.0.0")]
+    #[cfg(target_os = "galexy")]
+    pub fn recv_card(name: &str) -> io::Result<Vec<u8>> {
+        net_imp::UdpSocket::recv_card(name)
     }
 """,
     )

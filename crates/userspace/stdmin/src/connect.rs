@@ -3,8 +3,10 @@
 //! A granted name asks the seat, then dials through `net`. The value
 //! is a lane: this program reads it to EOF. `--bind <address>` binds
 //! the stored local address. `--listen <port>` accepts on the stored
-//! port. `--send <name>` sends one datagram to the stored peer. A
-//! receive, a timeout, and a socket option stay `unsupported`.
+//! port. `--accept <address:port>` binds, then accepts. `--send <name>`
+//! sends one datagram to the stored peer. `--recv <name>` receives one
+//! datagram from that peer. A timeout and a socket option stay
+//! `unsupported`.
 
 use std::io::{ErrorKind, Read};
 use std::net::{TcpListener, TcpStream, UdpSocket};
@@ -92,6 +94,44 @@ fn main() -> ExitCode {
             }
             Err(err) => report(Some(err)),
         };
+    }
+    if arg == "--recv" {
+        let name = std::env::args().nth(2).unwrap_or_default();
+        return match UdpSocket::recv_card(&name) {
+            Ok(body) => {
+                let text = String::from_utf8_lossy(&body);
+                if text.ends_with('\n') {
+                    print!("{text}");
+                } else {
+                    println!("{text}");
+                }
+                ExitCode::SUCCESS
+            }
+            Err(err) => report(Some(err)),
+        };
+    }
+    if arg == "--accept" {
+        let spec = std::env::args().nth(2).unwrap_or_default();
+        let listener = match TcpListener::bind(&spec) {
+            Ok(listener) => listener,
+            Err(err) => return report(Some(err)),
+        };
+        let (mut stream, _) = match listener.accept() {
+            Ok(pair) => pair,
+            Err(err) => return report(Some(err)),
+        };
+        let mut body = Vec::new();
+        if stream.read_to_end(&mut body).is_err() {
+            println!("connect: read failed");
+            return ExitCode::from(1);
+        }
+        let text = String::from_utf8_lossy(&body);
+        if text.ends_with('\n') {
+            print!("{text}");
+        } else {
+            println!("{text}");
+        }
+        return ExitCode::SUCCESS;
     }
     if arg == "--udp" {
         return report(UdpSocket::bind("127.0.0.1:1").err());
