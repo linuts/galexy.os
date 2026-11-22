@@ -1,9 +1,8 @@
 # USB — see the bus, then one way to add a driver
 
-Phase 13. Milestones **86–88**. After Phase 10, before the `v1.0`
-tag. Checkboxes live in `TODO.md`. Nothing in this phase is built
-yet. Phase 14 (RustPython, Milestones 91–96) has landed. It does
-not use this bus.
+Phase 13. Milestones **86–88** have landed. The `v1.0` tag still
+waits on a KVM pass. Checkboxes live in `TODO.md`. Phase 14
+(RustPython, Milestones 91–96) has landed. It does not use this bus.
 
 virtio-net does not need this bus. Phase 10 talks to QEMU through
 `virtio-net-pci`. USB is for a device that is actually plugged in:
@@ -148,7 +147,7 @@ After Milestone 88, this is the only way in.
 5. A test enumerates the device and shows the driver claimed it. A
    second device with a different ID is listed and not claimed.
 6. Move the row to `landed` in the same change that checks the box.
-   Update the wiki page USB.
+   This file is the reading copy. The repo has no `wiki/` directory.
 
 A driver that skips the row does not build. The table is the list
 the service walks. There is nowhere else to register.
@@ -162,12 +161,10 @@ Same habit as `NET.md`.
    constant edited in place.
 3. `docs/ABI.md` for `0x800B` and `0x800C`. `docs/DEVICES.md` for a
    device. `docs/STYLE.md` when a rule changes.
-4. The wiki page USB stays in step with this file.
+4. This file is the reading copy. The repo has no `wiki/` directory.
 5. A box is checked only after a run shows the behavior.
 
-## Files this phase will touch
-
-When the milestones start, not in this plan:
+## Files this phase touches
 
 | Piece | Where |
 | --- | --- |

@@ -97,6 +97,10 @@ pub(in crate::sched) static INIT_CTRL: AtomicU8 = AtomicU8::new(0xFF);
 /// Channel id of the first channel the task named `net` created.
 /// `0xFF` until then. `send` on end 0 of this channel is a net reply.
 pub(in crate::sched) static NET_CTRL: AtomicU8 = AtomicU8::new(0xFF);
+
+/// Channel id of the first channel the task named `usb` created.
+/// `0xFF` until then. `send` on end 0 of this channel is a usb reply.
+pub(in crate::sched) static USB_CTRL: AtomicU8 = AtomicU8::new(0xFF);
 /// `wait_proc_index` when the park is not a consuming Cap-wait.
 pub(in crate::sched) const WAIT_PROC_NONE: u8 = 0xFF;
 

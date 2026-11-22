@@ -4,10 +4,12 @@ One table for every device Galexy intends to speak to. Phase 10 and
 Phase 13 both use it. A driver without a row here is not a driver
 (`USB.md`, `NET.md`).
 
-Nothing in this table is built yet. `planned` means a milestone owns
-it. `unwritten` means the row exists so the columns stay honest, and
-no milestone is allowed to create the module until one is numbered.
-`landed` means the milestone box is checked.
+`planned` means a milestone owns the row and the code is not in the
+tree yet. `unwritten` means the row exists so the columns stay honest,
+and no milestone is allowed to create the module until one is numbered.
+`landed` means the milestone box is checked. virtio-net, xHCI, the
+enumerated-device list, and the empty driver table are landed. The
+example NIC and CDC-NCM rows stay unwritten.
 
 ## Rules
 
@@ -26,9 +28,9 @@ no milestone is allowed to create the module until one is numbered.
 | Kind | ID | Linux index | Contract | Module | Milestone | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | pci | virtio-net, vendor `1af4` | `drivers/net/virtio_net.c` | virtio 1.x specification | `drivers/virtio_net.rs`, service `net` | 78–85 | landed |
-| pci | xHCI (QEMU `qemu-xhci`) | `drivers/usb/host/xhci.c` | eXtensible Host Controller Interface | `drivers/usb/xhci.rs` | 86 | planned |
-| usb | any device the controller enumerates | — | USB chapter 9 device and configuration descriptors | service `usb`, list opcode | 87 | planned |
-| usb | driver table, no IDs yet | — | `docs/USB.md` → Adding a driver | `userspace/usb/src/drivers/mod.rs` | 88 | planned |
+| pci | xHCI (QEMU `qemu-xhci`, `1b36:000d`) | `drivers/usb/host/xhci.c` | eXtensible Host Controller Interface | `drivers/usb/xhci.rs` | 86 | landed |
+| usb | any device the controller enumerates | — | USB chapter 9 device and configuration descriptors | service `usb`, list opcode | 87 | landed |
+| usb | driver table, no IDs yet | — | `docs/USB.md` → Adding a driver | `userspace/usb/src/drivers/mod.rs` | 88 | landed |
 | pci | example: Intel Ethernet `8086:10d3` (e1000e class) | `drivers/net/ethernet/intel/e1000e/` | Intel PCIe GbE controller datasheet | unwritten | — | unwritten |
 | usb | example: CDC-NCM class `02` | `drivers/net/usb/cdc_ncm.c` | USB CDC NCM specification | unwritten | — | unwritten |
 

@@ -52,6 +52,7 @@ static IDT: LazyLock<Mutex<InterruptDescriptorTable>> = LazyLock::new(|| {
     idt[crate::drivers::virtio_blk::VIRTIO_VECTOR].set_handler_fn(virtio_blk_handler);
     idt[crate::drivers::virtio_input::VECTOR].set_handler_fn(virtio_input_handler);
     idt[crate::drivers::virtio_net::VECTOR].set_handler_fn(virtio_net_handler);
+    idt[crate::drivers::usb::xhci::VECTOR].set_handler_fn(xhci_handler);
     Mutex::new(idt)
 });
 
@@ -148,6 +149,15 @@ extern "x86-interrupt" fn virtio_net_handler(_stack_frame: InterruptStackFrame) 
     apic::eoi();
     if crate::drivers::virtio_net::intx_routed() {
         super::ioapic::eoi_level(crate::drivers::virtio_net::VECTOR);
+    }
+}
+
+/// xHCI. Acks the interrupter and wakes `usb`. Does not read a descriptor.
+extern "x86-interrupt" fn xhci_handler(_stack_frame: InterruptStackFrame) {
+    crate::drivers::usb::xhci::on_irq();
+    apic::eoi();
+    if crate::drivers::usb::xhci::intx_routed() {
+        super::ioapic::eoi_level(crate::drivers::usb::xhci::VECTOR);
     }
 }
 

@@ -103,11 +103,11 @@ const BEAT_MIN_MS: u64 = 250;
 const BEAT_MAX_MS: u64 = 86_400_000;
 
 /// Twelve seats, one once-service, the backoff fixture, one ignore
-/// service, one notice target, one beat target, and `net`. Eighteen names.
-/// A boot holds twelve seat Caps plus `net`; stamp exits and frees its
-/// Cap. `bell` and `chime` are not started at boot. That stays under the
-/// sixteen-Cap ceiling.
-const SERVICES: [Svc; 18] = [
+/// service, one notice target, one beat target, `net`, and `usb`.
+/// Nineteen names. A boot holds twelve seat Caps plus `net` and `usb`;
+/// stamp exits and frees its Cap. `bell` and `chime` are not started at
+/// boot. That stays under the sixteen-Cap ceiling.
+const SERVICES: [Svc; 19] = [
     row(b"shell", 1, RESTART, true),
     row(b"shell2", 2, RESTART, true),
     row(b"shell3", 3, RESTART, true),
@@ -140,6 +140,7 @@ const SERVICES: [Svc; 18] = [
         every_ms: 1_000,
     },
     row(b"net", 0, RESTART, true),
+    row(b"usb", 0, RESTART, true),
 ];
 
 /// Notice names a row may name. A raise of anything else is `unknown`.
@@ -183,7 +184,7 @@ const fn notices_declared() -> bool {
 
 const _: () = assert!(notices_declared());
 
-static LIVE: [Live; 18] = [const { live() }; 18];
+static LIVE: [Live; 19] = [const { live() }; 19];
 static NOTICE_UP: [AtomicBool; NOTICE_NAMES.len()] =
     [const { AtomicBool::new(false) }; NOTICE_NAMES.len()];
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
@@ -195,7 +196,7 @@ static RX: AtomicU64 = AtomicU64::new(0);
 static DATE_UNSET_LOGGED: AtomicBool = AtomicBool::new(false);
 /// A row whose ELF is not in this ramdisk. The release image omits the
 /// fixture programs; the test image packs them.
-static OMIT: [AtomicBool; 18] = [const { AtomicBool::new(false) }; 18];
+static OMIT: [AtomicBool; 19] = [const { AtomicBool::new(false) }; 19];
 
 fn main() -> i32 {
     let mut ends = [0u64; 2];

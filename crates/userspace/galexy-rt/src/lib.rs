@@ -792,6 +792,30 @@ pub fn lane_pair(out: &mut [u64; 2]) -> SyscallResult {
     syscall(Syscall::Lane as u64, out.as_mut_ptr() as u64, 0, 0)
 }
 
+/// One device record from the controller. `value == 0` means none is ready.
+/// Only the task named `usb` succeeds.
+pub fn usb_read(buf: &mut [u8]) -> SyscallResult {
+    read(galexy_abi::reserved::usb(CapRights::READ), buf)
+}
+
+/// Asks the `usb` service to run `payload`. Parks until it replies.
+///
+/// The reply is plain text. `Unsupported` means `usb` has not created
+/// its control channel.
+pub fn usb_rpc(payload: &[u8], reply: &mut [u8]) -> SyscallResult {
+    if payload.len() > galexy_abi::INIT_RPC_MAX || reply.len() > galexy_abi::CHAN_MSG_MAX {
+        return SyscallResult::err(galexy_abi::SysError::BadValue);
+    }
+    syscall_r8r9(
+        Syscall::Send as u64,
+        galexy_abi::reserved::usb_ctrl(CapRights::WRITE).bits(),
+        payload.as_ptr() as u64,
+        payload.len() as u64,
+        reply.as_mut_ptr() as u64,
+        reply.len() as u64,
+    )
+}
+
 /// One received Ethernet frame. `value == 0` means the queue is empty.
 pub fn wire_read(buf: &mut [u8]) -> SyscallResult {
     read(galexy_abi::reserved::wire(CapRights::READ), buf)

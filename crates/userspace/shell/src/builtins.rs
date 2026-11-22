@@ -9,8 +9,8 @@ use core::sync::atomic::Ordering;
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
     close, dmesg_cap, grant, init_rpc, init_rpc_at, init_rpc_every, net_rpc, open, read, reboot,
-    revoke, share, shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, user,
-    user_lock, user_login, user_logout, user_name, user_name_pass, user_passwd, user_quota,
+    revoke, share, shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, usb_rpc,
+    user, user_lock, user_login, user_logout, user_name, user_name_pass, user_passwd, user_quota,
     user_setquota, user_volpass, volume_query, wait, write_console,
 };
 
@@ -224,6 +224,10 @@ pub(crate) fn dispatch(
     }
     if let Some(rest) = arg_of(line, b"net") {
         net_cmd(cwd, rest);
+        return None;
+    }
+    if let Some(rest) = arg_of(line, b"usb") {
+        usb_cmd(cwd, rest);
         return None;
     }
     if line == b"fetch" || line == b"dashboard" {
@@ -1902,6 +1906,28 @@ fn fetch_name(cwd: &Cwd, name: &[u8]) {
     payload[at + 1..at + 1 + who.len()].copy_from_slice(who);
     let n = at + 1 + who.len();
     finish_net(cwd, &payload[..n], true);
+}
+
+fn usb_cmd(cwd: &Cwd, rest: &[u8]) {
+    if rest.is_empty() || rest == b"list" {
+        let mut reply = [0u8; galexy_abi::CHAN_MSG_MAX];
+        let got = usb_rpc(&[galexy_abi::USB_OP_LIST], &mut reply);
+        if !got.ok {
+            write_console(b"access denied\n");
+            prompt(cwd);
+            return;
+        }
+        let n = (got.value as usize).min(reply.len());
+        if n == 0 {
+            write_console(b"none\n");
+        } else {
+            write_console(&reply[..n]);
+        }
+        prompt(cwd);
+        return;
+    }
+    write_console(b"usb: list\n");
+    prompt(cwd);
 }
 
 fn net_cmd(cwd: &Cwd, rest: &[u8]) {

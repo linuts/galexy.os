@@ -1,0 +1,17 @@
+[package]
+name = "usb"
+version = "0.1.0"
+edition = "2021"
+description = "USB service: the only holder of the controller capability. No vendor drivers."
+
+[[bin]]
+name = "usb"
+path = "src/main.rs"
+
+[dependencies]
+galexy-rt = { path = "../galexy-rt" }
+galexy-abi = { path = "../../galexy-abi" }
+galexy-usb = { path = "../../galexy-usb" }
+
+[build-dependencies]
+galexy-abi = { path = "../../galexy-abi" }

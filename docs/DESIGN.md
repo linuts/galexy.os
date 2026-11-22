@@ -1240,7 +1240,7 @@ IRQ that already has IF=0) around the acquire.
 
 | Lock | May hold while taking | IRQ-gate |
 | --- | --- | --- |
-| `THREADS` | galfs `TABLE` (then large-file `STORE`), then `VOLUME_KEY`, then `VOLUME_PASS`, then `CHANS`. A sleep of `net` may take virtio-net `RXQ` while `THREADS` is held. `task_lane` may take `LANES` while `THREADS` is held. Snapshots still copy into fixed arrays and allocate after the drop. A galfs write may allocate the RAM large-file store while `THREADS` is held (Milestone 71): heap growth drops `INNER` before the shootdown, and every spin lock acks (`arch/mm/heap.rs`) | yes |
+| `THREADS` | galfs `TABLE` (then large-file `STORE`), then `VOLUME_KEY`, then `VOLUME_PASS`, then `CHANS`. A sleep of `net` may take virtio-net `RXQ` while `THREADS` is held. A sleep of `usb` may take the xHCI `CTRL` lock while `THREADS` is held. `task_lane` may take `LANES` while `THREADS` is held. Snapshots still copy into fixed arrays and allocate after the drop. A galfs write may allocate the RAM large-file store while `THREADS` is held (Milestone 71): heap growth drops `INNER` before the shootdown, and every spin lock acks (`arch/mm/heap.rs`) | yes |
 | galfs `TABLE` | large-file `STORE`; `DISK_BUF` only while encoding; `arch::rand` while sealing; not `THREADS`. The PBKDF2 for `login` / `passwd` / `useradd` runs before the lock is taken (`PasswordCred`) | yes. Syscalls arrive IF=0; the main-loop entries (`sync_to_disk`, `wipe_volume_key`, `seal_and_lock`) gate themselves — a preempted main-loop holder on the BSP deadlocked the shell's next galfs syscall on the same CPU (galexy.os#86) |
 | `arch::rand` | nothing else. Never takes `TABLE` | with the caller (`TABLE` may already be held inside `encode_table`) |
 | large-file `STORE` | nothing else. Never take `TABLE` or `THREADS` while holding it | with the caller (`TABLE`, already IF=0 on the syscall path) |
@@ -1250,6 +1250,7 @@ IRQ that already has IF=0) around the acquire.
 | Heap `INNER` | nothing else; growth drops it before shootdown. A second grower that lost the race polls `shootdown::service_pending()` while it waits and never re-enables IF (galexy.os#86) | yes |
 | `ATA` / virtio `DEV` then `DMA` | nothing else. The timer may take `DMA` alone to read `used.idx`; it never takes `DEV`. The waiter holds `DEV` across the halt and stays on that CPU (`xfer_wait_cpu`) so a same-CPU switch cannot spin on it | with the caller (syscall or BSP); `used.idx` disables interrupts around `DMA` |
 | virtio-net `RXQ`, then `RX_BUFS`, then `DEV` | `TXQ` only during probe, and both queues drop before `DEV`. `MAC` and `TX_HDR` are taken alone. The net IRQ acks the ISR, counts, and wakes `net`; it does not take these | with the caller. `THREADS` may already be held (`has_rx` from `task_sleep`) |
+| xHCI `CTRL` | nothing else. Probe, enumeration, and `read` take it. A command wait drops it before `hlt`. The xHCI IRQ acks the interrupter, counts, and wakes `usb`; it does not take this lock | with the caller. `THREADS` may already be held (`has_record` from `task_sleep`) |
 | `LANES` | nothing else | yes. `task_lane`, lane read, and lane write take it after `THREADS` |
 | Screen `SCREEN` | `STATUS_TEXT`, then `MIRROR`, then `GRIDS` | BSP; IRQ handlers do not take it. COM1 receive records the host's row count in atomics and does not take these |
 | `STATUS_TEXT` | nothing else | with `SCREEN` |
@@ -1373,6 +1374,7 @@ main image and are listed at the end.
 | `test-dmasplit` | `dmasplit_test_passes` | virtio-blk DMA splits at physical discontinuities (both transports); sentinel frame stays untouched |
 | `test-wire` | `wire_test_passes` | M78 virtio-net: a straddling transmit uses at least two data descriptors, the next physical frame keeps the sentinel, the MAC is `52:54:00:12:34:56`, and a task named `shell` is `AccessDenied` on the wire Cap |
 | `test-lane` | `lane_test_passes` | M82 `Syscall::Lane` is `AccessDenied` for `shell`. The task named `net` writes `lane ok` on one end and reads it on the other |
+| `test-usb` | `usb_test_passes`, `usb_list_shows_the_keyboard` | M86–88 xHCI: the link is up, the interrupt fires, a straddling buffer is at least two TRBs, the next physical frame keeps the sentinel, and a task named `shell` is `AccessDenied` on Cap `0x800B`. The typed list prints QEMU `0627:0001`, `unclaimed`, and `svc status usb` → `usb running` |
 | `test-users`, `test-mustchange`, `test-lockout`, `test-idle`, `test-unlock` | `users_test_passes`, `mustchange_test_passes`, `lockout_test_passes`, `idle_test_passes`, `unlock_test_passes` | M37 / M42 / M43 auth, M44 sealed unlock |
 | `test-pipe` | `pipe_test_passes` | M36 pipes + `give`, M57 block/wake |
 | `test-userheap`, `test-channel` | `userheap_test_passes`, `channel_test_passes` | M66 per-task `Map` budget and reap, `Clock`, channel send/recv and `give` |
@@ -1531,9 +1533,9 @@ pinned in `galexy-abi` tests.
   only audio device and the only PIT user after boot.
 - Stated non-goals for this platform pass: 5-level paging, huge user
   pages, and a GPU beyond the GOP framebuffer. The network is
-  Phase 10 (`docs/NET.md`), Milestones 78–85. USB is Phase 13
-  (`docs/USB.md`), Milestones 86–88, after the network and before
-  the `v1.0` tag. RustPython landed as Phase 14 (`docs/PYTHON.md`),
+  Phase 10 (`docs/NET.md`), Milestones 78–85. USB landed as Phase 13
+  (`docs/USB.md`), Milestones 86–88. The `v1.0` tag waits on a KVM
+  pass. RustPython landed as Phase 14 (`docs/PYTHON.md`),
   Milestones 91–96. `cargo run` carries `python` when the ELF was
   built. It adds no device and no syscall. The device inventory
   is `docs/DEVICES.md`.

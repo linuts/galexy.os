@@ -315,11 +315,11 @@ API beside it.
 
 ## After this phase
 
-USB is Phase 13 (`docs/USB.md`), Milestones **86–88**, after this
-phase and before the `v1.0` tag. That phase sees devices and locks
-the driver table. It does not implement vendor drivers, and it does
-not carry IP. A future NIC that is not virtio delivers Ethernet
-frames to this service. It does not grow its own stack.
+USB landed as Phase 13 (`docs/USB.md`), Milestones **86–88**.
+That phase sees devices and locks the driver table. It does not
+implement vendor drivers, and it does not carry IP. A future NIC
+that is not virtio delivers Ethernet frames to this service. It
+does not grow its own stack. The `v1.0` tag waits on a KVM pass.
 
 RustPython landed as Phase 14 (`docs/PYTHON.md`), Milestones
 **91–96**. It sits beside this phase. Its `socket` module stays

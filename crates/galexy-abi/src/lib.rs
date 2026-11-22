@@ -273,6 +273,31 @@ pub mod reserved {
     pub const fn net(rights: super::CapRights) -> Cap {
         Cap::new(NET_INDEX, rights)
     }
+
+    /// The xHCI controller. `read` copies one device record. Only the
+    /// task named `usb` may use it. The kernel moves rings; it does not
+    /// match a driver.
+    ///
+    /// **Experimental** (Milestone 86).
+    pub const USB_INDEX: u64 = 0x800B;
+
+    /// The controller capability. Rights must include [`super::CapRights::READ`].
+    pub const fn usb(rights: super::CapRights) -> Cap {
+        Cap::new(USB_INDEX, rights)
+    }
+
+    /// The usb service control capability. `send` parks for a plain-text
+    /// reply. The kernel stamps the same [`INIT_RPC_HDR`] header it stamps
+    /// for init. Opcode [`USB_OP_LIST`] lists devices. A logged-out task
+    /// is `AccessDenied`.
+    ///
+    /// **Experimental** (Milestone 87).
+    pub const USB_CTRL_INDEX: u64 = 0x800C;
+
+    /// The usb control capability. Rights must include [`super::CapRights::WRITE`].
+    pub const fn usb_ctrl(rights: super::CapRights) -> Cap {
+        Cap::new(USB_CTRL_INDEX, rights)
+    }
 }
 
 /// `power` operand: turn the machine off (ACPI S5).
@@ -946,6 +971,10 @@ pub const NET_OP_GRANT: u8 = 4;
 pub const NET_OP_REVOKE: u8 = 5;
 /// Net control: attach a gate for a name to the calling task. Admin only.
 pub const NET_OP_SERVE: u8 = 6;
+
+/// USB control: list enumerated devices, one per line. The reply is
+/// plain text. It does not begin with a lane capability.
+pub const USB_OP_LIST: u8 = 1;
 
 /// Live lanes the kernel will hold (Milestone 82).
 pub const LANE_SLOTS: usize = 32;

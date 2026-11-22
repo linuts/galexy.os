@@ -155,6 +155,22 @@ pub fn current_is_net() -> bool {
     })
 }
 
+/// True when the running task is the USB service.
+///
+/// Its console writes are serial-only, same as `net`.
+pub fn current_is_usb() -> bool {
+    let slot = current_slot();
+    if slot == 0 {
+        return false;
+    }
+    interrupts::without_interrupts(|| {
+        THREADS
+            .lock()
+            .get(slot - 1)
+            .is_some_and(|thread| thread.name() == "usb")
+    })
+}
+
 /// Wakes `net` out of `sleep` when a frame or a control message arrives.
 pub fn wake_net() {
     interrupts::without_interrupts(|| {
@@ -168,6 +184,30 @@ pub fn wake_net() {
 /// else stays parked.
 pub(in crate::sched) fn wake_net_for_control(threads: &mut [Thread]) {
     let Some(index) = threads.iter().position(|t| t.name() == "net") else {
+        return;
+    };
+    if threads[index].state.load(Ordering::Acquire) != STATE_WAITING {
+        return;
+    }
+    if threads[index].sleep_deadline.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    clear_wait_fields(&threads[index]);
+    stamp_waiter_frame(&threads[index], SyscallResult::err(SysError::Interrupted));
+    set_running(&threads[index]);
+}
+
+/// Wakes `usb` out of `sleep` when the controller or a control message arrives.
+pub fn wake_usb() {
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        wake_usb_for_control(&mut threads);
+    });
+}
+
+/// Caller holds [`THREADS`]. A sleeping `usb` is `Interrupted`.
+pub(in crate::sched) fn wake_usb_for_control(threads: &mut [Thread]) {
+    let Some(index) = threads.iter().position(|t| t.name() == "usb") else {
         return;
     };
     if threads[index].state.load(Ordering::Acquire) != STATE_WAITING {
@@ -749,6 +789,10 @@ pub(crate) fn task_sleep(ms: u64) -> Result<(), SysError> {
         if thread.name() == "net" && (crate::drivers::virtio_net::has_rx() || net_ctrl_queued()) {
             return Err(SysError::Interrupted);
         }
+        if thread.name() == "usb" && (crate::drivers::usb::xhci::has_record() || usb_ctrl_queued())
+        {
+            return Err(SysError::Interrupted);
+        }
         thread.wait_child_slot.store(0, Ordering::Relaxed);
         thread
             .wait_proc_index
@@ -775,6 +819,15 @@ pub(in crate::sched) fn init_ctrl_queued() -> bool {
 /// True when `net`'s control channel already holds a message for end 0.
 fn net_ctrl_queued() -> bool {
     let id = NET_CTRL.load(Ordering::Acquire);
+    if id == 0xFF {
+        return false;
+    }
+    channel::queued_for(id, 0)
+}
+
+/// True when `usb`'s control channel already holds a message for end 0.
+fn usb_ctrl_queued() -> bool {
+    let id = USB_CTRL.load(Ordering::Acquire);
     if id == 0xFF {
         return false;
     }
@@ -958,6 +1011,8 @@ pub(in crate::sched) const IO_NET_RPC: u8 = 8;
 pub(in crate::sched) const IO_LANE_READ: u8 = 9;
 /// Lane `write` parked on a full direction.
 pub(in crate::sched) const IO_LANE_WRITE: u8 = 10;
+/// USB control `send` parked until `usb` replies.
+pub(in crate::sched) const IO_USB_RPC: u8 = 11;
 
 pub(in crate::sched) fn clear_wait_fields(thread: &Thread) {
     thread.wait_child_slot.store(0, Ordering::Relaxed);

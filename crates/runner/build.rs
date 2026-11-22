@@ -1055,7 +1055,15 @@ fn ramdisk_entry_name(name: &str) -> String {
 }
 
 /// `no_std` programs built with `-Zbuild-std=core,alloc`.
-const NOSTD_PACKAGES: [&str; 6] = ["hello", "init", "shell", "util", "threadtest", "gxldos"];
+const NOSTD_PACKAGES: [&str; 7] = [
+    "hello",
+    "init",
+    "shell",
+    "util",
+    "threadtest",
+    "gxldos",
+    "usb",
+];
 /// `std` programs built with `-Zbuild-std=std,panic_abort` on the Galexy
 /// PAL overlay. They share one target dir (one std build), separate from
 /// the `no_std` one.

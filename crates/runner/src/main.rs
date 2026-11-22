@@ -124,6 +124,8 @@ fn main() {
             .arg("user,id=net0")
             .arg("-device")
             .arg("virtio-net-pci,netdev=net0,disable-legacy=on,mac=52:54:00:12:34:56");
+        cmd.arg("-device").arg("qemu-xhci,id=xhci");
+        cmd.arg("-device").arg("usb-kbd,bus=xhci.0");
     }
     // SMP: 2 cores, exposed by the per-CPU substrate (gs:[8] syscall path,
     // per-CPU GDT/TSS). KVM + `-cpu host` when a vCPU can be created,
