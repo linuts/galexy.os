@@ -105,7 +105,8 @@ is claimed as covered.
 
 | Gap | Today | Milestone |
 | --- | --- | --- |
-| KVM numbers, timing | the suite and `test-bench` run on the release image (`opt-level = 3`, fat LTO) under TCG; `docs/PERF.md` holds the TCG cells and loose KVM ceilings. The landing host opens `/dev/kvm` but `KVM_CREATE_VCPU` faults (`VMCLEAR` after a snapshot restore dropped VMXON), so the KVM cells stay empty until a host where the probe succeeds runs `bench_test_passes`; side-channel timing has not been looked at | **64** (release done), v1.0 gate for KVM |
+| KVM numbers, timing | the suite and `test-bench` run on the release image (`opt-level = 3`, fat LTO) under TCG; `docs/PERF.md` holds the TCG cells and loose KVM ceilings. The landing host opens `/dev/kvm` but `KVM_CREATE_VCPU` faults (`VMCLEAR` after a snapshot restore dropped VMXON), so the KVM cells stay empty until a host where the probe succeeds runs `bench_test_passes`; side-channel timing has not been looked at | **64** (release done), v1.0 gate for KVM. The real-network plan does not fill these cells |
+| Reach past the QEMU gateway, inbound from outside, SSH | a dial is a granted name with a literal locator, usually `10.0.2.2`. A name with no locator fails closed. `serve` attaches a gate and does not hand off the next lane. Nothing answers SSH | **110–117**, not started. Plaintext DNS, a second stack, raw sockets, and a crates.io SSH library stay out. The plan does not tag `v1.0` |
 | fsck repair of anything but a bad share | host `fsck --repair` clears a share that names a missing actor, an empty object, or no rights, and seals that into the other slot (Milestone 101). A cycle, a missing block, or a missing admin is still "pick the other slot" | no owner |
 
 ## Review log
@@ -129,9 +130,9 @@ Written down so the review is about what is here. Each has a reason;
 
 | Non-goal | Rationale |
 | --- | --- |
-| **Lane, not a socket** | Phase 10 has landed (Milestones 78–85, `NET.md`). Applications hold a lane Cap. There is no `socket` and no `std::net`. A6 above is the remote peer. The `v1.0` tag waits on a KVM pass |
+| **Lane, not a socket** | Phase 10 has landed (Milestones 78–85, `NET.md`). Applications hold a lane Cap. There is no socket syscall and no ambient `std::net` today. Milestones 108–109 keep `connect` as a name that dials a lane. A passed IP, `bind`, `listen`, and UDP do not exist until 112–116 grant that card. A6 above is the remote peer the current tests cover. Reach past `10.0.2.2` is the open row above. The `v1.0` tag waits on a KVM pass and is not applied by that plan |
 | **USB lists devices** | Phase 13 has landed (Milestones 86–88, `USB.md`). xHCI enumerates, `usb list` prints the row, and the driver table ships empty. Vendor drivers stay unwritten. A7 above is the hostile descriptor. The `v1.0` tag waits on a KVM pass |
-| **Python stays ring 3** | a seat runs `python` with that seat's tokens. Phase 14 has landed (Milestones 91–96, `PYTHON.md`). It adds no syscall. `socket`, `pip`, and `subprocess` stay out |
+| **Python stays ring 3** | a seat runs `python` with that seat's tokens. Phase 14 has landed (Milestones 91–96, `PYTHON.md`). It adds no syscall. `socket.connect` is Milestone 109 and is still open. `bind`, `listen`, and UDP stay refused until 114–116. `pip` and `subprocess` stay out |
 | **No GPU / multi-framebuffer** | the console is a text grid on the bootloader's GOP framebuffer; a second display adds device code with no security content |
 | **No POSIX compatibility claim** | the ABI is Caps and `SysError`, not fds, `errno`, signals, or `waitpid`; claiming POSIX would import its ambient-authority model (`PROCESS.md` → Why not PIDs) |
 | **No ambient process namespace** | there is no kill / wait / open by a guessed global integer; you hold a Cap or you do not. This is the point of the design, not a missing feature |

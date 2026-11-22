@@ -1161,10 +1161,30 @@ no socket syscall and no second stack. The PAL does not parse
 TCP, and rustls stays in `net`.
 
 This is not a Berkeley socket. `bind`, `listen`, UDP,
-`setsockopt`, and any call that passes an IP or a port stay
-unsupported. The boxes in `TODO.md` stay open until a run shows
-the ask and the dial. Milestone 103's `ImportError` assertion is
-not edited before that box is checked.
+`setsockopt`, and any call that passes an IP or a port are not
+part of these two milestones. They do not exist yet. The boxes
+in `TODO.md` stay open until a run shows the ask and the dial.
+Milestone 103's `ImportError` assertion is not edited before
+that box is checked. Reaching a host past `10.0.2.2` is
+Milestone 111.
+
+### A real network (Milestones 110–117)
+
+`net` resolves a name over TLS and dials the address that comes
+back. The destination is not the QEMU user gateway `10.0.2.2`.
+virtio-net stays the device. `net` stays the only packet stack.
+Outbound TCP and TLS stay inside `net`. The PAL does not parse
+TCP. A path or an address is not authority. The card is. Read
+dials. Write accepts. Logged-out is denied. A grant from the
+ask lasts for that run.
+
+A passed IP, a passed port, `bind`, `listen`, and UDP stay
+refused until Milestones 112–116 grant that exact card. None of
+those calls exist today. `setsockopt` stays refused. Inbound
+from outside stays closed until a write card is held and
+Milestone 83 hands the lane to that one listener. SSH is
+Milestone 117, after that stack: one ring-3 Rust service,
+`/card/ssh`, no new syscall. The `v1.0` tag is not applied here.
 
 ### Memory policy (Milestone 48)
 
