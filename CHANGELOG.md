@@ -8,7 +8,7 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Milestones 101–103 — `galfs-fsck --repair` seals a corrected share
+- [#157](https://github.com/linuts/galexy.os/pull/157) — Milestones 101–103 — `galfs-fsck --repair` seals a corrected share
   table into the other metadata slot. A USB boot keyboard
   (`hid_kbd`) types when the driver table claims it. `import lane`
   dials a granted name. `socket` stays off the allow-list. There is
