@@ -8,7 +8,7 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Milestones 104–107 — `test-cpus` boots at `-smp 4` and `-smp 8`
+- [#160](https://github.com/linuts/galexy.os/pull/160) — Milestones 104–107 — `test-cpus` boots at `-smp 4` and `-smp 8`
   (`online=4`, `online=8`; the suite stays at 2). A network name
   and a listed USB port are galfs cards. Dial, ping, and accept
   with no card do not open TCP. `usb list` without the card is
