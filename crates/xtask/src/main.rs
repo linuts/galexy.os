@@ -752,7 +752,7 @@ mod python_allow {
     fn allow_list_covers_frozen_and_blocks_the_rest() {
         let allow = names(&root().join("scripts/python-allow.txt"));
         let frozen = names(&root().join("scripts/python-frozen.txt"));
-        for name in ["builtins", "sys", "io"] {
+        for name in ["builtins", "sys", "io", "lane"] {
             assert!(allow.contains(name), "{name} starts the allow-list");
         }
         let extra: Vec<_> = frozen.difference(&allow).cloned().collect();

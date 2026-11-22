@@ -143,17 +143,19 @@ index 0000000..af84f05
 +workspace = true
 diff --git a/crates/galexy-python/allow.txt b/crates/galexy-python/allow.txt
 new file mode 100644
-index 0000000..652cd72
+index 0000000..bf65652
 --- /dev/null
 +++ b/crates/galexy-python/allow.txt
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,48 @@
 +# Modules a Galexy Python program may import.
-+# The first three are the public surface. The rest are the VM's own
++# The first four are the public surface. The rest are the VM's own
 +# frozen and builtin modules at the pin in scripts/rustpython.rev.
 +# socket, ssl, pip, venv, subprocess, ctypes, sqlite3, and os are absent.
++# `lane` is the dial in Milestone 103. It is not a frozen module.
 +builtins
 +sys
 +io
++lane
 +__hello__
 +__hello_alias__
 +__phello_alias__
@@ -195,10 +197,10 @@ index 0000000..652cd72
 +time
 diff --git a/crates/galexy-python/src/main.rs b/crates/galexy-python/src/main.rs
 new file mode 100644
-index 0000000..7d72cf0
+index 0000000..7cc717f
 --- /dev/null
 +++ b/crates/galexy-python/src/main.rs
-@@ -0,0 +1,258 @@
+@@ -0,0 +1,403 @@
 +//! Run one Python file on the Galexy RustPython VM.
 +//!
 +//! `python PATH` reads the file and executes it with builtins and `sys`.
@@ -294,6 +296,7 @@ index 0000000..7d72cf0
 +    let interp = Interpreter::without_stdlib(settings);
 +    let mut status = 0;
 +    interp.enter(|vm| {
++        install_lane(vm);
 +        let scope = vm.new_scope_with_builtins();
 +        let prelude = allow_prelude();
 +        if let Err(exc) = run(vm, &prelude, scope.clone(), "<galexy>") {
@@ -319,6 +322,7 @@ index 0000000..7d72cf0
 +    let interp = Interpreter::without_stdlib(settings);
 +    let mut status = 0;
 +    interp.enter(|vm| {
++        install_lane(vm);
 +        let scope = vm.new_scope_with_builtins();
 +        let prelude = allow_prelude();
 +        if let Err(exc) = run(vm, &prelude, scope.clone(), "<galexy>") {
@@ -456,6 +460,149 @@ index 0000000..7d72cf0
 +         import _io as io\n\
 +         _sys.modules['io'] = io\n"
 +    )
++}
++
++/// `import lane` then `lane.read(name)`. The name is the same directory
++/// entry `fetch` dials. The body is the lane's bytes. There is no socket.
++fn install_lane(vm: &VirtualMachine) {
++    let module = vm.new_module("lane", vm.ctx.new_dict(), None);
++    let func = vm.new_function("read", lane_read);
++    if module.set_attr("read", func, vm).is_err() {
++        return;
++    }
++    let Ok(modules) = vm.sys_module.get_attr("modules", vm) else {
++        return;
++    };
++    let _ = modules.set_item("lane", module.into(), vm);
++}
++
++fn lane_read(
++    name: rustpython_vm::builtins::PyStrRef,
++    vm: &VirtualMachine,
++) -> rustpython_vm::PyResult<rustpython_vm::builtins::PyStrRef> {
++    #[cfg(not(target_os = "galexy"))]
++    {
++        let _ = name;
++        return Err(vm.new_os_error("lane is only available on galexy"));
++    }
++    #[cfg(target_os = "galexy")]
++    {
++        match lane_body(name.as_str()) {
++            Ok(text) => Ok(vm.ctx.new_str(text)),
++            Err(msg) => Err(vm.new_os_error(msg.to_string())),
++        }
++    }
++}
++
++/// Dial `name` and read the lane to EOF. Syscall numbers match `galexy-abi`:
++/// User 16, Send 29, Read 5, Close 6. Net index `0x800A` with WRITE.
++#[cfg(target_os = "galexy")]
++fn lane_body(name: &str) -> Result<String, &'static str> {
++    if name.is_empty() || name.len() > 64 || name.bytes().any(|b| b < 0x21 || b > 0x7e) {
++        return Err("bad name");
++    }
++    let mut who = [0u8; 32];
++    let who_n = galexy_syscall3(16, who.as_mut_ptr() as u64, who.len() as u64, 0)? as usize;
++    let who_n = who_n.min(who.len());
++    let mut payload = [0u8; 96];
++    let name_b = name.as_bytes();
++    if name_b.len() + who_n + 3 > payload.len() {
++        return Err("bad name");
++    }
++    payload[0] = 2;
++    payload[1] = name_b.len() as u8;
++    payload[2..2 + name_b.len()].copy_from_slice(name_b);
++    let at = 2 + name_b.len();
++    payload[at] = who_n as u8;
++    payload[at + 1..at + 1 + who_n].copy_from_slice(&who[..who_n]);
++    let n = at + 1 + who_n;
++    let mut reply = [0u8; 256];
++    let net = 0x800A | (2u64 << 48);
++    let got = galexy_syscall5(
++        29,
++        net,
++        payload.as_ptr() as u64,
++        n as u64,
++        reply.as_mut_ptr() as u64,
++        reply.len() as u64,
++    )? as usize;
++    if got < 8 {
++        return Err("bad reply");
++    }
++    let lane = u64::from_le_bytes(reply[..8].try_into().unwrap_or([0; 8]));
++    if lane == 0 {
++        let text = std::str::from_utf8(&reply[8..got.min(reply.len())]).unwrap_or("");
++        return Err(if text.contains("denied") {
++            "access denied"
++        } else if text.contains("timed") {
++            "timed out"
++        } else {
++            "dial failed"
++        });
++    }
++    let mut body = Vec::new();
++    loop {
++        let mut buf = [0u8; 256];
++        let n = galexy_syscall3(5, lane, buf.as_mut_ptr() as u64, buf.len() as u64)? as usize;
++        if n == 0 {
++            break;
++        }
++        body.extend_from_slice(&buf[..n.min(buf.len())]);
++        if body.len() > 16 * 1024 {
++            break;
++        }
++    }
++    let _ = galexy_syscall3(6, lane, 0, 0);
++    Ok(String::from_utf8_lossy(&body).into_owned())
++}
++
++#[cfg(target_os = "galexy")]
++fn galexy_syscall3(number: u64, a0: u64, a1: u64, a2: u64) -> Result<u64, &'static str> {
++    let value: u64;
++    let ok: u64;
++    // SAFETY: the kernel syscall entry is uniform. rcx and r11 are clobbered.
++    unsafe {
++        core::arch::asm!(
++            "syscall",
++            inlateout("rax") number => value,
++            in("rdi") a0,
++            in("rsi") a1,
++            inlateout("rdx") a2 => ok,
++            lateout("rcx") _,
++            lateout("r11") _,
++            options(nostack),
++        );
++    }
++    if ok != 0 { Ok(value) } else { Err("syscall") }
++}
++
++#[cfg(target_os = "galexy")]
++fn galexy_syscall5(
++    number: u64,
++    a0: u64,
++    a1: u64,
++    a2: u64,
++    a3: u64,
++    a4: u64,
++) -> Result<u64, &'static str> {
++    let value: u64;
++    let ok: u64;
++    // SAFETY: same entry. r8 and r9 are the extra arguments Send uses.
++    unsafe {
++        core::arch::asm!(
++            "syscall",
++            inlateout("rax") number => value,
++            in("rdi") a0,
++            in("rsi") a1,
++            inlateout("rdx") a2 => ok,
++            in("r8") a3,
++            in("r9") a4,
++            lateout("rcx") _,
++            lateout("r11") _,
++            options(nostack),
++        );
++    }
++    if ok != 0 { Ok(value) } else { Err("syscall") }
 +}
 diff --git a/crates/host_env/Cargo.toml b/crates/host_env/Cargo.toml
 index 7f96342..0106bb1 100644

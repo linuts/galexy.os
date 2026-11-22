@@ -106,7 +106,7 @@ is claimed as covered.
 | Gap | Today | Milestone |
 | --- | --- | --- |
 | KVM numbers, timing | the suite and `test-bench` run on the release image (`opt-level = 3`, fat LTO) under TCG; `docs/PERF.md` holds the TCG cells and loose KVM ceilings. The landing host opens `/dev/kvm` but `KVM_CREATE_VCPU` faults (`VMCLEAR` after a snapshot restore dropped VMXON), so the KVM cells stay empty until a host where the probe succeeds runs `bench_test_passes`; side-channel timing has not been looked at | **64** (release done), v1.0 gate for KVM |
-| fsck repair into a new slot | host `fsck` detects; recovery is "pick the other slot" | GALFS follow-on |
+| fsck repair of anything but a bad share | host `fsck --repair` clears a share that names a missing actor, an empty object, or no rights, and seals that into the other slot (Milestone 101). A cycle, a missing block, or a missing admin is still "pick the other slot" | no owner |
 
 ## Review log
 

@@ -132,6 +132,13 @@ fn check(image: &[u8]) -> Report {
     report
 }
 
+fn report_of(image: &[u8]) -> Report {
+    let mut slot_buf = vec![0u8; SLOT_BYTES];
+    let mut best = Box::new(Table::empty());
+    let mut cand = Box::new(Table::empty());
+    check_image(image, PASS, &mut slot_buf, &mut best, &mut cand)
+}
+
 fn issues(report: &Report) -> Vec<Issue> {
     report.issues[..report.issue_count].to_vec()
 }
@@ -345,4 +352,84 @@ fn alternating_writes_never_move_the_chosen_generation_backwards() {
             slot = report.slot.expect("slot") as usize ^ 1;
         }
     }
+}
+
+fn bad_share(table: &mut Table) {
+    table.shares[0].used = true;
+    table.shares[0].rights = 1;
+    table.shares[0].grantee = 0;
+    table.shares[0].object = 5;
+}
+
+#[test]
+fn repair_writes_a_new_slot_and_leaves_the_old_one() {
+    let mut rng = Rng(0x5EED_0101);
+    let mut table = minimal_table();
+    bad_share(&mut table);
+    let mut image = vec![0u8; image_bytes(4)];
+    write_slot(&mut image, 0, 4, &mut rng);
+    // write_slot rebuilds a clean table. Plant the bad share in the slot
+    // the checker will open, using the same volume key.
+    let mut planted = table_at(4);
+    bad_share(&mut planted);
+    let flat = &mut image[..SLOT_BYTES];
+    assert!(encode_slot(&planted, 4, PASS, &VK, &rng.nonces(), flat));
+    write_inode_region(&mut image, &planted);
+    let before = report_of(&image);
+    assert_eq!(issues(&before), vec![Issue::BadShare { share: 0 }]);
+
+    let mut slot_buf = vec![0u8; SLOT_BYTES];
+    let mut best = Box::new(Table::empty());
+    let mut cand = Box::new(Table::empty());
+    let repaired = repair_image(
+        &mut image,
+        PASS,
+        &rng.nonces(),
+        &mut slot_buf,
+        &mut best,
+        &mut cand,
+    )
+    .expect("bad share is repairable");
+    let repaired = repaired.expect("a new slot was written");
+    assert_eq!(repaired.slot, 1);
+    assert_eq!(repaired.generation, 5);
+    assert_eq!(repaired.cleared_shares, 1);
+    let after = report_of(&image);
+    assert!(after.ok, "{:?}", issues(&after));
+    assert_eq!(after.slot, Some(1));
+    assert_eq!(after.generation, Some(5));
+    assert!(!best.shares[0].used);
+
+    // A torn new slot falls back to the unrepaired generation.
+    image[SLOT_BYTES + 24] ^= 0xff;
+    let torn = report_of(&image);
+    assert_eq!(torn.slot, Some(0));
+    assert_eq!(torn.generation, Some(4));
+    assert_eq!(issues(&torn), vec![Issue::BadShare { share: 0 }]);
+}
+
+#[test]
+fn repair_refuses_a_broken_tree() {
+    let mut rng = Rng(0x5EED_0102);
+    let mut table = minimal_table();
+    table.objects[0].kind = 9;
+    let mut image = vec![0u8; image_bytes(4)];
+    let flat = &mut image[..SLOT_BYTES];
+    assert!(encode_slot(&table, 3, PASS, &VK, &rng.nonces(), flat));
+    write_inode_region(&mut image, &table);
+    let before = image.clone();
+    let mut slot_buf = vec![0u8; SLOT_BYTES];
+    let mut best = Box::new(Table::empty());
+    let mut cand = Box::new(Table::empty());
+    let err = repair_image(
+        &mut image,
+        PASS,
+        &rng.nonces(),
+        &mut slot_buf,
+        &mut best,
+        &mut cand,
+    )
+    .expect_err("a bad object kind is not a share");
+    assert_eq!(err, RepairStop::Unrepairable);
+    assert_eq!(image, before);
 }

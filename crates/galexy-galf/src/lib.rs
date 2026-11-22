@@ -406,6 +406,172 @@ pub fn check_image(
     report
 }
 
+/// What [`repair_image`] did to the inactive slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Repair {
+    /// Slot that now holds the corrected metadata.
+    pub slot: u32,
+    /// Generation sealed into that slot. It is one past the slot that was read.
+    pub generation: u64,
+    /// Share rows cleared. File bytes and inode blocks are not rewritten.
+    pub cleared_shares: u16,
+}
+
+/// Why [`repair_image`] left the image as it was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepairStop {
+    /// Neither slot decoded.
+    NoValidSlot,
+    /// A current-version slot was present and neither slot decoded.
+    BothSlotsCorrupt,
+    /// The newest slot has a problem this repair does not touch.
+    Unrepairable,
+    /// The corrected slot could not be sealed.
+    Encode,
+}
+
+/// Clears bad share rows and seals the result into the other metadata slot.
+///
+/// A bad share names a missing actor, an empty object, or no rights. The
+/// previous slot stays. A torn copy of the new slot fails to decode, so
+/// the next check still selects the older generation. Any other issue
+/// (a cycle, a missing block, a missing admin) is left in place: this
+/// function does not invent a tree or file bytes.
+///
+/// `Ok(None)` means the newest slot was already clean and nothing was written.
+pub fn repair_image(
+    image: &mut [u8],
+    passphrase: &[u8],
+    nonces: &SealNonces,
+    slot_buf: &mut [u8],
+    best: &mut Table,
+    cand: &mut Table,
+) -> Result<Option<Repair>, RepairStop> {
+    let slot_len = DISK_SECTORS * SECTOR;
+    if image.len() < DISK_SLOT_COUNT * slot_len || slot_buf.len() < slot_len {
+        return Err(RepairStop::NoValidSlot);
+    }
+    let scratch = &mut slot_buf[..slot_len];
+    let mut best_gen = 0u64;
+    let mut best_slot: Option<u32> = None;
+    let mut best_key = [0u8; KEY_LEN];
+    let mut saw_corrupt_current = false;
+
+    for slot in 0..DISK_SLOT_COUNT as u32 {
+        let off = slot as usize * slot_len;
+        scratch.copy_from_slice(&image[off..off + slot_len]);
+        let magic = scratch[0..4] == DISK_MAGIC;
+        let version = if magic {
+            u16::from_le_bytes([scratch[4], scratch[5]])
+        } else {
+            0
+        };
+        if magic && version != DISK_VERSION {
+            continue;
+        }
+        match decode_slot(scratch, passphrase, cand) {
+            Some(decoded) => {
+                let inodes_ok = load_inodes(image, cand, &decoded.volume_key);
+                let blocks_ok = inodes_ok && verify_data_blocks(image, cand, &decoded.volume_key);
+                if !blocks_ok {
+                    let mut key = decoded.volume_key;
+                    wipe_bytes(&mut key);
+                    saw_corrupt_current = true;
+                    continue;
+                }
+                if best_slot.is_none() || decoded.generation >= best_gen {
+                    wipe_bytes(&mut best_key);
+                    best_gen = decoded.generation;
+                    best_slot = Some(slot);
+                    best_key = decoded.volume_key;
+                    copy_table(cand, best);
+                } else {
+                    let mut key = decoded.volume_key;
+                    wipe_bytes(&mut key);
+                }
+            }
+            None => {
+                if magic && version == DISK_VERSION {
+                    saw_corrupt_current = true;
+                }
+            }
+        }
+    }
+
+    let Some(slot) = best_slot else {
+        wipe_bytes(&mut best_key);
+        return Err(if saw_corrupt_current {
+            RepairStop::BothSlotsCorrupt
+        } else {
+            RepairStop::NoValidSlot
+        });
+    };
+
+    let mut report = Report {
+        ok: true,
+        slot: Some(slot),
+        generation: Some(best_gen),
+        issue_count: 0,
+        issues: [Issue::NoValidSlot; MAX_ISSUES],
+    };
+    collect_issues(best, &mut report);
+    if report.issue_count == 0 {
+        wipe_bytes(&mut best_key);
+        return Ok(None);
+    }
+    let only_shares = report.issues[..report.issue_count]
+        .iter()
+        .all(|issue| matches!(issue, Issue::BadShare { .. }));
+    if !only_shares {
+        wipe_bytes(&mut best_key);
+        return Err(RepairStop::Unrepairable);
+    }
+
+    let mut bad = [false; SHARE_SLOTS];
+    for (i, share) in best.shares.iter().enumerate() {
+        bad[i] = share_is_bad(best, share);
+    }
+    let mut cleared = 0u16;
+    for (share, drop) in best.shares.iter_mut().zip(bad) {
+        if drop {
+            *share = Share::empty();
+            cleared = cleared.saturating_add(1);
+        }
+    }
+    if cleared == 0 || !table_ok(best) {
+        wipe_bytes(&mut best_key);
+        return Err(RepairStop::Unrepairable);
+    }
+    let Some(generation) = best_gen.checked_add(1) else {
+        wipe_bytes(&mut best_key);
+        return Err(RepairStop::Encode);
+    };
+    let flat = &mut slot_buf[..slot_len];
+    if !encode_slot(best, generation, passphrase, &best_key, nonces, flat) {
+        wipe_bytes(&mut best_key);
+        return Err(RepairStop::Encode);
+    }
+    wipe_bytes(&mut best_key);
+    let dest = (slot ^ 1) as usize * slot_len;
+    image[dest..dest + slot_len].copy_from_slice(&flat[..slot_len]);
+    Ok(Some(Repair {
+        slot: slot ^ 1,
+        generation,
+        cleared_shares: cleared,
+    }))
+}
+
+fn share_is_bad(table: &Table, share: &Share) -> bool {
+    if !share.used {
+        return false;
+    }
+    share.rights == 0
+        || share.grantee as usize >= ACTOR_SLOTS
+        || !table.actors[share.grantee as usize].used
+        || share.object as usize >= table.objects.len()
+        || table.objects[share.object as usize].kind == KIND_EMPTY
+}
+
 fn copy_table(src: &Table, dst: &mut Table) {
     dst.actors = src.actors;
     dst.shares = src.shares;
@@ -807,15 +973,7 @@ fn collect_issues(table: &Table, report: &mut Report) {
     }
 
     for (si, share) in table.shares.iter().enumerate() {
-        if !share.used {
-            continue;
-        }
-        if share.rights == 0
-            || share.grantee as usize >= ACTOR_SLOTS
-            || !table.actors[share.grantee as usize].used
-            || share.object as usize >= table.objects.len()
-            || table.objects[share.object as usize].kind == KIND_EMPTY
-        {
+        if share_is_bad(table, share) {
             report.push(Issue::BadShare { share: si as u16 });
         }
     }

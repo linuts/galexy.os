@@ -2999,6 +2999,82 @@ language server stay off the image.
       help, go to definition across files, and running an external
       language server
 
+## Milestone 101 — Repair a bad share into the other slot
+
+Host `galfs-fsck` already reports a share that names a missing
+actor, an empty object, or no rights. Recovery was "keep the other
+slot." This milestone writes a corrected copy into the inactive
+slot. The previous slot stays, so a torn write of the new one still
+decodes as the older generation.
+
+- [x] **Only bad shares**: `repair_image` clears those rows and
+      seals generation+1 into the other slot. A cycle, a bad kind,
+      a missing block, a missing admin, or two corrupt slots is
+      `RepairStop::Unrepairable` and the file is not written.
+      `Ok(None)` means the newest slot was already clean
+- [x] **The tool**: `galfs-fsck <img> --repair` rewrites the image
+      and prints `repaired slot {} generation {} cleared {}`. The
+      volume key is wiped after the seal. Nonces for the new slot
+      are public; the existing key stays wrapped under the
+      passphrase
+- [x] **Proof**: `repair_writes_a_new_slot_and_leaves_the_old_one`
+      plants a share on an empty object, checks the new slot, then
+      tears that slot and sees the old generation win.
+      `repair_refuses_a_broken_tree` leaves the image unchanged
+- [x] **Out of this milestone**: rewriting inode blocks, orphan
+      files, or a second indirect block. Object `len` is already
+      `u64`
+
+## Milestone 102 — USB boot keyboard
+
+The bus already lists the QEMU keyboard (`0627:0001`). The driver
+table was empty, so keys stayed on virtio-input and PS/2. This
+milestone is one boot-protocol driver. A different device is listed
+and not claimed.
+
+- [x] **One row**: class 3, subclass 1, protocol 1.
+      `crates/userspace/usb/src/drivers/hid_kbd.rs` is the only
+      module. `docs/DEVICES.md` names it. The tablet
+      (`0627:0001`, protocol 0) stays unclaimed
+- [x] **Arm**: the service writes one byte, the port, on Cap
+      `0x800B` before it prints the list line. The kernel checks
+      the stored configuration again. `SET_CONFIGURATION` and
+      Configure Endpoint must succeed. `SET_PROTOCOL` and
+      `SET_IDLE` are attempted and ignored if the device refuses
+- [x] **Keys**: an interrupt IN on endpoint 1. Newly pressed
+      usages become keystrokes, including Ctrl-C. The report is
+      compared with the previous one so a held key is not repeated
+      every poll
+- [x] **Proof**: `usb_list_shows_the_keyboard` attaches the
+      keyboard and a tablet, with virtio-input and the i8042 off,
+      so the login keystrokes after `0627:0001` come from usb-kbd.
+      The serial has `claimed hid-kbd`, `unclaimed`, and
+      `[xhci] hid armed`. `usb_test_passes` still exits success
+      with the tablet on the bus
+- [x] **Out of this milestone**: a USB mouse, a hub, and any NIC.
+      The e1000e and CDC-NCM rows stay unwritten
+
+## Milestone 103 — Python reads a lane
+
+`fetch` already dials a granted name. A Python program can do the
+same call. `socket` stays off the allow-list. There is no new
+syscall.
+
+- [ ] **`import lane`**: `lane.read(name)` is dial opcode 2 on Cap
+      `0x800A`. The reply's first eight bytes are the lane. The
+      function reads that lane to EOF and closes it. The actor is
+      `whoami`. A missing grant is `OSError`
+- [ ] **Allow-list**: `lane` is a line in `scripts/python-allow.txt`.
+      `socket` is still absent. The host test
+      `python_allow::allow_list_covers_frozen_and_blocks_the_rest`
+      checks both
+- [ ] **Proof**: `python_lane_typing_e2e` grants `echo`, runs
+      `print(lane.read("echo"))`, and expects `lane ok`. A second
+      program `import socket` exits with `ImportError`. The test
+      skips when `target/galexy-python/python` was not built.
+      This host has no `galexy` toolchain, so the box stays open
+      until that boot is run
+
 ---
 
 ## Known limitations / follow-ups

@@ -270,8 +270,9 @@ checklist). Style: `docs/STYLE.md`.
    wipe on last logout / power. Poly1305 waived (HMAC tag stays)
 3. **45 galfs for real usage** ✅ — extents/capacity, rename/truncate/stat,
    sync/refuse-format, quotas, host fsck, durable shares, single-indirect,
-   crash injection, ATA I/O errors. Double-indirect and fsck
-   repair-into-new-slot stay follow-ons
+   crash injection, ATA I/O errors. Milestone 101 repairs a bad
+   share into the other slot. Object `len` is `u64`; a second
+   indirect block is not scheduled
 4. **46 Storage stack** ✅ — BlockDevice, ATA capacity, flush matrix,
    virtio-blk (legacy), partition offset. Modern virtio landed in
    Milestone 65

@@ -209,13 +209,17 @@ pub fn attach_user_net(cmd: &mut Command) {
         .arg("virtio-net-pci,netdev=net0,disable-legacy=on,mac=52:54:00:12:34:56");
 }
 
-/// qemu-xhci plus one USB keyboard. Not attached to the rest of the suite:
-/// those boots must keep the same PCI set they already assert.
+/// qemu-xhci, one USB keyboard, and one USB tablet. Not attached to the
+/// rest of the suite: those boots must keep the same PCI set they already
+/// assert. The tablet is a different HID protocol so the keyboard row
+/// must leave it unclaimed.
 pub fn attach_xhci(cmd: &mut Command) {
     cmd.arg("-device")
         .arg("qemu-xhci,id=xhci")
         .arg("-device")
-        .arg("usb-kbd,bus=xhci.0");
+        .arg("usb-kbd,bus=xhci.0")
+        .arg("-device")
+        .arg("usb-tablet,bus=xhci.0");
 }
 
 /// QEMU `-drive` `cache=` mode for the galfs data disk.
@@ -570,7 +574,7 @@ fn boot_once_with_galfs(
     if let Some(mut stderr) = child.stderr.take() {
         let _ = stderr.read_to_string(&mut qemu_err);
     }
-    let serial = std::fs::read_to_string(&serial_path).unwrap_or_default();
+    let serial = std::fs::read_to_string(serial_path).unwrap_or_default();
     let serial = if serial.is_empty() && code.is_none() {
         format!("(qemu stderr: {qemu_err})")
     } else {
@@ -626,7 +630,7 @@ pub fn boot_with_galfs_crash(image: &Image) -> (String, Option<i32>, String) {
             }
         }
     }
-    let serial1 = std::fs::read_to_string(&serial_path).unwrap_or_default();
+    let serial1 = std::fs::read_to_string(serial_path).unwrap_or_default();
     let (code2, serial2) = boot_once_with_galfs(
         &image.bios,
         &galfs_path,
@@ -727,7 +731,7 @@ fn run_qemu(mut cmd: Command, serial_path: &Path, timeout: Duration) -> (Option<
         let _ = stderr.read_to_string(&mut qemu_err);
     }
 
-    let serial = std::fs::read_to_string(&serial_path).unwrap_or_default();
+    let serial = std::fs::read_to_string(serial_path).unwrap_or_default();
     let serial = if serial.is_empty() && code.is_none() {
         format!("(qemu stderr: {qemu_err})")
     } else {
@@ -791,7 +795,7 @@ pub fn boot_with_tpm(image: &Image) -> (Option<i32>, String) {
     let _ = swtpm.kill();
     let _ = swtpm.wait();
     let _ = std::fs::remove_dir_all(&dir);
-    let serial = std::fs::read_to_string(&serial_path).unwrap_or_default();
+    let serial = std::fs::read_to_string(serial_path).unwrap_or_default();
     (code, serial)
 }
 
@@ -1519,8 +1523,8 @@ fn boot_and_type_on(
     )
 }
 
-/// Like [`boot_and_type`], with qemu-xhci and a USB keyboard.
-/// Virtio-keyboard still carries the typed keys.
+/// Like [`boot_and_type`], with qemu-xhci, a USB keyboard, and a tablet.
+/// The virtio keyboard stays off so `sendkey` reaches only the USB keyboard.
 #[allow(clippy::too_many_arguments)]
 pub fn boot_and_type_usb(
     image: &Image,
@@ -1531,7 +1535,10 @@ pub fn boot_and_type_usb(
     timeout: Duration,
 ) -> String {
     let serial_path = serial_log_path("typing-usb");
-    let mut cmd = qemu_command_opts(&image.bios, &serial_path, "q35", true, true);
+    // No virtio keyboard and no i8042, so the monitor's keys arrive only
+    // through usb-kbd. The guest still falls through `keyboard::init`
+    // when virtio-input is absent; the controller reads return 0xff.
+    let mut cmd = qemu_command_opts(&image.bios, &serial_path, "q35,i8042=off", false, true);
     attach_xhci(&mut cmd);
     boot_and_type_cmd(
         cmd,

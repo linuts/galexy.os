@@ -8,6 +8,11 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- Milestones 101–103 — `galfs-fsck --repair` seals a corrected share
+  table into the other metadata slot. A USB boot keyboard
+  (`hid_kbd`) types when the driver table claims it. `import lane`
+  dials a granted name. `socket` stays off the allow-list. There is
+  no new syscall.
 - [#156](https://github.com/linuts/galexy.os/pull/156) — Milestones 97, 99, and 100 —
   one virtio request seals the 64 KiB slot, one desk compile names 41
   objects (GALF v17), and the editor lists completions while typing.

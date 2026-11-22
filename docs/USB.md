@@ -6,9 +6,9 @@ waits on a KVM pass. Checkboxes live in `TODO.md`. Phase 14
 
 virtio-net does not need this bus. Phase 10 talks to QEMU through
 `virtio-net-pci`. USB is for a device that is actually plugged in:
-a keyboard, a stick, a dongle. The first cut does not drive those.
-It sees them, and it locks the place a driver will live so the next
-one is not a special case.
+a keyboard, a stick, a dongle. Milestones 86–88 see the bus and lock
+the driver table. Milestone 102 is the boot keyboard. A stick and a
+dongle are still unwritten.
 
 ## What you can see
 
@@ -19,7 +19,7 @@ the controller enumerated, not a claim that a driver is attached.
 | --- | --- |
 | **Controller** | The one xHCI host on q35. A reserved Cap. The `usb` service is the only task that can touch the rings. |
 | **Device** | One enumerated function: bus address, vendor, product, class, subclass, protocol, and a short string. |
-| **Driver** | A Rust module named in the one driver table, matched by an ID from `docs/DEVICES.md`. Milestone 88 creates the table. It ships empty of vendor code. |
+| **Driver** | A Rust module named in the one driver table, matched by an ID from `docs/DEVICES.md`. Milestone 88 creates the table. Milestone 102 adds the boot keyboard. |
 | **Matrix** | `docs/DEVICES.md`. The list of devices we intend to support, the public document that defines each one, and the Linux driver we used as an index. |
 
 The service is a child of init, `restart`, autostart, same shape as
@@ -33,7 +33,7 @@ ceiling does not move.
 | Pasting a Linux driver into this tree | Linux drivers are GPL. This tree is MIT. The matrix names the Linux file as the index of what that driver supports. The Galexy module is new Rust, written from the public specification or the vendor's programming manual. |
 | Loading a Linux module, or a wrapper that calls one | A second kernel inside the kernel. The translation is a row in the matrix, not an ABI compatibility layer. |
 | A driver that is not in the table | One list, `crates/userspace/usb/src/drivers/mod.rs`. A module the list does not name is not a driver. A list line without a `DEVICES.md` row is not a driver either. |
-| Class match means "now type on every seat" | Enumeration prints a USB keyboard. It does not inject keys. virtio-input and PS/2 stay the keyboards until a later milestone says otherwise. |
+| Class match means "now type on every seat" | Only a boot keyboard the driver table claimed, and only after that service writes the port on `0x800B`, injects keys (Milestone 102). virtio-input and PS/2 stay available. A tablet is listed and not claimed. |
 | Parsing descriptors in the interrupt handler | The kernel moves transfer rings. The service interprets descriptors. A bad descriptor is `BadValue`, never a panic. |
 | IP on this bus in this phase | A USB Ethernet dongle is a matrix row with status `unwritten`. Frames, when a driver exists, are delivered to `net`. The dongle does not grow a second stack (`NET.md`). |
 
@@ -149,6 +149,25 @@ After Milestone 88, this is the only way in.
 6. Move the row to `landed` in the same change that checks the box.
    This file is the reading copy. The repo has no `wiki/` directory.
 
+### 102 Boot keyboard
+
+One driver: USB class 3, subclass 1, protocol 1. The module is
+`hid_kbd`. QEMU `usb-kbd` is `0627:0001`. The service writes the
+port as one byte on `0x800B` before it prints the list line. The
+kernel checks the stored configuration again, sends
+`SET_CONFIGURATION`, then Configure Endpoint for interrupt IN on
+endpoint 1. `SET_PROTOCOL` and `SET_IDLE` are attempted. A refusal
+there does not cancel the arm. Newly pressed usages are keystrokes.
+
+`usb-tablet` uses the same vendor and product and a different
+protocol. It is listed and prints `unclaimed`.
+
+Prove: `usb_list_shows_the_keyboard`. virtio-input and the i8042
+are off, so the login typed after `0627:0001` is this keyboard.
+The serial contains `claimed hid-kbd`, `unclaimed`, and
+`[xhci] hid armed`. `usb_test_passes` still passes with the tablet
+attached.
+
 A driver that skips the row does not build. The table is the list
 the service walks. There is nowhere else to register.
 
@@ -171,6 +190,7 @@ Same habit as `NET.md`.
 | Controller | `crates/galexy-os/src/drivers/usb/xhci.rs` |
 | Service | `crates/userspace/usb/` |
 | Driver table | `crates/userspace/usb/src/drivers/mod.rs` |
+| Boot keyboard | `crates/userspace/usb/src/drivers/hid_kbd.rs` |
 | Init row | `crates/userspace/init/src/main.rs` |
 | Inventory | `docs/DEVICES.md` |
 | Tests | `bin/test-usb`, a typed `list` against a known QEMU device |
