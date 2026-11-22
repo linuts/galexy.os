@@ -1238,7 +1238,7 @@ IRQ that already has IF=0) around the acquire.
 
 | Lock | May hold while taking | IRQ-gate |
 | --- | --- | --- |
-| `THREADS` | galfs `TABLE` (then large-file `STORE`), then `VOLUME_KEY`, then `VOLUME_PASS`, then `CHANS`. Snapshots still copy into fixed arrays and allocate after the drop. A galfs write may allocate the RAM large-file store while `THREADS` is held (Milestone 71): heap growth drops `INNER` before the shootdown, and every spin lock acks (`arch/mm/heap.rs`) | yes |
+| `THREADS` | galfs `TABLE` (then large-file `STORE`), then `VOLUME_KEY`, then `VOLUME_PASS`, then `CHANS`. A sleep of `net` may take virtio-net `RXQ` while `THREADS` is held. `task_lane` may take `LANES` while `THREADS` is held. Snapshots still copy into fixed arrays and allocate after the drop. A galfs write may allocate the RAM large-file store while `THREADS` is held (Milestone 71): heap growth drops `INNER` before the shootdown, and every spin lock acks (`arch/mm/heap.rs`) | yes |
 | galfs `TABLE` | large-file `STORE`; `DISK_BUF` only while encoding; `arch::rand` while sealing; not `THREADS`. The PBKDF2 for `login` / `passwd` / `useradd` runs before the lock is taken (`PasswordCred`) | yes. Syscalls arrive IF=0; the main-loop entries (`sync_to_disk`, `wipe_volume_key`, `seal_and_lock`) gate themselves — a preempted main-loop holder on the BSP deadlocked the shell's next galfs syscall on the same CPU (galexy.os#86) |
 | `arch::rand` | nothing else. Never takes `TABLE` | with the caller (`TABLE` may already be held inside `encode_table`) |
 | large-file `STORE` | nothing else. Never take `TABLE` or `THREADS` while holding it | with the caller (`TABLE`, already IF=0 on the syscall path) |
@@ -1247,6 +1247,8 @@ IRQ that already has IF=0) around the acquire.
 | Frame `USED` then `USABLE` | nothing else | yes |
 | Heap `INNER` | nothing else; growth drops it before shootdown. A second grower that lost the race polls `shootdown::service_pending()` while it waits and never re-enables IF (galexy.os#86) | yes |
 | `ATA` / virtio `DEV` then `DMA` | nothing else. The timer may take `DMA` alone to read `used.idx`; it never takes `DEV`. The waiter holds `DEV` across the halt and stays on that CPU (`xfer_wait_cpu`) so a same-CPU switch cannot spin on it | with the caller (syscall or BSP); `used.idx` disables interrupts around `DMA` |
+| virtio-net `RXQ`, then `RX_BUFS`, then `DEV` | `TXQ` only during probe, and both queues drop before `DEV`. `MAC` and `TX_HDR` are taken alone. The net IRQ acks the ISR, counts, and wakes `net`; it does not take these | with the caller. `THREADS` may already be held (`has_rx` from `task_sleep`) |
+| `LANES` | nothing else | yes. `task_lane`, lane read, and lane write take it after `THREADS` |
 | Screen `SCREEN` | `STATUS_TEXT`, then `MIRROR`, then `GRIDS` | BSP; IRQ handlers do not take it. COM1 receive records the host's row count in atomics and does not take these |
 | `STATUS_TEXT` | nothing else | with `SCREEN` |
 | `MIRROR` | `GRIDS` while a scroll frame is queued. `flush_serial_view` takes `MIRROR` alone and does not take `SCREEN` | queued inside the screen section; the UART wait is after that section |
