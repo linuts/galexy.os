@@ -374,6 +374,12 @@ crates/
   seal. The login table stays. Milestones 97–99. It can land beside
   Phase 13, and it does not gate `v1.0`. Plan:
   [`docs/GALFS.md`](docs/GALFS.md)
+- **Phase 16** — planned, not built. Prove the CPUs the kernel can
+  already start (up to 8; the suite still boots `-smp 2`). Gate the
+  network and USB with the same cards as storage. Rust and Python
+  ask before they connect. An SSH/SFTP service speaks current
+  algorithms only. Milestones 104–110. The `v1.0` tag still waits
+  on the KVM cells as well. Plan: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
   static linker (LINKER.md, ✅ Milestone 69), `std` PAL (✅ Milestone
   70), compiler-sized limits and ring-3 `gxld` (✅ Milestone 71),

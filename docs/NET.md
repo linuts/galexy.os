@@ -330,7 +330,64 @@ There is no new syscall.
 
 QUIC, 0-RTT, device checksum offload, and a CA bundle are later
 carriers and later rights. They attach to the lane. They do not add
-`socket`.
+an ambient socket. Phase 16's socket is a card. It is not this phase.
+
+## Phase 16 — A card is the firewall
+
+Milestones **105**, **107**, **108**, and **110**. Checkboxes in
+`TODO.md`. This section is the plan. No opcode here has landed.
+
+Today a dial is allowed when the caller's name is a string in
+`Name.actors` (`may_dial`). `grant` and `revoke` are admin opcodes
+that rewrite `/net`. The `net` service itself holds one galfs token,
+read and write on that file. Ping is any logged-in seat. That is a
+second grant language. Storage's language is a token: an object id
+and rights, checked by `resolve_and_check`.
+
+Milestone 105 makes the name a galfs object. The locator and the
+pinned key stay in the service record. Who may use the name is a
+token, the same `grant` the tree already has. Read is dial. Write
+is accept. `may_dial` becomes that check. The actor strings stop
+being an authority once the token exists. Ping requires a token
+too. A flow with no token is dropped. Logged-out stays
+`AccessDenied`. There is no chain, no interface match, and no
+packet filter in the kernel. The firewall is the card, and it
+lives in `net`.
+
+A program that does not hold the token does not open a quiet
+failure inside the library. Milestone 107 parks the call and the
+foreground seat prints one line: the program name and the right
+(`wants the network`, or `wants storage` for a storage ask). Yes
+installs a token for this run. No is `AccessDenied` and the
+program stays up. A second ask for the same right in the same run
+does not print. The seat is the shell. The kernel does not draw a
+dialog. No new syscall number unless the existing grant path
+cannot carry the ask; if it cannot, the milestone stops and says
+why before a number is added.
+
+Milestone 108 is `std::net::TcpStream::connect` on the galexy
+target. It asks, then dials. The object the caller holds is still
+a lane. `bind` to an address, `UdpSocket`, and socket options stay
+unsupported. rustls stays in `net`. The PAL does not grow a stack.
+
+Milestone 110 is the server a person connects to. It waits on
+Milestone 83's open box: the next inbound lane is delivered to
+that listener and to nobody else. That box is checked only when a
+run shows the handoff. One init row, Rust, no C. Host key
+ed25519. Key exchange `curve25519-sha256`. Cipher
+`chacha20-poly1305` or `aes256-gcm`. The MAC is the AEAD. SFTP is
+a subsystem of that session, and the files it can see are the
+cards of the user who authenticated (the existing PBKDF2 path, not
+a new user table). A client that offers only a refused algorithm
+gets no session. Serial does not carry the host-key private bytes
+or the password. If a newer hybrid KEM will not link on
+`x86_64-unknown-galexy`, the milestone says so. It does not fall
+back to `diffie-hellman-group14`.
+
+Still refused, including after these milestones: the BSD option
+surface, a port or an address in the syscall ABI, cleartext as an
+application right, TLS before 1.3, iptables, raw frames, telnet,
+FTP, rsh, SSHv1, `ssh-rsa`, CBC, and SHA-1.
 
 ## Files this phase touches
 

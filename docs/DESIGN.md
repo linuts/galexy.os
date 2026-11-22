@@ -1128,6 +1128,28 @@ not free ramdisk bytes.
   The shootdown handler is the same rule pushed further: serial or
   atomics, never a lock.
 
+### More than two CPUs (Milestone 104)
+
+`boot_aps` walks every enabled MADT local-APIC id after the BSP. It
+does not stop at two. `MAX_CPUS` is 8, and the per-CPU arrays (GDT,
+scheduler, AP stacks, shootdown mailboxes, the watchdog) are that
+size. The suite and `cargo run` pass `-smp 2`, and `test-smp` asserts
+`online == 2`. A boot with three to eight type-0 local APICs is what
+the loop already does. It has not been run.
+
+Past eight the kernel cannot. `enabled_ids` is `[u8; 8]`, but the
+parser still increments `cpus` for every enabled type-0 record.
+`enabled_ids()` slices that array with `cpus`, so a ninth record
+panics. MADT types `0xA` and `0xB` (x2APIC) are skipped. `send_init`
+and `send_sipi` take a `u8` APIC id. The `rank >= MAX_CPUS` warning
+in `boot_aps` is not the path a ninth CPU hits: the slice panics
+first.
+
+The shell, the framebuffer, and the keyboard IRQ stay on the BSP
+(`no_steal`). That is not a CPU-count limit. Milestone 104 proves 4
+and 8. It does not raise the cap and it does not parse x2APIC
+processor records.
+
 ### Memory policy (Milestone 48)
 
 **PCID / GLOBAL.** Every CR3 swap is a full TLB flush. No suite test is
