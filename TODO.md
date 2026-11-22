@@ -3173,19 +3173,24 @@ with no one watching.
 
 ## Milestone 108 — Rust connects
 
-`std::net` on the galexy target is `unsupported`. A lane already
-exists. This milestone is the ask in front of that lane.
+A compatibility layer keeps the name programs already call.
+`std::net::TcpStream::connect` on the galexy target asks (Milestone
+107), then dials a granted name through `net`. The value the caller
+holds is still a lane. There is no socket syscall and no second
+stack. rustls stays in the service. The PAL does not parse TCP.
+This is not a Berkeley socket: the call does not take an address,
+a port, or a socket option.
 
-- [ ] **`TcpStream::connect`**: asks (Milestone 107), then dials
-      through `net`. The value the caller holds is a lane. rustls
-      stays in the service. The PAL does not parse TCP
-- [ ] **Still unsupported**: `bind` to an address, `UdpSocket`,
-      `setsockopt`, and any call that passes an IP or a port
+- [ ] **`TcpStream::connect`**: the name stays. It asks, then dials
+      a granted name. The value is a lane
+- [ ] **Still unsupported**: `bind`, `listen`, UDP, `setsockopt`, and
+      any call that passes an IP or a port. Those stay
+      `unsupported`. They are not a quieter spelling of `connect`
 - [ ] **Proof**: a program on the login image connects to a granted
       name after the seat answers yes, and is denied before that
       answer. The peer sees no handshake on the denial
-- [ ] **Out of this milestone**: a second stack, a C shim, and
-      enabling `std::net` for the host target
+- [ ] **Out of this milestone**: a socket syscall, a second stack,
+      a C shim, and enabling `std::net` for the host target
 
 ## Milestone 109 — Python connects
 
@@ -3194,19 +3199,28 @@ Milestone 103's boxes are open: `import lane` is specified, and
 that assertion, and it does not land, until those boxes are
 checked by a run.
 
-- [ ] **After 103**: `import socket` succeeds. `connect` without a
-      card is `OSError`. `connect` after the seat says yes reads
-      the lane to EOF, the same body as `lane.read`
+A compatibility layer keeps the name programs already call.
+`socket.connect` asks (Milestone 107), then dials a granted name
+through `net`. The value is still a lane. There is no socket
+syscall and no second stack. This is not a Berkeley socket: the
+call does not take an address, a port, or a socket option.
+
+- [ ] **After 103**: `import socket` succeeds so the name exists.
+      `socket.connect` without a card is `OSError`. After the seat
+      says yes, `socket.connect` dials a granted name and the
+      value is a lane, the same body `lane.read` returns
 - [ ] **The allow-list**: `socket` is a line in
-      `scripts/python-allow.txt` in the same change. `ssl`,
-      `asyncio` networks, `bind`, `listen`, `setsockopt`, and UDP
-      stay refused. The host allow-list test matches the file
+      `scripts/python-allow.txt` in the same change, for that
+      `connect` only. `bind`, `listen`, UDP, `setsockopt`, and any
+      call that passes an IP or a port stay refused. `ssl` and
+      `asyncio` networks stay refused. The host allow-list test
+      matches the file
 - [ ] **Proof**: `python_lane_typing_e2e`'s `ImportError` line moves
-      here, to a connect that is denied, plus one connect that
-      prints the body after yes. The test still skips when
-      `target/galexy-python/python` was not built
-- [ ] **Out of this milestone**: CPython, `pip`, and a socket
-      syscall number
+      here, to a `socket.connect` that is denied, plus one
+      `socket.connect` that prints the body after yes. The test
+      still skips when `target/galexy-python/python` was not built
+- [ ] **Out of this milestone**: a Berkeley socket, a socket
+      syscall, a second stack, CPython, and `pip`
 
 ## Milestone 110 — SSH and SFTP
 

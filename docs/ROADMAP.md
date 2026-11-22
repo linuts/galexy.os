@@ -692,11 +692,15 @@ and 106 make both a card. The firewall is that card, checked in
 
 Rust and Python ask before they connect. The seat prints one line
 (`python wants the network`, `rustc wants storage`). Yes installs a
-token for that run. No is `AccessDenied`. The call is still a lane
-through `net`. It is not an ambient BSD socket and not a second
-stack. Milestone 83's inbound handoff and Milestone 103's lane boot
-stay open until their own runs; 109 does not edit 103's
-`ImportError` assertion before that.
+token for that run. No is `AccessDenied`. Milestones 108 and 109
+are a compatibility layer: `std::net::TcpStream::connect` and
+Python `socket.connect` keep those names, ask, then dial a granted
+name through `net`. The value is still a lane. There is no socket
+syscall and no second stack. `bind`, `listen`, UDP, `setsockopt`,
+and any call that passes an IP or a port stay unsupported. That
+is not a Berkeley socket. Milestone 83's inbound handoff and
+Milestone 103's lane boot stay open until their own runs; 109
+does not edit 103's `ImportError` assertion before that.
 
 True `v1.0` adds one more gate to the KVM cells that are already
 open: a person on the host opens SSH, then reads a file over SFTP,
@@ -707,8 +711,10 @@ What this phase does not add:
 
 - A `MAX_CPUS` above 8, an x2APIC id, or a shell that leaves the BSP
 - iptables, nftables, eBPF, NAT, raw frames, or promiscuous capture
-- `socket` / `bind` / `listen` / `setsockopt` as syscall numbers, or
-  a port in the ABI
+- A socket syscall, a second stack, or a Berkeley socket.
+  `bind`, `listen`, UDP, `setsockopt`, and any call that passes
+  an IP or a port stay unsupported. `TcpStream::connect` and
+  `socket.connect` are the compatibility layer above, not this row
 - Telnet, FTP, rsh, SSHv1, `ssh-rsa`, CBC, SHA-1, or TLS before 1.3
 - OpenSSH, libssh, CPython, or a TCP stack inside `rustc` or Python
 - A second grant language beside the galfs token
