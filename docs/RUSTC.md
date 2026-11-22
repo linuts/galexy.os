@@ -470,7 +470,7 @@ testable in reasonable time. Those stages have since landed (Milestones
 68–73). Phase 14 (`docs/PYTHON.md`, Milestones 91–96) has landed:
 `cargo run` carries `python`, and the compiler, when those ELFs
 were built. Phase 10 (`docs/NET.md`, Milestones 78–85) and Phase 13
-(`docs/USB.md`, Milestones 86–88) are still required before the
-`v1.0` tag, along with a KVM pass. `std::net` stays unsupported;
+(`docs/USB.md`, Milestones 86–88) have landed. The `v1.0` tag waits
+on a KVM pass. `std::net` stays unsupported;
 a lane is not a `TcpStream`, and RustPython does not add a socket
 module.

@@ -4,12 +4,13 @@
 mod common;
 
 use common::{
-    boot, boot_and_type, boot_and_type_ps2, boot_and_type_uefi, boot_for, boot_galfs_once,
-    boot_galfs_once_virtio, boot_liveness_until, boot_quiet_until, boot_status_terminal, boot_uefi,
-    boot_uefi_rng, boot_uefi_until, boot_with_galfs, boot_with_galfs_both_corrupt,
-    boot_with_galfs_cache, boot_with_galfs_crash, boot_with_galfs_part, boot_with_galfs_recover,
-    boot_with_galfs_torn, boot_with_galfs_virtio, boot_with_galfs_virtio_legacy, boot_with_tpm,
-    image, uart_login_serial, use_kvm, GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
+    boot, boot_and_type, boot_and_type_ps2, boot_and_type_uefi, boot_and_type_usb, boot_for,
+    boot_galfs_once, boot_galfs_once_virtio, boot_liveness_until, boot_quiet_until,
+    boot_status_terminal, boot_uefi, boot_uefi_rng, boot_uefi_until, boot_with_galfs,
+    boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
+    boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio,
+    boot_with_galfs_virtio_legacy, boot_with_tpm, boot_xhci, image, uart_login_serial, use_kvm,
+    GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
 };
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -5817,6 +5818,59 @@ fn net_lines(lines: &[(&str, &str)], final_marker: &str, timeout: Duration) -> S
         Duration::from_millis(30),
         timeout,
     )
+}
+
+#[test]
+fn usb_test_passes() {
+    let (code, serial) = boot_xhci(&image("test-usb"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-usb should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-usb] passed"),
+        "controller proof missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[xhci] link up"),
+        "controller did not report a link; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn usb_list_shows_the_keyboard() {
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line("usb", "0627:0001"));
+    owned.extend(type_line("svc status usb", "usb running"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type_usb(
+        &image("galexy-os"),
+        &keys,
+        "0627:0001",
+        "usb running",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    let hits = serial.matches("0627:0001").count();
+    assert!(
+        hits >= 2,
+        "list should repeat the keyboard id (saw {hits}); serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("unclaimed"),
+        "an empty driver table leaves the keyboard unclaimed; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("usb running"),
+        "svc status usb; serial:\n{serial}"
+    );
 }
 
 #[test]

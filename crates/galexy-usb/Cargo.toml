@@ -1,0 +1,10 @@
+[package]
+name = "galexy-usb"
+version = "0.1.0"
+edition = "2021"
+description = "USB descriptor checks and the driver-table walk. No vendor modules."
+
+[dependencies]
+
+[lib]
+path = "src/lib.rs"

@@ -8,6 +8,7 @@ members = [
     "crates/galexy-abi",
     "crates/galexy-galf",
     "crates/galexy-net",
+    "crates/galexy-usb",
     "crates/galexy-netcfg",
     "crates/galfs-fsck",
     "crates/userspace/galexy-rt",
@@ -21,6 +22,7 @@ members = [
     "crates/userspace/gxldos",
     "crates/userspace/threadtest",
     "crates/userspace/net",
+    "crates/userspace/usb",
     "crates/gxld",
     "crates/xtask",
 ]

@@ -532,6 +532,9 @@ pub(crate) fn task_channel() -> Result<(Cap, Cap), SysError> {
         if thread.name() == "net" {
             let _ = NET_CTRL.compare_exchange(0xFF, id, Ordering::AcqRel, Ordering::Acquire);
         }
+        if thread.name() == "usb" {
+            let _ = USB_CTRL.compare_exchange(0xFF, id, Ordering::AcqRel, Ordering::Acquire);
+        }
         let rights = CapRights::READ.union(CapRights::WRITE);
         for (end, index) in [free[0], free[1]].into_iter().enumerate() {
             thread.files[index] = Some(OpenFile {
@@ -575,8 +578,16 @@ pub(crate) fn task_send(cap: Cap, bytes: &[u8], cap0: u64, cap1: u64) -> Result<
         };
         let ctrl = INIT_CTRL.load(Ordering::Acquire);
         let net = NET_CTRL.load(Ordering::Acquire);
+        let usb = USB_CTRL.load(Ordering::Acquire);
         if net != 0xFF && id == net && end == 0 {
             deliver_net_send(&mut threads, owner, bytes, cap0, cap1)?;
+            return Ok(id);
+        }
+        if usb != 0xFF && id == usb && end == 0 {
+            if cap0 != 0 || cap1 != 0 {
+                return Err(SysError::BadValue);
+            }
+            deliver_usb_reply(&mut threads, bytes)?;
             return Ok(id);
         }
         let thread = &mut threads[owner];
@@ -892,6 +903,85 @@ pub(crate) fn task_net_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(
         wake_net_for_control(&mut threads);
         Ok(())
     })
+}
+
+/// One usb control RPC is in flight. `Ok(())` means the caller is parked.
+///
+/// The reply is plain text. It does not carry a lane capability.
+pub(crate) fn task_usb_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(), SysError> {
+    if bytes.len() > galexy_abi::INIT_RPC_MAX || reply_len as usize > galexy_abi::CHAN_MSG_MAX {
+        return Err(SysError::BadValue);
+    }
+    let ctrl = USB_CTRL.load(Ordering::Acquire);
+    if ctrl == 0xFF {
+        return Err(SysError::Unsupported);
+    }
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let (admin, tty, debug_id, session_gen) = {
+            let owner = running_proc_index(&threads, slot)?;
+            let thread = &threads[owner];
+            if thread.fs_root == galfs::NO_OBJECT {
+                return Err(SysError::AccessDenied);
+            }
+            let admin = u8::from(galfs::is_admin_root(thread.fs_root));
+            (admin, thread.tty, thread.debug_id, thread.session_gen)
+        };
+        if threads.iter().any(|t| {
+            t.state.load(Ordering::Acquire) == STATE_WAITING
+                && t.io_kind.load(Ordering::Acquire) == IO_USB_RPC
+        }) {
+            return Err(SysError::NoResource);
+        }
+        let mut msg = [0u8; galexy_abi::CHAN_MSG_MAX];
+        let n = galexy_abi::INIT_RPC_HDR + bytes.len();
+        msg[0] = admin;
+        msg[1] = tty;
+        msg[4..12].copy_from_slice(&debug_id.to_le_bytes());
+        msg[12..20].copy_from_slice(&session_gen.to_le_bytes());
+        msg[galexy_abi::INIT_RPC_HDR..n].copy_from_slice(bytes);
+        channel::enqueue(ctrl, 1, &msg[..n], [None, None])?;
+        park_io(&mut threads, slot, IO_USB_RPC, ctrl, reply, reply_len, 0);
+        wake_usb_for_control(&mut threads);
+        Ok(())
+    })
+}
+
+/// Copies `bytes` into the parked usb-RPC waiter and marks it runnable.
+pub(in crate::sched) fn deliver_usb_reply(
+    threads: &mut [Thread],
+    bytes: &[u8],
+) -> Result<(), SysError> {
+    let Some(index) = threads.iter().position(|t| {
+        t.state.load(Ordering::Acquire) == STATE_WAITING
+            && t.io_kind.load(Ordering::Acquire) == IO_USB_RPC
+    }) else {
+        return Err(SysError::NoResource);
+    };
+    let addr = threads[index].io_addr.load(Ordering::Acquire);
+    let len = threads[index].io_len.load(Ordering::Acquire) as usize;
+    let cr3 = threads[index].cr3.load(Ordering::Acquire);
+    let n = bytes.len().min(len);
+    let copied = if n == 0 {
+        true
+    } else {
+        let root = PhysFrame::from_start_address(PhysAddr::new(cr3)).expect("waiter cr3");
+        // SAFETY: parked waiter's tree, not CR3-active. Phys-map copy.
+        unsafe {
+            crate::arch::mm::with_table(root, |mapper| copy_to_user_via(mapper, addr, &bytes[..n]))
+        }
+    };
+    let result = if copied {
+        SyscallResult::ok(n as u64)
+    } else {
+        SyscallResult::err(SysError::BadBuffer)
+    };
+    finish_chan_waiter(&threads[index], result);
+    Ok(())
 }
 
 /// Lets init observe a queued control message without waiting out a backoff

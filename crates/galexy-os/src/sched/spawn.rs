@@ -126,7 +126,7 @@ pub(crate) fn task_spawn(
             }
             // The wire holder is a label only init may create. A seat that
             // spawned `net` would own the device.
-            if name == "net" && !threads[slot - 1].is_init {
+            if (name == "net" || name == "usb") && !threads[slot - 1].is_init {
                 return Err(SysError::AccessDenied);
             }
             let thread = &threads[owner];

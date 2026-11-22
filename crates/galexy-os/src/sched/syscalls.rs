@@ -408,6 +408,29 @@ fn wire_holder(cap: Cap, write: bool) -> Result<(), SysError> {
     Ok(())
 }
 
+fn syscall_usb_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+    if !cap.rights().contains(CapRights::READ) || !crate::sched::current_is_usb() {
+        return SyscallResult::err(SysError::AccessDenied);
+    }
+    // A device record is larger than an ordinary file read.
+    let len = len.min(512);
+    if len > 0 && user_buffer(addr, len, true).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut staged = [0u8; 512];
+    match crate::drivers::usb::xhci::read_device(&mut staged[..len as usize]) {
+        Ok(0) => SyscallResult::ok(0),
+        Ok(n) => {
+            // SAFETY: `user_buffer` accepted `len` writable bytes and `n <= len`.
+            unsafe {
+                crate::arch::user_copy::copy_to_user(staged.as_ptr(), addr, n);
+            }
+            SyscallResult::ok(n as u64)
+        }
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
 fn syscall_wire_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if let Err(err) = wire_holder(cap, false) {
         return SyscallResult::err(err);
@@ -549,7 +572,10 @@ fn syscall_write_console(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     }
     // Init shares TTY 0 with F1. Its lines are serial-only, and the
     // console budget must not drop a backoff or shutdown marker.
-    if crate::sched::current_is_init() || crate::sched::current_is_net() {
+    if crate::sched::current_is_init()
+        || crate::sched::current_is_net()
+        || crate::sched::current_is_usb()
+    {
         let text = core::str::from_utf8(&staged[..len as usize]).unwrap_or("");
         for line in text.split('\n') {
             if !line.is_empty() {
@@ -1178,6 +1204,9 @@ fn syscall_open(addr: u64, len: u64) -> SyscallResult {
 fn syscall_read_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
     if cap.index() == galexy_abi::reserved::WIRE_INDEX {
         return IoResult::Done(syscall_wire_read(cap, addr, len));
+    }
+    if cap.index() == galexy_abi::reserved::USB_INDEX {
+        return IoResult::Done(syscall_usb_read(cap, addr, len));
     }
     if cap.index() == galexy_abi::reserved::KEYBOARD_INDEX {
         return syscall_read_keyboard_ex(cap, addr, len);
@@ -1842,6 +1871,9 @@ fn syscall_send(frame: &Context) -> IoResult {
     if cap.index() == galexy_abi::reserved::NET_INDEX {
         return syscall_net_send(frame, cap);
     }
+    if cap.index() == galexy_abi::reserved::USB_CTRL_INDEX {
+        return syscall_usb_send(frame, cap);
+    }
     let len = frame.rdx;
     if len > galexy_abi::CHAN_MSG_MAX as u64 {
         return IoResult::Done(SyscallResult::err(SysError::BadValue));
@@ -1858,6 +1890,37 @@ fn syscall_send(frame: &Context) -> IoResult {
     }
     match crate::sched::task_send(cap, &bytes[..len as usize], frame.r8, frame.r9) {
         Ok(n) => IoResult::Done(SyscallResult::ok(n as u64)),
+        Err(err) => IoResult::Done(SyscallResult::err(err)),
+    }
+}
+
+fn syscall_usb_send(frame: &Context, cap: Cap) -> IoResult {
+    if !cap.rights().contains(CapRights::WRITE) {
+        return IoResult::Done(SyscallResult::err(SysError::AccessDenied));
+    }
+    let len = frame.rdx;
+    if len > galexy_abi::INIT_RPC_MAX as u64 {
+        return IoResult::Done(SyscallResult::err(SysError::BadValue));
+    }
+    if len > 0 && user_buffer(frame.rsi, len, false).is_err() {
+        return IoResult::Done(SyscallResult::err(SysError::BadBuffer));
+    }
+    let reply_len = frame.r9;
+    if reply_len > galexy_abi::CHAN_MSG_MAX as u64 {
+        return IoResult::Done(SyscallResult::err(SysError::BadValue));
+    }
+    if reply_len > 0 && user_buffer(frame.r8, reply_len, true).is_err() {
+        return IoResult::Done(SyscallResult::err(SysError::BadBuffer));
+    }
+    let mut bytes = [0u8; galexy_abi::INIT_RPC_MAX];
+    if len > 0 {
+        // SAFETY: `user_buffer` accepted every byte of the payload.
+        unsafe {
+            crate::arch::user_copy::copy_from_user(frame.rsi, bytes.as_mut_ptr(), len as usize);
+        }
+    }
+    match crate::sched::task_usb_rpc(&bytes[..len as usize], frame.r8, reply_len as u32) {
+        Ok(()) => IoResult::Park,
         Err(err) => IoResult::Done(SyscallResult::err(err)),
     }
 }

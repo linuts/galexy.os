@@ -80,6 +80,8 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(reserved::INIT_INDEX, 0x8008);
     assert_eq!(reserved::WIRE_INDEX, 0x8009);
     assert_eq!(reserved::NET_INDEX, 0x800A);
+    assert_eq!(reserved::USB_INDEX, 0x800B);
+    assert_eq!(reserved::USB_CTRL_INDEX, 0x800C);
     assert_eq!(INIT_RPC_HDR, 20);
     assert_eq!(INIT_RPC_MAX, 236);
     assert_eq!(INIT_OP_STATUS, 1);
@@ -104,6 +106,7 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(NET_OP_GRANT, 4);
     assert_eq!(NET_OP_REVOKE, 5);
     assert_eq!(NET_OP_SERVE, 6);
+    assert_eq!(USB_OP_LIST, 1);
     assert_eq!(LANE_SLOTS, 32);
     assert_eq!(LANE_BYTES, 16 * 1024);
     assert_eq!(POWER_SHUTDOWN, 0);

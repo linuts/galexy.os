@@ -209,6 +209,15 @@ pub fn attach_user_net(cmd: &mut Command) {
         .arg("virtio-net-pci,netdev=net0,disable-legacy=on,mac=52:54:00:12:34:56");
 }
 
+/// qemu-xhci plus one USB keyboard. Not attached to the rest of the suite:
+/// those boots must keep the same PCI set they already assert.
+pub fn attach_xhci(cmd: &mut Command) {
+    cmd.arg("-device")
+        .arg("qemu-xhci,id=xhci")
+        .arg("-device")
+        .arg("usb-kbd,bus=xhci.0");
+}
+
 /// QEMU `-drive` `cache=` mode for the galfs data disk.
 ///
 /// Guest galfs always flushes after writing the inactive dual slot.
@@ -683,7 +692,20 @@ pub fn boot(image: &Image) -> (Option<i32>, String) {
 /// boot is longer than the 60 second suite default.
 pub fn boot_for(image: &Image, timeout: Duration) -> (Option<i32>, String) {
     let serial_path = serial_log_path(&image.name);
-    let mut child = qemu_command(&image.bios, &serial_path)
+    let cmd = qemu_command(&image.bios, &serial_path);
+    run_qemu(cmd, &serial_path, timeout)
+}
+
+/// Like [`boot`], with qemu-xhci and a USB keyboard attached.
+pub fn boot_xhci(image: &Image) -> (Option<i32>, String) {
+    let serial_path = serial_log_path(&image.name);
+    let mut cmd = qemu_command(&image.bios, &serial_path);
+    attach_xhci(&mut cmd);
+    run_qemu(cmd, &serial_path, TEST_TIMEOUT)
+}
+
+fn run_qemu(mut cmd: Command, serial_path: &Path, timeout: Duration) -> (Option<i32>, String) {
+    let mut child = cmd
         .spawn()
         .expect("failed to launch qemu-system-x86_64 (install qemu-desktop)");
 
@@ -1486,6 +1508,31 @@ fn boot_and_type_on(
         let ovmf_fd = std::env::var("OVMF_FD").unwrap_or_else(|_| OVMF_FD_DEFAULT.into());
         cmd.arg("-bios").arg(ovmf_fd);
     }
+    boot_and_type_cmd(
+        cmd,
+        &serial_path,
+        sync_pairs,
+        ready_marker,
+        final_marker,
+        key_delay,
+        timeout,
+    )
+}
+
+/// Like [`boot_and_type`], with qemu-xhci and a USB keyboard.
+/// Virtio-keyboard still carries the typed keys.
+#[allow(clippy::too_many_arguments)]
+pub fn boot_and_type_usb(
+    image: &Image,
+    sync_pairs: &[(&str, &str)],
+    ready_marker: &str,
+    final_marker: &str,
+    key_delay: Duration,
+    timeout: Duration,
+) -> String {
+    let serial_path = serial_log_path("typing-usb");
+    let mut cmd = qemu_command_opts(&image.bios, &serial_path, "q35", true, true);
+    attach_xhci(&mut cmd);
     boot_and_type_cmd(
         cmd,
         &serial_path,

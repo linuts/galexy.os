@@ -2211,7 +2211,8 @@ legacy paths kept only where the platform has nothing else.
       (Milestones 78–85, `docs/NET.md`). USB is Phase 13 (Milestones
       86–88, `docs/USB.md`). RustPython is Phase 14 (Milestones
       91–96, `docs/PYTHON.md`). All three were required before the
-      `v1.0` tag. Phase 14 has since landed
+      `v1.0` tag. Phases 10, 13, and 14 have since landed. The tag
+      waits on a KVM pass
 
 ## Milestone 66 — Userland completeness ✅
 
@@ -2321,7 +2322,7 @@ unset.
       DHCP, one datagram the host receives, a granted seat can
       `fetch` a name, and a handshake flood still leaves `svc status
       shell` answering
-- [ ] Phase 13 — Milestones 86–88 (`docs/USB.md`). The bus lists a
+- [x] Phase 13 — Milestones 86–88 (`docs/USB.md`). The bus lists a
       QEMU USB device, and a driver that is not in the table does
       not run. Vendor rows in `docs/DEVICES.md` stay `unwritten`
 - [x] Phase 14 — Milestones 91–96 (`docs/PYTHON.md`). A typed login
@@ -2770,38 +2771,38 @@ TCP on the address from Milestone 80.
 - [x] ABI note: syscall 35 and the net opcodes do not change shape
       after this milestone without an ABI entry
 
-## Phase 13 — USB (after Phase 10, before `v1.0`)
+## Phase 13 — USB (before `v1.0`) ✅
 
 Plan: `docs/USB.md`. Inventory: `docs/DEVICES.md`. See devices. Lock
 the driver table. No vendor modules in this phase.
 
 ## Milestone 86 — Controller
 
-- [ ] xHCI on q35, QEMU `qemu-xhci`. Cap `0x800B`. A second task that
+- [x] xHCI on q35, QEMU `qemu-xhci`. Cap `0x800B`. A second task that
       reads it is `AccessDenied`
-- [ ] DMA splits at a physical discontinuity; a sentinel stays
+- [x] DMA splits at a physical discontinuity; a sentinel stays
       untouched
-- [ ] The interrupt fires. No descriptor walk yet
+- [x] The interrupt fires. No descriptor walk yet
 
 ## Milestone 87 — Devices
 
-- [ ] Ramdisk `usb` under init is the only holder of `0x800B`.
+- [x] Ramdisk `usb` under init is the only holder of `0x800B`.
       `svc status usb` answers `usb running`. `MAX_PROC_CAPS` stays 16
-- [ ] Device and configuration descriptors, inside the budgets in
+- [x] Device and configuration descriptors, inside the budgets in
       `USB.md`. A hostile length is `BadValue` and the bus stays up
-- [ ] The runner attaches one QEMU USB device with a known ID. `list`
+- [x] The runner attaches one QEMU USB device with a known ID. `list`
       on `0x800C` prints it. The device does not become the keyboard
-- [ ] Any logged-in seat may list. A logged-out send is `AccessDenied`
+- [x] Any logged-in seat may list. A logged-out send is `AccessDenied`
 
 ## Milestone 88 — Contract (Phase 13 gate)
 
-- [ ] Driver table at `crates/userspace/usb/src/drivers/mod.rs` names
+- [x] Driver table at `crates/userspace/usb/src/drivers/mod.rs` names
       no vendor module. An unmatched device is listed and not claimed
-- [ ] A test row claims a fake device; removing the row means the
+- [x] A test row claims a fake device; removing the row means the
       module is not called
-- [ ] `docs/DEVICES.md` matches the code. The e1000e and CDC-NCM rows
+- [x] `docs/DEVICES.md` matches the code. The e1000e and CDC-NCM rows
       stay `unwritten`
-- [ ] A driver outside the table is not reachable
+- [x] A driver outside the table is not reachable
 
 ---
 
@@ -3090,11 +3091,11 @@ items stay here with rationale.
       stale-serial-log harness bug from that close stays fixed
       (`serial_log_path` removes the file before QEMU starts)
 - [x] ~~No network stack~~ — **Phase 10**, Milestones 78–85, landed
-      (`docs/NET.md`). The `v1.0` tag still waits on Phase 13 and a
-      KVM pass
-- [ ] No USB stack — **Phase 13**, Milestones 86–88, after Phase 10
-      and before the `v1.0` tag (`docs/USB.md`). Seeing a device and
-      the driver table are the gate. Vendor drivers stay unnumbered
+      (`docs/NET.md`). The `v1.0` tag waits on a KVM pass
+- [x] ~~No USB stack~~ — **Phase 13**, Milestones 86–88, landed
+      (`docs/USB.md`). The bus lists a device and the driver table
+      ships empty. Vendor drivers stay unnumbered. The `v1.0` tag
+      waits on a KVM pass
 - [x] ~~No Python interpreter~~ — **Phase 14**, Milestones 91–96.
       `cargo run` boots `python` and, when the compiler ELF was
       built, `rustc` with its sysroot. `python hello.py` and a file

@@ -2,7 +2,7 @@
 
 Phase 14. Milestones **91–96**. Landed. It was required before the
 `v1.0` tag, and that requirement is met. The tag still waits on
-Phase 10, Phase 13, and a KVM pass. This phase did not wait on a
+a KVM pass. This phase did not wait on a
 lane, and a lane does not wait on it. Checkboxes live in `TODO.md`.
 
 Galexy already runs upstream `rustc` in ring 3. The same kind of
