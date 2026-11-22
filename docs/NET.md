@@ -44,8 +44,8 @@ checked.
 
 | Refused | Why |
 | --- | --- |
-| BSD sockets and Winsock (`socket`, `bind`, `listen`, `accept`, `connect`, `sendto`, `recvfrom`, `setsockopt`) | That API is an ambient port namespace. Galexy does not grow one. Milestones 112–116 may honor one of those calls for one card. The call is not the namespace, and none of them exist yet. `setsockopt` stays refused. |
-| `std::net::TcpStream` and a POSIX shim in the PAL | Phase 10 leaves `std`'s `net` `unsupported`. Milestone 108 keeps the name `TcpStream::connect`: it asks, then dials a granted name, and the value is still a lane. `bind`, `listen`, UDP, and a passed IP or port stay refused until the milestone that grants that card. They do not exist yet. There is no socket syscall and no POSIX shim. |
+| BSD sockets and Winsock (`socket`, `bind`, `listen`, `accept`, `connect`, `sendto`, `recvfrom`, `setsockopt`) | That API is an ambient port namespace. Galexy does not grow one. Milestones 112–114 honor one address, one port, and one local bind, each with its card. `listen`, a datagram, and `setsockopt` stay refused. |
+| `std::net::TcpStream` and a POSIX shim in the PAL | Milestone 108 keeps the name `TcpStream::connect`. It asks, then dials a granted name, one stored address, or one stored `address:port`. The value is still a lane. `TcpListener::bind` binds the stored local address when the seat holds write on that card, and `accept` stays unsupported. UDP and `setsockopt` stay refused. There is no socket syscall and no POSIX shim. |
 | In-kernel TCP/IP | A parse bug on a packet would be ring 0. The kernel moves frames. The `net` service speaks the protocols. A second stack, a C stack, raw sockets, and promiscuous mode stay out. |
 | IP addresses and port numbers in the syscall ABI | Ports stay an internal demux. A program does not pass them to a syscall. Milestones 112 and 113 let a program pass one exact address or port on the existing net cap, and only with that card. An app still cannot bind `0.0.0.0`, spoof a source, or race a port it does not hold. |
 | Cleartext as an application right | The bytes an app reads on a lane are the plaintext of a finished TLS 1.3 session. There is no raw TCP Cap. An ordinary task has no datagram Cap. Milestone 116 grants one exact peer, and only with that card. |
@@ -182,12 +182,12 @@ second API and is not this phase.
 
 DNS, when a name is not a literal locator, is resolved by `net` over
 TLS to a resolver the admin pinned. That is DNS-over-TLS (port 853).
-Cleartext DNS is not implemented. Milestone 110 does not add UDP/53,
+Cleartext DNS is not implemented. The lookup does not use UDP/53
 and it does not ask QEMU's DNS at `10.0.2.3`. QUIC stays the later
-lane carrier, not this lookup. Milestone 83 ships literal locators,
-so a name with no locator still fails closed. `fetch` uses a literal
-locator until Milestone 111. A name that needs DNS and has no pinned
-resolver fails closed.
+lane carrier, not this lookup. A name that needs DNS and has no
+pinned resolver fails closed. `milestones_110_through_114` is the
+run: one TLS query, an answer other than `10.0.2.2`, and a dial
+whose TCP destination is that answer.
 
 ## Adversary this adds
 
@@ -281,10 +281,9 @@ The next inbound lane is delivered to that listener. A second
 carries TLS plaintext. Locators and ports
 exist in the record and in the admin opcode payload. They do not
 appear in `galexy-abi` as a general argument, and `fetch` will not
-take them. Literal locators are enough; DNS is wired here only as
-the fail-closed path (no pinned resolver, no lookup). Milestone 110
-is the encrypted lookup. Until that box is checked, this path stays
-fail-closed.
+take them. Literal locators stay in the record. Milestone 110 adds the
+encrypted lookup: DNS-over-TLS to the pinned resolver, and a
+missing pin still fails closed.
 
 ### 84 Fetch
 
@@ -382,23 +381,29 @@ Python `socket.connect`: the call asks, then dials, and a no is
 `OSError`. There is no socket syscall and no second stack. rustls
 stays in `net`. The PAL does not parse TCP. This is not a Berkeley
 socket. Those two milestones do not pass an IP or a port.
-`bind`, `listen`, UDP, and `setsockopt` stay refused until
-Milestones 112–116.
+`listen`, UDP, and `setsockopt` stay refused until Milestones
+115 and 116. `setsockopt` stays refused after those as well.
 
 Milestone 110 is the lookup: DNS-over-TLS to a pinned resolver,
 not UDP/53, and not `10.0.2.3`. Milestone 111 is the reach. A
 program passes a name. `net` resolves and dials. The TCP
 destination is the resolved address, not the QEMU gateway
-`10.0.2.2`. Outbound TCP and TLS stay inside `net`. virtio-net
-stays the device. `net` stays the only packet stack.
+`10.0.2.2`. The gateway may be the next hop. Outbound TCP and
+TLS stay inside `net`. virtio-net stays the device. `net` stays
+the only packet stack.
 
-A passed IP, a passed port, `bind`, `listen`, and UDP do not
-exist yet. Milestones 112–116 grant each exact call with a card.
-Read dials. Write accepts. `setsockopt` stays refused. No new
-syscall, and no new right bit. Milestone 83 hands the next lane
-to the one listener that attached the gate, and only when that
-seat holds the write bit. `serve_hands_the_lane_to_its_listener`
-is that run. Inbound from outside stays closed until Milestone 115.
+Milestone 112 stores one address on a card. Read on that card
+lets the program pass that address and no other. Milestone 113
+stores one destination port. An address card does not imply the
+port. Milestone 114 binds the stored local address, and only
+with write on the address card. Read does not bind. `0.0.0.0`
+is denied. `accept` does not listen. The record is version 2;
+version 1 is refused. No new syscall, and no new right bit.
+`milestones_110_through_114` is that run. Milestone 83 hands
+the next lane to the one listener that attached the gate, and
+only when that seat holds the write bit.
+`serve_hands_the_lane_to_its_listener` is that run. Inbound
+from outside stays closed until Milestone 115.
 
 Milestone 117 is the server a person connects to, and it is last.
 It waits on 111. One init row, in-tree Rust,

@@ -1,14 +1,27 @@
-//! Version 1 bytes for the `/net` record.
+//! Version 2 bytes for the `/net` record.
 //!
-//! Magic, version, mode, an optional learned lease, then the directory.
-//! A version this crate does not know is an error. Callers do not guess.
+//! Magic, version, mode, an optional learned lease, the directory, then
+//! the pinned resolver. A version this crate does not know is an error.
+//! Callers do not guess. Version 1 is refused.
 
 #![cfg_attr(not(test), no_std)]
 
 /// File magic, ASCII `GNET`.
 pub const MAGIC: &[u8; 4] = b"GNET";
-/// Record version. Unknown versions are refused.
-pub const VERSION: u16 = 1;
+/// Record version. Unknown versions, including version 1, are refused.
+pub const VERSION: u16 = 2;
+/// A name resolved over DNS-over-TLS. The address is not stored.
+pub const KIND_DNS: u8 = 1;
+/// IPv4 locator.
+pub const KIND_IPV4: u8 = 4;
+/// IPv6 locator. It stays inside `net`.
+pub const KIND_IPV6: u8 = 6;
+/// Address card. The name is the dotted address.
+pub const KIND_ADDR: u8 = 8;
+/// Port card. The name is the decimal port.
+pub const KIND_PORT: u8 = 9;
+/// DNS-over-TLS port. The record does not store another one.
+pub const DOT_PORT: u16 = 853;
 /// Mode byte: ask DHCP.
 pub const MODE_ASK: u8 = 0;
 /// Mode byte: use the stored locator and skip DHCP.
@@ -51,9 +64,9 @@ pub struct Name {
     pub name: [u8; NAME_MAX],
     /// Length of [`Self::name`].
     pub name_len: u8,
-    /// Remote port.
+    /// Remote port. `0` on an address card means the card does not dial.
     pub port: u16,
-    /// `4` or `6`.
+    /// [`KIND_DNS`], [`KIND_IPV4`], [`KIND_IPV6`], [`KIND_ADDR`], or [`KIND_PORT`].
     pub kind: u8,
     /// Address. IPv4 uses the first four bytes.
     pub ip: [u8; 16],
@@ -89,6 +102,15 @@ impl Name {
     }
 }
 
+/// Pinned DNS-over-TLS resolver. The port is always [`DOT_PORT`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Resolver {
+    /// Resolver address. Not the QEMU gateway and not `10.0.2.3`.
+    pub addr: [u8; 4],
+    /// Pinned key. Callers do not write these bytes to the console.
+    pub key: [u8; 32],
+}
+
 /// The whole file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Record {
@@ -100,6 +122,8 @@ pub struct Record {
     pub names: [Name; MAX_NAMES],
     /// Live entries in [`Self::names`].
     pub name_count: u8,
+    /// Pinned resolver. Absent means lookup fails closed.
+    pub resolver: Option<Resolver>,
 }
 
 impl Record {
@@ -110,7 +134,17 @@ impl Record {
             lease: None,
             names: [Name::empty(); MAX_NAMES],
             name_count: 0,
+            resolver: None,
         }
+    }
+
+    /// Stores the resolver. `10.0.2.2` and `10.0.2.3` are refused.
+    pub fn pin(&mut self, addr: [u8; 4], key: [u8; 32]) -> Result<(), CfgError> {
+        if addr == [10, 0, 2, 2] || addr == [10, 0, 2, 3] {
+            return Err(CfgError::BadRecord);
+        }
+        self.resolver = Some(Resolver { addr, key });
+        Ok(())
     }
 
     /// Installs or replaces a name. Actors on an existing name are kept
@@ -123,7 +157,7 @@ impl Record {
         ip: [u8; 16],
         key: [u8; 32],
     ) -> Result<(), CfgError> {
-        if name.is_empty() || name.len() > NAME_MAX || (kind != 4 && kind != 6) {
+        if name.is_empty() || name.len() > NAME_MAX || !kind_ok(kind) {
             return Err(CfgError::BadRecord);
         }
         if let Some(slot) = self.find_mut(name) {
@@ -240,10 +274,25 @@ pub fn encode(record: &Record, out: &mut [u8]) -> Result<usize, CfgError> {
             w.bytes(&name.actors[i][..name.actor_len[i] as usize])?;
         }
     }
+    match &record.resolver {
+        None => w.u8(0)?,
+        Some(resolver) => {
+            w.u8(1)?;
+            w.bytes(&resolver.addr)?;
+            w.bytes(&resolver.key)?;
+        }
+    }
     Ok(w.at)
 }
 
-/// Decodes a version-1 record. Any other version is [`CfgError::BadRecord`].
+fn kind_ok(kind: u8) -> bool {
+    matches!(
+        kind,
+        KIND_DNS | KIND_IPV4 | KIND_IPV6 | KIND_ADDR | KIND_PORT
+    )
+}
+
+/// Decodes a version-2 record. Any other version is [`CfgError::BadRecord`].
 pub fn decode(bytes: &[u8]) -> Result<Record, CfgError> {
     let mut r = Reader { buf: bytes, at: 0 };
     let mut magic = [0u8; 4];
@@ -288,7 +337,7 @@ pub fn decode(bytes: &[u8]) -> Result<Record, CfgError> {
         name.name_len = nlen as u8;
         name.port = r.u16()?;
         name.kind = r.u8()?;
-        if name.kind != 4 && name.kind != 6 {
+        if !kind_ok(name.kind) {
             return Err(CfgError::BadRecord);
         }
         r.bytes(&mut name.ip)?;
@@ -306,6 +355,20 @@ pub fn decode(bytes: &[u8]) -> Result<Record, CfgError> {
             name.actor_len[i] = alen as u8;
         }
     }
+    let resolver = match r.u8()? {
+        0 => None,
+        1 => {
+            let mut addr = [0u8; 4];
+            let mut key = [0u8; 32];
+            r.bytes(&mut addr)?;
+            r.bytes(&mut key)?;
+            if addr == [10, 0, 2, 2] || addr == [10, 0, 2, 3] {
+                return Err(CfgError::BadRecord);
+            }
+            Some(Resolver { addr, key })
+        }
+        _ => return Err(CfgError::BadRecord),
+    };
     if r.at != bytes.len() {
         return Err(CfgError::BadRecord);
     }
@@ -314,6 +377,7 @@ pub fn decode(bytes: &[u8]) -> Result<Record, CfgError> {
         lease,
         names,
         name_count,
+        resolver,
     })
 }
 
@@ -388,7 +452,12 @@ mod tests {
         });
         let mut ip = [0u8; 16];
         ip[..4].copy_from_slice(&[10, 0, 2, 2]);
-        rec.allow(b"echo", 4582, 4, ip, [0xAB; 32]).unwrap();
+        rec.allow(b"echo", 4582, KIND_IPV4, ip, [0xAB; 32]).unwrap();
+        rec.allow(b"docs", 4594, KIND_DNS, [0; 16], [0xCD; 32])
+            .unwrap();
+        rec.pin([172, 30, 0, 2], [0x11; 32]).unwrap();
+        assert!(rec.pin([10, 0, 2, 2], [0x11; 32]).is_err());
+        assert!(rec.pin([10, 0, 2, 3], [0x11; 32]).is_err());
         rec.grant(b"echo", b"admin").unwrap();
         assert!(rec.may_dial(b"echo", b"admin"));
         assert!(!rec.may_dial(b"echo", b"other"));
@@ -404,8 +473,10 @@ mod tests {
     fn unknown_version_is_refused() {
         let mut buf = [0u8; 64];
         let n = encode(&Record::empty_ask(), &mut buf).unwrap();
-        buf[4] = 2;
+        buf[4] = 1;
         buf[5] = 0;
+        assert_eq!(decode(&buf[..n]), Err(CfgError::BadRecord));
+        buf[4] = 99;
         assert_eq!(decode(&buf[..n]), Err(CfgError::BadRecord));
     }
 }

@@ -1955,6 +1955,22 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
         net_allow(cwd, tail);
         return;
     }
+    if let Some(tail) = arg_of(rest, b"pin") {
+        net_pin(cwd, tail);
+        return;
+    }
+    if let Some(tail) = arg_of(rest, b"resolve") {
+        net_resolve(cwd, tail);
+        return;
+    }
+    if let Some(tail) = arg_of(rest, b"addr") {
+        net_addr(cwd, tail);
+        return;
+    }
+    if let Some(tail) = arg_of(rest, b"port") {
+        net_port(cwd, tail);
+        return;
+    }
     if let Some(tail) = arg_of(rest, b"grant") {
         net_actor(cwd, galexy_abi::NET_OP_GRANT, tail);
         return;
@@ -1973,7 +1989,7 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
         finish_net(cwd, &payload[..1 + n], true);
         return;
     }
-    write_console(b"net: link, allow, grant, revoke, serve\n");
+    write_console(b"net: link, pin, allow, resolve, addr, port, grant, revoke, serve\n");
     prompt(cwd);
 }
 
@@ -2084,10 +2100,25 @@ fn net_allow(cwd: &Cwd, tail: &[u8]) {
         prompt(cwd);
         return;
     }
-    let Some((ip, port)) = parse_locator(parts[1]) else {
-        write_console(b"bad locator\n");
-        prompt(cwd);
-        return;
+    let (ip, port, kind) = if let Some(port) = parts[1].strip_prefix(b"dns:") {
+        let Some(port) = parse_u16(port) else {
+            write_console(b"bad locator\n");
+            prompt(cwd);
+            return;
+        };
+        if port == 0 {
+            write_console(b"bad locator\n");
+            prompt(cwd);
+            return;
+        }
+        ([0u8; 4], port, 1)
+    } else {
+        let Some((ip, port)) = parse_locator(parts[1]) else {
+            write_console(b"bad locator\n");
+            prompt(cwd);
+            return;
+        };
+        (ip, port, 4)
     };
     let Some(key) = read_key(cwd, parts[2]) else {
         write_console(b"bad key\n");
@@ -2107,7 +2138,147 @@ fn net_allow(cwd: &Cwd, tail: &[u8]) {
     let mut at = 2 + name.len();
     payload[at..at + 2].copy_from_slice(&port.to_le_bytes());
     at += 2;
-    payload[at] = 4;
+    payload[at] = kind;
+    at += 1;
+    payload[at..at + 4].copy_from_slice(&ip);
+    at += 16;
+    payload[at..at + 32].copy_from_slice(&key);
+    at += 32;
+    finish_net(cwd, &payload[..at], false);
+}
+
+fn net_pin(cwd: &Cwd, tail: &[u8]) {
+    let Some(sp) = tail.iter().position(|b| *b == b' ') else {
+        write_console(b"net pin <ip> <keyfile>\n");
+        prompt(cwd);
+        return;
+    };
+    let Some(ip) = parse_ip(trim(&tail[..sp])) else {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    };
+    if ip == [10, 0, 2, 2] || ip == [10, 0, 2, 3] {
+        write_console(b"access denied\n");
+        prompt(cwd);
+        return;
+    }
+    let Some(key) = read_key(cwd, trim(&tail[sp + 1..])) else {
+        write_console(b"bad key\n");
+        prompt(cwd);
+        return;
+    };
+    let mut payload = [0u8; 40];
+    payload[0] = galexy_abi::NET_OP_PIN;
+    payload[1..5].copy_from_slice(&ip);
+    payload[5..37].copy_from_slice(&key);
+    finish_net(cwd, &payload[..37], false);
+}
+
+fn net_resolve(cwd: &Cwd, tail: &[u8]) {
+    let name = trim(tail);
+    if name.is_empty() || name.len() > 32 {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    }
+    let mut payload = [0u8; 40];
+    payload[0] = galexy_abi::NET_OP_RESOLVE;
+    payload[1] = name.len() as u8;
+    payload[2..2 + name.len()].copy_from_slice(name);
+    let at = 2 + name.len();
+    payload[at] = 0;
+    finish_net(cwd, &payload[..at + 1], false);
+}
+
+fn net_addr(cwd: &Cwd, tail: &[u8]) {
+    let mut parts = [b"".as_slice(); 3];
+    if !three_parts(tail, &mut parts) {
+        write_console(b"net addr <ip> <port> <keyfile>\n");
+        prompt(cwd);
+        return;
+    }
+    let Some(ip) = parse_ip(parts[0]) else {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    };
+    let Some(port) = parse_u16(parts[1]) else {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    };
+    let Some(key) = read_key(cwd, parts[2]) else {
+        write_console(b"bad key\n");
+        prompt(cwd);
+        return;
+    };
+    send_allow(cwd, parts[0], port, 8, ip, key);
+}
+
+fn net_port(cwd: &Cwd, tail: &[u8]) {
+    let Some(sp) = tail.iter().position(|b| *b == b' ') else {
+        write_console(b"net port <port> <ip>\n");
+        prompt(cwd);
+        return;
+    };
+    let port_text = trim(&tail[..sp]);
+    let Some(port) = parse_u16(port_text) else {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    };
+    if port == 0 {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    }
+    let Some(ip) = parse_ip(trim(&tail[sp + 1..])) else {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    };
+    send_allow(cwd, port_text, port, 9, ip, [0; 32]);
+}
+
+fn three_parts<'a>(tail: &'a [u8], parts: &mut [&'a [u8]; 3]) -> bool {
+    let mut rest = tail;
+    let mut nparts = 0usize;
+    while nparts < 3 {
+        rest = trim(rest);
+        if rest.is_empty() {
+            break;
+        }
+        if nparts == 2 {
+            parts[2] = rest;
+            return true;
+        }
+        let sp = rest.iter().position(|b| *b == b' ').unwrap_or(rest.len());
+        parts[nparts] = &rest[..sp];
+        nparts += 1;
+        rest = if sp == rest.len() {
+            b""
+        } else {
+            &rest[sp + 1..]
+        };
+    }
+    false
+}
+
+fn send_allow(cwd: &Cwd, name: &[u8], port: u16, kind: u8, ip: [u8; 4], key: [u8; 32]) {
+    if name.is_empty() || name.len() > 32 {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    }
+    let mut payload = [0u8; 128];
+    payload[0] = galexy_abi::NET_OP_ALLOW;
+    payload[1] = name.len() as u8;
+    payload[2..2 + name.len()].copy_from_slice(name);
+    let mut at = 2 + name.len();
+    payload[at..at + 2].copy_from_slice(&port.to_le_bytes());
+    at += 2;
+    payload[at] = kind;
     at += 1;
     payload[at..at + 4].copy_from_slice(&ip);
     at += 16;

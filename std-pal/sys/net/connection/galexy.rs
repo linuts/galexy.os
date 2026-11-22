@@ -1,10 +1,11 @@
-//! `std::net` on Galexy is one dial (Milestone 108).
+//! `std::net` on Galexy dials through `net`.
 //!
-//! `TcpStream::connect` takes a granted name. The kernel asks the seat
-//! when the card is missing, then `net` dials. The value is a lane Cap.
-//! This file does not parse TCP. rustls stays in the `net` service.
-//! `bind`, `listen`, UDP, socket options, and any call that passes an
-//! IP or a port return `unsupported`.
+//! `TcpStream::connect` takes a granted name, one stored address, or
+//! one stored `address:port`. The kernel asks the seat when the card
+//! is missing. The value is a lane Cap. `TcpListener::bind` binds the
+//! stored local address when the seat holds write on that card. This
+//! file does not parse TCP. rustls stays in the `net` service.
+//! `accept`, UDP, timeouts, and socket options stay `unsupported`.
 
 use crate::fmt;
 use crate::io::{self, BorrowedCursor, IoSlice, IoSliceMut};
@@ -18,9 +19,19 @@ pub struct TcpStream {
 }
 
 impl TcpStream {
-    /// Dial `name`. An address or a port never reaches `net`.
+    /// Resolve `name` over DNS-over-TLS. The reply is the address text.
+    /// A missing card asks the seat. This does not open the dial.
+    pub fn lookup(name: &str) -> io::Result<String> {
+        if !is_name(name) || is_address(name) {
+            return Err(io::const_error!(io::ErrorKind::InvalidInput, "bad name"));
+        }
+        let text = net_text(abi::NET_OP_RESOLVE, name)?;
+        Ok(text)
+    }
+
+    /// Dial `name`, one stored address, or `address:port`.
     pub fn connect(name: &str) -> io::Result<TcpStream> {
-        if is_address(name) {
+        if is_address(name) && !is_passed_endpoint(name) {
             return unsupported();
         }
         if !is_name(name) {
@@ -161,8 +172,44 @@ impl fmt::Debug for TcpStream {
     }
 }
 
+/// A dotted IPv4 address, or that address plus `:port`.
+fn is_passed_endpoint(name: &str) -> bool {
+    let (host, port) = match name.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (name, None),
+    };
+    if !dotted_v4(host) {
+        return false;
+    }
+    match port {
+        None => true,
+        Some(port) => {
+            !port.is_empty()
+                && port.bytes().all(|b| b.is_ascii_digit())
+                && !(port.len() > 1 && port.starts_with('0'))
+        }
+    }
+}
+
+fn dotted_v4(text: &str) -> bool {
+    let mut parts = 0usize;
+    for part in text.split('.') {
+        if part.is_empty() || part.len() > 3 || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+        let Ok(n) = part.parse::<u16>() else {
+            return false;
+        };
+        if n > 255 {
+            return false;
+        }
+        parts += 1;
+    }
+    parts == 4
+}
+
 /// A colon is a port. Four numeric pieces are an IPv4 address. A
-/// string of only digits is a port. None of those is a granted name.
+/// string of only digits is a port.
 fn is_address(name: &str) -> bool {
     if name.contains(':') || name.contains('/') {
         return true;
@@ -184,8 +231,46 @@ fn is_name(name: &str) -> bool {
     !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| (0x21..=0x7e).contains(&b))
 }
 
-/// Same payload `fetch` sends: opcode 2, the name, then `whoami`.
+/// Resolve or another name opcode. The reply text has no lane.
+fn net_text(op: u8, name: &str) -> io::Result<String> {
+    let (reply, got, lane) = net_rpc(op, name)?;
+    if lane != 0 {
+        return Err(io::const_error!(
+            io::ErrorKind::InvalidData,
+            "unexpected lane"
+        ));
+    }
+    let text = core::str::from_utf8(&reply[8..got.min(reply.len())]).unwrap_or("");
+    if text.contains("denied") {
+        return Err(syscall::io_error(SysError::AccessDenied));
+    }
+    if text.contains("timed") {
+        return Err(syscall::io_error(SysError::TimedOut));
+    }
+    if text.is_empty() {
+        return Err(io::const_error!(io::ErrorKind::InvalidData, "bad reply"));
+    }
+    Ok(text.to_string())
+}
+
+/// Same payload `fetch` sends: opcode, the name, then `whoami`.
 fn dial(name: &str) -> io::Result<Cap> {
+    let (reply, got, lane) = net_rpc(abi::NET_OP_DIAL, name)?;
+    if lane == 0 {
+        let text = core::str::from_utf8(&reply[8..got.min(reply.len())]).unwrap_or("");
+        let err = if text.contains("denied") {
+            SysError::AccessDenied
+        } else if text.contains("timed") {
+            SysError::TimedOut
+        } else {
+            SysError::Unsupported
+        };
+        return Err(syscall::io_error(err));
+    }
+    Ok(Cap::from_bits(lane))
+}
+
+fn net_rpc(op: u8, name: &str) -> io::Result<([u8; abi::CHAN_MSG_MAX], usize, u64)> {
     let mut who = [0u8; 32];
     let who_n = syscall::syscall(
         Syscall::User,
@@ -201,7 +286,7 @@ fn dial(name: &str) -> io::Result<Cap> {
     if name_b.len() + who_n + 3 > payload.len() {
         return Err(io::const_error!(io::ErrorKind::InvalidInput, "bad name"));
     }
-    payload[0] = abi::NET_OP_DIAL;
+    payload[0] = op;
     payload[1] = name_b.len() as u8;
     payload[2..2 + name_b.len()].copy_from_slice(name_b);
     let at = 2 + name_b.len();
@@ -223,67 +308,106 @@ fn dial(name: &str) -> io::Result<Cap> {
         return Err(io::const_error!(io::ErrorKind::InvalidData, "bad reply"));
     }
     let lane = u64::from_le_bytes(reply[..8].try_into().unwrap_or([0; 8]));
-    if lane == 0 {
-        let text = core::str::from_utf8(&reply[8..got.min(reply.len())]).unwrap_or("");
-        let err = if text.contains("denied") {
-            SysError::AccessDenied
-        } else if text.contains("timed") {
-            SysError::TimedOut
-        } else {
-            SysError::Unsupported
-        };
-        return Err(syscall::io_error(err));
-    }
-    Ok(Cap::from_bits(lane))
+    Ok((reply, got, lane))
 }
 
-pub struct TcpListener(!);
+fn bind_local(addr: &str) -> io::Result<()> {
+    let bytes = addr.as_bytes();
+    let mut payload = [0u8; 32];
+    if bytes.len() + 2 > payload.len() {
+        return Err(io::const_error!(io::ErrorKind::InvalidInput, "bad address"));
+    }
+    payload[0] = abi::NET_OP_BIND;
+    payload[1] = bytes.len() as u8;
+    payload[2..2 + bytes.len()].copy_from_slice(bytes);
+    let n = 2 + bytes.len();
+    let mut reply = [0u8; abi::CHAN_MSG_MAX];
+    let got = syscall::syscall6(
+        Syscall::Send,
+        abi::reserved::net(CapRights::WRITE).bits(),
+        payload.as_ptr().addr() as u64,
+        n as u64,
+        reply.as_mut_ptr().addr() as u64,
+        reply.len() as u64,
+    )
+    .map_err(syscall::io_error)?;
+    let got = got as usize;
+    if got < 8 {
+        return Err(io::const_error!(io::ErrorKind::InvalidData, "bad reply"));
+    }
+    let text = core::str::from_utf8(&reply[8..got.min(reply.len())]).unwrap_or("");
+    if text.contains("ok") {
+        return Ok(());
+    }
+    let err = if text.contains("denied") {
+        SysError::AccessDenied
+    } else if text.contains("timed") {
+        SysError::TimedOut
+    } else {
+        SysError::Unsupported
+    };
+    Err(syscall::io_error(err))
+}
+
+pub struct TcpListener(());
 
 impl TcpListener {
-    pub fn bind<A: ToSocketAddrs>(_: A) -> io::Result<TcpListener> {
-        unsupported()
+    /// Bind the stored local address. `accept` stays unsupported.
+    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<TcpListener> {
+        let sock = addr
+            .to_socket_addrs()?
+            .next()
+            .ok_or_else(|| io::const_error!(io::ErrorKind::InvalidInput, "bad address"))?;
+        let SocketAddr::V4(v4) = sock else {
+            return unsupported();
+        };
+        let ip = v4.ip().octets();
+        let text = format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
+        bind_local(&text)?;
+        Ok(TcpListener(()))
     }
 
     pub fn socket_addr(&self) -> io::Result<SocketAddr> {
-        self.0
+        unsupported()
     }
 
     pub fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
-        self.0
+        let _ = self;
+        unsupported()
     }
 
     pub fn duplicate(&self) -> io::Result<TcpListener> {
-        self.0
+        unsupported()
     }
 
     pub fn set_ttl(&self, _: u32) -> io::Result<()> {
-        self.0
+        unsupported()
     }
 
     pub fn ttl(&self) -> io::Result<u32> {
-        self.0
+        unsupported()
     }
 
     pub fn set_only_v6(&self, _: bool) -> io::Result<()> {
-        self.0
+        unsupported()
     }
 
     pub fn only_v6(&self) -> io::Result<bool> {
-        self.0
+        unsupported()
     }
 
     pub fn take_error(&self) -> io::Result<Option<io::Error>> {
-        self.0
+        unsupported()
     }
 
     pub fn set_nonblocking(&self, _: bool) -> io::Result<()> {
-        self.0
+        unsupported()
     }
 }
 
 impl fmt::Debug for TcpListener {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("TcpListener")
     }
 }
 

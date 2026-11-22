@@ -405,12 +405,19 @@ mod common;
         net_imp::TcpStream::connect(addr).map(TcpStream)
     }
 
-    /// Dial a granted name. The value is a lane. A string that is an
-    /// IP address, or that contains a port, is `unsupported`.
+    /// Dial a granted name, one stored address, or `address:port`.
+    /// The value is a lane.
     #[stable(feature = "rust1", since = "1.0.0")]
     #[cfg(target_os = "galexy")]
     pub fn connect(name: &str) -> io::Result<TcpStream> {
         net_imp::TcpStream::connect(name).map(TcpStream)
+    }
+
+    /// Resolve a granted name over DNS-over-TLS. The string is the address.
+    #[stable(feature = "rust1", since = "1.0.0")]
+    #[cfg(target_os = "galexy")]
+    pub fn lookup(name: &str) -> io::Result<String> {
+        net_imp::TcpStream::lookup(name)
     }
 """,
     )

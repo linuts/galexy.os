@@ -4,15 +4,17 @@
 //! provider. A handshake that is not finished in five seconds is dropped.
 //! Session keys are not written to the console.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::Arc;
 
 use galexy_abi::{
-    Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_DIAL, NET_OP_GRANT, NET_OP_LINK, NET_OP_PING,
-    NET_OP_REVOKE, NET_OP_SERVE,
+    Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DIAL, NET_OP_GRANT, NET_OP_LINK,
+    NET_OP_PIN, NET_OP_PING, NET_OP_RESOLVE, NET_OP_REVOKE, NET_OP_SERVE,
 };
 use galexy_net::Engine;
-use galexy_netcfg::{decode, encode, Record, MODE_FIXED, NAME_MAX};
+use galexy_netcfg::{
+    decode, encode, Record, KIND_ADDR, KIND_DNS, KIND_IPV4, KIND_PORT, MODE_FIXED, NAME_MAX,
+};
 use galexy_rt::{
     chan_recv_poll, chan_send, channel, clock_ms, close, lane_pair, open, read, seek, sleep_ms,
     truncate, wire_read, wire_write, write, write_console,
@@ -182,12 +184,15 @@ fn handle(
             }
         }
         NET_OP_DIAL => dial(rx, engine, record, admin, actor_id, msg[2], rest, now),
+        NET_OP_RESOLVE => resolve(rx, engine, record, actor_id, msg[2], rest, now),
+        NET_OP_PIN if admin => pin(rx, record, rest),
+        NET_OP_BIND => bind_local(rx, engine, record, msg[2], rest),
         NET_OP_ALLOW if admin => allow(rx, record, rest),
         NET_OP_GRANT if admin => grant_op(rx, record, rest, true),
         NET_OP_REVOKE if admin => grant_op(rx, record, rest, false),
         NET_OP_SERVE if admin => serve(rx, engine, record, msg[2], actor_id, gates, rest),
         NET_OP_PING => ping(rx, engine, msg[2], rest),
-        NET_OP_ALLOW | NET_OP_GRANT | NET_OP_REVOKE | NET_OP_SERVE => {
+        NET_OP_ALLOW | NET_OP_GRANT | NET_OP_REVOKE | NET_OP_SERVE | NET_OP_PIN => {
             reply(rx, b"access denied\n", 0);
         }
         _ => reply(rx, b"bad\n", 0),
@@ -208,65 +213,126 @@ fn dial(
         reply(rx, b"bad\n", 0);
         return;
     };
+    // Read on the card is dial. The check is the held bit from the
+    // kernel. A passed address is not a directory name.
+    if let Some((ip, passed_port)) = parse_passed(name) {
+        dial_passed(rx, engine, record, actor_id, held, ip, passed_port, now);
+        return;
+    }
     let Some(entry) = record.find(name) else {
         audit(actor_id, name, &[0; 32], "missing");
         reply(rx, b"access denied\n", 0);
         return;
     };
-    // Read on the name's galfs object is dial. Actor strings are not
-    // an authority. No bit means no TCP.
     if held & 1 == 0 {
         audit(actor_id, name, &entry.key, "denied");
         reply(rx, b"access denied\n", 0);
         return;
     }
-    if entry.kind != 4 {
-        reply(rx, b"unsupported\n", 0);
+    let (ip, port, key) = match entry.kind {
+        KIND_IPV4 => {
+            let ip = [entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]];
+            (ip, entry.port, entry.key)
+        }
+        KIND_DNS => match lookup_dns(engine, record, name, now) {
+            Ok(ip) => (ip, entry.port, entry.key),
+            Err(why) => {
+                reply_lookup(rx, why);
+                return;
+            }
+        },
+        _ => {
+            reply(rx, b"unsupported\n", 0);
+            return;
+        }
+    };
+    if port == 0 || ip == [0, 0, 0, 0] {
+        reply(rx, b"access denied\n", 0);
         return;
     }
-    let ip = [entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]];
-    let Ok(id) = engine.tcp_connect(ip, entry.port) else {
-        audit(actor_id, name, &entry.key, "unavailable");
+    finish_dial(rx, engine, actor_id, name, ip, port, &key, now);
+}
+
+fn dial_passed(
+    rx: Cap,
+    engine: &mut Engine,
+    record: &Record,
+    actor_id: u64,
+    held: u8,
+    ip: [u8; 4],
+    passed_port: Option<u16>,
+    now: u64,
+) {
+    if held & 1 == 0 || ip == [0, 0, 0, 0] {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    let Some(addr) = find_kind(record, KIND_ADDR, ip, None) else {
+        reply(rx, b"access denied\n", 0);
+        return;
+    };
+    let port = if let Some(port) = passed_port {
+        if find_kind(record, KIND_PORT, ip, Some(port)).is_none() {
+            reply(rx, b"access denied\n", 0);
+            return;
+        }
+        port
+    } else {
+        addr.port
+    };
+    if port == 0 {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    let key = addr.key;
+    let label = addr.name_bytes().to_vec();
+    finish_dial(rx, engine, actor_id, &label, ip, port, &key, now);
+}
+
+fn finish_dial(
+    rx: Cap,
+    engine: &mut Engine,
+    actor_id: u64,
+    name: &[u8],
+    ip: [u8; 4],
+    port: u16,
+    key: &[u8; 32],
+    now: u64,
+) {
+    log(&format!(
+        "[net] dial {}.{}.{}.{}",
+        ip[0], ip[1], ip[2], ip[3]
+    ));
+    let Ok(id) = engine.tcp_connect(ip, port) else {
+        audit(actor_id, name, key, "unavailable");
         reply(rx, b"unavailable\n", 0);
         return;
     };
-    let start = now;
-    let mut established = false;
-    while clock_ms().saturating_sub(start) < HANDSHAKE_MS {
-        pump(engine);
-        engine.poll(clock_ms());
-        pump(engine);
-        if engine.tcp_established(id) {
-            established = true;
-            break;
-        }
-        let _ = sleep_ms(20);
-    }
-    if !established {
-        engine.tcp_close(id);
-        audit(actor_id, name, &entry.key, "deadline");
+    if !wait_established(engine, id, now) {
+        engine.tcp_release(id);
+        audit(actor_id, name, key, "deadline");
         log("[net] deadline");
         reply(rx, b"timed out\n", 0);
         return;
     }
     let name_str = String::from_utf8_lossy(name).into_owned();
-    match tls_fetch(engine, id, &name_str, &entry.key, start) {
+    match tls_fetch(engine, id, &name_str, key, now) {
         Ok(body) => {
             let mut pair = [0u64; 2];
             if !lane_pair(&mut pair).ok {
-                audit(actor_id, name, &entry.key, "unavailable");
+                audit(actor_id, name, key, "unavailable");
                 reply(rx, b"unavailable\n", 0);
                 return;
             }
             let ours = Cap::from_bits(pair[0]);
             let _ = write(ours, &body);
             let _ = close(ours);
-            audit(actor_id, name, &entry.key, "ok");
+            audit(actor_id, name, key, "ok");
             reply(rx, b"ok\n", pair[1]);
         }
         Err(why) => {
-            engine.tcp_close(id);
-            audit(actor_id, name, &entry.key, why);
+            engine.tcp_release(id);
+            audit(actor_id, name, key, why);
             if why == "deadline" {
                 log("[net] deadline");
             }
@@ -290,7 +356,12 @@ fn tls_fetch(
     key: &[u8; 32],
     start: u64,
 ) -> Result<Vec<u8>, &'static str> {
-    let server = ServerName::try_from(name.to_string()).map_err(|_| "bad")?;
+    let server_name = if ServerName::try_from(name.to_string()).is_ok() {
+        name.to_string()
+    } else {
+        "echo".to_string()
+    };
+    let server = ServerName::try_from(server_name).map_err(|_| "bad")?;
     let config = client_config(key).map_err(|_| "bad")?;
     let mut conn = Connection::Client(ClientConnection::new(config, server).map_err(|_| "bad")?);
     let mut body = Vec::new();
@@ -439,6 +510,348 @@ fn ed25519_key(der: &[u8]) -> Option<[u8; 32]> {
     let mut key = [0u8; 32];
     key.copy_from_slice(&rest[bit + 3..bit + 35]);
     Some(key)
+}
+
+fn resolve(
+    rx: Cap,
+    engine: &mut Engine,
+    record: &Record,
+    _actor_id: u64,
+    held: u8,
+    rest: &[u8],
+    now: u64,
+) {
+    let Some(name) = one_name(rest) else {
+        reply(rx, b"bad\n", 0);
+        return;
+    };
+    if held & 1 == 0 || record.find(name).is_none_or(|entry| entry.kind != KIND_DNS) {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    match lookup_dns(engine, record, name, now) {
+        Ok(ip) => {
+            let text = format!("{}.{}.{}.{}\n", ip[0], ip[1], ip[2], ip[3]);
+            reply(rx, text.as_bytes(), 0);
+        }
+        Err(why) => reply_lookup(rx, why),
+    }
+}
+
+fn pin(rx: Cap, record: &mut Record, rest: &[u8]) {
+    if rest.len() < 4 + 32 {
+        reply(rx, b"bad\n", 0);
+        return;
+    }
+    let addr = [rest[0], rest[1], rest[2], rest[3]];
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&rest[4..36]);
+    if record.pin(addr, key).is_err() {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    save_record(record);
+    reply(rx, b"ok\n", 0);
+}
+
+fn bind_local(rx: Cap, engine: &mut Engine, record: &Record, held: u8, rest: &[u8]) {
+    let Some(name) = one_name(rest) else {
+        reply(rx, b"bad\n", 0);
+        return;
+    };
+    if held & 2 == 0 {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    let Some(ip) = parse_ip(name) else {
+        reply(rx, b"access denied\n", 0);
+        return;
+    };
+    if ip == [0, 0, 0, 0] || find_kind(record, KIND_ADDR, ip, None).is_none() {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    let Some((ours, _, _)) = engine.locator() else {
+        reply(rx, b"unavailable\n", 0);
+        return;
+    };
+    if ip != ours {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    log(&format!(
+        "[net] bound {}.{}.{}.{}",
+        ip[0], ip[1], ip[2], ip[3]
+    ));
+    reply(rx, b"ok\n", 0);
+}
+
+fn lookup_dns(
+    engine: &mut Engine,
+    record: &Record,
+    name: &[u8],
+    now: u64,
+) -> Result<[u8; 4], &'static str> {
+    let Some(resolver) = record.resolver else {
+        return Err("denied");
+    };
+    let query = dns_query(name).ok_or("bad")?;
+    let id = engine
+        .tcp_connect(resolver.addr, galexy_netcfg::DOT_PORT)
+        .map_err(|_| "unavailable")?;
+    if !wait_established(engine, id, now) {
+        engine.tcp_release(id);
+        return Err("deadline");
+    }
+    let result = match tls_exchange(engine, id, "echo", &resolver.key, now, &query) {
+        Ok(body) => dot_answer(&body).ok_or("denied"),
+        Err(why) => Err(why),
+    };
+    engine.tcp_release(id);
+    if let Ok(ip) = result {
+        log(&format!(
+            "[net] dot {}.{}.{}.{}",
+            ip[0], ip[1], ip[2], ip[3]
+        ));
+    }
+    result
+}
+
+fn reply_lookup(rx: Cap, why: &'static str) {
+    if why == "deadline" {
+        log("[net] deadline");
+        reply(rx, b"timed out\n", 0);
+    } else if why == "unavailable" {
+        reply(rx, b"unavailable\n", 0);
+    } else {
+        reply(rx, b"access denied\n", 0);
+    }
+}
+
+fn wait_established(engine: &mut Engine, id: u8, start: u64) -> bool {
+    while clock_ms().saturating_sub(start) < HANDSHAKE_MS {
+        pump(engine);
+        engine.poll(clock_ms());
+        pump(engine);
+        if engine.tcp_established(id) {
+            return true;
+        }
+        let _ = sleep_ms(20);
+    }
+    false
+}
+
+fn tls_exchange(
+    engine: &mut Engine,
+    id: u8,
+    name: &str,
+    key: &[u8; 32],
+    start: u64,
+    send: &[u8],
+) -> Result<Vec<u8>, &'static str> {
+    let server = ServerName::try_from(name.to_string()).map_err(|_| "bad")?;
+    let config = client_config(key).map_err(|_| "bad")?;
+    let mut conn = Connection::Client(ClientConnection::new(config, server).map_err(|_| "bad")?);
+    let mut body = Vec::new();
+    let mut sent = false;
+    let limit = start.saturating_add(HANDSHAKE_MS.saturating_mul(2));
+    while clock_ms() < limit {
+        if clock_ms().saturating_sub(start) >= HANDSHAKE_MS && conn.is_handshaking() {
+            return Err("deadline");
+        }
+        if !conn.is_handshaking() && !sent {
+            conn.writer().write_all(send).map_err(|_| "bad")?;
+            sent = true;
+        }
+        drive_tls(engine, id, &mut conn, &mut body)?;
+        if sent && dot_complete(&body) {
+            break;
+        }
+        pump(engine);
+        let _ = sleep_ms(20);
+    }
+    if !sent || !dot_complete(&body) {
+        return Err("deadline");
+    }
+    Ok(body)
+}
+
+fn find_kind(
+    record: &Record,
+    kind: u8,
+    ip: [u8; 4],
+    port: Option<u16>,
+) -> Option<&galexy_netcfg::Name> {
+    record.names[..record.name_count as usize]
+        .iter()
+        .find(|entry| {
+            entry.kind == kind && entry.ip[..4] == ip && port.is_none_or(|port| entry.port == port)
+        })
+}
+
+fn one_name(rest: &[u8]) -> Option<&[u8]> {
+    if rest.is_empty() {
+        return None;
+    }
+    let nlen = rest[0] as usize;
+    if nlen == 0 || rest.len() < 1 + nlen {
+        return None;
+    }
+    Some(&rest[1..1 + nlen])
+}
+
+fn parse_passed(name: &[u8]) -> Option<([u8; 4], Option<u16>)> {
+    if let Some(colon) = name.iter().position(|b| *b == b':') {
+        let ip = parse_ip(&name[..colon])?;
+        let port = parse_port(&name[colon + 1..])?;
+        return Some((ip, Some(port)));
+    }
+    parse_ip(name).map(|ip| (ip, None))
+}
+
+fn parse_ip(text: &[u8]) -> Option<[u8; 4]> {
+    let mut ip = [0u8; 4];
+    let mut parts = 0usize;
+    for part in text.split(|b| *b == b'.') {
+        if parts == 4 {
+            return None;
+        }
+        ip[parts] = parse_octet(part)?;
+        parts += 1;
+    }
+    if parts == 4 {
+        Some(ip)
+    } else {
+        None
+    }
+}
+
+fn parse_octet(text: &[u8]) -> Option<u8> {
+    if text.is_empty() || text.len() > 3 || (text.len() > 1 && text[0] == b'0') {
+        return None;
+    }
+    let mut n = 0u16;
+    for b in text {
+        let d = b.wrapping_sub(b'0');
+        if d > 9 {
+            return None;
+        }
+        n = n.checked_mul(10)?.checked_add(u16::from(d))?;
+    }
+    u8::try_from(n).ok()
+}
+
+fn parse_port(text: &[u8]) -> Option<u16> {
+    if text.is_empty() || (text.len() > 1 && text[0] == b'0') {
+        return None;
+    }
+    let mut n = 0u16;
+    for b in text {
+        let d = b.wrapping_sub(b'0');
+        if d > 9 {
+            return None;
+        }
+        n = n.checked_mul(10)?.checked_add(u16::from(d))?;
+    }
+    if n == 0 {
+        None
+    } else {
+        Some(n)
+    }
+}
+
+fn dns_query(name: &[u8]) -> Option<Vec<u8>> {
+    let mut msg = Vec::new();
+    msg.extend_from_slice(&1u16.to_be_bytes());
+    msg.extend_from_slice(&0x0100u16.to_be_bytes());
+    msg.extend_from_slice(&1u16.to_be_bytes());
+    msg.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+    if name.is_empty() {
+        return None;
+    }
+    for label in name.split(|b| *b == b'.') {
+        if label.is_empty() || label.len() > 63 {
+            return None;
+        }
+        msg.push(label.len() as u8);
+        msg.extend_from_slice(label);
+    }
+    msg.push(0);
+    msg.extend_from_slice(&1u16.to_be_bytes());
+    msg.extend_from_slice(&1u16.to_be_bytes());
+    let mut wire = Vec::new();
+    let len = u16::try_from(msg.len()).ok()?;
+    wire.extend_from_slice(&len.to_be_bytes());
+    wire.extend_from_slice(&msg);
+    Some(wire)
+}
+
+fn dot_complete(body: &[u8]) -> bool {
+    if body.len() < 2 {
+        return false;
+    }
+    let n = u16::from_be_bytes([body[0], body[1]]) as usize;
+    body.len() >= 2 + n && n >= 12
+}
+
+fn dot_answer(body: &[u8]) -> Option<[u8; 4]> {
+    if !dot_complete(body) {
+        return None;
+    }
+    let n = u16::from_be_bytes([body[0], body[1]]) as usize;
+    dns_a(&body[2..2 + n])
+}
+
+fn dns_a(buf: &[u8]) -> Option<[u8; 4]> {
+    if buf.len() < 12 {
+        return None;
+    }
+    let answers = u16::from_be_bytes([buf[6], buf[7]]) as usize;
+    let mut i = skip_name(buf, 12)?;
+    if i + 4 > buf.len() {
+        return None;
+    }
+    i += 4;
+    for _ in 0..answers {
+        i = skip_name(buf, i)?;
+        if i + 10 > buf.len() {
+            return None;
+        }
+        let kind = u16::from_be_bytes([buf[i], buf[i + 1]]);
+        let rdlen = u16::from_be_bytes([buf[i + 8], buf[i + 9]]) as usize;
+        i += 10;
+        if i + rdlen > buf.len() {
+            return None;
+        }
+        if kind == 1 && rdlen == 4 {
+            let ip = [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]];
+            if ip != [10, 0, 2, 2] && ip != [0, 0, 0, 0] {
+                return Some(ip);
+            }
+        }
+        i += rdlen;
+    }
+    None
+}
+
+fn skip_name(buf: &[u8], mut i: usize) -> Option<usize> {
+    for _ in 0..16 {
+        if i >= buf.len() {
+            return None;
+        }
+        let len = buf[i];
+        if len == 0 {
+            return Some(i + 1);
+        }
+        if len & 0xc0 == 0xc0 {
+            if i + 1 >= buf.len() {
+                return None;
+            }
+            return Some(i + 2);
+        }
+        i += 1 + len as usize;
+    }
+    None
 }
 
 fn allow(rx: Cap, record: &mut Record, rest: &[u8]) {
