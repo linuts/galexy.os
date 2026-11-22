@@ -346,7 +346,7 @@ pub fn boot_with_galfs_virtio(
 }
 
 /// Like [`boot_with_galfs`], but the guest places GALF at LBA 2048
-/// (`DISK_PART_LBA`). Image is 2 MiB so base + dual slots fit.
+/// (`DISK_PART_LBA`). Image covers that offset plus an 8 MiB volume.
 pub fn boot_with_galfs_part(image: &Image) -> (Option<i32>, String, Vec<u8>, Option<i32>, String) {
     boot_with_galfs_inner(
         image,
@@ -416,10 +416,10 @@ enum CorruptMode {
     TornNewest,
 }
 
-/// 1 MiB — covers dual slots at LBA 0.
-const GALFS_IMG_BYTES: usize = 1024 * 1024;
-/// 2 MiB — covers LBA 2048 partition offset + dual slots.
-const GALFS_IMG_BYTES_PARTED: usize = 2 * 1024 * 1024;
+/// 8 MiB — metadata slots plus a 4 KiB data pool.
+const GALFS_IMG_BYTES: usize = 8 * 1024 * 1024;
+/// LBA 2048 plus an 8 MiB volume.
+const GALFS_IMG_BYTES_PARTED: usize = 2048 * 512 + 8 * 1024 * 1024;
 
 fn boot_with_galfs_inner(
     image: &Image,
@@ -448,8 +448,8 @@ fn boot_with_galfs_inner(
     (code1, serial1, img_after_write, code2, serial2)
 }
 
-/// Dual-slot layout must match `galfs::DISK_SECTORS` (288 × 512).
-const GALFS_SLOT_SECTORS: usize = 288;
+/// Dual-slot layout must match `galfs::DISK_SECTORS` (128 × 512).
+const GALFS_SLOT_SECTORS: usize = 128;
 const GALFS_SECTOR: usize = 512;
 /// Matches kernel / `galexy_galf::DISK_HEADER`.
 const GALFS_DISK_HEADER: usize = 128;

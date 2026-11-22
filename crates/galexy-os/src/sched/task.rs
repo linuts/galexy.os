@@ -362,7 +362,7 @@ pub(crate) fn task_truncate(cap: Cap, new_len: u64) -> Result<(), SysError> {
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    if new_len > galfs::FILE_BYTES as u64 {
+    if new_len > galfs::FILE_BYTES {
         return Err(SysError::BadValue);
     }
     interrupts::without_interrupts(|| {

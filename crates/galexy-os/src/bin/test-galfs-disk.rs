@@ -19,12 +19,32 @@ entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 /// Unique plaintext the host asserts is absent from the sealed image.
 const PLAIN_TAG: &[u8] = b"persist-ok-block-store";
 
-fn multi_block_payload() -> [u8; 600] {
-    let mut buf = [0u8; 600];
+const PAYLOAD: usize = galfs::BLOCK_SIZE + 64;
+
+fn multi_block_payload() -> [u8; PAYLOAD] {
+    let mut buf = [0u8; PAYLOAD];
     for (i, b) in buf.iter_mut().enumerate() {
         *b = PLAIN_TAG.get(i % PLAIN_TAG.len()).copied().unwrap_or(b'x');
     }
     buf
+}
+
+fn write_mib(file: u32) {
+    let chunk = [0x5Au8; 4096];
+    let mut left = 1024 * 1024;
+    while left > 0 {
+        let n = galfs::append_file(file, &chunk).expect("append mib");
+        assert_eq!(n, chunk.len());
+        left -= n;
+    }
+}
+
+fn check_mib(file: u32) {
+    assert_eq!(galfs::object_len(file), Some(1024 * 1024));
+    let mut head = [0u8; 16];
+    let n = galfs::read_file_bytes(file, &mut head).expect("read mib");
+    assert_eq!(n, head.len());
+    assert!(head.iter().all(|b| *b == 0x5A));
 }
 
 fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
@@ -62,13 +82,15 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let desktop = galfs::find_under(admin, "Desktop").expect("admin Desktop");
     let want = multi_block_payload();
     if let Some(file) = galfs::find_under(desktop, "persist") {
-        let mut buf = [0u8; 600];
+        let mut buf = [0u8; PAYLOAD];
         let n = galfs::read_file_bytes(file, &mut buf).expect("read persist");
         assert_eq!(
             &buf[..n],
             &want[..],
             "persist file must hold multi-block marker"
         );
+        let wide = galfs::find_under(desktop, "wide").expect("wide");
+        check_mib(wide);
         assert!(
             galfs::blocks_used() >= 2,
             "multi-block persist must keep allocated blocks"
@@ -82,6 +104,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let n = galfs::append_file(file, &want).expect("append");
     assert_eq!(n, want.len());
     assert!(galfs::blocks_used() >= 2, "append must span two blocks");
+    let wide = galfs::create_file_under(desktop, "wide").expect("wide");
+    write_mib(wide);
     // Two commits so both dual slots hold the persist bytes — corrupt-
     // newest recover tests must find the file in the older sibling.
     galfs::sync();

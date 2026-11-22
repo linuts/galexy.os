@@ -22,7 +22,7 @@ fn bad_stat(path: &str) {
     );
 }
 
-fn bad_create(parent: u16, name: &str) {
+fn bad_create(parent: u32, name: &str) {
     assert!(
         matches!(
             galfs::create_file_under(parent, name),

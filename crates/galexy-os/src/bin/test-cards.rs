@@ -48,7 +48,7 @@ fn token_slot_exhaustion() {
     let admin = galfs::admin_root();
     let desktop = galfs::find_under(admin, "Desktop").expect("Desktop");
 
-    let mut objs = [0u16; galfs::TOKEN_SLOTS];
+    let mut objs = [0u32; galfs::TOKEN_SLOTS];
     for (i, slot) in objs.iter_mut().enumerate() {
         let mut name = [b'a'; 2];
         name[1] = b'0' + i as u8;

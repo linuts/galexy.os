@@ -142,14 +142,14 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     exit_qemu(QemuExitCode::Success);
 }
 
-fn copy_file(parent: u16, name: &str, bytes: &[u8]) {
+fn copy_file(parent: u32, name: &str, bytes: &[u8]) {
     let id =
         sched::galfs::create_file_under(parent, name).unwrap_or_else(|_| panic!("create {name}"));
     let n = sched::galfs::append_file(id, bytes).unwrap_or(0);
     assert_eq!(n, bytes.len(), "short write {name}: {n} of {}", bytes.len());
 }
 
-fn read_root_file(root: u16, name: &str) -> Vec<u8> {
+fn read_root_file(root: u32, name: &str) -> Vec<u8> {
     let id = sched::galfs::find_under(root, name).unwrap_or_else(|| panic!("{name} missing"));
     let n = sched::galfs::object_len(id).unwrap_or_else(|| panic!("{name} length"));
     let mut bytes = alloc::vec![0u8; n];

@@ -86,7 +86,7 @@ fn main() {
         std::env::var_os("GALEXY_GALFS_IMG").unwrap_or_else(|| "galfs.img".into()),
     );
     if !galfs_path.exists() {
-        std::fs::write(&galfs_path, vec![0u8; 1024 * 1024]).unwrap_or_else(|e| {
+        std::fs::write(&galfs_path, vec![0u8; 8 * 1024 * 1024]).unwrap_or_else(|e| {
             panic!("create {}: {e}", galfs_path.display());
         });
         eprintln!("[runner] created {}", galfs_path.display());

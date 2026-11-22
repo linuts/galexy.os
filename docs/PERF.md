@@ -76,8 +76,8 @@ ceiling is `NoResource`, never a panic.
 | Process caps per task | 16 | `galexy_abi::MAX_PROC_CAPS` |
 | Pipes system-wide / bytes per pipe | 8 / 256 | `sched::pipe` |
 | galfs tokens per task | 8 | `GALFS.md` → Table limits |
-| galfs actors / objects / shares | 32 / 128 / 32 | `GALFS.md` |
-| galfs block pool / max file | v12: 256 × 512 B / 32 KiB on disk. A larger file promotes into a RAM store, 4 KiB blocks, 80 MiB per file, 128 MiB pool (Milestones 72–73) | `GALFS.md` |
+| galfs actors / objects / shares | 32 / 384 / 32 | `GALFS.md` |
+| galfs block pool / max file | v16: 4 KiB extents, eight per file, pool sized to the disk. File bytes are what remains after inode and map blocks, capped at 64 GiB. A longer file promotes into a RAM store, 80 MiB per file, 128 MiB pool (Milestones 72–73) | `GALFS.md` |
 | Default actor quota | 16 objects, 16 KiB | `GALFS.md` |
 | Path | 8 components × 64 bytes; actor names 32 | `galexy_core::path` |
 | Spawn name / arg blob | 64 / 4096 bytes | `galexy_abi` |

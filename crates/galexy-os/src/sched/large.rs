@@ -1,7 +1,7 @@
-//! Files that do not fit the v12 pool.
+//! Files that do not fit the durable extent cap.
 //!
-//! v12 keeps 512-byte blocks and a `u16` length (32 KiB). A write past
-//! that promotes the file here: 4 KiB blocks, one indirect block per
+//! v15 keeps 4 KiB extents and a 64 MiB file. A write past that
+//! promotes the file here: 4 KiB blocks, one indirect block per
 //! 4 MiB, length `u32`. The pool grows on the kernel heap up to
 //! [`LARGE_POOL_BYTES`] of file data, plus indirect blocks. One file
 //! is still capped at [`LARGE_FILE_MAX`]. A sysroot import can attach
@@ -29,8 +29,8 @@ pub const LARGE_FILE_MAX: u32 = 80 * 1024 * 1024;
 /// `std`, and the rlibs the linker reads. That set is about 90 MiB.
 /// 128 MiB leaves room for the linked ELF and rustc's temps.
 pub const LARGE_POOL_BYTES: usize = 128 * 1024 * 1024;
-/// Object slots. Matches `galfs::OBJECT_SLOTS`.
-pub const SLOTS: usize = 128;
+/// Promoted files addressed by object id. Ids past this stay durable.
+const MAX_PROMOTED: usize = 16_384;
 
 const PTRS: usize = LARGE_BLOCK / 4;
 const NONE: u32 = u32::MAX;
@@ -64,10 +64,14 @@ fn zero_block() -> Box<[u8; LARGE_BLOCK]> {
         .unwrap_or_else(|_| unreachable!("4096-byte block"))
 }
 
-fn ensure_slots(store: &mut Store) {
-    if store.files.len() < SLOTS {
-        store.files.resize_with(SLOTS, || None);
+fn ensure_slots(store: &mut Store, index: usize) -> bool {
+    if index >= MAX_PROMOTED {
+        return false;
     }
+    if store.files.len() <= index {
+        store.files.resize_with(index + 1, || None);
+    }
+    true
 }
 
 fn alloc_block(store: &mut Store) -> Option<u32> {
@@ -98,7 +102,7 @@ fn read_ptr(block: &[u8], slot: usize) -> u32 {
 }
 
 fn ensure_indirect(store: &mut Store, index: usize, ind: usize) -> Option<u32> {
-    ensure_slots(store);
+    let _ = ensure_slots(store, index);
     while store.files[index].as_ref()?.indirect.len() <= ind {
         let b = alloc_block(store)?;
         fill_none(store, b);
@@ -128,7 +132,7 @@ fn ensure_data(store: &mut Store, index: usize, data_index: usize) -> Option<u32
 /// `Some(len)` when `index` has been promoted.
 pub fn len(index: usize) -> Option<u32> {
     let mut store = STORE.lock();
-    ensure_slots(&mut store);
+    let _ = ensure_slots(&mut store, index);
     store
         .files
         .get(index)
@@ -139,13 +143,13 @@ pub fn len(index: usize) -> Option<u32> {
 /// Copies `bytes` into a fresh promoted file. Replaces any previous
 /// large body for `index`.
 pub fn create_from(index: usize, bytes: &[u8]) -> bool {
-    if index >= SLOTS || bytes.len() > LARGE_FILE_MAX as usize {
+    if index >= MAX_PROMOTED || bytes.len() > LARGE_FILE_MAX as usize {
         return false;
     }
     clear(index);
     {
         let mut store = STORE.lock();
-        ensure_slots(&mut store);
+        let _ = ensure_slots(&mut store, index);
         store.files[index] = Some(File {
             len: 0,
             indirect: Vec::new(),
@@ -161,12 +165,12 @@ pub fn create_from(index: usize, bytes: &[u8]) -> bool {
 /// write copies the visible prefix into pool blocks and then extends
 /// that copy. Replaces any previous large body for `index`.
 pub fn create_shared(index: usize, bytes: &'static [u8]) -> bool {
-    if index >= SLOTS || bytes.len() > LARGE_FILE_MAX as usize {
+    if index >= MAX_PROMOTED || bytes.len() > LARGE_FILE_MAX as usize {
         return false;
     }
     clear(index);
     let mut store = STORE.lock();
-    ensure_slots(&mut store);
+    let _ = ensure_slots(&mut store, index);
     store.files[index] = Some(File {
         len: bytes.len() as u32,
         indirect: Vec::new(),
@@ -230,8 +234,8 @@ fn materialize(store: &mut Store, index: usize) -> bool {
 /// [`LARGE_FILE_MAX`]. The file must already be promoted.
 pub fn append(index: usize, src: &[u8], max_new: u32) -> usize {
     let mut store = STORE.lock();
-    ensure_slots(&mut store);
-    if index >= SLOTS || store.files[index].is_none() {
+    let _ = ensure_slots(&mut store, index);
+    if index >= MAX_PROMOTED || store.files[index].is_none() {
         return 0;
     }
     if !materialize(&mut store, index) {
@@ -278,8 +282,8 @@ pub fn write_at(index: usize, start: usize, src: &[u8], max_new: u32) -> usize {
         return 0;
     }
     let mut store = STORE.lock();
-    ensure_slots(&mut store);
-    if index >= SLOTS || store.files[index].is_none() {
+    let _ = ensure_slots(&mut store, index);
+    if index >= MAX_PROMOTED || store.files[index].is_none() {
         return 0;
     }
     if !materialize(&mut store, index) {
@@ -410,7 +414,7 @@ pub fn read(index: usize, start: usize, dst: &mut [u8]) -> Option<usize> {
 /// Shrinks a promoted file. Growing is [`append`] of zeros.
 pub fn truncate_to(index: usize, new_len: u32) {
     let mut store = STORE.lock();
-    ensure_slots(&mut store);
+    let _ = ensure_slots(&mut store, index);
     let Some(file) = store.files[index].as_mut() else {
         return;
     };
@@ -506,7 +510,8 @@ fn free_tree(store: &mut Store, ib: u32, indirect: bool) {
 /// pre-unlock RAM tree no longer name those files, so the bodies must
 /// not stay attached to the new table.
 pub fn reset() {
-    for index in 0..SLOTS {
+    let n = STORE.lock().files.len();
+    for index in 0..n {
         clear(index);
     }
 }
@@ -514,7 +519,7 @@ pub fn reset() {
 /// Drops a promoted file and returns its blocks to the pool.
 pub fn clear(index: usize) {
     let mut store = STORE.lock();
-    ensure_slots(&mut store);
+    let _ = ensure_slots(&mut store, index);
     if index >= store.files.len() {
         return;
     }

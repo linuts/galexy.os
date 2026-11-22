@@ -853,10 +853,10 @@ fn syscall_user(frame: &Context) -> SyscallResult {
                 return SyscallResult::err(SysError::BadValue);
             };
             let name = core::str::from_utf8(&raw[..n]).unwrap_or("");
-            if frame.r8 > u16::MAX as u64 || frame.r9 > u32::MAX as u64 {
+            if frame.r8 > u32::MAX as u64 {
                 return SyscallResult::err(SysError::BadValue);
             }
-            match crate::sched::task_setquota(name, frame.r8 as u16, frame.r9 as u32) {
+            match crate::sched::task_setquota(name, frame.r8 as u32, frame.r9) {
                 Ok(()) => SyscallResult::ok(0),
                 Err(err) => SyscallResult::err(err),
             }
@@ -1312,7 +1312,7 @@ fn render_stats(out: &mut TextBuf<'_>) {
     out.push(b"\ngalfs: ");
     out.push_u64(crate::sched::galfs::blocks_used() as u64);
     out.push(b" / ");
-    out.push_u64(crate::sched::galfs::BLOCK_SLOTS as u64);
+    out.push_u64(crate::sched::galfs::pool_blocks() as u64);
     out.push(b" blocks\nlockouts: ");
     out.push_u64(crate::sched::lockout::lockout_active());
     out.push(b"\n");

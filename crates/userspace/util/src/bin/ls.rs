@@ -148,7 +148,9 @@ fn print_long(cwd: &[u8], shown: &[u8]) {
         Some(stat(&path[..plen], &mut rec))
     };
     let (kind, size) = if got.is_some_and(|got| got.ok && got.value == STAT_LEN as u64) {
-        let size = u32::from_le_bytes([rec[4], rec[5], rec[6], rec[7]]);
+        let lo = u32::from_le_bytes([rec[4], rec[5], rec[6], rec[7]]);
+        let hi = u32::from_le_bytes([rec[44], rec[45], rec[46], rec[47]]);
+        let size = (u64::from(hi) << 32) | u64::from(lo);
         let kind = match rec[0] {
             STAT_FILE => b'f',
             STAT_DIR => b'd',
@@ -160,7 +162,7 @@ fn print_long(cwd: &[u8], shown: &[u8]) {
     };
     let _ = write_std(&[kind]);
     let _ = write_std(b" ");
-    write_u32(size);
+    write_u64(size);
     let _ = write_std(b" ");
     let _ = write_std(shown);
     let _ = write_std(b"\n");
@@ -184,12 +186,12 @@ fn compose(cwd: &[u8], shown: &[u8], out: &mut [u8]) -> usize {
     need
 }
 
-fn write_u32(mut n: u32) {
+fn write_u64(mut n: u64) {
     if n == 0 {
         let _ = write_std(b"0");
         return;
     }
-    let mut tmp = [0u8; 10];
+    let mut tmp = [0u8; 20];
     let mut i = tmp.len();
     while n > 0 {
         i -= 1;
