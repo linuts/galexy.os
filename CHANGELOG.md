@@ -8,6 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#166](https://github.com/linuts/galexy.os/pull/166) — Rust `std::net` and Python `socket` call the existing net cards: bind, listen, datagram send and receive, and an address or a port.
+  A missing card asks. No leaves the program up. `setsockopt`, `ssl`, and `asyncio` stay refused. Port 53 stays refused. No new syscall. No second stack.
 - [#165](https://github.com/linuts/galexy.os/pull/165) — Milestones 115–116 — write on the port card accepts one forwarded connection, and Milestone 83 hands that lane to one listener.
   Read on a datagram card sends one payload to the stored peer. Write does not capture. Port 53 stays unused.
   No new syscall. SSH stays open.
