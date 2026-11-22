@@ -2339,14 +2339,18 @@ unset.
       `-accel kvm` there instead of waiting on an empty serial log)
 - [ ] `PERF.md` numbers within budget under KVM (TCG release cells
       recorded; KVM cells empty for the same host reason)
-- [ ] Phase 16 — Milestones 104–110 (`docs/ROADMAP.md`). A boot shows
+- [ ] Phase 16 — Milestones 104–117 (`docs/ROADMAP.md`). A boot shows
       4 and 8 CPUs online. A dial, a ping, and a USB list without a
-      card are denied. Rust and Python connect only after the seat
-      allows it. A host SSH client reads one file over SFTP, and a
-      legacy algorithm is refused. Milestone 83's `serve` box and
-      Milestone 103's lane boxes stay open until their own runs
+      card are denied. Rust and Python connect by name only after the
+      seat allows it. A name resolves over TLS and a program reaches a
+      host that is not `10.0.2.2`. A raw IP, a port, `bind`, `listen`,
+      and UDP stay refused until the milestone that grants that card.
+      SSH is last: a host client reads one file over SFTP, and a
+      legacy algorithm is refused. Milestone 83's `serve` box,
+      Milestone 103's lane boxes, and the KVM rows stay open until
+      their own runs
 - [ ] Tag `v1.0` with the changelog. The tag needs the KVM cells and
-      Phase 16. This plan does not apply it
+      Phase 16, including Milestone 117. This plan does not apply it
 
 ---
 
@@ -3084,11 +3088,17 @@ syscall.
 
 ## Phase 16 — Cards, then a reachable machine
 
-Milestones 104–107 landed. Milestones 108–110 stay open.
-`docs/ROADMAP.md` is the phase. Do not check Milestone 83,
-Milestone 103, or the KVM rows under the `v1.0` gate. 109 does
-not land until 103's boxes are checked by a run, and it does not
-edit the `import socket` assertion until then.
+Milestones 104–107 landed. Milestones 108 and 109 stay open:
+a granted name, then a lane. They do not pass an address.
+Milestones 110–116 are the real stack. Milestone 117 is SSH, and
+it is last. SSH does not start until a program can reach a host
+past the QEMU gateway `10.0.2.2`. `docs/ROADMAP.md` is the phase.
+Do not check Milestone 83, Milestone 103, or the KVM rows under
+the `v1.0` gate. Do not tag `v1.0`. 109 does not land until 103's
+boxes are checked by a run, and it does not edit the `import
+socket` assertion until then. `bind`, `listen`, UDP, and a passed
+IP or port do not exist yet. Each stays refused until the
+milestone below that grants that exact card.
 
 ## Milestone 104 — Prove four and eight CPUs
 
@@ -3179,13 +3189,17 @@ A compatibility layer keeps the name programs already call.
 holds is still a lane. There is no socket syscall and no second
 stack. rustls stays in the service. The PAL does not parse TCP.
 This is not a Berkeley socket: the call does not take an address,
-a port, or a socket option.
+a port, or a socket option. Reaching a host past `10.0.2.2` is
+Milestone 111, not this one.
 
 - [ ] **`TcpStream::connect`**: the name stays. It asks, then dials
       a granted name. The value is a lane
-- [ ] **Still unsupported**: `bind`, `listen`, UDP, `setsockopt`, and
-      any call that passes an IP or a port. Those stay
-      `unsupported`. They are not a quieter spelling of `connect`
+- [ ] **Still refused here**: `bind`, `listen`, UDP, `setsockopt`, and
+      any call that passes an IP or a port. This milestone does not
+      grant them. They stay refused until the milestone that names
+      that card (112 address, 113 port, 114 bind, 115 listen, 116
+      UDP). They do not exist yet, and they are not a quieter
+      spelling of `connect`
 - [ ] **Proof**: a program on the login image connects to a granted
       name after the seat answers yes, and is denied before that
       answer. The peer sees no handshake on the denial
@@ -3204,6 +3218,7 @@ A compatibility layer keeps the name programs already call.
 through `net`. The value is still a lane. There is no socket
 syscall and no second stack. This is not a Berkeley socket: the
 call does not take an address, a port, or a socket option.
+Reaching a host past `10.0.2.2` is Milestone 111, not this one.
 
 - [ ] **After 103**: `import socket` succeeds so the name exists.
       `socket.connect` without a card is `OSError`. After the seat
@@ -3212,9 +3227,10 @@ call does not take an address, a port, or a socket option.
 - [ ] **The allow-list**: `socket` is a line in
       `scripts/python-allow.txt` in the same change, for that
       `connect` only. `bind`, `listen`, UDP, `setsockopt`, and any
-      call that passes an IP or a port stay refused. `ssl` and
-      `asyncio` networks stay refused. The host allow-list test
-      matches the file
+      call that passes an IP or a port stay refused until the
+      milestone that names that card (112–116). They do not exist
+      yet. `ssl` and `asyncio` networks stay refused. The host
+      allow-list test matches the file
 - [ ] **Proof**: `python_lane_typing_e2e`'s `ImportError` line moves
       here, to a `socket.connect` that is denied, plus one
       `socket.connect` that prints the body after yes. The test
@@ -3222,34 +3238,192 @@ call does not take an address, a port, or a socket option.
 - [ ] **Out of this milestone**: a Berkeley socket, a socket
       syscall, a second stack, CPython, and `pip`
 
-## Milestone 110 — SSH and SFTP
+## Milestone 110 — Resolve a name
 
-The machine a person can log into from the host. Newest algorithms
-only. The listener is Milestone 83's open box: the next inbound
-lane goes to that listener and to nobody else. Check 83 when that
-handoff is shown. Do not check it from this text.
+A name with no literal locator fails closed. This milestone is the
+lookup, not the dial. `net` resolves the name. The program still
+passes only the name. DNS is DNS-over-TLS to a resolver the admin
+pinned, the lookup `NET.md` already prefers. Plaintext UDP/53 is
+refused.
 
-- [ ] **One Rust service**: an init row, the same shape as `net`.
-      No OpenSSH, no libssh, no C. Authentication is the existing
-      PBKDF2 password path
-- [ ] **What it speaks**: host key ed25519, key exchange
-      `curve25519-sha256`, cipher `chacha20-poly1305` or
-      `aes256-gcm`. The MAC is the AEAD. If a newer hybrid KEM
-      will not link on `x86_64-unknown-galexy`, say so. Do not
-      fall back to a legacy group
-- [ ] **What it refuses**: SSHv1, FTP, telnet, rsh, `ssh-rsa`,
-      `ssh-dss`, CBC, SHA-1, `hmac-sha1`,
-      `diffie-hellman-group1-sha1`, `diffie-hellman-group14-sha1`,
-      and any cleartext file transfer. A client that offers only
-      a refused algorithm gets no session
-- [ ] **SFTP**: a subsystem of that session, not a second port and
-      not a second daemon. The files it can see are the cards of
-      the user who authenticated
+- [ ] **One lookup**: TLS to port 853. The resolver is pinned, and
+      it is not `10.0.2.2` and not QEMU's DNS at `10.0.2.3`. The
+      answer is an address other than `10.0.2.2`. The program does
+      not pass that address
+- [ ] **The card**: no read card, no query. Logged-out is
+      `AccessDenied`. A program without the card asks (Milestone
+      107). Yes lasts for that run. It is not an always that
+      survives reboot
+- [ ] **Fail closed**: no pin, a bad pin, or a timeout does not
+      fall through to UDP/53. QUIC stays the later lane carrier.
+      It is not this lookup
+- [ ] **Proof**: a run shows one TLS query and an answer that is
+      not `10.0.2.2`. A seat without the card sends no query.
+      Serial does not carry the resolver key. A UDP datagram to
+      port 53 is absent
+- [ ] **Out of this milestone**: the dial (Milestone 111), a
+      program-supplied resolver, raw sockets, a second stack, a C
+      resolver, plaintext DNS, the `v1.0` tag, and the KVM rows
+
+## Milestone 111 — Reach past the gateway
+
+A program can reach a host beyond the QEMU user gateway
+`10.0.2.2`, not only a pre-granted name that points at that
+gateway. virtio-net stays the device. `net` stays the only packet
+stack. The program passes a name. `net` resolves (Milestone 110)
+and dials. Outbound TCP to the resolved address is inside `net`.
+TLS stays inside `net`. The PAL does not parse TCP.
+
+- [ ] **By name**: the TCP destination is the resolved address.
+      The gateway may be the next hop. It is not the destination.
+      A literal locator on `10.0.2.2` does not check this box
+- [ ] **The card**: read dials. No card, no handshake. Logged-out
+      is denied. The ask is Milestone 107, for that run only. An
+      address is not authority
+- [ ] **One stack**: no second stack, no C stack, no raw socket,
+      no promiscuous mode. The kernel still only moves frames.
+      There is no new syscall
+- [ ] **Proof**: a granted seat reads a body from that peer. The
+      peer sees one TLS 1.3 handshake. The destination is not
+      `10.0.2.2`. A seat without the card opens no TCP
+- [ ] **Out of this milestone**: a passed IP, a passed port,
+      `bind`, `listen`, and UDP. Those stay refused until 112–116.
+      Also out: a public CA bundle, TLS before 1.3, `setsockopt`,
+      plaintext DNS, raw sockets, the `v1.0` tag, and the KVM rows
+
+## Milestone 112 — An address is a card
+
+A program that passes a raw IP is still refused. This milestone
+grants that exact address with a card, and no other address. The
+name path in Milestone 111 does not start taking IPs. Read dials.
+The path is a label. The address lives in the record, the way a
+locator already does. `net` trusts the card, not the bytes the
+program passed.
+
+- [ ] **One address**: admin stores it the way `allow` stores a
+      locator. Read on that card lets the program pass the stored
+      address. A different address does not open TCP. Holding a
+      name card is not this right. No new syscall, and no new
+      right bit. A new record field bumps the `galexy-netcfg`
+      version. An old version is refused, not guessed
+- [ ] **Proof**: the seat that holds the card reads a body from
+      that address. The same program with a second address, or
+      without the card, is denied, and the peer sees no handshake
+- [ ] **Out of this milestone**: a port the program picks, `bind`,
+      `listen`, UDP, `setsockopt`, raw sockets, promiscuous mode,
+      a second stack, plaintext DNS, the `v1.0` tag, and the KVM
+      rows. IPv6 stays a locator inside `net`. The path charset
+      does not change
+
+## Milestone 113 — A port is a card
+
+A program that passes a port is still refused. This milestone
+grants that exact destination port with a card. Source ports stay
+inside `net`.
+
+- [ ] **One port**: read lets the program pass the stored port and
+      no other. `0.0.0.0` is not a program argument. An address
+      card from Milestone 112 does not imply a port. No new
+      syscall
+- [ ] **Proof**: the granted port completes one handshake. A
+      second port is denied. Logged-out is `AccessDenied`
+- [ ] **Out of this milestone**: `bind`, `listen`, UDP,
+      `setsockopt`, a well-known port raced without the card, raw
+      sockets, a second stack, plaintext DNS, the `v1.0` tag, and
+      the KVM rows
+
+## Milestone 114 — Bind is a card
+
+`bind` does not exist yet. This milestone grants it for one local
+address, and only with write on the address card from Milestone
+112. Read does not bind.
+
+- [ ] **Write binds**: write binds the stored local address. No
+      write, `bind` is denied. `0.0.0.0`, or any address the card
+      does not store, is denied. No new syscall. The PAL does not
+      parse TCP
+- [ ] **Proof**: a seat with write binds that address, and the run
+      shows it. A seat with only read, or with no card, is denied
+      and sends no packet
+- [ ] **Out of this milestone**: `listen`, the inbound handoff,
+      UDP, `setsockopt`, raw sockets, promiscuous mode, a second
+      stack, plaintext DNS, the `v1.0` tag, and the KVM rows
+
+## Milestone 115 — Listen is a card
+
+Inbound connections from outside stay closed until a card with
+write is held and Milestone 83 hands the lane to that one
+listener. `listen` does not exist before this run.
+
+- [ ] **Write listens**: write on the port card is the only
+      accept. Without it, no gate opens. virtio-net stays the
+      device. `net` stays the only stack. No new syscall
+- [ ] **One listener**: Milestone 83 hands the next inbound lane
+      to that listener and to nobody else. A second `serve` does
+      not get it. Check Milestone 83 only when this run shows the
+      handoff. Do not check it from this text
+- [ ] **From outside**: the peer is not `10.0.2.2` answering the
+      guest. The runner forwards one host TCP connection on the
+      same user network. Until the write card is held, that
+      connection is not accepted
+- [ ] **Proof**: with the write card, one program reads the
+      inbound body. Without the card, the peer's handshake does
+      not complete. A second listener receives nothing
+- [ ] **Out of this milestone**: SSH, a packet filter, raw
+      sockets, promiscuous mode, a second stack, plaintext DNS,
+      `setsockopt`, the `v1.0` tag, and the KVM rows
+
+## Milestone 116 — A datagram is a card
+
+A UDP call does not exist yet. This milestone grants one exact
+peer with a card. It is not DNS, and it is not a raw socket.
+
+- [ ] **One peer**: read sends to the peer stored on that card.
+      No card, nothing is sent. Write does not capture. Port 53
+      stays unused. Milestone 80's datagram to the gateway stays
+      inside `net`. No new syscall
+- [ ] **Proof**: a granted seat sends one payload and the peer
+      receives it. A seat without the card sends nothing. The
+      run shows no UDP/53 query
+- [ ] **Out of this milestone**: SSH, raw sockets, promiscuous
+      mode, a second stack, plaintext DNS, `setsockopt`, the
+      `v1.0` tag, and the KVM rows
+
+## Milestone 117 — SSH and SFTP
+
+The last milestone. It waits until Milestone 111 has reached a
+host past `10.0.2.2`, and until Milestone 115 has shown
+Milestone 83's handoff. One ring-3 Rust service. No new syscall.
+
+- [ ] **One service**: an init row, the same shape as `net`. The
+      SSH protocol is in-tree Rust. No OpenSSH, no libssh, no C,
+      and no crates.io SSH library. It does not hold the wire
+- [ ] **The card**: `/card/ssh`. Init creates it the way it
+      creates `/card/ping`, and does not grant it. Write accepts
+      an inbound session. Read lets a local program open a
+      session. The program passes no address. Both use `net`. A
+      missing card asks (Milestone 107), for that run only
+- [ ] **What it speaks**: strict key exchange, then
+      `curve25519-sha256`. Host keys are Ed25519. The cipher is
+      `chacha20-poly1305` or `aes256-gcm`. The MAC is the AEAD
+- [ ] **What it refuses**: SHA-1, CBC, `ssh-rsa`, SSHv1, FTP,
+      telnet, rsh, `ssh-dss`, `hmac-sha1`,
+      `diffie-hellman-group1-sha1`,
+      `diffie-hellman-group14-sha1`, and a cleartext transfer. A
+      client that offers only a refused algorithm gets no
+      session. There is no fallback to a legacy group
+- [ ] **Auth and files**: the existing PBKDF2 password hash. SFTP
+      is a subsystem of that session, not a second port and not a
+      second daemon. The files it can touch are the galfs tokens
+      the seat already holds
 - [ ] **Proof**: the host opens one session and reads one file.
+      A local program with read on `/card/ssh` opens one session.
       Serial does not contain the host-key private bytes or the
-      password. A refused algorithm is a failed handshake
-- [ ] **Out of this milestone**: a port in the ABI, a root shell
-      that bypasses cards, and tagging `v1.0`
+      password. A refused algorithm fails the handshake. A seat
+      without the card accepts nothing
+- [ ] **Out of this milestone**: a new syscall, a root shell that
+      bypasses cards, a second stack, raw sockets, old
+      algorithms, plaintext DNS, the `v1.0` tag, and the KVM rows
 
 ---
 

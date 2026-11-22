@@ -36,15 +36,17 @@ service beside them (`PROCESS.md`).
 
 ## What this refuses
 
-These are design decisions, not a backlog.
+Phase 10 refuses an ambient socket. A later row names the milestone
+that may grant one call. That call does not exist until its box is
+checked.
 
 | Refused | Why |
 | --- | --- |
-| BSD sockets and Winsock (`socket`, `bind`, `listen`, `accept`, `connect`, `sendto`, `recvfrom`, `setsockopt`) | That API is an ambient port namespace with fifty years of options. Galexy will not grow one. |
-| `std::net::TcpStream` and a POSIX shim in the PAL | Phase 10 leaves `std`'s `net` `unsupported`. A lane is not a TCP socket with a different name. Milestone 108 keeps the name `TcpStream::connect` as a compatibility layer: it asks, then dials a granted name, and the value is still a lane. `bind`, `listen`, UDP, `setsockopt`, and any call that passes an IP or a port stay unsupported. There is no socket syscall. |
-| In-kernel TCP/IP | A parse bug on a packet would be ring 0. The kernel moves frames. The `net` service speaks the protocols. |
-| IP addresses and port numbers in the syscall ABI | Ports are an internal demux. Source addresses are chosen by the service. An app cannot bind `0.0.0.0`, spoof a source, or race a well-known port. |
-| Cleartext as an application right | The bytes an app reads are the plaintext of a finished TLS 1.3 session. There is no "raw TCP" Cap and no datagram Cap for ordinary tasks. |
+| BSD sockets and Winsock (`socket`, `bind`, `listen`, `accept`, `connect`, `sendto`, `recvfrom`, `setsockopt`) | That API is an ambient port namespace. Galexy does not grow one. Milestones 112–116 may honor one of those calls for one card. The call is not the namespace, and none of them exist yet. `setsockopt` stays refused. |
+| `std::net::TcpStream` and a POSIX shim in the PAL | Phase 10 leaves `std`'s `net` `unsupported`. Milestone 108 keeps the name `TcpStream::connect`: it asks, then dials a granted name, and the value is still a lane. `bind`, `listen`, UDP, and a passed IP or port stay refused until the milestone that grants that card. They do not exist yet. There is no socket syscall and no POSIX shim. |
+| In-kernel TCP/IP | A parse bug on a packet would be ring 0. The kernel moves frames. The `net` service speaks the protocols. A second stack, a C stack, raw sockets, and promiscuous mode stay out. |
+| IP addresses and port numbers in the syscall ABI | Ports stay an internal demux. A program does not pass them to a syscall. Milestones 112 and 113 let a program pass one exact address or port on the existing net cap, and only with that card. An app still cannot bind `0.0.0.0`, spoof a source, or race a port it does not hold. |
+| Cleartext as an application right | The bytes an app reads on a lane are the plaintext of a finished TLS 1.3 session. There is no raw TCP Cap. An ordinary task has no datagram Cap. Milestone 116 grants one exact peer, and only with that card. |
 | The public WebPKI as the default trust | A name is pinned to a key the admin installed. Trust-on-first-use is not silent. A system CA bundle is not in the image. |
 | TLS before 1.3, renegotiation, compression, 0-RTT | Replay and oracle bugs we do not have to accept. 0-RTT can be a later right. It is off in this phase. |
 | A hand-rolled handshake | The service links a maintained Rust TLS 1.3 implementation (rustls-class) with a pure-Rust crypto provider. No C. If that crate will not link on `x86_64-unknown-galexy`, Milestone 82 fixes the link. It does not replace the handshake. |
@@ -177,10 +179,13 @@ IPv6 packet build and parse are host tests. Happy eyeballs is not a
 second API and is not this phase.
 
 DNS, when a name is not a literal locator, is resolved by `net` over
-TLS to a resolver the admin pinned. Cleartext DNS is not implemented.
-Milestone 83 ships literal locators so dial works without a resolver.
-Milestone 84's `fetch` may use either. A name that needs DNS and has
-no pinned resolver fails closed.
+TLS to a resolver the admin pinned. That is DNS-over-TLS (port 853).
+Cleartext DNS is not implemented. Milestone 110 does not add UDP/53,
+and it does not ask QEMU's DNS at `10.0.2.3`. QUIC stays the later
+lane carrier, not this lookup. Milestone 83 ships literal locators,
+so a name with no locator still fails closed. `fetch` uses a literal
+locator until Milestone 111. A name that needs DNS and has no pinned
+resolver fails closed.
 
 ## Adversary this adds
 
@@ -275,7 +280,9 @@ TCP is not delivered as cleartext. Locators and ports
 exist in the record and in the admin opcode payload. They do not
 appear in `galexy-abi` as a general argument, and `fetch` will not
 take them. Literal locators are enough; DNS is wired here only as
-the fail-closed path (no pinned resolver, no lookup).
+the fail-closed path (no pinned resolver, no lookup). Milestone 110
+is the encrypted lookup. Until that box is checked, this path stays
+fail-closed.
 
 ### 84 Fetch
 
@@ -325,17 +332,21 @@ does not grow its own stack. The `v1.0` tag waits on a KVM pass.
 
 RustPython landed as Phase 14 (`docs/PYTHON.md`), Milestones
 **91–96**. Milestone **103** is the later one: `lane.read(name)`
-dials a granted name and reads the body. `socket` stays refused.
-There is no new syscall.
+dials a granted name and reads the body. `socket` stays refused
+until Milestone 109, and that milestone is still open. There is no
+new syscall.
 
 QUIC, 0-RTT, device checksum offload, and a CA bundle are later
 carriers and later rights. They attach to the lane. They do not add
-an ambient socket. Phase 16's socket is a card. It is not this phase.
+an ambient socket. Phase 16's extra calls are cards. They are not
+this phase, and they do not exist yet.
 
 ## Phase 16 — A card is the firewall
 
-Milestones **105** and **107** landed. **108** and **110** are
-still the plan. Checkboxes in `TODO.md`.
+Milestones **105** and **107** landed. **108** and **109** are
+still the name layer. **110–116** are the real stack. **117** is
+SSH, and it is last. Checkboxes in `TODO.md`. This plan does not
+tag `v1.0` and does not check the KVM rows.
 
 A network name is a galfs object under `/card` (the same object
 as `/admin@card/<name>`). `/card/ping` is the ping card. The
@@ -347,8 +358,9 @@ bit 1, and an accept without bit 2, before TCP or ICMP. Actor
 strings stay in the record and are not consulted. `may_dial`
 remains for that record. Logged-out stays `AccessDenied`. There
 is no chain, no interface match, and no packet filter. The
-firewall is the card, and it lives in `net`. Admin's root token
-covers the cards. A seat without one does not open TCP.
+firewall is the card, not a packet-filter language, and it lives
+in `net`. Admin's root token covers the cards. A seat without one
+does not open TCP. A path or an address is not authority.
 
 A foreground program that does not hold the token parks. The
 shell, which is Cap-waiting, prints `<name> wants the network`
@@ -360,34 +372,50 @@ and the program stays up. A second ask for the same right in
 the same run does not print. A task that already holds the
 token does not ask. The kernel does not draw a dialog. There
 is no new syscall number. The token dies when the task exits.
+It is not an always that survives reboot.
 
-Milestone 108 is a compatibility layer. It keeps the name
-`std::net::TcpStream::connect`. The call asks (Milestone 107),
-then dials a granted name through `net`. The value is still a
-lane. Milestone 109 is the same layer for Python `socket.connect`.
-There is no socket syscall and no second stack. rustls stays in
-`net`. The PAL does not parse TCP. This is not a Berkeley socket.
-`bind`, `listen`, UDP, `setsockopt`, and any call that passes an
-IP or a port stay unsupported.
+Milestone 108 keeps the name `std::net::TcpStream::connect`. The
+call asks (Milestone 107), then dials a granted name through
+`net`. The value is still a lane. Milestone 109 is the same layer
+for Python `socket.connect`. There is no socket syscall and no
+second stack. rustls stays in `net`. The PAL does not parse TCP.
+This is not a Berkeley socket. Those two milestones do not pass
+an IP or a port.
 
-Milestone 110 is the server a person connects to. It waits on
-Milestone 83's open box: the next inbound lane is delivered to
-that listener and to nobody else. That box is checked only when a
-run shows the handoff. One init row, Rust, no C. Host key
-ed25519. Key exchange `curve25519-sha256`. Cipher
-`chacha20-poly1305` or `aes256-gcm`. The MAC is the AEAD. SFTP is
-a subsystem of that session, and the files it can see are the
-cards of the user who authenticated (the existing PBKDF2 path, not
-a new user table). A client that offers only a refused algorithm
-gets no session. Serial does not carry the host-key private bytes
-or the password. If a newer hybrid KEM will not link on
-`x86_64-unknown-galexy`, the milestone says so. It does not fall
-back to `diffie-hellman-group14`.
+Milestone 110 is the lookup: DNS-over-TLS to a pinned resolver,
+not UDP/53, and not `10.0.2.3`. Milestone 111 is the reach. A
+program passes a name. `net` resolves and dials. The TCP
+destination is the resolved address, not the QEMU gateway
+`10.0.2.2`. Outbound TCP and TLS stay inside `net`. virtio-net
+stays the device. `net` stays the only packet stack.
 
-Still refused, including after these milestones: the BSD option
-surface, a port or an address in the syscall ABI, cleartext as an
-application right, TLS before 1.3, iptables, raw frames, telnet,
-FTP, rsh, SSHv1, `ssh-rsa`, CBC, and SHA-1.
+A passed IP, a passed port, `bind`, `listen`, and UDP do not
+exist yet. Milestones 112–116 grant each exact call with a card.
+Read dials. Write accepts. `setsockopt` stays refused. No new
+syscall, and no new right bit. Inbound from outside stays closed
+until a write card is held and Milestone 83 hands the lane to
+that one listener (Milestone 115). That box is checked only when
+a run shows the handoff.
+
+Milestone 117 is the server a person connects to, and it is last.
+It waits on 111 and on that handoff. One init row, in-tree Rust,
+no OpenSSH, no libssh, no C, and no crates.io SSH library.
+`/card/ssh` write accepts. Read lets a local program open a
+session. Strict key exchange, then `curve25519-sha256`. Host keys
+are Ed25519. Cipher `chacha20-poly1305` or `aes256-gcm`. The MAC
+is the AEAD. SFTP is a subsystem of that session, and the files
+it can touch are the galfs tokens the seat already holds (the
+existing PBKDF2 path, not a new user table). A client that offers
+only a refused algorithm gets no session. Serial does not carry
+the host-key private bytes or the password. There is no fallback
+to a legacy group, and no new syscall.
+
+Still refused after these milestones: the BSD option surface,
+`setsockopt`, a port or an address in the syscall ABI, cleartext
+as an application right, plaintext DNS, TLS before 1.3, iptables,
+raw frames, raw sockets, promiscuous mode, a second stack, telnet,
+FTP, rsh, SSHv1, `ssh-rsa`, CBC, and SHA-1. The `v1.0` tag stays
+unapplied.
 
 ## Files this phase touches
 

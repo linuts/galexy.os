@@ -34,15 +34,17 @@ can land beside the USB work that has already landed. It does not move the
 `v1.0` tag. The `v1.0` tag waits on
 the KVM cells.
 Vendor USB and NIC drivers stay unwritten. Python's `socket`
-module stays refused.
+module stays refused until Milestone 109, which is still open.
 
 Milestones **97–102** have since landed. Milestone **103**'s boxes
 are still open (the lane boot was not run here). Milestone **83**'s
 `serve` handoff is still open. Milestones **104–107** landed:
 four and eight CPUs, a card on each network name and each listed
 USB port, and a foreground ask the shell answers. Milestones
-**108–110** stay open, including SSH/SFTP. The `v1.0` tag still
-waits on the KVM cells, and it also waits on the rest of Phase 16.
+**108** and **109** stay open: connect by name, no address in the
+call. Milestones **110–116** are the real stack, and **117** is
+SSH, last. The `v1.0` tag still waits on the KVM cells and on
+that sequence. This plan does not apply it.
 
 ## Phase 0 — Boot & TTY ✅
 
@@ -469,7 +471,9 @@ does not yet hand the next lane to that listener; that box stays open.
 Non-goals: BSD sockets, Winsock, `std::net`, in-kernel TCP/IP,
 cleartext application I/O, a public CA bundle, TLS before 1.3, 0-RTT,
 QUIC as a second API, iptables, a second NIC. QUIC may later ride the
-same lane Cap. USB is Phase 13, not a carrier for this phase.
+same lane Cap. USB is Phase 13, not a carrier for this phase. Phase 16
+grants a card for a passed address, a port, `bind`, `listen`, and UDP.
+Phase 10 does not. Those calls do not exist yet.
 
 ## Phase 13 — USB (before `v1.0`) ✅
 
@@ -668,10 +672,13 @@ hard links.
 
 ## Phase 16 — Cards, then a reachable machine
 
-Milestones **104–107** landed. Milestones **108–110** are still
-the plan. Nothing here tags `v1.0`. Checkboxes live in `TODO.md`.
+Milestones **104–107** landed. Milestones **108** and **109** are
+still the plan: a program connects by a granted name, and the
+value is a lane. Milestones **110–116** are the real stack.
+Milestone **117** is SSH, and it is last. Nothing here tags
+`v1.0`. The KVM rows stay open. Checkboxes live in `TODO.md`.
 The reading copies are `DESIGN.md` (CPUs), `NET.md` (firewall,
-sockets, SSH), `USB.md` (device cards), `GALFS.md` (the card
+the stack, SSH), `USB.md` (device cards), `GALFS.md` (the card
 those two reuse), and `PYTHON.md` (the ask).
 
 `boot_aps` walks every enabled MADT local-APIC id, and `MAX_CPUS`
@@ -686,37 +693,51 @@ A network name and a listed USB port are galfs cards, the same
 token storage already uses. The check for a dial, a ping, or an
 accept is in `net`, and it is default deny. Cap `0x800B` stays
 with the task named `usb`. The list on `0x800C` is what the seat
-token gates. There is no rule language.
+token gates. There is no rule language. The firewall is the card.
 
 A foreground program without the card asks. The shell prints
 `<name> wants the network` or `<name> wants storage`. Yes
-installs a token for that run. No is `AccessDenied`. Milestones
-108 and 109 are still a compatibility layer: `std::net::TcpStream::connect`
-and Python `socket.connect` keep those names, ask, then dial a
-granted name through `net`. The value is still a lane. There is
-no socket syscall and no second stack. `bind`, `listen`, UDP,
-`setsockopt`, and any call that passes an IP or a port stay
-unsupported. That is not a Berkeley socket. Milestone 83's
-inbound handoff and Milestone 103's lane boot stay open until
-their own runs; 109 does not edit 103's `ImportError` assertion
-before that.
+installs a token for that run, not an always that survives
+reboot. No is `AccessDenied`. Milestones 108 and 109 keep the
+names `std::net::TcpStream::connect` and Python `socket.connect`.
+Each asks, then dials a granted name through `net`. The value is
+still a lane. There is no socket syscall and no second stack.
+The PAL does not parse TCP. A passed IP, a passed port, `bind`,
+`listen`, and UDP do not exist yet. They stay refused until the
+milestone that grants that exact card: 112 address, 113 port,
+114 bind, 115 listen, 116 UDP. `setsockopt` stays refused.
+That is not a Berkeley socket. Milestone 83's inbound handoff
+and Milestone 103's lane boot stay open until their own runs;
+109 does not edit 103's `ImportError` assertion before that.
 
-True `v1.0` adds one more gate to the KVM cells that are already
-open: a person on the host opens SSH, then reads a file over SFTP,
-on current algorithms only. The service is Rust. Legacy protocols
-stay out.
+Real outside access is 110 and 111. `net` resolves a name over
+TLS to a pinned resolver (not UDP/53, not `10.0.2.3`) and dials
+the address that comes back. The destination is not the QEMU
+user gateway `10.0.2.2`. virtio-net stays the device. `net`
+stays the only packet stack. Outbound TCP and TLS stay inside
+`net`. Inbound from outside stays closed until a write card is
+held and Milestone 83 hands the lane to that one listener (115).
+
+SSH does not start before that stack. Milestone 117 is one
+ring-3 Rust service. `/card/ssh` write accepts. Read lets a
+local program open a session. No new syscall. No OpenSSH, no
+libssh, no C, and no crates.io SSH library. Strict key exchange,
+Curve25519, Ed25519 host keys, ChaCha20-Poly1305 or AES-256-GCM.
+Auth is the existing password hash. SFTP is a subsystem and uses
+the galfs tokens the seat already holds. The `v1.0` tag still
+waits on the KVM cells and on 117. This plan does not apply it.
 
 What this phase does not add:
 
 - A `MAX_CPUS` above 8, an x2APIC id, or a shell that leaves the BSP
-- iptables, nftables, eBPF, NAT, raw frames, or promiscuous capture
-- A socket syscall, a second stack, or a Berkeley socket.
-  `bind`, `listen`, UDP, `setsockopt`, and any call that passes
-  an IP or a port stay unsupported. `TcpStream::connect` and
-  `socket.connect` are the compatibility layer above, not this row
+- iptables, nftables, eBPF, NAT, raw frames, raw sockets, or promiscuous mode
+- A second stack, a C stack, or a Berkeley socket. `setsockopt` stays refused.
+  `TcpStream::connect` and `socket.connect` are the name layer above.
+  A passed IP, port, `bind`, `listen`, or UDP is a later card, not a call that exists today
+- Plaintext DNS (UDP/53)
 - Telnet, FTP, rsh, SSHv1, `ssh-rsa`, CBC, SHA-1, or TLS before 1.3
-- OpenSSH, libssh, CPython, or a TCP stack inside `rustc` or Python
-- A second grant language beside the galfs token
+- OpenSSH, libssh, a crates.io SSH library, CPython, or a TCP stack inside `rustc` or Python
+- A second grant language beside the galfs token, or a reboot-persistent always
 - Checking Milestone 83, Milestone 103, or the KVM `v1.0` boxes
 - The `v1.0` tag
 

@@ -54,7 +54,7 @@ Milestone 96 checks that the run did not leave a child task.
 | CPython, `libpython`, and C extensions | A second language runtime, and C in a Rust kernel tree. The interpreter is RustPython. |
 | Copying the RustPython tree into this repository | It is MIT or Apache-2.0. The pin stays a host checkout, the way `rustc` does. A patch, if one is required, is `scripts/galexy-rustpython.patch`. The license notices stay with the checkout. |
 | `pip`, `venv`, `ensurepip`, and a package index | Same non-goal as on-OS `cargo`. |
-| `socket`, `ssl`, and `asyncio` networks | `std::net` stays an ambient stack (`NET.md`). Milestone 103 speaks a lane: `import lane` then `lane.read(name)`. Until Milestone 109 is checked, `import socket` is `ImportError`. Milestone 109 keeps the name `socket.connect`: it asks, then dials a granted name, and the value is a lane. `bind`, `listen`, UDP, `setsockopt`, and any call that passes an IP or a port stay refused. That is not a Berkeley socket. |
+| `socket`, `ssl`, and `asyncio` networks | `std::net` stays an ambient stack (`NET.md`). Milestone 103 speaks a lane: `import lane` then `lane.read(name)`. Until Milestone 109 is checked, `import socket` is `ImportError`. Milestone 109 keeps the name `socket.connect`: it asks, then dials a granted name, and the value is a lane. `bind`, `listen`, UDP, `setsockopt`, and any call that passes an IP or a port stay refused until the milestone that grants that card. They do not exist yet. That is not a Berkeley socket. `ssl` stays refused: TLS stays inside `net`. |
 | `sqlite3`, `ctypes`, `cffi` | Those need C. |
 | `os.fork`, `os.exec`, `os.system`, `os.environ`, `subprocess`, `multiprocessing` | There is no environment block and no fork. Spawn stays the kernel's, and this program does not call it. |
 | A second editor | `edit` is already the editor. The REPL reads the seat keyboard and does not draw a screen of its own. |
@@ -258,7 +258,10 @@ Yes installs a token for this run. No is `OSError` and the
 interpreter stays up. There is no socket syscall and no second
 stack. This is not a Berkeley socket. `bind`, `listen`, UDP,
 `setsockopt`, and any call that passes an IP or a port stay
-refused. `ssl` stays refused.
+refused in this milestone. They do not exist yet. Milestones
+112–116 grant each exact call with a card (`NET.md`). `ssl`
+stays refused. TLS stays inside `net`. Reaching a host past
+`10.0.2.2` is Milestone 111, not this section.
 
 ## Changing this subsystem
 
@@ -270,9 +273,11 @@ refused. `ssl` stays refused.
    milestone is a compatibility layer: the name stays, the call
    asks, then dials a granted name, and the value is a lane
    (`NET.md` → Phase 16). `bind`, `listen`, UDP, `setsockopt`, and
-   any call that passes an IP or a port stay refused. It does not
-   add a socket syscall, and it does not edit Milestone 103's
-   `ImportError` assertion before that box is checked.
+   any call that passes an IP or a port stay refused until the
+   milestone that grants that card (112–116). They do not exist
+   yet. Milestone 109 does not add a socket syscall, and it does
+   not edit Milestone 103's `ImportError` assertion before that
+   box is checked.
 4. `docs/ABI.md` gains a row only if a number appears. This phase
    has none. `docs/STYLE.md` carries the rules below.
 5. The wiki page Python stays in step with this file.
