@@ -8,7 +8,7 @@ use std::io::Read;
 use std::sync::Arc;
 
 use galexy_abi::{
-    Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_DIAL, NET_OP_GRANT, NET_OP_LINK,
+    Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_DIAL, NET_OP_GRANT, NET_OP_LINK, NET_OP_PING,
     NET_OP_REVOKE, NET_OP_SERVE,
 };
 use galexy_net::Engine;
@@ -199,6 +199,7 @@ fn handle(
         NET_OP_GRANT if admin => grant_op(rx, record, rest, true),
         NET_OP_REVOKE if admin => grant_op(rx, record, rest, false),
         NET_OP_SERVE if admin => serve(rx, engine, record, gates, rest),
+        NET_OP_PING => ping(rx, engine, rest),
         NET_OP_ALLOW | NET_OP_GRANT | NET_OP_REVOKE | NET_OP_SERVE => {
             reply(rx, b"access denied\n", 0);
         }
@@ -542,6 +543,42 @@ fn two_fields(rest: &[u8]) -> Option<(&[u8], &[u8])> {
     }
     let actor = &rest[2 + nlen..2 + nlen + alen];
     Some((name, actor))
+}
+
+fn ping(rx: Cap, engine: &mut Engine, rest: &[u8]) {
+    if rest.len() < 4 {
+        reply(rx, b"bad\n", 0);
+        return;
+    }
+    let dst = [rest[0], rest[1], rest[2], rest[3]];
+    if engine.icmp_echo(dst, b"galexy").is_err() {
+        reply(rx, b"down\n", 0);
+        return;
+    }
+    let start = clock_ms();
+    loop {
+        let now = clock_ms();
+        if now.saturating_sub(start) >= 3_000 {
+            reply(rx, b"timeout\n", 0);
+            return;
+        }
+        pump(engine);
+        engine.poll(now);
+        pump(engine);
+        if let Some(from) = engine.take_echo() {
+            reply(
+                rx,
+                format!(
+                    "reply from {}.{}.{}.{}\n",
+                    from[0], from[1], from[2], from[3]
+                )
+                .as_bytes(),
+                0,
+            );
+            return;
+        }
+        let _ = sleep_ms(20);
+    }
 }
 
 fn reply(rx: Cap, text: &[u8], lane: u64) {

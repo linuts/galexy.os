@@ -23,11 +23,12 @@ Milestones 72–77 run a Cranelift `rustc` on Galexy and put it on the
 login image: `rustc hello.rs -o /hello`, then `/hello`.
 Milestones 91–96 put RustPython on that same boot: `python hello.py`,
 and `python` with no file is the REPL.
-The QEMU suite is 152 runner tests plus host tests (`test-big` boots
+The QEMU suite is 153 runner tests plus host tests (`test-big` boots
 only under KVM; the rustc and python boots run when those ELFs were
 present at image build). Phase 10 adds `wire_test_passes`,
 `lane_test_passes`, `net_udp_and_tcp_reach_the_host`,
-`fetch_grant_typing_e2e`, and `net_flood_deadline_leaves_the_seat`.
+`fetch_grant_typing_e2e`, `net_flood_deadline_leaves_the_seat`, and
+`ping_gateway_replies`.
 Phase 13 adds `usb_test_passes` and `usb_list_shows_the_keyboard`.
 The Milestone 52 review checklist is complete except
 the `review-rc1` tag, which is the owner's call. The `v1.0` tag waits
@@ -43,7 +44,7 @@ The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md) → Where
 we stand. Known gap today: the KVM column is empty on this host. When
 `target/galexy-rustc/rustc` and
 `target/galexy-python/python` were built, a normal `cargo run` logs
-into a seat that has both. The network is a ring-3 `net` service, DHCP,
+into a seat that has both. The network is a ring-3 `net` service, DHCP, ICMP echo (`ping`),
 and a granted TLS 1.3 lane, not a socket API. USB lists the devices
 on xHCI and does not attach a vendor driver. Python is upstream RustPython
 as a login-shell command, not CPython and not a socket module.

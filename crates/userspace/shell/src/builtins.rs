@@ -226,6 +226,10 @@ pub(crate) fn dispatch(
         net_cmd(cwd, rest);
         return None;
     }
+    if let Some(rest) = arg_of(line, b"ping") {
+        ping_cmd(cwd, rest);
+        return None;
+    }
     if let Some(rest) = arg_of(line, b"usb") {
         usb_cmd(cwd, rest);
         return None;
@@ -1928,6 +1932,18 @@ fn usb_cmd(cwd: &Cwd, rest: &[u8]) {
     }
     write_console(b"usb: list\n");
     prompt(cwd);
+}
+
+fn ping_cmd(cwd: &Cwd, rest: &[u8]) {
+    let Some(ip) = parse_ip(trim(rest)) else {
+        write_console(b"ping <ip>\n");
+        prompt(cwd);
+        return;
+    };
+    let mut payload = [0u8; 5];
+    payload[0] = galexy_abi::NET_OP_PING;
+    payload[1..5].copy_from_slice(&ip);
+    finish_net(cwd, &payload, false);
 }
 
 fn net_cmd(cwd: &Cwd, rest: &[u8]) {

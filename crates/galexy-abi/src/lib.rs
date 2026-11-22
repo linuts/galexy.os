@@ -265,8 +265,9 @@ pub mod reserved {
     /// bytes. A logged-out task is `AccessDenied`.
     ///
     /// **Experimental** (Milestone 82). Opcodes are [`NET_OP_LINK`] and
-    /// the rest. A dial reply begins with 8 little-endian Cap bits (0
-    /// when the reply carries no lane) and then the text.
+    /// the rest, including [`NET_OP_PING`]. A dial reply begins with 8
+    /// little-endian Cap bits (0 when the reply carries no lane) and
+    /// then the text. A ping reply is the same shape with a zero Cap.
     pub const NET_INDEX: u64 = 0x800A;
 
     /// The net control capability. Rights must include [`super::CapRights::WRITE`].
@@ -971,6 +972,10 @@ pub const NET_OP_GRANT: u8 = 4;
 pub const NET_OP_REVOKE: u8 = 5;
 /// Net control: attach a gate for a name to the calling task. Admin only.
 pub const NET_OP_SERVE: u8 = 6;
+/// Net control: ICMP echo to an IPv4 address. Any logged-in seat.
+/// The payload is four address bytes. The reply is text (`reply from`
+/// or `timeout`). It is not a lane and not a socket.
+pub const NET_OP_PING: u8 = 7;
 
 /// USB control: list enumerated devices, one per line. The reply is
 /// plain text. It does not begin with a lane capability.
