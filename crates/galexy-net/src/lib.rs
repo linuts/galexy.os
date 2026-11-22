@@ -384,6 +384,16 @@ impl Engine {
             .is_some_and(|c| c.state == TcpState::Established)
     }
 
+    /// Local port of a connection that is still in the table.
+    pub fn tcp_local(&self, id: u8) -> Option<u16> {
+        let c = self.conns.get(id as usize)?;
+        if c.state == TcpState::Free || c.state == TcpState::Closed {
+            None
+        } else {
+            Some(c.local)
+        }
+    }
+
     /// Queue bytes. They leave on the next poll once the handshake is done.
     #[allow(clippy::result_unit_err)]
     pub fn tcp_send(&mut self, id: u8, bytes: &[u8]) -> Result<usize, ()> {
@@ -1153,6 +1163,7 @@ mod tests {
             a.ingest(&f);
         }
         let acc = b.take_accepted().unwrap();
+        assert_eq!(b.tcp_local(acc), Some(4590));
         let mut buf = [0u8; 8];
         let n = b.tcp_recv(acc, &mut buf);
         assert_eq!(&buf[..n], b"hi");

@@ -106,7 +106,7 @@ is claimed as covered.
 | Gap | Today | Milestone |
 | --- | --- | --- |
 | KVM numbers, timing | the suite and `test-bench` run on the release image (`opt-level = 3`, fat LTO) under TCG; `docs/PERF.md` holds the TCG cells and loose KVM ceilings. The landing host opens `/dev/kvm` but `KVM_CREATE_VCPU` faults (`VMCLEAR` after a snapshot restore dropped VMXON), so the KVM cells stay empty until a host where the probe succeeds runs `bench_test_passes`; side-channel timing has not been looked at | **64** (release done), v1.0 gate for KVM. The real-network plan does not fill these cells |
-| Reach past the QEMU gateway, inbound from outside, SSH | a dial is a granted name with a literal locator, usually `10.0.2.2`. A name with no locator fails closed. `serve` attaches a gate and does not hand off the next lane. Nothing answers SSH | **110–117**, not started. Plaintext DNS, a second stack, raw sockets, and a crates.io SSH library stay out. The plan does not tag `v1.0` |
+| Reach past the QEMU gateway, inbound from outside, SSH | a dial is a granted name with a literal locator, usually `10.0.2.2`. A name with no locator fails closed. `serve` hands the next inbound lane to the listener that attached the gate. Nothing answers SSH | **110–117**, not started. Plaintext DNS, a second stack, raw sockets, and a crates.io SSH library stay out. The plan does not tag `v1.0` |
 | fsck repair of anything but a bad share | host `fsck --repair` clears a share that names a missing actor, an empty object, or no rights, and seals that into the other slot (Milestone 101). A cycle, a missing block, or a missing admin is still "pick the other slot" | no owner |
 
 ## Review log

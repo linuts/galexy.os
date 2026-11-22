@@ -1968,7 +1968,9 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
         payload[0] = galexy_abi::NET_OP_SERVE;
         let n = tail.len().min(payload.len() - 1);
         payload[1..1 + n].copy_from_slice(&tail[..n]);
-        finish_net(cwd, &payload[..1 + n], false);
+        // A lane in the reply is the next inbound body. `attached` and
+        // `held` carry no lane, so those words are what the seat sees.
+        finish_net(cwd, &payload[..1 + n], true);
         return;
     }
     write_console(b"net: link, allow, grant, revoke, serve\n");

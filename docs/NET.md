@@ -2,9 +2,11 @@
 
 Phase 10. Milestones **78–85**. Required before the `v1.0` tag.
 Checkboxes live in `TODO.md`. This page is the design those boxes
-implement. Milestones 78–85 have landed, except one gate on
-`serve`: the listener is attached, and a second call does not yet
-receive the next inbound lane. That TODO box stays open.
+implement. Milestones 78–85 have landed. `serve` attaches a gate
+(8 gates, 4 pending lanes) and hands the next inbound lane to that
+listener. `serve_hands_the_lane_to_its_listener` is the run: the
+attaching seat prints the TLS body, and a second admin seat that
+holds the write bit receives `held`.
 
 Galexy has no network today, and that is why nothing in the tree is
 reachable remotely (`THREAT.md`). The tag should not ship that way.
@@ -274,9 +276,9 @@ The directory, `allow` / `grant` / `revoke` / `serve` / `dial`.
 Each change rewrites the record, so a restart of `net` keeps it.
 A name the seat was not granted does not open a TCP connection.
 Admin grants it; dial then returns a lane. `serve` attaches a gate.
-Handing the next inbound lane to that listener, and to nobody else,
-is still open: a second `serve` does not return a lane Cap, and raw
-TCP is not delivered as cleartext. Locators and ports
+The next inbound lane is delivered to that listener. A second
+`serve` from another seat returns `held` and no lane Cap. The lane
+carries TLS plaintext. Locators and ports
 exist in the record and in the admin opcode payload. They do not
 appear in `galexy-abi` as a general argument, and `fetch` will not
 take them. Literal locators are enough; DNS is wired here only as
@@ -393,13 +395,13 @@ stays the device. `net` stays the only packet stack.
 A passed IP, a passed port, `bind`, `listen`, and UDP do not
 exist yet. Milestones 112–116 grant each exact call with a card.
 Read dials. Write accepts. `setsockopt` stays refused. No new
-syscall, and no new right bit. Inbound from outside stays closed
-until a write card is held and Milestone 83 hands the lane to
-that one listener (Milestone 115). That box is checked only when
-a run shows the handoff.
+syscall, and no new right bit. Milestone 83 hands the next lane
+to the one listener that attached the gate, and only when that
+seat holds the write bit. `serve_hands_the_lane_to_its_listener`
+is that run. Inbound from outside stays closed until Milestone 115.
 
 Milestone 117 is the server a person connects to, and it is last.
-It waits on 111 and on that handoff. One init row, in-tree Rust,
+It waits on 111. One init row, in-tree Rust,
 no OpenSSH, no libssh, no C, and no crates.io SSH library.
 `/card/ssh` write accepts. Read lets a local program open a
 session. Strict key exchange, then `curve25519-sha256`. Host keys

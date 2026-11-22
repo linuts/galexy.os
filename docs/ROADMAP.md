@@ -36,8 +36,9 @@ the KVM cells.
 Vendor USB and NIC drivers stay unwritten. Python `socket.connect`
 is a lane. `bind`, UDP, and `ssl` stay refused until 112–116.
 
-Milestones **97–109** have since landed, except Milestone **83**'s
-`serve` handoff, which is still open. Milestones **104–107** are
+Milestones **83** and **97–109** have since landed.
+`serve_hands_the_lane_to_its_listener` hands the next inbound lane
+to the listener that attached the gate. Milestones **104–107** are
 four and eight CPUs, a card on each network name and each listed
 USB port, and a foreground ask the shell answers. Milestone
 **108** is `TcpStream::connect`. Milestone **109** is
@@ -443,7 +444,7 @@ granted. Ports and addresses stay inside that service. There is no
 Landed. Plan: `docs/NET.md`. Record format: `crates/galexy-netcfg`.
 Inventory row: `docs/DEVICES.md` (virtio-net is `landed`). Checkboxes:
 `TODO.md` Milestones **78–85**. Inbound `serve` attaches a gate and
-does not yet hand the next lane to that listener; that box stays open.
+hands the next lane to that listener.
 
 1. **78 Wire** — virtio-net 1.x + MSI-X; reserved Cap `0x8009`; the
    MAC comes from the device; only its holder can touch frames; DMA
@@ -460,7 +461,7 @@ does not yet hand the next lane to that listener; that box stays open.
    `write` are the plaintext. A test task reads `lane ok`
 6. **83 Names and gates** — the directory lives in the record and
    survives a restart. `dial` works after `grant`. `serve` attaches
-   a gate; handing the next lane to that listener is still open
+   a gate and hands the next inbound lane to that listener
 7. **84 Fetch** — `fetch <name>` at a login seat prints a body from
    the host peer. A seat without the grant is refused, and the host
    sees no handshake
@@ -707,15 +708,17 @@ passed port, `bind`, `listen`, and UDP do not exist yet. They
 stay refused until the milestone that grants that exact card:
 112 address, 113 port, 114 bind, 115 listen, 116 UDP.
 `setsockopt` stays refused. That is not a Berkeley socket.
-Milestone 83's inbound handoff stays open until its own run.
+Milestone 83's inbound handoff is
+`serve_hands_the_lane_to_its_listener`: the attaching seat
+receives the TLS body, and another admin seat receives `held`.
 
 Real outside access is 110 and 111. `net` resolves a name over
 TLS to a pinned resolver (not UDP/53, not `10.0.2.3`) and dials
 the address that comes back. The destination is not the QEMU
 user gateway `10.0.2.2`. virtio-net stays the device. `net`
 stays the only packet stack. Outbound TCP and TLS stay inside
-`net`. Inbound from outside stays closed until a write card is
-held and Milestone 83 hands the lane to that one listener (115).
+`net`. Milestone 83 hands the next lane to the listener that holds
+the write bit. Inbound from outside stays closed until Milestone 115.
 
 SSH does not start before that stack. Milestone 117 is one
 ring-3 Rust service. `/card/ssh` write accepts. Read lets a
