@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#164](https://github.com/linuts/galexy.os/pull/164) — Milestones 110–114 — `net` resolves a name over DNS-over-TLS and dials that address past `10.0.2.2`.
+  An address card, a port card, and write on the stored local address each grant one call.
+  The `/net` record is version 2. No new syscall. Listen, datagrams, and SSH stay open.
 - [#163](https://github.com/linuts/galexy.os/pull/163) — Milestone 83 — `serve` hands the next inbound TLS lane to the listener that attached the gate.
   A second admin seat receives `held` and no lane. Accept still needs the write bit.
   Logged-out stays denied. Eight gates, four pending lanes. No new syscall.
