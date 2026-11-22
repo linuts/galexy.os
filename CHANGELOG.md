@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#154](https://github.com/linuts/galexy.os/pull/154) — Milestones 86–88 — Phase 13 lands.
+  The kernel moves xHCI transfer rings. A ring-3 service named `usb`
+  lists each device. The QEMU keyboard is printed and left unclaimed.
+  The driver table ships empty. There is no vendor module and no socket.
 - [#153](https://github.com/linuts/galexy.os/pull/153) — Milestones 78–85 — Phase 10 lands.
   The kernel moves Ethernet frames on virtio-net. A ring-3 service named
   `net` speaks DHCP, ARP, UDP, TCP, and TLS 1.3. `fetch <name>` dials a
