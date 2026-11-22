@@ -41,7 +41,7 @@ These are design decisions, not a backlog.
 | Refused | Why |
 | --- | --- |
 | BSD sockets and Winsock (`socket`, `bind`, `listen`, `accept`, `connect`, `sendto`, `recvfrom`, `setsockopt`) | That API is an ambient port namespace with fifty years of options. Galexy will not grow one. |
-| `std::net::TcpStream` and a POSIX shim in the PAL | `std`'s `net` stays `unsupported`. A lane is not a TCP socket with a different name. |
+| `std::net::TcpStream` and a POSIX shim in the PAL | Phase 10 leaves `std`'s `net` `unsupported`. A lane is not a TCP socket with a different name. Milestone 108 keeps the name `TcpStream::connect` as a compatibility layer: it asks, then dials a granted name, and the value is still a lane. `bind`, `listen`, UDP, `setsockopt`, and any call that passes an IP or a port stay unsupported. There is no socket syscall. |
 | In-kernel TCP/IP | A parse bug on a packet would be ring 0. The kernel moves frames. The `net` service speaks the protocols. |
 | IP addresses and port numbers in the syscall ABI | Ports are an internal demux. Source addresses are chosen by the service. An app cannot bind `0.0.0.0`, spoof a source, or race a well-known port. |
 | Cleartext as an application right | The bytes an app reads are the plaintext of a finished TLS 1.3 session. There is no "raw TCP" Cap and no datagram Cap for ordinary tasks. |
@@ -365,10 +365,14 @@ dialog. No new syscall number unless the existing grant path
 cannot carry the ask; if it cannot, the milestone stops and says
 why before a number is added.
 
-Milestone 108 is `std::net::TcpStream::connect` on the galexy
-target. It asks, then dials. The object the caller holds is still
-a lane. `bind` to an address, `UdpSocket`, and socket options stay
-unsupported. rustls stays in `net`. The PAL does not grow a stack.
+Milestone 108 is a compatibility layer. It keeps the name
+`std::net::TcpStream::connect`. The call asks (Milestone 107),
+then dials a granted name through `net`. The value is still a
+lane. Milestone 109 is the same layer for Python `socket.connect`.
+There is no socket syscall and no second stack. rustls stays in
+`net`. The PAL does not parse TCP. This is not a Berkeley socket.
+`bind`, `listen`, UDP, `setsockopt`, and any call that passes an
+IP or a port stay unsupported.
 
 Milestone 110 is the server a person connects to. It waits on
 Milestone 83's open box: the next inbound lane is delivered to

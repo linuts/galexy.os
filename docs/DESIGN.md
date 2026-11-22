@@ -1150,6 +1150,21 @@ The shell, the framebuffer, and the keyboard IRQ stay on the BSP
 and 8. It does not raise the cap and it does not parse x2APIC
 processor records.
 
+### Socket names (Milestones 108–109)
+
+Programs keep the names they already call.
+`std::net::TcpStream::connect` and Python `socket.connect` are a
+compatibility layer. Each asks (Milestone 107), then dials a
+granted name through `net`. The value is still a lane. There is
+no socket syscall and no second stack. The PAL does not parse
+TCP, and rustls stays in `net`.
+
+This is not a Berkeley socket. `bind`, `listen`, UDP,
+`setsockopt`, and any call that passes an IP or a port stay
+unsupported. The boxes in `TODO.md` stay open until a run shows
+the ask and the dial. Milestone 103's `ImportError` assertion is
+not edited before that box is checked.
+
 ### Memory policy (Milestone 48)
 
 **PCID / GLOBAL.** Every CR3 swap is a full TLB flush. No suite test is
