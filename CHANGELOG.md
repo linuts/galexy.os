@@ -8,6 +8,13 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#162](https://github.com/linuts/galexy.os/pull/162) — Milestones 103, 108, and 109 — `lane.read` dials a granted name and reads the lane to EOF.
+  `std::net::TcpStream::connect` and Python `socket.connect` ask,
+  then dial that name. The value is a lane. No is `OSError` and
+  the program stays up. Yes prints the body. `bind`, UDP,
+  `setsockopt`, `ssl`, and `asyncio` stay refused. No new
+  syscall. Milestone 83, SSH/SFTP, and the KVM `v1.0` rows stay
+  open.
 - [#160](https://github.com/linuts/galexy.os/pull/160) — Milestones 104–107 — `test-cpus` boots at `-smp 4` and `-smp 8`
   (`online=4`, `online=8`; the suite stays at 2). A network name
   and a listed USB port are galfs cards. Dial, ping, and accept
