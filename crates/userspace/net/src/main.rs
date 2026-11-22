@@ -19,8 +19,16 @@ use galexy_rt::{
 };
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{verify_tls13_signature, CryptoProvider};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConfig, ClientConnection, DigitallySignedStruct, Error, SignatureScheme};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
+use rustls::{
+    ClientConfig, ClientConnection, Connection, DigitallySignedStruct, Error, ServerConfig,
+    ServerConnection, SignatureScheme,
+};
+
+/// Listener identity presented on an inbound gate. The private key stays
+/// in this image and is never written to the console.
+const LISTENER_CERT: &[u8] = include_bytes!("listener_cert.der");
+const LISTENER_KEY: &[u8] = include_bytes!("listener_key.der");
 
 const HANDSHAKE_MS: u64 = 5_000;
 const MAX_GATES: usize = 8;
@@ -52,7 +60,6 @@ fn main() {
         Engine::new(mac, true)
     };
     let mut gates: Vec<Gate> = Vec::new();
-    let mut stalls: Vec<Stall> = Vec::new();
     let mut logged_addr = false;
     let mut logged_udp = false;
     let mut logged_tcp = false;
@@ -88,25 +95,7 @@ fn main() {
             log("[net] tcp ok");
             logged_tcp = true;
         }
-        while let Some(id) = engine.take_accepted() {
-            let local = 0u16;
-            let _ = local;
-            if stalls.len() >= PENDING * MAX_GATES {
-                engine.tcp_close(id);
-                continue;
-            }
-            stalls.push(Stall { id, start: now });
-        }
-        let mut i = 0;
-        while i < stalls.len() {
-            if now.saturating_sub(stalls[i].start) >= HANDSHAKE_MS {
-                engine.tcp_close(stalls[i].id);
-                log("[net] deadline");
-                stalls.swap_remove(i);
-            } else {
-                i += 1;
-            }
-        }
+        enqueue_accepted(&mut engine, &mut gates);
         if let Some(start) = flood_at {
             if flood_ids.len() < 4 {
                 if let Some(gw) = engine.locator().map(|(_, _, gw)| gw) {
@@ -144,15 +133,13 @@ fn main() {
 
 struct Gate {
     port: u16,
-    /// Listen slot. Inbound delivery to the serving task is still open,
-    /// so nothing reads this yet.
-    #[allow(dead_code)]
+    /// Listen slot. Later accepts on this port belong to `listener`.
     id: u8,
-}
-
-struct Stall {
-    id: u8,
-    start: u64,
+    /// Task that attached the gate. A later `serve` from anyone else
+    /// does not receive the lane.
+    listener: u64,
+    /// Accepted connections waiting for that listener. At most [`PENDING`].
+    pending: Vec<u8>,
 }
 
 fn handle(
@@ -198,7 +185,7 @@ fn handle(
         NET_OP_ALLOW if admin => allow(rx, record, rest),
         NET_OP_GRANT if admin => grant_op(rx, record, rest, true),
         NET_OP_REVOKE if admin => grant_op(rx, record, rest, false),
-        NET_OP_SERVE if admin => serve(rx, engine, record, msg[2], gates, rest),
+        NET_OP_SERVE if admin => serve(rx, engine, record, msg[2], actor_id, gates, rest),
         NET_OP_PING => ping(rx, engine, msg[2], rest),
         NET_OP_ALLOW | NET_OP_GRANT | NET_OP_REVOKE | NET_OP_SERVE => {
             reply(rx, b"access denied\n", 0);
@@ -305,7 +292,7 @@ fn tls_fetch(
 ) -> Result<Vec<u8>, &'static str> {
     let server = ServerName::try_from(name.to_string()).map_err(|_| "bad")?;
     let config = client_config(key).map_err(|_| "bad")?;
-    let mut conn = ClientConnection::new(config, server).map_err(|_| "bad")?;
+    let mut conn = Connection::Client(ClientConnection::new(config, server).map_err(|_| "bad")?);
     let mut body = Vec::new();
     // The handshake has five seconds. A finished handshake gets the same
     // again to read the body, then the lane closes either way.
@@ -331,7 +318,7 @@ fn tls_fetch(
 fn drive_tls(
     engine: &mut Engine,
     id: u8,
-    conn: &mut ClientConnection,
+    conn: &mut Connection,
     body: &mut Vec<u8>,
 ) -> Result<(), &'static str> {
     while conn.wants_write() {
@@ -506,6 +493,7 @@ fn serve(
     engine: &mut Engine,
     record: &Record,
     held: u8,
+    actor_id: u64,
     gates: &mut Vec<Gate>,
     rest: &[u8],
 ) {
@@ -519,23 +507,161 @@ fn serve(
         reply(rx, b"access denied\n", 0);
         return;
     }
-    if gates.iter().any(|g| g.port == entry.port) {
-        reply(rx, b"ok\n", 0);
-        return;
-    }
-    if gates.len() >= MAX_GATES {
+    let port = entry.port;
+    let key = entry.key;
+    if let Some(gate) = gates.iter().find(|g| g.port == port) {
+        if gate.listener != actor_id {
+            reply(rx, b"held\n", 0);
+            return;
+        }
+    } else if gates.len() >= MAX_GATES {
         reply(rx, b"full\n", 0);
         return;
-    }
-    let Ok(id) = engine.tcp_listen(entry.port) else {
-        reply(rx, b"unavailable\n", 0);
+    } else {
+        let Ok(id) = engine.tcp_listen(port) else {
+            reply(rx, b"unavailable\n", 0);
+            return;
+        };
+        gates.push(Gate {
+            port,
+            id,
+            listener: actor_id,
+            pending: Vec::new(),
+        });
+        reply(rx, b"attached\n", 0);
         return;
+    }
+    let start = clock_ms();
+    let id = match next_inbound(engine, gates, port, start) {
+        Ok(id) => id,
+        Err(why) => {
+            audit(actor_id, name, &key, why);
+            reply(rx, b"timed out\n", 0);
+            return;
+        }
     };
-    gates.push(Gate {
-        port: entry.port,
-        id,
-    });
-    reply(rx, b"attached\n", 0);
+    match tls_accept(engine, id, clock_ms()) {
+        Ok(body) => {
+            let mut pair = [0u64; 2];
+            if !lane_pair(&mut pair).ok {
+                engine.tcp_close(id);
+                audit(actor_id, name, &key, "unavailable");
+                reply(rx, b"unavailable\n", 0);
+                return;
+            }
+            let ours = Cap::from_bits(pair[0]);
+            let _ = write(ours, &body);
+            let _ = close(ours);
+            audit(actor_id, name, &key, "handed");
+            reply(rx, b"ok\n", pair[1]);
+        }
+        Err(why) => {
+            engine.tcp_close(id);
+            audit(actor_id, name, &key, why);
+            if why == "deadline" {
+                log("[net] deadline");
+            }
+            reply(
+                rx,
+                if why == "denied" {
+                    b"access denied\n"
+                } else {
+                    b"timed out\n"
+                },
+                0,
+            );
+        }
+    }
+}
+
+/// The listener's next accepted connection. Other gates keep their own queues.
+fn next_inbound(
+    engine: &mut Engine,
+    gates: &mut Vec<Gate>,
+    port: u16,
+    start: u64,
+) -> Result<u8, &'static str> {
+    loop {
+        enqueue_accepted(engine, gates);
+        if let Some(id) = take_pending(gates, port) {
+            return Ok(id);
+        }
+        if clock_ms().saturating_sub(start) >= HANDSHAKE_MS.saturating_mul(3) {
+            return Err("deadline");
+        }
+        pump(engine);
+        engine.poll(clock_ms());
+        pump(engine);
+        let _ = sleep_ms(20);
+    }
+}
+
+fn take_pending(gates: &mut [Gate], port: u16) -> Option<u8> {
+    let gate = gates.iter_mut().find(|g| g.port == port)?;
+    if gate.pending.is_empty() {
+        None
+    } else {
+        Some(gate.pending.remove(0))
+    }
+}
+
+/// Queue an accepted connection on the gate for its local port.
+/// A port with no gate, or a gate that already holds [`PENDING`] lanes,
+/// is closed here. Nobody else receives it.
+fn enqueue_accepted(engine: &mut Engine, gates: &mut Vec<Gate>) {
+    while let Some(id) = engine.take_accepted() {
+        if gates.iter().any(|g| g.id == id) {
+            engine.tcp_close(id);
+            continue;
+        }
+        let Some(port) = engine.tcp_local(id) else {
+            engine.tcp_close(id);
+            continue;
+        };
+        let Some(gate) = gates.iter_mut().find(|g| g.port == port) else {
+            engine.tcp_close(id);
+            continue;
+        };
+        if gate.pending.len() >= PENDING {
+            engine.tcp_close(id);
+            continue;
+        }
+        gate.pending.push(id);
+    }
+}
+
+fn tls_accept(engine: &mut Engine, id: u8, start: u64) -> Result<Vec<u8>, &'static str> {
+    let config = server_config().map_err(|_| "bad")?;
+    let mut conn = Connection::Server(ServerConnection::new(config).map_err(|_| "bad")?);
+    let mut body = Vec::new();
+    let limit = start.saturating_add(HANDSHAKE_MS.saturating_mul(2));
+    while clock_ms() < limit {
+        if clock_ms().saturating_sub(start) >= HANDSHAKE_MS && conn.is_handshaking() {
+            return Err("deadline");
+        }
+        drive_tls(engine, id, &mut conn, &mut body)?;
+        if !conn.is_handshaking() && !body.is_empty() && !conn.wants_read() {
+            break;
+        }
+        pump(engine);
+        let _ = sleep_ms(20);
+    }
+    if conn.is_handshaking() || body.is_empty() {
+        return Err("deadline");
+    }
+    engine.tcp_close(id);
+    Ok(body)
+}
+
+fn server_config() -> Result<Arc<ServerConfig>, Error> {
+    let cert = CertificateDer::from(LISTENER_CERT.to_vec());
+    let key = PrivateKeyDer::try_from(LISTENER_KEY.to_vec())
+        .map_err(|_| Error::General("listener key".into()))?;
+    let config = ServerConfig::builder_with_provider(filtered_provider())
+        .with_protocol_versions(&[&rustls::version::TLS13])?
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)?;
+    Ok(Arc::new(config))
 }
 
 fn two_fields(rest: &[u8]) -> Option<(&[u8], &[u8])> {

@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#163](https://github.com/linuts/galexy.os/pull/163) — Milestone 83 — `serve` hands the next inbound TLS lane to the listener that attached the gate.
+  A second admin seat receives `held` and no lane. Accept still needs the write bit.
+  Logged-out stays denied. Eight gates, four pending lanes. No new syscall.
+  Milestones 110–117 stay open. SSH is 117.
 - [#162](https://github.com/linuts/galexy.os/pull/162) — Milestones 103, 108, and 109 — `lane.read` dials a granted name and reads the lane to EOF.
   `std::net::TcpStream::connect` and Python `socket.connect` ask,
   then dial that name. The value is a lane. No is `OSError` and

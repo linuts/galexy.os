@@ -2755,7 +2755,7 @@ TCP on the address from Milestone 80.
 - [x] Dial of a name this seat was not granted does not open TCP.
       Reply is `access denied`
 - [x] After `grant`, dial's reply carries the app end of a lane
-- [ ] `serve` attaches a gate (8 gates, 4 pending lanes). The next
+- [x] `serve` attaches a gate (8 gates, 4 pending lanes). The next
       lane is delivered to that listener and to nobody else
 - [x] Locators and ports are not a general `galexy-abi` argument.
       A name with no literal locator and no pinned resolver fails
@@ -3356,9 +3356,9 @@ listener. `listen` does not exist before this run.
       accept. Without it, no gate opens. virtio-net stays the
       device. `net` stays the only stack. No new syscall
 - [ ] **One listener**: Milestone 83 hands the next inbound lane
-      to that listener and to nobody else. A second `serve` does
-      not get it. Check Milestone 83 only when this run shows the
-      handoff. Do not check it from this text
+      to that listener and to nobody else. That box is checked
+      (`serve_hands_the_lane_to_its_listener`). This milestone's
+      `listen` card is still open
 - [ ] **From outside**: the peer is not `10.0.2.2` answering the
       guest. The runner forwards one host TCP connection on the
       same user network. Until the write card is held, that

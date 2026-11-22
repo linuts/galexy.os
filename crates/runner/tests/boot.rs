@@ -4,10 +4,10 @@
 mod common;
 
 use common::{
-    boot, boot_and_type, boot_and_type_ps2, boot_and_type_uefi, boot_and_type_usb, boot_for,
-    boot_galfs_once, boot_galfs_once_virtio, boot_liveness_until, boot_quiet_until,
-    boot_status_terminal, boot_uefi, boot_uefi_rng, boot_uefi_until, boot_with_galfs,
-    boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
+    boot, boot_and_type, boot_and_type_fwd, boot_and_type_ps2, boot_and_type_uefi,
+    boot_and_type_usb, boot_for, boot_galfs_once, boot_galfs_once_virtio, boot_liveness_until,
+    boot_quiet_until, boot_status_terminal, boot_uefi, boot_uefi_rng, boot_uefi_until,
+    boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
     boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio,
     boot_with_galfs_virtio_legacy, boot_with_tpm, boot_xhci, image, uart_login_serial, use_kvm,
     GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
@@ -6463,6 +6463,80 @@ fn python_lane_typing_e2e() {
     );
 }
 
+/// Milestone 83: `serve` attaches a gate, and the next inbound lane is
+/// delivered to that listener. A second admin seat holds the write bit
+/// and still receives no lane.
+#[test]
+fn serve_hands_the_lane_to_its_listener() {
+    let port = 4591u16;
+    let client = std::thread::spawn(move || host_lane_send(port, b"handoff-lane"));
+    let pin = "11".repeat(32);
+    let save_pin = format!("echo {pin} > k");
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line(save_pin.as_str(), "admin@galexy>"));
+    owned.extend(type_line("net allow echo 10.0.2.2:4591 k", "ok"));
+    owned.extend(type_line("net serve echo", "attached"));
+    owned.push(("f2".to_string(), "[tty] 2".to_string()));
+    owned.extend(type_line("admin", "Password: "));
+    owned.extend([
+        ("t".to_string(), "*".to_string()),
+        ("e".to_string(), "*".to_string()),
+        ("s".to_string(), "*".to_string()),
+        ("t".to_string(), "*".to_string()),
+        ("p".to_string(), "*".to_string()),
+        ("a".to_string(), "*".to_string()),
+        ("s".to_string(), "*".to_string()),
+        ("s".to_string(), "*".to_string()),
+        ("ret".to_string(), "admin@galexy> ".to_string()),
+    ]);
+    owned.extend(type_line("net serve echo", "held"));
+    owned.push(("f1".to_string(), "[tty] 1".to_string()));
+    owned.extend(type_line("net serve echo", "handoff-lane"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type_fwd(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "handoff-lane",
+        Duration::from_millis(30),
+        Duration::from_secs(300),
+        port,
+    );
+    let _ = client.join();
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+    let attached = serial
+        .find("attached")
+        .expect("the gate was not attached; serial:\n{serial}");
+    let held = serial
+        .find("held")
+        .expect("the other seat was not answered; serial:\n{serial}");
+    let body = serial
+        .find("handoff-lane")
+        .expect("the listener did not receive the lane; serial:\n{serial}");
+    assert!(
+        attached < held && held < body,
+        "the lane arrived out of order; serial:\n{serial}"
+    );
+    assert_eq!(
+        serial.matches("handoff-lane").count(),
+        1,
+        "the lane was delivered more than once; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("result=handed") && serial.contains("fp=") && !serial.contains("key="),
+        "audit line; serial:\n{serial}"
+    );
+}
+
 /// Milestone 85: connections a peer never finishes are closed on the
 /// deadline, and `svc status shell` still answers.
 #[test]
@@ -6515,6 +6589,146 @@ fn net_flood_deadline_leaves_the_seat() {
         held.load(Ordering::Relaxed) > 0,
         "the stall peer accepted nothing; serial:\n{serial}"
     );
+}
+
+fn host_lane_send(port: u16, body: &'static [u8]) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(240);
+    while std::time::Instant::now() < deadline && !serial_fwd_contains("held") {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if !serial_fwd_contains("held") {
+        return;
+    }
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = Arc::new(HostPin {
+        pin: listener_pin(),
+        provider: provider.clone(),
+    });
+    let config = Arc::new(
+        rustls::ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .expect("tls 1.3")
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth(),
+    );
+    let mut sock = loop {
+        if std::time::Instant::now() > deadline {
+            return;
+        }
+        match std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            Duration::from_secs(2),
+        ) {
+            Ok(sock) => break sock,
+            Err(_) => std::thread::sleep(Duration::from_millis(50)),
+        }
+    };
+    let _ = sock.set_read_timeout(Some(Duration::from_secs(60)));
+    let _ = sock.set_write_timeout(Some(Duration::from_secs(30)));
+    let name = rustls::pki_types::ServerName::try_from("echo").expect("server name");
+    let mut conn = rustls::ClientConnection::new(config, name).expect("tls client");
+    {
+        let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+        let _ = tls.write_all(body);
+    }
+    conn.send_close_notify();
+    while conn.wants_write() {
+        let _ = conn.write_tls(&mut sock);
+    }
+}
+
+fn serial_fwd_contains(needle: &str) -> bool {
+    let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) else {
+        return false;
+    };
+    let prefix = format!("galexy-serial-typing_fwd-{}", std::process::id());
+    for ent in rd.flatten() {
+        let name = ent.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(&prefix) || !name.ends_with(".log") {
+            continue;
+        }
+        if std::fs::read_to_string(ent.path())
+            .map(|text| text.contains(needle))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+#[derive(Debug)]
+struct HostPin {
+    pin: [u8; 32],
+    provider: Arc<rustls::crypto::CryptoProvider>,
+}
+
+impl rustls::client::danger::ServerCertVerifier for HostPin {
+    fn verify_server_cert(
+        &self,
+        end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        let Some(got) = cert_ed25519(end_entity.as_ref()) else {
+            return Err(rustls::Error::General("pin-miss".into()));
+        };
+        if got != self.pin {
+            return Err(rustls::Error::General("pin-mismatch".into()));
+        }
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Err(rustls::Error::PeerIncompatible(
+            rustls::PeerIncompatible::ServerDoesNotSupportTls12Or13,
+        ))
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )?;
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![rustls::SignatureScheme::ED25519]
+    }
+}
+
+fn listener_pin() -> [u8; 32] {
+    let der = include_bytes!("../../userspace/net/src/listener_cert.der");
+    cert_ed25519(der).expect("listener ed25519 pin")
+}
+
+fn cert_ed25519(der: &[u8]) -> Option<[u8; 32]> {
+    let oid = [0x06, 0x03, 0x2b, 0x65, 0x70];
+    let at = der.windows(oid.len()).position(|w| w == oid)?;
+    let rest = &der[at + oid.len()..];
+    let bit = rest.windows(3).position(|w| w == [0x03, 0x21, 0x00])?;
+    if rest.len() < bit + 35 {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&rest[bit + 3..bit + 35]);
+    Some(key)
 }
 
 fn host_echo_cert() -> (Vec<u8>, Vec<u8>, String) {

@@ -154,7 +154,7 @@ fn apply_accel(cmd: &mut Command) {
 pub use runner::use_kvm;
 
 fn qemu_command(img_path: &str, serial_path: &Path) -> Command {
-    qemu_command_opts(img_path, serial_path, "q35", true, true, 2)
+    qemu_command_opts(img_path, serial_path, "q35", true, true, 2, None)
 }
 
 /// `machine` is `q35` (default) or `pc` (legacy IDE). `virtio_kbd` attaches
@@ -166,6 +166,7 @@ fn qemu_command_opts(
     virtio_kbd: bool,
     kernel_log: bool,
     smp: u8,
+    hostfwd: Option<u16>,
 ) -> Command {
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.arg("-M")
@@ -196,7 +197,7 @@ fn qemu_command_opts(
         runner::enable_kernel_log(&mut cmd);
     }
     if machine == "q35" {
-        attach_user_net(&mut cmd);
+        attach_user_net_port(&mut cmd, hostfwd);
     }
     cmd
 }
@@ -204,8 +205,16 @@ fn qemu_command_opts(
 /// Virtio-net 1.x on QEMU user networking. Guest `10.0.2.15`, gateway
 /// `10.0.2.2`. The MAC is fixed so the wire test can check it.
 pub fn attach_user_net(cmd: &mut Command) {
+    attach_user_net_port(cmd, None);
+}
+
+fn attach_user_net_port(cmd: &mut Command, hostfwd: Option<u16>) {
+    let spec = match hostfwd {
+        Some(port) => format!("user,id=net0,hostfwd=tcp:127.0.0.1:{port}-:{port}"),
+        None => "user,id=net0".to_string(),
+    };
     cmd.arg("-netdev")
-        .arg("user,id=net0")
+        .arg(spec)
         .arg("-device")
         .arg("virtio-net-pci,netdev=net0,disable-legacy=on,mac=52:54:00:12:34:56");
 }
@@ -696,7 +705,7 @@ pub fn boot(image: &Image) -> (Option<i32>, String) {
 /// Like [`boot`], with `-smp N`. The rest of the suite stays at 2.
 pub fn boot_smp(image: &Image, smp: u8) -> (Option<i32>, String) {
     let serial_path = serial_log_path(&format!("{}-smp{}", image.name, smp));
-    let cmd = qemu_command_opts(&image.bios, &serial_path, "q35", true, true, smp);
+    let cmd = qemu_command_opts(&image.bios, &serial_path, "q35", true, true, smp, None);
     run_qemu(cmd, &serial_path, TEST_TIMEOUT)
 }
 
@@ -1050,7 +1059,7 @@ pub fn boot_liveness_until(
 /// does not, so COM1 is the console mirror only.
 pub fn boot_quiet_until(image: &Image, timeout: Duration, ready: impl Fn(&str) -> bool) -> String {
     let serial_path = serial_log_path(&format!("{}-quiet", image.name));
-    let child = qemu_command_opts(&image.bios, &serial_path, "q35", true, false, 2)
+    let child = qemu_command_opts(&image.bios, &serial_path, "q35", true, false, 2, None)
         .spawn()
         .expect("failed to launch qemu-system-x86_64");
     run_until(child, &serial_path, timeout, &ready)
@@ -1433,6 +1442,32 @@ pub fn boot_and_type(
     )
 }
 
+/// Like [`boot_and_type`], and QEMU forwards host TCP `port` to the guest.
+///
+/// The suite's other boots do not publish that forward. This one is how
+/// a host client reaches the listener `serve` attached.
+pub fn boot_and_type_fwd(
+    image: &Image,
+    sync_pairs: &[(&str, &str)],
+    ready_marker: &str,
+    final_marker: &str,
+    key_delay: Duration,
+    timeout: Duration,
+    port: u16,
+) -> String {
+    let serial_path = serial_log_path("typing-fwd");
+    let cmd = qemu_command_opts(&image.bios, &serial_path, "q35", true, true, 2, Some(port));
+    boot_and_type_cmd(
+        cmd,
+        &serial_path,
+        sync_pairs,
+        ready_marker,
+        final_marker,
+        key_delay,
+        timeout,
+    )
+}
+
 /// Like [`boot_and_type`], but with no virtio-keyboard so QMP keys hit the i8042.
 pub fn boot_and_type_ps2(
     image: &Image,
@@ -1514,7 +1549,7 @@ fn boot_and_type_on(
     timeout: Duration,
 ) -> String {
     let serial_path = serial_log_path("typing");
-    let mut cmd = qemu_command_opts(&img_path, &serial_path, "q35", virtio_kbd, true, 2);
+    let mut cmd = qemu_command_opts(&img_path, &serial_path, "q35", virtio_kbd, true, 2, None);
     if uefi {
         const OVMF_FD_DEFAULT: &str = "/usr/share/ovmf/x64/OVMF.4m.fd";
         let ovmf_fd = std::env::var("OVMF_FD").unwrap_or_else(|_| OVMF_FD_DEFAULT.into());
@@ -1546,7 +1581,15 @@ pub fn boot_and_type_usb(
     // No virtio keyboard and no i8042, so the monitor's keys arrive only
     // through usb-kbd. The guest still falls through `keyboard::init`
     // when virtio-input is absent; the controller reads return 0xff.
-    let mut cmd = qemu_command_opts(&image.bios, &serial_path, "q35,i8042=off", false, true, 2);
+    let mut cmd = qemu_command_opts(
+        &image.bios,
+        &serial_path,
+        "q35,i8042=off",
+        false,
+        true,
+        2,
+        None,
+    );
     attach_xhci(&mut cmd);
     boot_and_type_cmd(
         cmd,
