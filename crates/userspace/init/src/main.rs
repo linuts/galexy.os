@@ -212,6 +212,7 @@ fn main() -> i32 {
 
     note_omissions();
     ensure_net_record();
+    ensure_cards();
     for (i, svc) in SERVICES.iter().enumerate() {
         if svc.autostart && !OMIT[i].load(Ordering::Acquire) {
             let _ = spawn_svc(i);
@@ -486,6 +487,17 @@ fn line_eq(snap: &[u8], name: &[u8]) -> bool {
 /// every row, so a query glitch does not drop the seats.
 /// Creates `/net` once. A record that is already there keeps its lease
 /// and directory across a restart of this task.
+/// `/card` holds one object per network name, plus `ping`. `/usb`
+/// holds one object per listed port. Init does not grant them.
+fn ensure_cards() {
+    let _ = create(b"/card/");
+    let ping = create(b"/card/ping");
+    if ping.ok {
+        let _ = close(Cap::from_bits(ping.value));
+    }
+    let _ = create(b"/usb/");
+}
+
 fn ensure_net_record() {
     let existing = open(b"/net");
     if existing.ok {

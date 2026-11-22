@@ -109,6 +109,7 @@ pub use spawn::test_revoke_token;
 pub use spawn::test_session_locked;
 pub use spawn::test_set_idle_limit;
 pub(crate) use spawn::ARG_MAX;
+pub(crate) use task::begin_storage_ask;
 pub(crate) use task::task_channel;
 pub(crate) use task::task_close;
 pub(crate) use task::task_create;

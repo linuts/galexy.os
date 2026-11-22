@@ -154,7 +154,7 @@ fn apply_accel(cmd: &mut Command) {
 pub use runner::use_kvm;
 
 fn qemu_command(img_path: &str, serial_path: &Path) -> Command {
-    qemu_command_opts(img_path, serial_path, "q35", true, true)
+    qemu_command_opts(img_path, serial_path, "q35", true, true, 2)
 }
 
 /// `machine` is `q35` (default) or `pc` (legacy IDE). `virtio_kbd` attaches
@@ -165,6 +165,7 @@ fn qemu_command_opts(
     machine: &str,
     virtio_kbd: bool,
     kernel_log: bool,
+    smp: u8,
 ) -> Command {
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.arg("-M")
@@ -175,7 +176,7 @@ fn qemu_command_opts(
         .arg(format!("format=raw,file={img_path}"))
         .arg("-snapshot")
         .arg("-smp")
-        .arg("2");
+        .arg(smp.to_string());
     apply_accel(&mut cmd);
     if virtio_kbd {
         cmd.arg("-device").arg("virtio-keyboard-pci");
@@ -692,6 +693,13 @@ pub fn boot(image: &Image) -> (Option<i32>, String) {
     boot_for(image, TEST_TIMEOUT)
 }
 
+/// Like [`boot`], with `-smp N`. The rest of the suite stays at 2.
+pub fn boot_smp(image: &Image, smp: u8) -> (Option<i32>, String) {
+    let serial_path = serial_log_path(&format!("{}-smp{}", image.name, smp));
+    let cmd = qemu_command_opts(&image.bios, &serial_path, "q35", true, true, smp);
+    run_qemu(cmd, &serial_path, TEST_TIMEOUT)
+}
+
 /// Like [`boot`], with an explicit deadline. Milestone 72's compiler
 /// boot is longer than the 60 second suite default.
 pub fn boot_for(image: &Image, timeout: Duration) -> (Option<i32>, String) {
@@ -1042,7 +1050,7 @@ pub fn boot_liveness_until(
 /// does not, so COM1 is the console mirror only.
 pub fn boot_quiet_until(image: &Image, timeout: Duration, ready: impl Fn(&str) -> bool) -> String {
     let serial_path = serial_log_path(&format!("{}-quiet", image.name));
-    let child = qemu_command_opts(&image.bios, &serial_path, "q35", true, false)
+    let child = qemu_command_opts(&image.bios, &serial_path, "q35", true, false, 2)
         .spawn()
         .expect("failed to launch qemu-system-x86_64");
     run_until(child, &serial_path, timeout, &ready)
@@ -1506,7 +1514,7 @@ fn boot_and_type_on(
     timeout: Duration,
 ) -> String {
     let serial_path = serial_log_path("typing");
-    let mut cmd = qemu_command_opts(&img_path, &serial_path, "q35", virtio_kbd, true);
+    let mut cmd = qemu_command_opts(&img_path, &serial_path, "q35", virtio_kbd, true, 2);
     if uefi {
         const OVMF_FD_DEFAULT: &str = "/usr/share/ovmf/x64/OVMF.4m.fd";
         let ovmf_fd = std::env::var("OVMF_FD").unwrap_or_else(|_| OVMF_FD_DEFAULT.into());
@@ -1538,7 +1546,7 @@ pub fn boot_and_type_usb(
     // No virtio keyboard and no i8042, so the monitor's keys arrive only
     // through usb-kbd. The guest still falls through `keyboard::init`
     // when virtio-input is absent; the controller reads return 0xff.
-    let mut cmd = qemu_command_opts(&image.bios, &serial_path, "q35,i8042=off", false, true);
+    let mut cmd = qemu_command_opts(&image.bios, &serial_path, "q35,i8042=off", false, true, 2);
     attach_xhci(&mut cmd);
     boot_and_type_cmd(
         cmd,

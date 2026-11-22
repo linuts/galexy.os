@@ -92,6 +92,10 @@ path = "src/bin/bell.rs"
 name = "chime"
 path = "src/bin/chime.rs"
 
+[[bin]]
+name = "dial"
+path = "src/bin/dial.rs"
+
 [dependencies]
 galexy-rt = { path = "../galexy-rt" }
 galexy-abi = { path = "../../galexy-abi" }

@@ -8,6 +8,16 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- Milestones 104–107 — `test-cpus` boots at `-smp 4` and `-smp 8`
+  (`online=4`, `online=8`; the suite stays at 2). A network name
+  and a listed USB port are galfs cards. Dial, ping, and accept
+  with no card do not open TCP. `usb list` without the card is
+  `access denied`; the HID arm stays inside `usb`. A foreground
+  program prints `<name> wants the network` or `wants storage`.
+  Yes is a token for that run. No is `AccessDenied` and the
+  program stays up. No new syscall. `DISK_VERSION` stays 17.
+  Milestone 103's guest proof, Milestone 83, Milestones 108–110,
+  and the KVM `v1.0` rows stay open.
 - [#157](https://github.com/linuts/galexy.os/pull/157) — Milestones 101–103 — `galfs-fsck --repair` seals a corrected share
   table into the other metadata slot. A USB boot keyboard
   (`hid_kbd`) types when the driver table claims it. `import lane`

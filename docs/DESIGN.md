@@ -1134,8 +1134,9 @@ not free ramdisk bytes.
 does not stop at two. `MAX_CPUS` is 8, and the per-CPU arrays (GDT,
 scheduler, AP stacks, shootdown mailboxes, the watchdog) are that
 size. The suite and `cargo run` pass `-smp 2`, and `test-smp` asserts
-`online == 2`. A boot with three to eight type-0 local APICs is what
-the loop already does. It has not been run.
+`online == 2`. `test-cpus` is the one kernel that boots at
+`-smp 4` and `-smp 8`. Serial shows `online=4` and `online=8`,
+and each AP rank prints `online`. That kernel has no shell.
 
 Past eight the kernel cannot. `enabled_ids` is `[u8; 8]`, but the
 parser still increments `cpus` for every enabled type-0 record.
@@ -1146,9 +1147,9 @@ in `boot_aps` is not the path a ninth CPU hits: the slice panics
 first.
 
 The shell, the framebuffer, and the keyboard IRQ stay on the BSP
-(`no_steal`). That is not a CPU-count limit. Milestone 104 proves 4
-and 8. It does not raise the cap and it does not parse x2APIC
-processor records.
+(`no_steal`). That is not a CPU-count limit. Milestone 104 proved
+4 and 8. It did not raise the cap and it does not parse x2APIC
+processor records. A ninth CPU was not booted.
 
 ### Socket names (Milestones 108–109)
 

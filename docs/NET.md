@@ -334,36 +334,32 @@ an ambient socket. Phase 16's socket is a card. It is not this phase.
 
 ## Phase 16 — A card is the firewall
 
-Milestones **105**, **107**, **108**, and **110**. Checkboxes in
-`TODO.md`. This section is the plan. No opcode here has landed.
+Milestones **105** and **107** landed. **108** and **110** are
+still the plan. Checkboxes in `TODO.md`.
 
-Today a dial is allowed when the caller's name is a string in
-`Name.actors` (`may_dial`). `grant` and `revoke` are admin opcodes
-that rewrite `/net`. The `net` service itself holds one galfs token,
-read and write on that file. Ping is any logged-in seat. That is a
-second grant language. Storage's language is a token: an object id
-and rights, checked by `resolve_and_check`.
+A network name is a galfs object under `/card` (the same object
+as `/admin@card/<name>`). `/card/ping` is the ping card. The
+locator and the pinned key stay in the service record. Who may
+use the name is a token. Read is dial. Write is accept. The
+kernel stamps the held bits into header byte 2 (`TOKEN_READ` is
+1, `TOKEN_WRITE` is 2). `net` refuses a dial or a ping without
+bit 1, and an accept without bit 2, before TCP or ICMP. Actor
+strings stay in the record and are not consulted. `may_dial`
+remains for that record. Logged-out stays `AccessDenied`. There
+is no chain, no interface match, and no packet filter. The
+firewall is the card, and it lives in `net`. Admin's root token
+covers the cards. A seat without one does not open TCP.
 
-Milestone 105 makes the name a galfs object. The locator and the
-pinned key stay in the service record. Who may use the name is a
-token, the same `grant` the tree already has. Read is dial. Write
-is accept. `may_dial` becomes that check. The actor strings stop
-being an authority once the token exists. Ping requires a token
-too. A flow with no token is dropped. Logged-out stays
-`AccessDenied`. There is no chain, no interface match, and no
-packet filter in the kernel. The firewall is the card, and it
-lives in `net`.
-
-A program that does not hold the token does not open a quiet
-failure inside the library. Milestone 107 parks the call and the
-foreground seat prints one line: the program name and the right
-(`wants the network`, or `wants storage` for a storage ask). Yes
-installs a token for this run. No is `AccessDenied` and the
-program stays up. A second ask for the same right in the same run
-does not print. The seat is the shell. The kernel does not draw a
-dialog. No new syscall number unless the existing grant path
-cannot carry the ask; if it cannot, the milestone stops and says
-why before a number is added.
+A foreground program that does not hold the token parks. The
+shell, which is Cap-waiting, prints `<name> wants the network`
+or `<name> wants storage`, and reads yes or no. Yes installs a
+token on that task for this run. The parent may `grant` that
+exact path and those rights even when the parent does not hold
+the card. The program cannot grant itself. No is `AccessDenied`
+and the program stays up. A second ask for the same right in
+the same run does not print. A task that already holds the
+token does not ask. The kernel does not draw a dialog. There
+is no new syscall number. The token dies when the task exits.
 
 Milestone 108 is a compatibility layer. It keeps the name
 `std::net::TcpStream::connect`. The call asks (Milestone 107),

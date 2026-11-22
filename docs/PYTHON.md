@@ -243,9 +243,12 @@ the current patch is applied when `fn lane_read` is missing.
 
 ## Phase 16 — Ask, then connect
 
-Milestones **107** and **109**. The boxes in `TODO.md` are open.
-`socket` stays off the allow-list until 109, and 109 does not
-start while 103's boxes are open.
+Milestone **107** landed for a foreground program: the shell
+prints `<name> wants the network` or `<name> wants storage`.
+Milestone **109** is still open. `socket` stays off the
+allow-list, and 109 does not start while 103's boxes are open.
+This host has no `galexy` toolchain, so `python_lane_typing_e2e`
+has not been run.
 
 A compatibility layer keeps the name programs already call.
 `socket.connect` asks (Milestone 107), then dials a granted name

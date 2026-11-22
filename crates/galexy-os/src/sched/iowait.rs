@@ -431,6 +431,9 @@ pub unsafe fn syscall_handoff(
                 t.fs_base.store(read_fs_base(), Ordering::Relaxed);
             }
         }
+        if !exit && threads[slot - 1].io_kind.load(Ordering::Acquire) == IO_ASK {
+            wake_ask_parent(&mut threads, slot as u8);
+        }
         if exit {
             if threads[slot - 1].is_init {
                 panic!("init exited ({reason}) — no orphan root");
@@ -1013,6 +1016,16 @@ pub(in crate::sched) const IO_LANE_READ: u8 = 9;
 pub(in crate::sched) const IO_LANE_WRITE: u8 = 10;
 /// USB control `send` parked until `usb` replies.
 pub(in crate::sched) const IO_USB_RPC: u8 = 11;
+/// Foreground card ask. The seat answers with `grant` or `revoke`.
+pub(in crate::sched) const IO_ASK: u8 = 12;
+/// `io_pipe` while [`IO_ASK`]: the program wants the network.
+pub(in crate::sched) const ASK_NETWORK: u8 = 1;
+/// `io_pipe` while [`IO_ASK`]: the program wants storage.
+pub(in crate::sched) const ASK_STORAGE: u8 = 2;
+/// [`Thread::ask_done`] bit: this run already asked for the network.
+pub(in crate::sched) const ASK_DONE_NETWORK: u8 = 1;
+/// [`Thread::ask_done`] bit: this run already asked for storage.
+pub(in crate::sched) const ASK_DONE_STORAGE: u8 = 2;
 
 pub(in crate::sched) fn clear_wait_fields(thread: &Thread) {
     thread.wait_child_slot.store(0, Ordering::Relaxed);
