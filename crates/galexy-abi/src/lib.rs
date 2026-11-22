@@ -990,6 +990,15 @@ pub const NET_OP_PIN: u8 = 9;
 /// card. The payload is the address text. The reply is `ok` or
 /// `access denied`. This opcode does not listen.
 pub const NET_OP_BIND: u8 = 10;
+/// Net control: listen on the stored port. Write on that port card.
+/// The payload is the port text. The first reply is `attached`. The
+/// next reply from that same listener carries the inbound lane. A
+/// second listener is `held` and receives no lane.
+pub const NET_OP_LISTEN: u8 = 11;
+/// Net control: send one datagram to the peer stored on the card.
+/// Read on that card. The payload is the name, then the bytes. Write
+/// does not send and does not capture. Port 53 is refused.
+pub const NET_OP_DGRAM: u8 = 12;
 
 /// USB control: list enumerated devices, one per line. The reply is
 /// plain text. It does not begin with a lane capability.

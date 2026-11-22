@@ -168,7 +168,7 @@ after a PAL change should `rm target/.rustc_info.json` too.
 | `thread` + `thread_local_key` | `ThreadSpawn` (new slot, same CR3, fresh user stack, kernel stack); per-thread pointer in the FS base via user-mode `wrfsbase` (CR4.FSGSBASE is already on; the kernel never touches FS in ring 3). Join is process-Cap `Wait` |
 | `sync` | `std`'s generic futex implementations over `Futex` |
 | `random` | `rdrand` in the PAL |
-| `net` | `TcpStream::connect` dials a granted name (Milestone 108). The value is a lane. `bind`, UDP, `setsockopt`, and any call that passes an IP or a port stay `unsupported`. The PAL does not parse TCP (`docs/NET.md`) |
+| `net` | `TcpStream::connect` dials a granted name, one stored address, or one stored port (Milestones 108 and 112–113). The value is a lane. `listen_port` and `send_card` are the listen and datagram cards. A receive and `setsockopt` stay `unsupported`. The PAL does not parse TCP (`docs/NET.md`) |
 
 Key-based TLS stays. `has-thread-local` is still false, so compiled
 code does not emit `#[thread_local]`. `gxld` does link `.tdata`/`.tbss`
@@ -472,5 +472,6 @@ testable in reasonable time. Those stages have since landed (Milestones
 were built. Phase 10 (`docs/NET.md`, Milestones 78–85) and Phase 13
 (`docs/USB.md`, Milestones 86–88) have landed. The `v1.0` tag waits
 on a KVM pass. `TcpStream::connect` and Python `socket.connect`
-are a granted name and the value is a lane. `bind`, UDP, and
-socket options stay unsupported until Milestones 112–116.
+are a granted name and the value is a lane. Bind, listen, and
+one datagram are the cards from Milestones 112–116. Socket
+options stay unsupported.

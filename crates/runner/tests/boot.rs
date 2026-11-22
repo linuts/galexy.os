@@ -6870,6 +6870,285 @@ fn milestones_110_through_114() {
     );
 }
 
+/// Milestones 115 and 116. Write on the port card accepts one inbound
+/// connection that the runner forwarded. A seat without that card does
+/// not complete the handshake, and a second listener receives nothing.
+/// Read on a datagram card sends one payload to the stored peer. Write
+/// does not send. Port 53 stays unused.
+#[test]
+fn milestones_115_and_116() {
+    let peer = host_ipv4();
+    let peer_text = format!("{}.{}.{}.{}", peer[0], peer[1], peer[2], peer[3]);
+    let dgram_hits = Arc::new(AtomicUsize::new(0));
+    let dns_hits = Arc::new(AtomicUsize::new(0));
+    let dns_up = Arc::new(AtomicBool::new(false));
+    let refused = Arc::new(AtomicUsize::new(0));
+    let dgram_bg = Arc::clone(&dgram_hits);
+    let dns_bg = Arc::clone(&dns_hits);
+    let dns_flag = Arc::clone(&dns_up);
+    let refused_bg = Arc::clone(&refused);
+    let udp = std::thread::spawn(move || host_dgram_count(4597, b"card-datagram", dgram_bg, None));
+    let dns =
+        std::thread::spawn(move || host_dgram_count(53, b"card-datagram", dns_bg, Some(dns_flag)));
+    let inbound = std::thread::spawn(move || host_listen_body(4596, b"outside-lane", refused_bg));
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line("net peer nope 0.0.0.0 9", "bad"));
+    owned.extend(type_line("net peer nope 172.30.0.2 53", "bad"));
+    owned.extend(type_line("net port 4596 10.0.2.15", "ok"));
+    owned.extend(type_line("useradd eve", "Password: "));
+    owned.extend([
+        ("e".into(), "*".into()),
+        ("v".into(), "*".into()),
+        ("e".into(), "*".into()),
+        ("ret".into(), "admin@galexy> ".into()),
+        ("f2".into(), "[tty] 2".into()),
+    ]);
+    owned.extend(type_line("eve", "Password: "));
+    owned.extend([
+        ("e".into(), "*".into()),
+        ("v".into(), "*".into()),
+        ("e".into(), "*".into()),
+        ("ret".into(), "eve@galexy> ".into()),
+    ]);
+    owned.extend(type_line("connect --listen 4596", "wants the network"));
+    owned.extend(type_line("no", "access denied"));
+    owned.push(("f1".into(), "[tty] 1".into()));
+    owned.extend(type_line("net listen 4596", "attached"));
+    owned.extend(type_line("grant w /card/4596 shell2", "admin@galexy> "));
+    owned.push(("f2".into(), "[tty] 2".into()));
+    owned.extend(type_line("connect --listen 4596", "held"));
+    owned.push(("f1".into(), "[tty] 1".into()));
+    owned.extend(type_line("net listen 4596", "outside-lane"));
+    let peer_cmd = format!("net peer peer {peer_text} 4597");
+    owned.extend(type_line(&peer_cmd, "ok"));
+    owned.push(("f2".into(), "[tty] 2".into()));
+    owned.extend(type_line("connect --send peer", "wants the network"));
+    owned.extend(type_line("no", "access denied"));
+    owned.push(("f1".into(), "[tty] 1".into()));
+    owned.extend(type_line("grant w /card/peer shell2", "admin@galexy> "));
+    owned.push(("f2".into(), "[tty] 2".into()));
+    owned.extend(type_line("connect --send peer", "wants the network"));
+    owned.extend(type_line("no", "access denied"));
+    owned.push(("f1".into(), "[tty] 1".into()));
+    owned.extend(type_line("connect --send peer", "sent"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type_fwd(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "sent",
+        Duration::from_millis(30),
+        Duration::from_secs(300),
+        4596,
+    );
+    drop(udp);
+    drop(dns);
+    let _ = inbound.join();
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+    assert!(
+        refused.load(Ordering::Relaxed) > 0,
+        "the handshake completed before the write card; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[net] listen 4596"),
+        "the gate did not open; serial:\n{serial}"
+    );
+    assert_eq!(
+        serial.matches("outside-lane").count(),
+        1,
+        "the body was delivered more than once; serial:\n{serial}"
+    );
+    let attached = serial.find("attached").unwrap_or(usize::MAX);
+    let held = serial.find("held").unwrap_or(0);
+    let body = serial.find("outside-lane").unwrap_or(0);
+    assert!(
+        attached < held && held < body,
+        "the lane arrived out of order; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[net] dial 10.0.2.2"),
+        "the gateway answered a dial; serial:\n{serial}"
+    );
+    assert_eq!(
+        dgram_hits.load(Ordering::Relaxed),
+        1,
+        "the peer did not receive one datagram; serial:\n{serial}"
+    );
+    if dns_up.load(Ordering::Relaxed) {
+        assert_eq!(
+            dns_hits.load(Ordering::Relaxed),
+            0,
+            "a UDP/53 payload arrived; serial:\n{serial}"
+        );
+    }
+    assert!(
+        serial.contains(&format!("[net] dgram {peer_text} 4597")),
+        "the stored peer was not the destination; serial:\n{serial}"
+    );
+    assert_eq!(
+        serial.matches("[net] dgram").count(),
+        1,
+        "more than one card datagram was sent; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("udp/53") && !serial.contains("port 53"),
+        "plaintext DNS showed up; serial:\n{serial}"
+    );
+}
+
+fn host_ipv4() -> [u8; 4] {
+    let text = std::fs::read_to_string("/proc/net/fib_trie").unwrap_or_default();
+    let mut last = None;
+    for line in text.lines() {
+        let trimmed = line.trim().trim_start_matches("|--").trim();
+        let head = trimmed.split(['/', ' ']).next().unwrap_or("");
+        if let Some(ip) = parse_dotted(head) {
+            last = Some(ip);
+        }
+        if trimmed.contains("host LOCAL") {
+            if let Some(ip) = last {
+                if ip[0] != 127 && !(ip[0] == 172 && ip[1] == 17) {
+                    return ip;
+                }
+            }
+        }
+    }
+    panic!("no host address in /proc/net/fib_trie");
+}
+
+fn parse_dotted(text: &str) -> Option<[u8; 4]> {
+    let mut ip = [0u8; 4];
+    let mut n = 0usize;
+    for part in text.split('.') {
+        if n == 4 || part.is_empty() || part.len() > 3 {
+            return None;
+        }
+        ip[n] = part.parse::<u8>().ok()?;
+        n += 1;
+    }
+    if n == 4 {
+        Some(ip)
+    } else {
+        None
+    }
+}
+
+fn host_dgram_count(
+    port: u16,
+    needle: &[u8],
+    hits: Arc<AtomicUsize>,
+    bound: Option<Arc<AtomicBool>>,
+) {
+    let Ok(sock) = std::net::UdpSocket::bind(("0.0.0.0", port)) else {
+        return;
+    };
+    if let Some(flag) = bound {
+        flag.store(true, Ordering::Relaxed);
+    }
+    let _ = sock.set_read_timeout(Some(Duration::from_millis(200)));
+    let mut buf = [0u8; 256];
+    let deadline = std::time::Instant::now() + Duration::from_secs(280);
+    while std::time::Instant::now() < deadline {
+        if let Ok((n, _)) = sock.recv_from(&mut buf) {
+            if buf[..n].windows(needle.len()).any(|w| w == needle) {
+                hits.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+fn tls_body(port: u16, body: &[u8], budget: Duration) -> bool {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = Arc::new(HostPin {
+        pin: listener_pin(),
+        provider: provider.clone(),
+    });
+    let config = Arc::new(
+        rustls::ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .expect("tls 1.3")
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth(),
+    );
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut sock) = std::net::TcpStream::connect_timeout(&addr, budget) else {
+        return false;
+    };
+    let _ = sock.set_read_timeout(Some(budget));
+    let _ = sock.set_write_timeout(Some(budget));
+    let name = rustls::pki_types::ServerName::try_from("echo").expect("server name");
+    let Ok(mut conn) = rustls::ClientConnection::new(config, name) else {
+        return false;
+    };
+    let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+    tls.write_all(body).is_ok() && !conn.is_handshaking()
+}
+
+fn host_listen_body(port: u16, body: &'static [u8], refused: Arc<AtomicUsize>) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(240);
+    while std::time::Instant::now() < deadline && !serial_fwd_contains("still up") {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Slirp accepts the host TCP connection before the guest does. The
+    // proof is the TLS handshake, which needs the listen card.
+    if !serial_fwd_contains("[net] listen") && !tls_body(port, body, Duration::from_millis(800)) {
+        refused.fetch_add(1, Ordering::Relaxed);
+    }
+    while std::time::Instant::now() < deadline && !serial_fwd_contains("held") {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if !serial_fwd_contains("held") {
+        return;
+    }
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = Arc::new(HostPin {
+        pin: listener_pin(),
+        provider: provider.clone(),
+    });
+    let config = Arc::new(
+        rustls::ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .expect("tls 1.3")
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth(),
+    );
+    let mut sock = loop {
+        if std::time::Instant::now() > deadline {
+            return;
+        }
+        match std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            Duration::from_secs(2),
+        ) {
+            Ok(sock) => break sock,
+            Err(_) => std::thread::sleep(Duration::from_millis(50)),
+        }
+    };
+    let _ = sock.set_read_timeout(Some(Duration::from_secs(60)));
+    let _ = sock.set_write_timeout(Some(Duration::from_secs(30)));
+    let name = rustls::pki_types::ServerName::try_from("echo").expect("server name");
+    let mut conn = rustls::ClientConnection::new(config, name).expect("tls client");
+    {
+        let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+        let _ = tls.write_all(body);
+    }
+    conn.send_close_notify();
+    while conn.wants_write() {
+        let _ = conn.write_tls(&mut sock);
+    }
+}
+
 fn listener_identity() -> (Vec<u8>, Vec<u8>) {
     (
         include_bytes!("../../userspace/net/src/listener_cert.der").to_vec(),

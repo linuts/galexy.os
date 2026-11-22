@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#165](https://github.com/linuts/galexy.os/pull/165) — Milestones 115–116 — write on the port card accepts one forwarded connection, and Milestone 83 hands that lane to one listener.
+  Read on a datagram card sends one payload to the stored peer. Write does not capture. Port 53 stays unused.
+  No new syscall. SSH stays open.
 - [#164](https://github.com/linuts/galexy.os/pull/164) — Milestones 110–114 — `net` resolves a name over DNS-over-TLS and dials that address past `10.0.2.2`.
   An address card, a port card, and write on the stored local address each grant one call.
   The `/net` record is version 2. No new syscall. Listen, datagrams, and SSH stay open.

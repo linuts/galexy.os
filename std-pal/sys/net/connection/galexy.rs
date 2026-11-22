@@ -3,9 +3,12 @@
 //! `TcpStream::connect` takes a granted name, one stored address, or
 //! one stored `address:port`. The kernel asks the seat when the card
 //! is missing. The value is a lane Cap. `TcpListener::bind` binds the
-//! stored local address when the seat holds write on that card. This
+//! stored local address when the seat holds write on that card.
+//! `listen_port` accepts on the stored port with write on that card.
+//! `UdpSocket::send_card` sends one datagram to the stored peer. This
 //! file does not parse TCP. rustls stays in the `net` service.
-//! `accept`, UDP, timeouts, and socket options stay `unsupported`.
+//! `accept` on a bound listener, a datagram receive, timeouts, and
+//! socket options stay `unsupported`.
 
 use crate::fmt;
 use crate::io::{self, BorrowedCursor, IoSlice, IoSliceMut};
@@ -367,6 +370,38 @@ impl TcpListener {
         Ok(TcpListener(()))
     }
 
+    /// Listen on the stored port. `Ok(None)` means the gate is attached
+    /// and no lane has arrived. `Ok(Some)` is the inbound body.
+    pub fn listen_port(port: &str) -> io::Result<Option<TcpStream>> {
+        if port.is_empty()
+            || port.len() > 5
+            || !port.bytes().all(|b| b.is_ascii_digit())
+            || (port.len() > 1 && port.starts_with('0'))
+        {
+            return Err(io::const_error!(io::ErrorKind::InvalidInput, "bad port"));
+        }
+        let (reply, got, lane) = net_rpc(abi::NET_OP_LISTEN, port)?;
+        if lane != 0 {
+            return Ok(Some(TcpStream {
+                lane: Cap::from_bits(lane),
+            }));
+        }
+        let text = core::str::from_utf8(&reply[8..got.min(reply.len())]).unwrap_or("");
+        if text.contains("attached") {
+            return Ok(None);
+        }
+        let err = if text.contains("held") {
+            io::const_error!(io::ErrorKind::AddrInUse, "held")
+        } else if text.contains("denied") {
+            syscall::io_error(SysError::AccessDenied)
+        } else if text.contains("timed") {
+            syscall::io_error(SysError::TimedOut)
+        } else {
+            io::const_error!(io::ErrorKind::InvalidData, "bad reply")
+        };
+        Err(err)
+    }
+
     pub fn socket_addr(&self) -> io::Result<SocketAddr> {
         unsupported()
     }
@@ -416,6 +451,58 @@ pub struct UdpSocket(!);
 impl UdpSocket {
     pub fn bind<A: ToSocketAddrs>(_: A) -> io::Result<UdpSocket> {
         unsupported()
+    }
+
+    /// Send `payload` to the peer stored on `name`. Read on that card.
+    /// This does not receive, and it does not take an address.
+    pub fn send_card(name: &str, payload: &[u8]) -> io::Result<()> {
+        if !is_name(name) || is_address(name) || payload.is_empty() || payload.len() > 64 {
+            return Err(io::const_error!(
+                io::ErrorKind::InvalidInput,
+                "bad datagram"
+            ));
+        }
+        let mut body = [0u8; 96];
+        let name_b = name.as_bytes();
+        if name_b.len() + payload.len() + 3 > body.len() {
+            return Err(io::const_error!(
+                io::ErrorKind::InvalidInput,
+                "bad datagram"
+            ));
+        }
+        body[0] = abi::NET_OP_DGRAM;
+        body[1] = name_b.len() as u8;
+        body[2..2 + name_b.len()].copy_from_slice(name_b);
+        let at = 2 + name_b.len();
+        body[at] = payload.len() as u8;
+        body[at + 1..at + 1 + payload.len()].copy_from_slice(payload);
+        let n = at + 1 + payload.len();
+        let mut reply = [0u8; abi::CHAN_MSG_MAX];
+        let got = syscall::syscall6(
+            Syscall::Send,
+            abi::reserved::net(CapRights::WRITE).bits(),
+            body.as_ptr().addr() as u64,
+            n as u64,
+            reply.as_mut_ptr().addr() as u64,
+            reply.len() as u64,
+        )
+        .map_err(syscall::io_error)?;
+        let got = got as usize;
+        if got < 8 {
+            return Err(io::const_error!(io::ErrorKind::InvalidData, "bad reply"));
+        }
+        let text = core::str::from_utf8(&reply[8..got.min(reply.len())]).unwrap_or("");
+        if text.contains("ok") {
+            return Ok(());
+        }
+        let err = if text.contains("denied") {
+            SysError::AccessDenied
+        } else if text.contains("timed") {
+            SysError::TimedOut
+        } else {
+            SysError::Unsupported
+        };
+        Err(syscall::io_error(err))
     }
 
     pub fn peer_addr(&self) -> io::Result<SocketAddr> {

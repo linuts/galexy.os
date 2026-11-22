@@ -1971,6 +1971,14 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
         net_port(cwd, tail);
         return;
     }
+    if let Some(tail) = arg_of(rest, b"peer") {
+        net_peer(cwd, tail);
+        return;
+    }
+    if let Some(tail) = arg_of(rest, b"listen") {
+        net_listen(cwd, tail);
+        return;
+    }
     if let Some(tail) = arg_of(rest, b"grant") {
         net_actor(cwd, galexy_abi::NET_OP_GRANT, tail);
         return;
@@ -1989,7 +1997,9 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
         finish_net(cwd, &payload[..1 + n], true);
         return;
     }
-    write_console(b"net: link, pin, allow, resolve, addr, port, grant, revoke, serve\n");
+    write_console(
+        b"net: link, pin, allow, resolve, addr, port, peer, listen, grant, revoke, serve\n",
+    );
     prompt(cwd);
 }
 
@@ -2214,6 +2224,55 @@ fn net_addr(cwd: &Cwd, tail: &[u8]) {
         return;
     };
     send_allow(cwd, parts[0], port, 8, ip, key);
+}
+
+fn net_listen(cwd: &Cwd, tail: &[u8]) {
+    let port_text = trim(tail);
+    let Some(port) = parse_u16(port_text) else {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    };
+    if port == 0 || (port_text.len() > 1 && port_text[0] == b'0') {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    }
+    let mut payload = [0u8; 16];
+    if port_text.len() + 2 > payload.len() {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    }
+    payload[0] = galexy_abi::NET_OP_LISTEN;
+    payload[1] = port_text.len() as u8;
+    payload[2..2 + port_text.len()].copy_from_slice(port_text);
+    finish_net(cwd, &payload[..2 + port_text.len()], true);
+}
+
+fn net_peer(cwd: &Cwd, tail: &[u8]) {
+    let mut parts = [b"".as_slice(); 3];
+    if !three_parts(tail, &mut parts) {
+        write_console(b"net peer <name> <ip> <port>\n");
+        prompt(cwd);
+        return;
+    }
+    let Some(ip) = parse_ip(parts[1]) else {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    };
+    let Some(port) = parse_u16(parts[2]) else {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    };
+    if port == 0 || port == 53 || ip == [0, 0, 0, 0] {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    }
+    send_allow(cwd, parts[0], port, 10, ip, [0; 32]);
 }
 
 fn net_port(cwd: &Cwd, tail: &[u8]) {

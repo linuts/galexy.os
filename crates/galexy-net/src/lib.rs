@@ -274,6 +274,9 @@ impl Engine {
     }
 
     /// Queue a UDP datagram. `Err` when we have no address yet.
+    ///
+    /// An off-subnet peer is reached through the gateway. The IP
+    /// destination stays `dst`. A broadcast is not a next hop.
     #[allow(clippy::result_unit_err)]
     pub fn udp_send(
         &mut self,
@@ -285,20 +288,27 @@ impl Engine {
         let Some(src) = self.addr else {
             return Err(());
         };
-        if self.lookup(dst).is_none() && dst != [255, 255, 255, 255] {
+        let broadcast = dst == [255, 255, 255, 255];
+        let hop = if broadcast { dst } else { self.next_hop(dst) };
+        if !broadcast && self.lookup(hop).is_none() {
             self.pending_udp = Some(PendingUdp {
                 dst,
                 dport,
                 sport,
                 payload: payload.to_vec(),
             });
-            self.send_arp(dst);
+            self.send_arp(hop);
             return Ok(());
         }
-        let mac = self.lookup(dst).unwrap_or([0xff; 6]);
+        let mac = self.lookup(hop).unwrap_or([0xff; 6]);
         self.egress
             .push(udp_frame(self.mac, mac, src, dst, sport, dport, payload));
         Ok(())
+    }
+
+    /// True when a datagram is not waiting on neighbor discovery.
+    pub fn udp_idle(&self) -> bool {
+        self.pending_udp.is_none()
     }
 
     /// Queue an ICMP echo request. `Err` when we have no address, or the
@@ -455,11 +465,14 @@ impl Engine {
     }
 
     fn flush_pending(&mut self) {
-        if self
-            .pending_udp
-            .as_ref()
-            .is_some_and(|p| self.lookup(p.dst).is_some())
-        {
+        if self.pending_udp.as_ref().is_some_and(|p| {
+            let hop = if p.dst == [255, 255, 255, 255] {
+                p.dst
+            } else {
+                self.next_hop(p.dst)
+            };
+            self.lookup(hop).is_some()
+        }) {
             let p = self.pending_udp.take().unwrap();
             let _ = self.udp_send(p.dst, p.dport, p.sport, &p.payload);
         }
@@ -1172,6 +1185,23 @@ mod tests {
         let udp = e.pop().unwrap();
         assert!(udp.ends_with(b"galexy"));
         assert_ne!(&udp[udp.len() - 8 - 6..udp.len() - 8], &[0, 0]);
+    }
+
+    #[test]
+    fn udp_off_subnet_keeps_the_peer_address() {
+        let mut e = Engine::new([1; 6], false);
+        e.set_fixed([10, 0, 2, 15], 24, [10, 0, 2, 2]);
+        e.udp_send([172, 30, 0, 2], 4597, 4598, b"card").unwrap();
+        let arp = e.pop().unwrap();
+        assert_eq!(&arp[12..14], &[0x08, 0x06]);
+        assert_eq!(&arp[38..42], &[10, 0, 2, 2]);
+        e.learn([10, 0, 2, 2], [9; 6]);
+        e.poll(1);
+        let udp = e.pop().unwrap();
+        assert_eq!(&udp[..6], &[9; 6]);
+        assert_eq!(&udp[30..34], &[172, 30, 0, 2]);
+        assert!(udp.ends_with(b"card"));
+        assert_ne!(&udp[30..34], &[10, 0, 2, 2]);
     }
 
     #[test]

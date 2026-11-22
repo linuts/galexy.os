@@ -54,7 +54,7 @@ Milestone 96 checks that the run did not leave a child task.
 | CPython, `libpython`, and C extensions | A second language runtime, and C in a Rust kernel tree. The interpreter is RustPython. |
 | Copying the RustPython tree into this repository | It is MIT or Apache-2.0. The pin stays a host checkout, the way `rustc` does. A patch, if one is required, is `scripts/galexy-rustpython.patch`. The license notices stay with the checkout. |
 | `pip`, `venv`, `ensurepip`, and a package index | Same non-goal as on-OS `cargo`. |
-| `ssl`, `asyncio`, and a Berkeley socket | `socket.connect(name)` asks, then dials a granted name, and the value is a lane (`NET.md`). `bind`, `listen`, UDP, `setsockopt`, and any call that passes an IP or a port stay refused until Milestones 112–116 grant that card. They do not exist yet. `ssl` and `asyncio` stay off the allow-list. TLS stays inside `net`. |
+| `ssl`, `asyncio`, and a Berkeley socket | `socket.connect(name)` asks, then dials a granted name, and the value is a lane (`NET.md`). The address, port, bind, listen, and datagram cards live in `net` (Milestones 112–116). Python `socket` still only connects by name. `bind`, `listen`, UDP, `setsockopt`, and any call that passes an IP or a port stay `OSError`. `ssl` and `asyncio` stay off the allow-list. TLS stays inside `net`. |
 | `sqlite3`, `ctypes`, `cffi` | Those need C. |
 | `os.fork`, `os.exec`, `os.system`, `os.environ`, `subprocess`, `multiprocessing` | There is no environment block and no fork. Spawn stays the kernel's, and this program does not call it. |
 | A second editor | `edit` is already the editor. The REPL reads the seat keyboard and does not draw a screen of its own. |
@@ -257,8 +257,9 @@ for this run. No is `OSError` and the interpreter stays up.
 There is no socket syscall and no second stack. This is not a
 Berkeley socket. `bind`, `listen`, UDP, `setsockopt`, and any
 call that passes an IP or a port stay refused in this milestone.
-They do not exist yet. Milestones 112–116 grant each exact call
-with a card (`NET.md`). `ssl` and `asyncio` stay refused. TLS
+Milestones 112–116 grant each exact call with a card in `net`
+(`NET.md`). Python does not grow those calls. `ssl` and `asyncio`
+stay refused. TLS
 stays inside `net`. Reaching a host past `10.0.2.2` is
 Milestone 111, not this section.
 
@@ -271,9 +272,9 @@ Milestone 111, not this section.
 3. `socket.connect` is Milestone 109. The name stays, the call
    asks, then dials a granted name, and the value is a lane
    (`NET.md` → Phase 16). `bind`, `listen`, UDP, `setsockopt`, and
-   any call that passes an IP or a port stay refused until the
-   milestone that grants that card (112–116). They do not exist
-   yet. It does not add a socket syscall. `ssl` and `asyncio`
+   any call that passes an IP or a port stay `OSError` in Python.
+   The cards for those calls are Milestones 112–116, and they live
+   in `net`. It does not add a socket syscall. `ssl` and `asyncio`
    stay off the allow-list.
 4. `docs/ABI.md` gains a row only if a number appears. This phase
    has none. `docs/STYLE.md` carries the rules below.
