@@ -219,19 +219,30 @@ machines: ACPI, x2APIC, PCIe, virtio 1.x, UEFI + GOP.
 
 Rules for Phase 10 (`docs/NET.md`; Milestones **78–85**). Binding
 once the first of those milestones lands; the plan is binding now.
+Phase 16 (Milestones **108–117**) is the later plan. Its boxes stay
+open. This text does not check them.
 
 - **A lane is the application object.** One TLS 1.3 session, one peer,
-  `READ` and `WRITE`. No `socket`, `bind`, `listen`, `accept`,
-  `connect`, or `setsockopt`. `std::net` stays unsupported.
+  `READ` and `WRITE`. Phase 10 has no `socket`, `bind`, `listen`,
+  `accept`, `connect`, or `setsockopt`. `std::net` stays unsupported
+  in that phase.
+- **Name-only until 112.** Milestones 108 and 109 keep `connect` as a
+  granted name. The value is still a lane. A passed IP, a port,
+  `bind`, `listen`, and UDP do not exist yet. 112 is the address
+  card, 113 the port, 114 bind, 115 listen, and 116 the datagram.
+  Each is one card. Read dials. Write accepts. `setsockopt` stays
+  refused. No new syscall. SSH is 117, and it is last.
 - **The kernel moves frames.** virtio-net DMA follows the virtio-blk
   rule: one descriptor per physically contiguous run. The interrupt
   handler does not parse IP. TCP, UDP, and TLS live in the ring-3
-  `net` service.
+  `net` service. virtio-net stays the device. `net` stays the only
+  packet stack. No raw sockets and no promiscuous mode.
 - **Only `net` holds the wire** (Cap `0x8009`) and only `net` may call
   `Syscall::Lane` (35). A dial right is a grant on a name, checked
   before any handshake.
-- **Names, not ports.** Locators stay inside `net`. They are not a
-  general syscall argument.
+- **Names, not ports, through 111.** Locators stay inside `net`.
+  They are not a syscall argument. A program may pass one exact
+  address or port only with the card from 112 or 113.
 - **Pinned keys, TLS 1.3 only.** No WebPKI default, no TLS 1.2, no
   compression, no renegotiation, no 0-RTT in this phase. The handshake
   is a maintained Rust crate, not a private implementation. Session
@@ -283,10 +294,14 @@ not wait on Phase 10, and Phase 10 does not wait on it.
   `MAX_PROC_CAPS` stays 16. `DISK_VERSION` stays 12. The target
   JSON stays as it is.
 - **The allow-list is `scripts/python-allow.txt`.** A module that
-  is not listed raises `ImportError`. `socket`, `ssl`, `pip`,
-  `subprocess`, `ctypes`, and `os.fork` stay off that list.
-- **`std::net` stays unsupported.** A later Python milestone that
-  wants a peer speaks a lane. It does not grow a socket module.
+  is not listed raises `ImportError`. `pip`, `subprocess`, `ctypes`,
+  and `os.fork` stay off that list. `socket` stays off until
+  Milestone 109, which is `socket.connect` by name only. `ssl`
+  stays off.
+- **Name-only until 112.** Milestone 109 does not pass an address,
+  a port, `bind`, `listen`, or UDP. Those stay refused until
+  112–116 grant that card. `ssl` stays refused. TLS stays inside
+  `net`.
 - **Two clocks stay two clocks.** `time.monotonic` is `Clock`.
   `time.time` is `Date`, and it raises when the date is unset.
 - **Budgets are the ones in `PYTHON.md`.** 2 GiB until a boot shows
