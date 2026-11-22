@@ -120,7 +120,7 @@ pub(crate) enum FileBody {
     /// Immutable archive bytes. The slice lives in the ramdisk.
     Archive(&'static [u8]),
     /// Index into [`galfs`] object table. The bytes are writable.
-    Galfs(u16),
+    Galfs(u32),
     /// Anonymous pipe end.
     Pipe { id: u8, end: pipe::PipeEnd },
     /// Capability-channel endpoint (`0` or `1`).
@@ -353,7 +353,7 @@ pub(in crate::sched) struct Thread {
     /// Inherited from the task that spawned it. F1 is 0.
     pub(in crate::sched) tty: u8,
     /// Actor root this task walks from when a path has no `owner@`.
-    pub(in crate::sched) fs_root: u16,
+    pub(in crate::sched) fs_root: u32,
     /// Tokens that authorize galfs paths. Utilities inherit; bare spawns do not.
     pub(in crate::sched) fs_tokens: [galfs::Token; galfs::TOKEN_SLOTS],
     /// Set when the task was created as admin. Survives [`task_su`] so the
@@ -991,7 +991,7 @@ pub(in crate::sched) struct LeaderSnapshot {
     pub(in crate::sched) user_p4: u16,
     pub(in crate::sched) grants: Grants,
     pub(in crate::sched) tty: u8,
-    pub(in crate::sched) fs_root: u16,
+    pub(in crate::sched) fs_root: u32,
     pub(in crate::sched) born_admin: bool,
     pub(in crate::sched) session_gen: u64,
 }

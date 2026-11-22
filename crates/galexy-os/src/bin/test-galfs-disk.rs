@@ -29,7 +29,7 @@ fn multi_block_payload() -> [u8; PAYLOAD] {
     buf
 }
 
-fn write_mib(file: u16) {
+fn write_mib(file: u32) {
     let chunk = [0x5Au8; 4096];
     let mut left = 1024 * 1024;
     while left > 0 {
@@ -39,7 +39,7 @@ fn write_mib(file: u16) {
     }
 }
 
-fn check_mib(file: u16) {
+fn check_mib(file: u32) {
     assert_eq!(galfs::object_len(file), Some(1024 * 1024));
     let mut head = [0u8; 16];
     let n = galfs::read_file_bytes(file, &mut head).expect("read mib");

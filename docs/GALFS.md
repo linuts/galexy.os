@@ -129,33 +129,42 @@ confused-deputy share rules.
 
 ## Table limits (today)
 
-The on-disk version is GALF **v15**. Actor/object tables plus a data
-pool sized to the disk, per-actor quotas, and durable home shares. A
-directory is the sibling list hung off its inode (cards still walk the
-parent pointer). Empty files cost an inode only. File bytes are 4 KiB
-extents in the data region, not inside the sealed slot. A small cache
-holds the blocks a read or write is using; the rest stay on the device.
+The on-disk version is GALF **v16**. The sealed slot holds actors,
+shares, quotas, and geometry. Inodes live in the data pool, named by
+up to 128 map blocks. A directory is the sibling list hung off its
+inode (cards still walk the parent pointer). Empty files cost an
+inode only. File bytes are 4 KiB extents. A small cache holds the
+blocks a read or write is using; the rest stay on the device.
 
 | Resource | Cap |
 | --- | --- |
 | Actors | 32 |
-| Objects (files + dirs + roots) | 384 |
+| Names (files + dirs + roots) | 1,048,576 format ceiling. A live disk uses at most a quarter of its pool for inode and map blocks, and never more than that ceiling |
 | Durable home shares | 32 |
 | Block size | 4096 bytes |
-| Extents per file | 8 |
-| Max durable file | 64 MiB (`len` is u32) |
-| Block pool | sized to the disk, at most 64 MiB of file bytes |
+| Extents per file | 8. One sequential write in a commit is one extent |
+| Max durable file | the rest of the pool after inode and map blocks, capped at 64 GiB |
+| Block pool | sized to the disk |
 | Default user quota | 16 objects / 16 KiB |
 | Tokens per task | 8 |
 | Open files per task | 8 (IF=0: no heap on `open`) |
 | Path depth | 8 components |
 | Name length | 64 (object) / 32 (actor) |
-| Metadata slot | 64 KiB |
+| Metadata slot | 64 KiB (no inodes) |
 | Data region | 4 KiB blocks after the two slots (tag sector + 8 data sectors each) |
 
+An 8 MiB test image holds a few thousand names and about 5 MiB of
+file data. A 32 GiB disk clears 1,000,000 names and a file over
+16 GiB. 1,048,576 is the format ceiling, not a counted desk-compile
+file count (Milestone 99 is still open).
+
 The IF=0 syscall path must not heap-allocate over this table. A file
-that needs a ninth extent is `NoResource`. Files past 64 MiB still
-promote into the RAM store (`core`'s metadata is about 66 MiB).
+that needs a ninth extent is `NoResource`, which is what happens when
+the same file grows across more than eight commits. A write that does
+not fit the live file cap, and still fits the 80 MiB RAM store,
+promotes into that store. On the 8 MiB image that includes `core`'s
+metadata (about 66 MiB). The 16-byte quota record saturates byte
+counts above 4 GiB; the stored quota is a `u64`.
 
 ## On-disk: GALF slots
 
@@ -172,23 +181,26 @@ data   @ LBA disk_lba_base() + 2 × DISK_SECTORS
 Call `set_disk_lba_base` before `galfs::init` when the volume should not
 own absolute LBA 0 (e.g. after a protective MBR / GPT). The device must
 cover `base` plus `MIN_DISK_BYTES` (8 MiB). The pool is whatever 4 KiB
-blocks fit after the two slots, capped at one 64 MiB file.
+blocks fit after the two slots. Inode and map blocks take at most a
+quarter of it. File bytes take the rest, up to 64 GiB.
 
 | Property | Behavior |
 | --- | --- |
 | Dual slot | Commit writes changed data blocks, then the **inactive** metadata slot, then flush |
 | Generation | Newer gen wins on load |
 | Crash | A torn slot leaves the previous metadata, which still names its own blocks |
-| Version | Layout bump **refuses** old images (no silent reinterpret). v15 refuses v12, v13, and v14 |
+| Version | Layout bump **refuses** old images (no silent reinterpret). v16 refuses v12, v13, v14, and v15 |
 
 ### Commit ordering and flush
 
 Mutates update the in-RAM table and mark it **dirty**. A coalesced
 commit (write-back) seals changed pool blocks into the data region
-(ChaCha20-HMAC, nonce = block index ‖ allocation generation), then
-encodes the sealed metadata slot (actors, objects, directory links,
-and shares — not the file bytes, the bitmap, or per-block tags)
-into the inactive LBA range, then `BlockDevice::flush` **before**
+(ChaCha20-HMAC, nonce = domain ‖ block index ‖ allocation generation),
+including the inode and map blocks that hold names and directory
+links, then encodes the sealed metadata slot (actors, shares,
+geometry, and the map-block pointers — not the file bytes, the
+bitmap, or per-block tags) into the inactive LBA range, then
+`BlockDevice::flush` **before**
 publishing the new generation in RAM. A block named by committed
 metadata is copied to a fresh index before it is overwritten. The old
 index stays reserved until both slots have dropped it, so falling back
@@ -298,22 +310,25 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 
 ### Today (through review readiness)
 
-- GALF **v15**: 32 actors / 384 objects / 32 durable shares; per-actor
-  `kdf_iters`; 4 KiB extents (eight per file, 64 MiB) in a pool sized
-  to the disk, capped at 64 MiB of file bytes; directory sibling lists;
-  per-actor object and byte quotas (defaults for new users; admin at
-  the large-file maximum on a fresh RAM table, or the stored quota on
-  a loaded disk). The compiler sysroot import raises a stored admin
-  quota up to the object table and the 128 MiB RAM pool, and does not
-  lower a higher one. Its rlib and rmeta bodies stay the ramdisk
-  mapping until a write copies them
-- **Files past 64 MiB** still promote into the RAM store (`core`'s
-  metadata is about 66 MiB). Promoted bytes are not sealed. Host
+- GALF **v16**: 32 actors / up to 1,048,576 names / 32 durable shares;
+  per-actor `kdf_iters`; 4 KiB extents (eight per file) in a pool sized
+  to the disk. Inodes are pool blocks, not slot bytes. File length is
+  a `u64`, capped at 64 GiB and at whatever the disk has left after
+  inode and map blocks. Directory sibling lists; per-actor object and
+  byte quotas (defaults for new users; admin at least the 128 MiB RAM
+  pool on a fresh table, or the stored quota on a loaded disk). The
+  compiler sysroot import raises a stored admin quota up to the live
+  inode count and that RAM pool, and does not lower a higher one. Its
+  rlib and rmeta bodies stay the ramdisk mapping until a write copies
+  them
+- **A write past the live file cap** promotes into the RAM store when
+  it fits in 80 MiB (`core`'s metadata is about 66 MiB, so the 8 MiB
+  test image still promotes it). Promoted bytes are not sealed. Host
   **v13** (`galexy-galf::v13`) remains the 32-file extent-map checker.
-  `check_image` dispatches on the version word. The kernel speaks v15
-  and refuses every other version, including v13 and v14. v13 names 32
-  files and does not carry actors, shares, or quotas, so it is not the
-  login volume
+  `check_image` dispatches on the version word. The kernel speaks v16
+  and refuses every other version, including v13, v14, and v15. v13
+  names 32 files and does not carry actors, shares, or quotas, so it
+  is not the login volume
 - Sealed dual-slot image (64 KiB per slot) on virtio-blk, else the IDE slave
 - Object + block fill stress; remove reuses blocks without leaks
 - Shell: `ls` / `cat` / `echo` / `touch` / `mkdir` / `rm` / `cp` / `mv`
@@ -430,16 +445,18 @@ a gigabyte per second.
 - **97** — one virtio data request for the 288-sector v12 slot, then
   one flush. `DISK_VERSION` stays 12. Still one command in flight.
   `PERF.md` records the TCG and KVM sync times
-- **98** (landed, GALF v15) — the kernel formats and loads a large
-  volume: changed 4 KiB blocks, one sealed 64 KiB metadata slot, one
-  flush. Actors, objects, shares, and quotas stay in that metadata.
-  Host v13 (`MAX_FILES` = 32, no actor table) is the extent-map shape,
-  not the login image. Older images are refused. A 1 MiB file survives
-  reboot. `core`'s metadata (~66 MiB) stays in the RAM store because
-  the file cap is 64 MiB
-- **99** — the object table is sized to the file count one desk
-  compile needs. That count is a format change. Dual-slot order stays.
-  A crash recovers the previous metadata slot. No journal
+- **98** (landed) — the kernel formats and loads a large volume:
+  changed 4 KiB blocks, one sealed 64 KiB metadata slot, one flush.
+  Actors, shares, and quotas stay in that metadata. v16 also keeps
+  inodes in pool blocks so a large disk can hold more than 1,000,000
+  names and a file over 16 GiB. Host v13 (`MAX_FILES` = 32, no actor
+  table) is the extent-map shape, not the login image. Older images
+  are refused. A 1 MiB file survives reboot. On the 8 MiB test image
+  `core`'s metadata (~66 MiB) stays in the RAM store because the live
+  file cap is a few megabytes
+- **99** — count the files one desk compile needs and write that count
+  here. 1,048,576 is the v16 format ceiling, not that count. Dual-slot
+  order stays. A crash recovers the previous metadata slot. No journal
 
 Left out of this phase: `async` / `await`, several virtio commands in
 flight, ATA PIO as the fast path, POSIX, mmap, sparse files, hard links.

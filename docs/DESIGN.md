@@ -732,14 +732,16 @@ only indexes a slot on the IF=0 path. Indexes from `FILE_CAP_BASE`
 `read` copies the next bytes of an open file
 (short-read at 1 KiB, 0 at EOF);
 `close` drops the slot. `create(name, len, flags)` (syscall 9) puts a
-path in a fixed galfs table (384 objects, 32 actors with one root each,
-64-byte component names, 4 KiB extents, eight per file, 64 MiB on the
-v15 image). A write past 64 MiB promotes that
-file into the RAM large store (4 KiB blocks, 80 MiB per file, 128 MiB
-pool; Milestones 72–73). A compiler sysroot file can name its ramdisk
-bytes instead of copying them; the first write copies that file into
-blocks. Promotion past 64 MiB allocates on the kernel heap while the write syscall
-holds the thread table. A path ending in `/` is a directory and
+path in the galfs table (32 actors with one root each, 64-byte
+component names, 4 KiB extents, eight per file, GALF v16). The format
+ceiling is 1,048,576 names and 64 GiB per file. A live disk gives
+fewer: inode and map blocks take at most a quarter of the pool, and
+the rest is file bytes, capped at 64 GiB. A write that does not fit
+that live cap promotes the file into the RAM large store (4 KiB
+blocks, 80 MiB per file, 128 MiB pool; Milestones 72–73). A compiler
+sysroot file can name its ramdisk bytes instead of copying them; the
+first write copies that file into blocks. Promotion allocates on the
+kernel heap while the write syscall holds the thread table. A path ending in `/` is a directory and
 returns 0. A file returns
 READ|WRITE. `RDX == 1` empties an existing file; any other value creates
 only when the name is new. Uniqueness is the parent plus the component.
@@ -805,8 +807,9 @@ root to be `admin`. A seat born as admin may `su admin` to return.
 `rename(old, new)` (syscall 17) moves a galfs dirent (REMOVE on source,
 CREATE on dest parent; no byte copy). `truncate(cap, size)` (syscall 18)
 sets a galfs file length (WRITE; shrink frees blocks, grow zero-fills).
-`stat(path, buf)` (syscall 19) writes a [`STAT_LEN`] record (kind, size,
-owner, held token rights; needs LIST). Directory listing remains the
+`stat(path, buf)` (syscall 19) writes a [`STAT_LEN`] record (kind, size
+low at bytes 4..8, size high at bytes 44..48, owner, held token
+rights; needs LIST). Directory listing remains the
 `FILES` snapshot — `open` on a directory is `Unsupported`. The shell
 exposes `whoami`, `users`, `useradd`, `userdel`, `su`, `truncate`, and
 `stat` (and resets cwd on `su`). Boot formats one immortal actor,

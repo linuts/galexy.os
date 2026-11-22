@@ -2937,9 +2937,11 @@ shares, or quotas.
 - [x] **Survive**: a 1 MiB file is still there after reboot. The
       commit's data is that file's blocks plus one 64 KiB metadata
       slot, not the other actors' bytes
-- [x] **Still RAM**: `core`'s metadata is about 66 MiB, past the
-      64 MiB file cap, so it stays in the RAM store. `GALFS.md`
-      and `RUSTC.md` say so in this change
+- [x] **Still RAM**: `core`'s metadata is about 66 MiB. The 8 MiB
+      test image cannot seal it, so it stays in the RAM store.
+      `GALFS.md` and `RUSTC.md` say so. v16's format ceiling is
+      1,048,576 names and 64 GiB per file; that ceiling is not the
+      counted desk-compile file count in Milestone 99
 - [x] **Extents**: eight per file, as in host v13. A file that
       needs a ninth is `NoResource` unless this milestone raises
       that cap in the same version bump

@@ -7,13 +7,17 @@
 #![no_std]
 #![deny(clippy::all)]
 
+extern crate alloc;
+
 pub mod cards;
 #[cfg(test)]
 mod cards_test;
 #[cfg(test)]
 mod slots_test;
 pub mod v13;
+mod volume;
 
+use alloc::vec::Vec;
 use galexy_core::crc32;
 use galexy_crypto::{
     derive_key, open, seal, wipe_bytes, HASH_LEN, KEY_LEN, NONCE_LEN, SALT_LEN, TAG_LEN,
@@ -21,16 +25,24 @@ use galexy_crypto::{
 
 /// ATA / GALF sector size.
 pub const SECTOR: usize = 512;
-/// Dual-slot image sectors per slot (64 KiB: header + sealed inode table).
+/// Dual-slot image sectors per slot (64 KiB superblock).
 pub const DISK_SECTORS: usize = 128;
 pub const DISK_SLOT_COUNT: usize = 2;
 /// On-disk magic.
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
-/// Extent volume: directory lists, 4 KiB blocks sized to the disk.
-/// Older images are refused.
-pub const DISK_VERSION: u16 = 15;
+/// Inodes live in the pool. A sealed slot holds actors, shares, and the
+/// inode map. Older images are refused.
+pub const DISK_VERSION: u16 = 16;
 
-pub const OBJECT_SLOTS: usize = 384;
+pub use volume::{
+    inode_address, map_address, map_ptr_offset, payload_len, read_actor, read_free, read_geometry_head,
+    read_inode, read_map_ptrs, read_share, volume_limits, write_actor, write_free, write_geometry,
+    write_inode, write_map_ptrs, write_share, ACTOR_ON_DISK, FILE_CAP, FREE_EXTENTS, GEOMETRY_ON_DISK,
+    INODE_ON_DISK, INODES_PER_BLOCK, MAP_PER_BLOCK, MAP_POINTERS, OBJECT_CAP, SHARE_ON_DISK, Geometry,
+    VolumeLimits,
+};
+/// Format ceiling. A live volume's object table is [`VolumeLimits::inode_slots`].
+pub const OBJECT_SLOTS: usize = OBJECT_CAP as usize;
 pub const ACTOR_SLOTS: usize = 32;
 pub const SHARE_SLOTS: usize = 32;
 /// File data block. One block is eight sectors of ciphertext plus a
@@ -39,57 +51,44 @@ pub const SHARE_SLOTS: usize = 32;
 pub const BLOCK_SIZE: usize = 4096;
 /// Extents stored on one inode. A ninth extent is `NoResource`.
 pub const EXTENTS_PER_FILE: usize = 8;
-/// Largest durable file (`len` is u32). Past this, the kernel promotes
-/// into the RAM store.
-pub const FILE_BYTES: usize = 64 * 1024 * 1024;
-/// Data blocks the bitmap can name (one max-size file).
-pub const POOL_CAP: usize = FILE_BYTES / BLOCK_SIZE;
-/// Sectors per data block: one tag sector, then eight ciphertext sectors.
+/// Format ceiling for one file. The live cap is [`VolumeLimits::file_max`].
+pub const FILE_BYTES: u64 = FILE_CAP;
+/// Sectors per stored block: one tag sector, then eight ciphertext sectors.
 pub const BLOCK_STRIDE: usize = 9;
 /// A volume smaller than this stays RAM-only.
 pub const MIN_DISK_BYTES: usize = 8 * 1024 * 1024;
 pub const NAME_CAP: usize = 64;
 pub const ACTOR_NAME: usize = 32;
+/// AEAD domain so an inode block cannot be swapped with a file block.
+pub const DOMAIN_DATA: u8 = 1;
+pub const DOMAIN_INODE: u8 = 2;
+pub const DOMAIN_MAP: u8 = 3;
 
 pub const DISK_HEADER: usize = 128;
-/// used + name_len + name + root + salt + hash + kdf_iters + quota.
-pub const ACTOR_ON_DISK: usize = 70;
-/// kind+actor+name_len+extent_count + parent+child+next+pad + len
-/// + name + 8 extents.
-pub const OBJECT_ON_DISK: usize = 16 + NAME_CAP + EXTENTS_PER_FILE * 8;
-/// used + rights + grantee + pad + object.
-pub const SHARE_ON_DISK: usize = 6;
-pub const PAYLOAD_LEN: usize =
-    ACTOR_ON_DISK * ACTOR_SLOTS + OBJECT_ON_DISK * OBJECT_SLOTS + SHARE_ON_DISK * SHARE_SLOTS;
-/// Byte offset of data block `index`'s tag sector.
+pub const OBJECT_ON_DISK: usize = INODE_ON_DISK;
+pub const PAYLOAD_LEN: usize = payload_len();
+/// Byte offset of pool block `index`'s tag sector.
 pub const fn block_tag_offset(index: u32) -> usize {
     DISK_SLOT_COUNT * DISK_SECTORS * SECTOR + index as usize * BLOCK_STRIDE * SECTOR
 }
-/// Byte offset of data block `index`'s ciphertext.
+/// Byte offset of pool block `index`'s ciphertext.
 pub const fn data_byte_offset(index: usize) -> usize {
     block_tag_offset(index as u32) + SECTOR
 }
-/// How many data blocks fit on a disk of `disk_bytes`, after the two slots.
-pub const fn pool_blocks_for(disk_bytes: usize) -> u32 {
-    let meta = DISK_SLOT_COUNT * DISK_SECTORS * SECTOR;
-    let usable = disk_bytes.saturating_sub(meta);
-    let n = usable / (BLOCK_STRIDE * SECTOR);
-    if n > POOL_CAP {
-        POOL_CAP as u32
-    } else {
-        n as u32
-    }
+/// How many pool blocks fit on a disk of `disk_bytes`, after the two slots.
+pub fn pool_blocks_for(disk_bytes: usize) -> u32 {
+    volume_limits(disk_bytes as u64).pool_blocks
 }
 
 const _: () = assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * SECTOR);
-const _: () = assert!(OBJECT_ON_DISK == 144);
-const _: () = assert!(POOL_CAP <= 65535);
+const _: () = assert!(OBJECT_ON_DISK == 192);
+const _: () = assert!(FILE_CAP > 16 * 1024 * 1024 * 1024);
 
 pub const KIND_EMPTY: u8 = 0;
 pub const KIND_FILE: u8 = 1;
 pub const KIND_DIR: u8 = 2;
-pub const NO_PARENT: u16 = 0xffff;
-pub const NO_BLOCK: u16 = 0xffff;
+pub const NO_PARENT: u32 = u32::MAX;
+pub const NO_BLOCK: u32 = u32::MAX;
 
 /// Bring-up volume passphrase (matches kernel `VOLUME_PASSPHRASE`).
 pub const DEFAULT_VOLUME_PASSPHRASE: &[u8] = b"galfs";
@@ -105,16 +104,16 @@ pub enum Issue {
     BothSlotsCorrupt,
     MissingAdmin,
     BadActorRoot { actor: u16 },
-    BadObjectKind { object: u16 },
-    OrphanObject { object: u16 },
-    BadParent { object: u16 },
-    Cycle { object: u16 },
-    BadActorRef { object: u16 },
-    BlockLeak { block: u16 },
-    BlockDuplicate { block: u16 },
-    BlockMissing { block: u16 },
-    FileTooLarge { object: u16 },
-    DirHasLength { object: u16 },
+    BadObjectKind { object: u32 },
+    OrphanObject { object: u32 },
+    BadParent { object: u32 },
+    Cycle { object: u32 },
+    BadActorRef { object: u32 },
+    BlockLeak { block: u32 },
+    BlockDuplicate { block: u32 },
+    BlockMissing { block: u32 },
+    FileTooLarge { object: u32 },
+    DirHasLength { object: u32 },
     BadShare { share: u16 },
 }
 
@@ -146,13 +145,13 @@ pub struct Actor {
     pub used: bool,
     pub name: [u8; ACTOR_NAME],
     pub name_len: u8,
-    pub root: u16,
+    pub root: u32,
     pub salt: [u8; SALT_LEN],
     pub pass_hash: [u8; HASH_LEN],
     /// PBKDF2-HMAC-SHA256 iteration count used for `pass_hash`.
     pub kdf_iters: u32,
-    pub max_objects: u16,
-    pub max_bytes: u32,
+    pub max_objects: u32,
+    pub max_bytes: u64,
 }
 
 impl Actor {
@@ -161,7 +160,7 @@ impl Actor {
             used: false,
             name: [0; ACTOR_NAME],
             name_len: 0,
-            root: 0xffff,
+            root: NO_PARENT,
             salt: [0; SALT_LEN],
             pass_hash: [0; HASH_LEN],
             kdf_iters: 0,
@@ -181,28 +180,34 @@ impl Actor {
 pub struct Extent {
     pub start: u32,
     pub count: u32,
+    /// Generation that sealed these blocks. Zero means the extent is empty.
+    pub gen: u32,
 }
 
 impl Extent {
     pub const fn empty() -> Self {
-        Self { start: 0, count: 0 }
+        Self {
+            start: 0,
+            count: 0,
+            gen: 0,
+        }
     }
 }
 
 #[derive(Clone, Copy)]
 pub struct Object {
     pub kind: u8,
-    pub parent: u16,
+    pub parent: u32,
     pub actor: u8,
     pub name: [u8; NAME_CAP],
     pub name_len: u8,
-    pub len: u32,
+    pub len: u64,
     pub extent_count: u8,
     pub extents: [Extent; EXTENTS_PER_FILE],
     /// First child, when `kind` is a directory. [`NO_PARENT`] if none.
-    pub child: u16,
+    pub child: u32,
     /// Next sibling under the same parent. [`NO_PARENT`] if none.
-    pub next: u16,
+    pub next: u32,
 }
 
 impl Object {
@@ -228,7 +233,7 @@ pub struct Share {
     pub used: bool,
     pub rights: u8,
     pub grantee: u8,
-    pub object: u16,
+    pub object: u32,
 }
 
 impl Share {
@@ -248,20 +253,23 @@ impl Share {
 /// after the two metadata slots.
 pub struct Table {
     pub actors: [Actor; ACTOR_SLOTS],
-    pub objects: [Object; OBJECT_SLOTS],
+    pub objects: Vec<Object>,
     pub shares: [Share; SHARE_SLOTS],
-    /// Data blocks that follow the metadata slots.
-    pub pool_blocks: u32,
+    pub geo: volume::Geometry,
 }
 
 impl Table {
-    pub const fn empty() -> Self {
+    pub fn empty() -> Self {
         Self {
             actors: [Actor::empty(); ACTOR_SLOTS],
-            objects: [Object::empty(); OBJECT_SLOTS],
+            objects: Vec::new(),
             shares: [Share::empty(); SHARE_SLOTS],
-            pool_blocks: 0,
+            geo: volume::Geometry::empty(),
         }
+    }
+
+    pub fn pool_blocks(&self) -> u32 {
+        self.geo.pool_blocks
     }
 }
 
@@ -359,7 +367,8 @@ pub fn check_image(
         }
         match decode_slot(scratch, passphrase, cand) {
             Some(decoded) => {
-                let blocks_ok = verify_data_blocks(image, cand, &decoded.volume_key);
+                let inodes_ok = load_inodes(image, cand, &decoded.volume_key);
+                let blocks_ok = inodes_ok && verify_data_blocks(image, cand, &decoded.volume_key);
                 let mut key = decoded.volume_key;
                 wipe_bytes(&mut key);
                 if !blocks_ok {
@@ -398,10 +407,10 @@ pub fn check_image(
 }
 
 fn copy_table(src: &Table, dst: &mut Table) {
-    // SAFETY: distinct owned tables; plain data.
-    unsafe {
-        core::ptr::copy_nonoverlapping(src as *const Table, dst as *mut Table, 1);
-    }
+    dst.actors = src.actors;
+    dst.shares = src.shares;
+    dst.geo = src.geo;
+    dst.objects.clone_from(&src.objects);
 }
 
 fn seal_aad(generation: u64) -> [u8; 14] {
@@ -415,26 +424,29 @@ fn seal_aad(generation: u64) -> [u8; 14] {
 /// Nonce for data block `index` allocated at `gen`. Unique per write
 /// because a rewritten block gets a new generation (and, while either
 /// metadata slot still names the old block, a new index).
-pub fn block_nonce(index: usize, gen: u32) -> [u8; NONCE_LEN] {
+pub fn block_nonce(domain: u8, index: usize, gen: u32) -> [u8; NONCE_LEN] {
     let mut nonce = [0u8; NONCE_LEN];
-    nonce[0..4].copy_from_slice(&(index as u32).to_le_bytes());
-    nonce[4..8].copy_from_slice(&gen.to_le_bytes());
+    nonce[0] = domain;
+    nonce[1..5].copy_from_slice(&(index as u32).to_le_bytes());
+    nonce[5..9].copy_from_slice(&gen.to_le_bytes());
     nonce
 }
 
-/// AAD binding a data block to this GALF version, its index, and its generation.
-pub fn block_aad(index: usize, gen: u32) -> [u8; 14] {
-    let mut aad = [0u8; 14];
+/// AAD binding a pool block to this GALF version, its domain, index, and generation.
+pub fn block_aad(domain: u8, index: usize, gen: u32) -> [u8; 15] {
+    let mut aad = [0u8; 15];
     aad[0..4].copy_from_slice(&DISK_MAGIC);
     aad[4..6].copy_from_slice(&DISK_VERSION.to_le_bytes());
-    aad[6..10].copy_from_slice(&(index as u32).to_le_bytes());
-    aad[10..14].copy_from_slice(&gen.to_le_bytes());
+    aad[6] = domain;
+    aad[7..11].copy_from_slice(&(index as u32).to_le_bytes());
+    aad[11..15].copy_from_slice(&gen.to_le_bytes());
     aad
 }
 
 /// Encrypts one plaintext pool block in place. `gen` must be non-zero.
 pub fn seal_block(
     volume_key: &[u8; KEY_LEN],
+    domain: u8,
     index: usize,
     gen: u32,
     block: &mut [u8],
@@ -443,8 +455,8 @@ pub fn seal_block(
     if block.len() != BLOCK_SIZE || gen == 0 {
         return false;
     }
-    let nonce = block_nonce(index, gen);
-    let aad = block_aad(index, gen);
+    let nonce = block_nonce(domain, index, gen);
+    let aad = block_aad(domain, index, gen);
     seal(volume_key, &nonce, &aad, block, tag);
     true
 }
@@ -452,6 +464,7 @@ pub fn seal_block(
 /// Decrypts one pool block in place. Returns false on a bad tag or generation.
 pub fn open_block(
     volume_key: &[u8; KEY_LEN],
+    domain: u8,
     index: usize,
     gen: u32,
     block: &mut [u8],
@@ -460,8 +473,8 @@ pub fn open_block(
     if block.len() != BLOCK_SIZE || gen == 0 {
         return false;
     }
-    let nonce = block_nonce(index, gen);
-    let aad = block_aad(index, gen);
+    let nonce = block_nonce(domain, index, gen);
+    let aad = block_aad(domain, index, gen);
     open(volume_key, &nonce, &aad, block, tag)
 }
 
@@ -471,24 +484,18 @@ pub struct DecodedSlot {
     pub volume_key: [u8; KEY_LEN],
 }
 
-/// Decrypts every block named by an extent. Plaintext is discarded.
-///
-/// A short image or a bad tag fails the slot. An image with no extents
-/// succeeds without reading the data region.
+/// Extent bounds only. File ciphertext is checked on read, not at mount:
+/// a multi-gigabyte file is not decrypted to prove the slot.
 pub fn verify_data_blocks(image: &[u8], table: &Table, volume_key: &[u8; KEY_LEN]) -> bool {
+    let _ = (image, volume_key);
     for obj in &table.objects {
         if obj.kind != KIND_FILE {
             continue;
         }
         for ext in obj.extents.iter().take(obj.extent_count as usize) {
             let end = ext.start.saturating_add(ext.count);
-            if ext.count == 0 || end > table.pool_blocks {
+            if ext.count == 0 || ext.gen == 0 || end > table.pool_blocks() {
                 return false;
-            }
-            for b in ext.start..end {
-                if !open_stored_block(image, b, volume_key) {
-                    return false;
-                }
             }
         }
     }
@@ -508,7 +515,7 @@ pub fn open_stored_block(image: &[u8], index: u32, volume_key: &[u8; KEY_LEN]) -
     tag.copy_from_slice(&image[tag_off + 4..tag_off + 4 + TAG_LEN]);
     let mut block = [0u8; BLOCK_SIZE];
     block.copy_from_slice(&image[data_off..data_off + BLOCK_SIZE]);
-    let ok = open_block(volume_key, index as usize, gen, &mut block, &tag);
+    let ok = open_block(volume_key, DOMAIN_DATA, index as usize, gen, &mut block, &tag);
     wipe_bytes(&mut block);
     ok
 }
@@ -525,11 +532,9 @@ pub struct SealNonces {
 /// Serialises and seals `table` at `generation` into `flat` (one slot,
 /// at least `DISK_HEADER + PAYLOAD_LEN` bytes; the rest is zeroed).
 ///
-/// Mirror of the kernel's live encoder (`sched::galfs::encode_table`):
-/// header, actors, objects, shares; volume key wrapped
-/// under the passphrase-derived KEK; payload sealed under the volume key;
-/// CRC over the sealed payload. [`decode_slot`] inverts it. Returns
-/// `false` when `flat` is too short.
+/// The slot holds actors, shares, quotas, the free list, and the inode
+/// map. Inode records themselves live in pool blocks. Returns `false`
+/// when `flat` is too short.
 pub fn encode_slot(
     table: &Table,
     generation: u64,
@@ -545,54 +550,28 @@ pub fn encode_slot(
     flat[0..4].copy_from_slice(&DISK_MAGIC);
     flat[4..6].copy_from_slice(&DISK_VERSION.to_le_bytes());
     flat[6..8].copy_from_slice(&(ACTOR_SLOTS as u16).to_le_bytes());
-    flat[8..10].copy_from_slice(&(OBJECT_SLOTS as u16).to_le_bytes());
-    flat[10..14].copy_from_slice(&(FILE_BYTES as u32).to_le_bytes());
+    flat[8..10].copy_from_slice(&(SHARE_SLOTS as u16).to_le_bytes());
     flat[14] = 1; // sealed
     flat[16..24].copy_from_slice(&generation.to_le_bytes());
-    flat[28..32].copy_from_slice(&table.pool_blocks.to_le_bytes());
 
-    let mut off = DISK_HEADER;
+    write_geometry(&mut flat[DISK_HEADER..DISK_HEADER + GEOMETRY_ON_DISK], &table.geo);
+    let mut off = DISK_HEADER + GEOMETRY_ON_DISK;
     for actor in &table.actors {
-        flat[off] = u8::from(actor.used);
-        flat[off + 1] = actor.name_len;
-        flat[off + 2..off + 2 + ACTOR_NAME].copy_from_slice(&actor.name);
-        flat[off + 2 + ACTOR_NAME..off + 4 + ACTOR_NAME].copy_from_slice(&actor.root.to_le_bytes());
-        let salt_off = off + 4 + ACTOR_NAME;
-        flat[salt_off..salt_off + SALT_LEN].copy_from_slice(&actor.salt);
-        flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN].copy_from_slice(&actor.pass_hash);
-        let koff = salt_off + SALT_LEN + HASH_LEN;
-        flat[koff..koff + 4].copy_from_slice(&actor.kdf_iters.to_le_bytes());
-        let qoff = koff + 4;
-        flat[qoff..qoff + 2].copy_from_slice(&actor.max_objects.to_le_bytes());
-        flat[qoff + 2..qoff + 6].copy_from_slice(&actor.max_bytes.to_le_bytes());
+        write_actor(&mut flat[off..off + ACTOR_ON_DISK], actor);
         off += ACTOR_ON_DISK;
     }
-    for obj in &table.objects {
-        flat[off] = obj.kind;
-        flat[off + 1] = obj.actor;
-        flat[off + 2] = obj.name_len;
-        flat[off + 3] = obj.extent_count;
-        flat[off + 4..off + 6].copy_from_slice(&obj.parent.to_le_bytes());
-        flat[off + 6..off + 8].copy_from_slice(&obj.child.to_le_bytes());
-        flat[off + 8..off + 10].copy_from_slice(&obj.next.to_le_bytes());
-        flat[off + 12..off + 16].copy_from_slice(&obj.len.to_le_bytes());
-        flat[off + 16..off + 16 + NAME_CAP].copy_from_slice(&obj.name);
-        for (e, ext) in obj.extents.iter().enumerate() {
-            let eo = off + 16 + NAME_CAP + e * 8;
-            flat[eo..eo + 4].copy_from_slice(&ext.start.to_le_bytes());
-            flat[eo + 4..eo + 8].copy_from_slice(&ext.count.to_le_bytes());
-        }
-        off += OBJECT_ON_DISK;
-    }
     for share in &table.shares {
-        flat[off] = u8::from(share.used);
-        flat[off + 1] = share.rights;
-        flat[off + 2] = share.grantee;
-        flat[off + 3] = 0;
-        flat[off + 4..off + 6].copy_from_slice(&share.object.to_le_bytes());
+        write_share(&mut flat[off..off + SHARE_ON_DISK], share);
         off += SHARE_ON_DISK;
     }
-    debug_assert_eq!(off, DISK_HEADER + PAYLOAD_LEN);
+    write_free(&mut flat[off..off + FREE_EXTENTS * 12], &table.geo.free);
+    off += FREE_EXTENTS * 12;
+    write_map_ptrs(
+        &mut flat[off..off + MAP_POINTERS * 8],
+        &table.geo.map_at,
+        &table.geo.map_gen,
+    );
+    debug_assert_eq!(off + MAP_POINTERS * 8, DISK_HEADER + PAYLOAD_LEN);
 
     let aad = seal_aad(generation);
     let mut kek = [0u8; KEY_LEN];
@@ -634,15 +613,8 @@ pub fn decode_slot(flat: &mut [u8], passphrase: &[u8], table: &mut Table) -> Opt
     }
     let version = u16::from_le_bytes([flat[4], flat[5]]);
     let actors = u16::from_le_bytes([flat[6], flat[7]]) as usize;
-    let objects = u16::from_le_bytes([flat[8], flat[9]]) as usize;
-    let file_bytes = u32::from_le_bytes(flat[10..14].try_into().ok()?) as usize;
-    let pool_blocks = u32::from_le_bytes(flat[28..32].try_into().ok()?);
-    if version != DISK_VERSION
-        || actors != ACTOR_SLOTS
-        || objects != OBJECT_SLOTS
-        || file_bytes != FILE_BYTES
-        || pool_blocks > POOL_CAP as u32
-        || flat[14] & 1 == 0
+    let shares = u16::from_le_bytes([flat[8], flat[9]]) as usize;
+    if version != DISK_VERSION || actors != ACTOR_SLOTS || shares != SHARE_SLOTS || flat[14] & 1 == 0
     {
         return None;
     }
@@ -682,78 +654,116 @@ pub fn decode_slot(flat: &mut [u8], passphrase: &[u8], table: &mut Table) -> Opt
         return None;
     }
 
-    let mut off = DISK_HEADER;
+    let geo = read_geometry_head(&flat[DISK_HEADER..DISK_HEADER + GEOMETRY_ON_DISK])?;
+    table.geo = geo;
+    let mut off = DISK_HEADER + GEOMETRY_ON_DISK;
     for actor in &mut table.actors {
-        *actor = Actor::empty();
-        actor.used = flat[off] != 0;
-        actor.name_len = flat[off + 1].min(ACTOR_NAME as u8);
-        actor
-            .name
-            .copy_from_slice(&flat[off + 2..off + 2 + ACTOR_NAME]);
-        actor.root = u16::from_le_bytes([flat[off + 2 + ACTOR_NAME], flat[off + 3 + ACTOR_NAME]]);
-        let salt_off = off + 4 + ACTOR_NAME;
-        actor
-            .salt
-            .copy_from_slice(&flat[salt_off..salt_off + SALT_LEN]);
-        actor
-            .pass_hash
-            .copy_from_slice(&flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN]);
-        let koff = salt_off + SALT_LEN + HASH_LEN;
-        actor.kdf_iters =
-            u32::from_le_bytes([flat[koff], flat[koff + 1], flat[koff + 2], flat[koff + 3]]);
-        let qoff = koff + 4;
-        actor.max_objects = u16::from_le_bytes([flat[qoff], flat[qoff + 1]]);
-        actor.max_bytes = u32::from_le_bytes([
-            flat[qoff + 2],
-            flat[qoff + 3],
-            flat[qoff + 4],
-            flat[qoff + 5],
-        ]);
+        *actor = read_actor(&flat[off..off + ACTOR_ON_DISK])?;
         off += ACTOR_ON_DISK;
     }
-    for obj in &mut table.objects {
-        *obj = Object::empty();
-        obj.kind = flat[off];
-        obj.actor = flat[off + 1];
-        obj.name_len = flat[off + 2].min(NAME_CAP as u8);
-        obj.extent_count = flat[off + 3].min(EXTENTS_PER_FILE as u8);
-        obj.parent = u16::from_le_bytes([flat[off + 4], flat[off + 5]]);
-        obj.child = u16::from_le_bytes([flat[off + 6], flat[off + 7]]);
-        obj.next = u16::from_le_bytes([flat[off + 8], flat[off + 9]]);
-        obj.len = u32::from_le_bytes([
-            flat[off + 12],
-            flat[off + 13],
-            flat[off + 14],
-            flat[off + 15],
-        ]);
-        obj.name
-            .copy_from_slice(&flat[off + 16..off + 16 + NAME_CAP]);
-        for (e, ext) in obj.extents.iter_mut().enumerate() {
-            let eo = off + 16 + NAME_CAP + e * 8;
-            ext.start = u32::from_le_bytes([flat[eo], flat[eo + 1], flat[eo + 2], flat[eo + 3]]);
-            ext.count =
-                u32::from_le_bytes([flat[eo + 4], flat[eo + 5], flat[eo + 6], flat[eo + 7]]);
-        }
-        if obj.len as usize > FILE_BYTES {
-            let mut gone = vk;
-            wipe_bytes(&mut gone);
-            return None;
-        }
-        off += OBJECT_ON_DISK;
-    }
     for share in &mut table.shares {
-        *share = Share::empty();
-        share.used = flat[off] != 0;
-        share.rights = flat[off + 1];
-        share.grantee = flat[off + 2];
-        share.object = u16::from_le_bytes([flat[off + 4], flat[off + 5]]);
+        *share = read_share(&flat[off..off + SHARE_ON_DISK])?;
         off += SHARE_ON_DISK;
     }
-    table.pool_blocks = pool_blocks;
+    if !read_free(&flat[off..off + FREE_EXTENTS * 12], &mut table.geo.free) {
+        let mut gone = vk;
+        wipe_bytes(&mut gone);
+        return None;
+    }
+    off += FREE_EXTENTS * 12;
+    if !read_map_ptrs(
+        &flat[off..off + MAP_POINTERS * 8],
+        &mut table.geo.map_at,
+        &mut table.geo.map_gen,
+    ) {
+        let mut gone = vk;
+        wipe_bytes(&mut gone);
+        return None;
+    }
+    table.objects.clear();
     Some(DecodedSlot {
         generation,
         volume_key: vk,
     })
+}
+
+/// Reads inode blocks named by the superblock map into `table.objects`.
+pub fn load_inodes(image: &[u8], table: &mut Table, volume_key: &[u8; KEY_LEN]) -> bool {
+    let slots = table.geo.inode_slots as usize;
+    if slots == 0 || slots > OBJECT_CAP as usize {
+        return false;
+    }
+    table.objects.clear();
+    table.objects.resize(slots, Object::empty());
+    let inode_blocks = slots.div_ceil(INODES_PER_BLOCK);
+    let map_len = table.geo.map_len as usize;
+    if map_len == 0 || map_len > MAP_POINTERS {
+        return false;
+    }
+    for m in 0..map_len {
+        let gen = table.geo.map_gen[m];
+        let index = table.geo.map_at[m];
+        if gen == 0 {
+            continue;
+        }
+        let Some(map_plain) = open_pool_block(image, DOMAIN_MAP, index, gen, volume_key) else {
+            return false;
+        };
+        let entries = BLOCK_SIZE / 8;
+        for e in 0..entries {
+            let ib = m * MAP_PER_BLOCK + e;
+            if ib >= inode_blocks {
+                break;
+            }
+            let off = e * 8;
+            let at = u32::from_le_bytes(map_plain[off..off + 4].try_into().unwrap_or([0; 4]));
+            let igen = u32::from_le_bytes(map_plain[off + 4..off + 8].try_into().unwrap_or([0; 4]));
+            if igen == 0 {
+                continue;
+            }
+            let Some(plain) = open_pool_block(image, DOMAIN_INODE, at, igen, volume_key) else {
+                return false;
+            };
+            for n in 0..INODES_PER_BLOCK {
+                let id = ib * INODES_PER_BLOCK + n;
+                if id >= slots {
+                    break;
+                }
+                let ioff = n * INODE_ON_DISK;
+                let Some(obj) = read_inode(&plain[ioff..ioff + INODE_ON_DISK]) else {
+                    return false;
+                };
+                table.objects[id] = obj;
+            }
+        }
+    }
+    true
+}
+
+fn open_pool_block(
+    image: &[u8],
+    domain: u8,
+    index: u32,
+    gen: u32,
+    volume_key: &[u8; KEY_LEN],
+) -> Option<[u8; BLOCK_SIZE]> {
+    let tag_off = block_tag_offset(index);
+    let data_off = data_byte_offset(index as usize);
+    if gen == 0 || image.len() < data_off + BLOCK_SIZE || tag_off + 20 > image.len() {
+        return None;
+    }
+    let stored_gen = u32::from_le_bytes(image[tag_off..tag_off + 4].try_into().unwrap_or([0; 4]));
+    if stored_gen != gen {
+        return None;
+    }
+    let mut tag = [0u8; TAG_LEN];
+    tag.copy_from_slice(&image[tag_off + 4..tag_off + 4 + TAG_LEN]);
+    let mut block = [0u8; BLOCK_SIZE];
+    block.copy_from_slice(&image[data_off..data_off + BLOCK_SIZE]);
+    if !open_block(volume_key, domain, index as usize, gen, &mut block, &tag) {
+        return None;
+    }
+    Some(block)
 }
 
 fn collect_issues(table: &Table, report: &mut Report) {
@@ -767,7 +777,7 @@ fn collect_issues(table: &Table, report: &mut Report) {
             continue;
         }
         let root = actor.root as usize;
-        if root >= OBJECT_SLOTS {
+        if root >= table.objects.len() {
             report.push(Issue::BadActorRoot { actor: ai as u16 });
             continue;
         }
@@ -790,53 +800,55 @@ fn collect_issues(table: &Table, report: &mut Report) {
         if share.rights == 0
             || share.grantee as usize >= ACTOR_SLOTS
             || !table.actors[share.grantee as usize].used
-            || share.object as usize >= OBJECT_SLOTS
+            || share.object as usize >= table.objects.len()
             || table.objects[share.object as usize].kind == KIND_EMPTY
         {
             report.push(Issue::BadShare { share: si as u16 });
         }
     }
 
-    let mut seen = [0u64; POOL_CAP / 64];
+    let words = (table.pool_blocks() as usize).div_ceil(64);
+    let mut seen = alloc::vec![0u64; words];
+    let n = table.objects.len();
     for (i, obj) in table.objects.iter().enumerate() {
         if obj.kind == KIND_EMPTY {
             continue;
         }
         if obj.kind != KIND_FILE && obj.kind != KIND_DIR {
-            report.push(Issue::BadObjectKind { object: i as u16 });
+            report.push(Issue::BadObjectKind { object: i as u32 });
             continue;
         }
         if obj.actor as usize >= ACTOR_SLOTS || !table.actors[obj.actor as usize].used {
-            report.push(Issue::BadActorRef { object: i as u16 });
+            report.push(Issue::BadActorRef { object: i as u32 });
         }
         if obj.parent == NO_PARENT {
-            if !table.actors.iter().any(|a| a.used && a.root == i as u16) {
-                report.push(Issue::OrphanObject { object: i as u16 });
+            if !table.actors.iter().any(|a| a.used && a.root == i as u32) {
+                report.push(Issue::OrphanObject { object: i as u32 });
             }
         } else {
             let parent = obj.parent as usize;
-            if parent >= OBJECT_SLOTS || parent == i || table.objects[parent].kind != KIND_DIR {
-                report.push(Issue::BadParent { object: i as u16 });
+            if parent >= n || parent == i || table.objects[parent].kind != KIND_DIR {
+                report.push(Issue::BadParent { object: i as u32 });
             } else {
                 let mut cur = obj.parent;
-                for _ in 0..OBJECT_SLOTS {
-                    if cur == i as u16 {
-                        report.push(Issue::Cycle { object: i as u16 });
+                for _ in 0..n {
+                    if cur == i as u32 {
+                        report.push(Issue::Cycle { object: i as u32 });
                         break;
                     }
                     let p = table.objects[cur as usize].parent;
                     if p == NO_PARENT {
                         break;
                     }
-                    if p as usize >= OBJECT_SLOTS {
-                        report.push(Issue::BadParent { object: i as u16 });
+                    if p as usize >= n {
+                        report.push(Issue::BadParent { object: i as u32 });
                         break;
                     }
                     cur = p;
                 }
             }
         }
-        check_object_blocks(table, obj, i as u16, &mut seen, report);
+        check_object_blocks(table, obj, i as u32, &mut seen, report);
     }
     check_directories(table, report);
 }
@@ -844,14 +856,15 @@ fn collect_issues(table: &Table, report: &mut Report) {
 /// Directory membership is a sibling list on the parent, not a scan of
 /// every object. The list and the parent pointers must name the same set.
 fn check_directories(table: &Table, report: &mut Report) {
-    let mut seen = [false; OBJECT_SLOTS];
-    for i in 0..OBJECT_SLOTS {
+    let n = table.objects.len();
+    let mut seen = alloc::vec![false; n];
+    for i in 0..n {
         let obj = &table.objects[i];
         if obj.kind == KIND_EMPTY {
             continue;
         }
         if obj.kind != KIND_DIR && obj.child != NO_PARENT {
-            report.push(Issue::BadParent { object: i as u16 });
+            report.push(Issue::BadParent { object: i as u32 });
         }
         if obj.kind != KIND_DIR {
             continue;
@@ -859,20 +872,20 @@ fn check_directories(table: &Table, report: &mut Report) {
         let mut child = obj.child;
         let mut guard = 0usize;
         while child != NO_PARENT {
-            if child as usize >= OBJECT_SLOTS || seen[child as usize] {
-                report.push(Issue::BadParent { object: i as u16 });
+            if child as usize >= n || seen[child as usize] {
+                report.push(Issue::BadParent { object: i as u32 });
                 break;
             }
             seen[child as usize] = true;
             let entry = &table.objects[child as usize];
-            if entry.kind == KIND_EMPTY || entry.parent != i as u16 {
+            if entry.kind == KIND_EMPTY || entry.parent != i as u32 {
                 report.push(Issue::BadParent { object: child });
                 break;
             }
             child = entry.next;
             guard += 1;
-            if guard > OBJECT_SLOTS {
-                report.push(Issue::Cycle { object: i as u16 });
+            if guard > n {
+                report.push(Issue::Cycle { object: i as u32 });
                 break;
             }
         }
@@ -883,29 +896,25 @@ fn check_directories(table: &Table, report: &mut Report) {
         }
         if obj.parent == NO_PARENT {
             if obj.next != NO_PARENT {
-                report.push(Issue::BadParent { object: i as u16 });
+                report.push(Issue::BadParent { object: i as u32 });
             }
             continue;
         }
         if !seen[i] {
-            report.push(Issue::OrphanObject { object: i as u16 });
+            report.push(Issue::OrphanObject { object: i as u32 });
         }
     }
 }
 
 fn mark_seen(seen: &mut [u64], block: u32, pool: u32, report: &mut Report) {
-    if block >= pool || block as usize >= POOL_CAP {
-        report.push(Issue::BlockMissing {
-            block: block.min(u16::MAX as u32) as u16,
-        });
+    if block >= pool {
+        report.push(Issue::BlockMissing { block });
         return;
     }
     let i = block as usize;
     let bit = 1u64 << (i % 64);
     if seen[i / 64] & bit != 0 {
-        report.push(Issue::BlockDuplicate {
-            block: block as u16,
-        });
+        report.push(Issue::BlockDuplicate { block });
     }
     seen[i / 64] |= bit;
 }
@@ -913,7 +922,7 @@ fn mark_seen(seen: &mut [u64], block: u32, pool: u32, report: &mut Report) {
 fn check_object_blocks(
     table: &Table,
     obj: &Object,
-    index: u16,
+    index: u32,
     seen: &mut [u64],
     report: &mut Report,
 ) {
@@ -923,7 +932,7 @@ fn check_object_blocks(
         }
         return;
     }
-    if obj.len as usize > FILE_BYTES {
+    if obj.len > table.geo.file_max || obj.len > FILE_CAP {
         report.push(Issue::FileTooLarge { object: index });
         return;
     }
@@ -931,21 +940,21 @@ fn check_object_blocks(
         report.push(Issue::BlockMissing { block: index });
         return;
     }
-    let need = (obj.len as usize).div_ceil(BLOCK_SIZE);
+    let need = obj.len.div_ceil(BLOCK_SIZE as u64);
     let mut covered = 0u64;
     for ext in obj.extents.iter().take(obj.extent_count as usize) {
-        if ext.count == 0 {
+        if ext.count == 0 || ext.gen == 0 {
             report.push(Issue::BlockMissing { block: index });
             continue;
         }
         covered += u64::from(ext.count);
         let mut b = ext.start;
         for _ in 0..ext.count {
-            mark_seen(seen, b, table.pool_blocks, report);
+            mark_seen(seen, b, table.pool_blocks(), report);
             b = b.saturating_add(1);
         }
     }
-    if covered < need as u64 {
+    if covered < need {
         report.push(Issue::BlockMissing { block: index });
     }
 }
@@ -991,12 +1000,28 @@ mod tests {
     #[test]
     fn layout_constants_fit_slot() {
         // Slot fit is a `const _` assertion at the top of the crate.
-        assert_eq!(ACTOR_ON_DISK, 70);
-        assert_eq!(OBJECT_ON_DISK, 144);
-        assert_eq!(SHARE_ON_DISK, 6);
+        assert_eq!(ACTOR_ON_DISK, 80);
+        assert_eq!(OBJECT_ON_DISK, 192);
+        assert_eq!(SHARE_ON_DISK, 8);
         assert_eq!(SHARE_SLOTS, 32);
-        assert_eq!(FILE_BYTES, 64 * 1024 * 1024);
-        assert_eq!(DISK_VERSION, 15);
+        assert!(FILE_BYTES > 16 * 1024 * 1024 * 1024);
+        assert_eq!(DISK_VERSION, 16);
         assert!(pool_blocks_for(MIN_DISK_BYTES) > 256);
+        let big = volume_limits(32 * 1024 * 1024 * 1024);
+        assert!(big.inode_slots > 1_000_000, "slots {}", big.inode_slots);
+        assert!(big.file_max > 16 * 1024 * 1024 * 1024, "file {}", big.file_max);
+        let mut wide = Object::empty();
+        wide.kind = KIND_FILE;
+        wide.len = 20 * 1024 * 1024 * 1024;
+        wide.extent_count = 1;
+        wide.extents[0] = Extent {
+            start: 0,
+            count: (wide.len / BLOCK_SIZE as u64) as u32,
+            gen: 1,
+        };
+        let mut raw = [0u8; OBJECT_ON_DISK];
+        write_inode(&mut raw, &wide);
+        let back = read_inode(&raw).expect("inode");
+        assert_eq!(back.len, wide.len);
     }
 }

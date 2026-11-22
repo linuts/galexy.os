@@ -527,7 +527,9 @@ pub fn stat(p: &Path) -> io::Result<FileAttr> {
     match syscall::stat(bytes, &mut record) {
         Ok(()) => {
             let kind = FileType { dir: record[0] == abi::STAT_DIR };
-            let size = u64::from(u32::from_le_bytes([record[4], record[5], record[6], record[7]]));
+            let lo = u32::from_le_bytes([record[4], record[5], record[6], record[7]]);
+            let hi = u32::from_le_bytes([record[44], record[45], record[46], record[47]]);
+            let size = (u64::from(hi) << 32) | u64::from(lo);
             Ok(FileAttr { size, kind })
         }
         // `Stat` knows galfs only; a bare ramdisk name answers through `Open`.

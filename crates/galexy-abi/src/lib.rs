@@ -25,6 +25,11 @@ mod tests;
 /// Marketing / banner version string for the OS (shell login screen, about).
 pub const OS_VERSION: &str = "1.0.0";
 
+/// Raised when a stable record defines bytes that used to be reserved.
+/// The banner stays [`OS_VERSION`]. Epoch 2 puts a file's high 32 size
+/// bits at `stat` bytes 44..48; the low half stays at bytes 4..8.
+pub const ABI_EPOCH: u32 = 2;
+
 /* ---------------- capabilities ---------------- */
 
 /// An opaque capability handle. Ring 3 treats it as a black u64; the kernel
@@ -948,10 +953,11 @@ pub const STAT_DIR: u8 = 2;
 /// - `0`: kind ([`STAT_FILE`] / [`STAT_DIR`])
 /// - `1`: token rights the caller holds (`TOKEN_*` mask)
 /// - `2..4`: reserved
-/// - `4..8`: size (`u32`) — file length; `0` for directories
+/// - `4..8`: size low 32 bits — file length; `0` for directories
 /// - `8`: owner name length
 /// - `9..41`: owner name bytes (padded)
-/// - `41..48`: reserved
+/// - `41..44`: reserved
+/// - `44..48`: size high 32 bits (files over 4 GiB; zero below that)
 pub const STAT_LEN: usize = 48;
 
 /// Maximum syscall number (upper bound for a u64 dispatch table).

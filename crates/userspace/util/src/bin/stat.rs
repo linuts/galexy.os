@@ -34,9 +34,11 @@ fn main() -> i32 {
         _ => write_console(b"?\n"),
     };
 
-    let size = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
+    let lo = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
+    let hi = u32::from_le_bytes([buf[44], buf[45], buf[46], buf[47]]);
+    let size = (u64::from(hi) << 32) | u64::from(lo);
     write_console(b"size: ");
-    write_u32(size);
+    write_u64(size);
     write_console(b"\n");
 
     let owner_len = buf[8] as usize;
@@ -70,13 +72,13 @@ fn main() -> i32 {
     0
 }
 
-fn write_u32(mut n: u32) {
+fn write_u64(mut n: u64) {
     if n == 0 {
         write_console(b"0");
         return;
     }
-    let mut buf = [0u8; 10];
-    let mut i = 10;
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
     while n > 0 {
         i -= 1;
         buf[i] = b'0' + (n % 10) as u8;

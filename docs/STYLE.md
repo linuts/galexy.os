@@ -315,8 +315,9 @@ the `v1.0` tag.
   v13's 32-file map is not that volume. Milestone 99's object-table
   count is another format change and refuses the image it replaces.
   There is no silent migrate.
-- **`core`'s metadata stays in the RAM store** while the on-disk
-  file cap is 64 MiB.
+- **`core`'s metadata stays in the RAM store** on the 8 MiB test
+  image, whose live file cap is a few megabytes. A disk whose file
+  cap is past ~66 MiB can seal it.
 - **ATA PIO stays the legacy fallback.** `async` / `await`, POSIX,
   mmap, sparse files, and hard links stay out.
 

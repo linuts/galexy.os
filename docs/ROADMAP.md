@@ -636,16 +636,18 @@ Phase 13. It does not move the `v1.0` tag.
    virtio data request for the 288-sector slot, one flush, then
    the generation publish. Still one command in flight. `PERF.md`
    records the TCG time and the KVM time
-2. **98 Large volume** (landed, GALF v15) — file bytes move into a
-   4 KiB pool sized to the disk. Two 64 KiB metadata slots keep
-   actors, objects, shares, and quotas. Host v13 is the extent-map
-   shape and names 32 files with no actor table; the login volume
-   does not become that map. `DISK_VERSION` is 15. Older images are
-   refused. A 1 MiB file survives reboot. `core`'s metadata
-   (~66 MiB) stays in RAM
+2. **98 Large volume** (landed) — file bytes move into a 4 KiB pool
+   sized to the disk. Two 64 KiB metadata slots keep actors, shares,
+   and quotas. v16 keeps inodes in pool blocks: the format ceiling is
+   1,048,576 names and 64 GiB per file, and a large enough disk holds
+   more than 1,000,000 names and a file over 16 GiB. Host v13 is the
+   extent-map shape and names 32 files with no actor table; the login
+   volume does not become that map. `DISK_VERSION` is 16. Older images
+   are refused. A 1 MiB file survives reboot. On the 8 MiB test image
+   `core`'s metadata (~66 MiB) stays in RAM
 3. **99 Desk tree** — count the files one desk compile needs and
-   size the object table to that count. That count is a format
-   change. Dual-slot order stays. A crash recovers the previous
+   write that count down. 1,048,576 is the v16 ceiling, not that
+   count. Dual-slot order stays. A crash recovers the previous
    metadata slot. **Phase 15 gate**
 
 Non-goals: `async` / `await`, several virtio commands in flight,

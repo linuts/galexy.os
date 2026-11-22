@@ -55,7 +55,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         total += n;
     }
     assert_eq!(total, 10 * 4096);
-    assert!(total < galfs::FILE_BYTES);
+    assert!((total as u64) < galfs::FILE_BYTES);
     assert_eq!(galfs::object_len(big), Some(total));
     let mut got = [0u8; 16];
     assert_eq!(galfs::read_file_bytes(big, &mut got), Some(16));

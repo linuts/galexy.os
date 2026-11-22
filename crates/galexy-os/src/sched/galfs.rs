@@ -34,37 +34,36 @@ use crate::drivers::ata::PrimarySlave;
 use crate::drivers::block::{self, BlockDevice};
 use crate::drivers::virtio_blk::VirtioBlk;
 
-/// Objects the kernel will hold (files, directories, and actor roots).
-pub const OBJECT_SLOTS: usize = 384;
+/// Format ceiling on files and directories. A live volume holds fewer
+/// when the disk is smaller; see [`galexy_galf::volume_limits`].
+pub const OBJECT_SLOTS: usize = galexy_galf::OBJECT_SLOTS;
 /// Actors (users) the table can name.
 pub const ACTOR_SLOTS: usize = 32;
 /// File data block (eight ciphertext sectors plus a private tag sector).
 pub const BLOCK_SIZE: usize = 4096;
 /// Extents stored on one inode.
 pub const EXTENTS_PER_FILE: usize = 8;
-/// Largest durable file. A longer write promotes into the RAM store.
-pub const FILE_BYTES: usize = 64 * 1024 * 1024;
-/// Data blocks one max-size file needs. The live pool may be smaller.
-pub const BLOCK_SLOTS: usize = FILE_BYTES / BLOCK_SIZE;
+/// Format ceiling for one durable file. The live cap is the volume's
+/// `file_max` (what the disk can hold, and never above this).
+pub const FILE_BYTES: u64 = galexy_galf::FILE_CAP;
+/// Names kept in RAM when no disk is attached.
+const DISKLESS_INODES: usize = 8192;
 /// Blocks kept in RAM when no disk is attached (bigtest's 20 MiB file).
 const DISKLESS_BLOCKS: usize = (32 * 1024 * 1024) / BLOCK_SIZE;
 // Host fsck (`galexy-galf`) must stay byte-identical — STYLE: no forked magic.
-const _: () = assert!(OBJECT_SLOTS == galexy_galf::OBJECT_SLOTS);
 const _: () = assert!(ACTOR_SLOTS == galexy_galf::ACTOR_SLOTS);
 const _: () = assert!(BLOCK_SIZE == galexy_galf::BLOCK_SIZE);
 const _: () = assert!(EXTENTS_PER_FILE == galexy_galf::EXTENTS_PER_FILE);
 const _: () = assert!(FILE_BYTES == galexy_galf::FILE_BYTES);
-const _: () = assert!(BLOCK_SLOTS == galexy_galf::POOL_CAP);
-const _: () = assert!(FILE_BYTES <= u32::MAX as usize);
-const _: () = assert!(super::large::SLOTS == OBJECT_SLOTS);
+const _: () = assert!(FILE_BYTES > 16 * 1024 * 1024 * 1024);
 /// Tokens one task may hold.
 pub use galexy_galf::cards::TOKEN_SLOTS;
 /// Durable home shares recorded in the sealed image (re-applied at login).
 pub const SHARE_SLOTS: usize = 32;
 /// Default object quota for a new non-admin actor (root + Desktop count).
-pub const DEFAULT_MAX_OBJECTS: u16 = 16;
+pub const DEFAULT_MAX_OBJECTS: u32 = 16;
 /// Default byte quota for a new non-admin actor (sum of file lengths).
-pub const DEFAULT_MAX_BYTES: u32 = 16 * 1024;
+pub const DEFAULT_MAX_BYTES: u64 = 16 * 1024;
 /// Path components after the optional owner.
 pub const MAX_DEPTH: usize = galexy_core::MAX_DEPTH;
 /// One path-component name.
@@ -77,24 +76,23 @@ pub(crate) const KIND_FILE: u8 = 1;
 pub(crate) const KIND_DIR: u8 = 2;
 
 /// Parent of an actor root.
-const NO_PARENT: u16 = 0xffff;
+const NO_PARENT: u32 = u32::MAX;
 pub use galexy_galf::cards::NO_OBJECT;
-const BITMAP_BYTES: usize = BLOCK_SLOTS / 8;
 const CACHE_SLOTS: usize = 8;
 
 pub use galexy_galf::cards::{
     RIGHT_ALL, RIGHT_CREATE, RIGHT_LIST, RIGHT_ONCE, RIGHT_READ, RIGHT_REMOVE, RIGHT_WRITE,
 };
-/// Stored in bit 15 of `Actor::max_objects` (quotas use the low 15 bits).
-/// Set while `admin`'s password is still the default. Not a GALF version bump.
-const MUST_CHANGE_BIT: u16 = 0x8000;
+/// Stored in bit 31 of `Actor::max_objects`. Set while `admin`'s password
+/// is still the default. Not a GALF version bump.
+const MUST_CHANGE_BIT: u32 = 0x8000_0000;
 
 pub use galexy_galf::cards::Token;
 
 /// Credentials copied onto a task at spawn.
 #[derive(Clone, Copy)]
 pub struct FsCred {
-    pub root: u16,
+    pub root: u32,
     pub tokens: [Token; TOKEN_SLOTS],
 }
 
@@ -107,7 +105,7 @@ impl FsCred {
     }
 
     /// Full rights on `root`. Used for the interactive shell and test blobs.
-    pub fn launcher(root: u16) -> Self {
+    pub fn launcher(root: u32) -> Self {
         let mut tokens = [Token::empty(); TOKEN_SLOTS];
         tokens[0] = Token {
             object: root,
@@ -122,15 +120,20 @@ struct Actor {
     used: bool,
     name: [u8; ACTOR_NAME],
     name_len: u8,
-    root: u16,
+    root: u32,
     salt: [u8; SALT_LEN],
     pass_hash: [u8; HASH_LEN],
     /// PBKDF2 iteration count that produced `pass_hash`.
     kdf_iters: u32,
     /// Max objects (files + dirs, including root) this actor may own.
-    max_objects: u16,
+    /// Bit 31 is [`MUST_CHANGE_BIT`], not part of the count.
+    max_objects: u32,
     /// Max sum of file lengths (bytes) this actor may own.
-    max_bytes: u32,
+    max_bytes: u64,
+    /// Objects this actor currently owns. Rebuilt at load.
+    used_objects: u32,
+    /// Sum of file lengths this actor currently owns.
+    used_bytes: u64,
 }
 
 impl Actor {
@@ -145,6 +148,8 @@ impl Actor {
             kdf_iters: 0,
             max_objects: 0,
             max_bytes: 0,
+            used_objects: 0,
+            used_bytes: 0,
         }
     }
 
@@ -154,7 +159,7 @@ impl Actor {
     }
 
     fn object_limit(self) -> u32 {
-        (self.max_objects & !MUST_CHANGE_BIT) as u32
+        self.max_objects & !MUST_CHANGE_BIT
     }
 
     /// Stores an already-derived credential (see [`PasswordCred`]).
@@ -233,18 +238,18 @@ impl PasswordCred {
 #[derive(Clone, Copy)]
 pub(crate) struct Object {
     pub(crate) kind: u8,
-    parent: u16,
+    parent: u32,
     /// Actor that owns this object (its root's actor).
     actor: u8,
     name: [u8; NAME_CAP],
     name_len: u8,
-    pub(crate) len: u32,
+    pub(crate) len: u64,
     extent_count: u8,
     extents: [galexy_galf::Extent; EXTENTS_PER_FILE],
     /// First child of a directory. [`NO_OBJECT`] when this is a file or empty.
-    child: u16,
+    child: u32,
     /// Next object in the parent's directory list.
-    next: u16,
+    next: u32,
 }
 
 impl Object {
@@ -276,7 +281,7 @@ struct Share {
     /// Actor index that receives the card at login.
     grantee: u8,
     rights: u8,
-    object: u16,
+    object: u32,
 }
 
 impl Share {
@@ -290,20 +295,125 @@ impl Share {
     }
 }
 
+/// Names live in fixed chunks so a large table never asks the heap for
+/// one multi-megabyte block. A single block that big does not come back
+/// from the allocator once the second CPU is up.
+const OBJECT_CHUNK: usize = 64;
+
+struct ObjectTable {
+    chunks: alloc::vec::Vec<alloc::boxed::Box<[Object]>>,
+    len: usize,
+}
+
+struct ObjectIter<'a> {
+    table: &'a ObjectTable,
+    idx: usize,
+}
+
+impl<'a> Iterator for ObjectIter<'a> {
+    type Item = &'a Object;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx >= self.table.len {
+            return None;
+        }
+        let i = self.idx;
+        self.idx += 1;
+        Some(&self.table[i])
+    }
+}
+
+impl ObjectTable {
+    const fn empty() -> Self {
+        Self {
+            chunks: alloc::vec::Vec::new(),
+            len: 0,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn resize(&mut self, n: usize, fill: Object) {
+        let need = n.div_ceil(OBJECT_CHUNK);
+        while self.chunks.len() < need {
+            self.chunks
+                .push(alloc::vec![fill; OBJECT_CHUNK].into_boxed_slice());
+        }
+        if self.chunks.len() > need {
+            self.chunks.truncate(need);
+        }
+        self.len = n;
+    }
+
+    fn iter(&self) -> ObjectIter<'_> {
+        ObjectIter {
+            table: self,
+            idx: 0,
+        }
+    }
+
+    fn get(&self, i: usize) -> Option<&Object> {
+        if i >= self.len {
+            None
+        } else {
+            Some(&self[i])
+        }
+    }
+
+    fn get_mut(&mut self, i: usize) -> Option<&mut Object> {
+        if i >= self.len {
+            None
+        } else {
+            Some(&mut self[i])
+        }
+    }
+
+    fn clone_from(&mut self, src: &Self) {
+        self.resize(src.len, Object::empty());
+        for i in 0..src.len {
+            self[i] = src[i];
+        }
+    }
+}
+
+impl core::ops::Index<usize> for ObjectTable {
+    type Output = Object;
+
+    fn index(&self, i: usize) -> &Object {
+        &self.chunks[i / OBJECT_CHUNK][i % OBJECT_CHUNK]
+    }
+}
+
+impl core::ops::IndexMut<usize> for ObjectTable {
+    fn index_mut(&mut self, i: usize) -> &mut Object {
+        &mut self.chunks[i / OBJECT_CHUNK][i % OBJECT_CHUNK]
+    }
+}
+
+impl<'a> IntoIterator for &'a ObjectTable {
+    type Item = &'a Object;
+    type IntoIter = ObjectIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 struct Table {
     actors: [Actor; ACTOR_SLOTS],
-    objects: [Object; OBJECT_SLOTS],
+    objects: ObjectTable,
     shares: [Share; SHARE_SLOTS],
-    /// Data blocks that follow the metadata slots. Zero when RAM-only.
-    pool_blocks: u32,
+    geo: galexy_galf::Geometry,
 }
 
 const fn empty_table() -> Table {
     Table {
         actors: [Actor::empty(); ACTOR_SLOTS],
-        objects: [Object::empty(); OBJECT_SLOTS],
+        objects: ObjectTable::empty(),
         shares: [Share::empty(); SHARE_SLOTS],
-        pool_blocks: 0,
+        geo: galexy_galf::Geometry::empty(),
     }
 }
 
@@ -328,7 +438,7 @@ static RECOVERIES: AtomicU64 = AtomicU64::new(0);
 pub const ADMIN_NAME: &str = "admin";
 
 /// Admin's root object. Valid after [`init`].
-static ADMIN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(NO_OBJECT);
+static ADMIN_ROOT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(NO_OBJECT);
 
 /// On-disk image: dual slots of header + actors + objects.
 ///
@@ -339,7 +449,7 @@ static ADMIN_ROOT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
 /// Extent volume (directory lists + 4 KiB blocks outside the seal).
 /// Older images are refused with a serial line; there is no silent migrate.
-pub const DISK_VERSION: u16 = 15;
+pub const DISK_VERSION: u16 = 16;
 /// Sectors per metadata slot (64 KiB).
 pub const DISK_SECTORS: usize = 128;
 pub const DISK_SLOT_COUNT: usize = 2;
@@ -348,11 +458,8 @@ pub const DISK_SLOT_COUNT: usize = 2;
 pub const DISK_PART_LBA: u32 = 2048;
 /// Clear header + wrap fields + data tag (see `encode_table`).
 const DISK_HEADER: usize = 128;
-/// used(1) + name_len(1) + name(32) + root(2) + salt(8) + hash(16)
-/// + kdf_iters(4) + max_objects(2) + max_bytes(4) = 70.
-const ACTOR_ON_DISK: usize = 70;
-/// used(1) + rights(1) + grantee(1) + pad(1) + object(2) = 6.
-const SHARE_ON_DISK: usize = 6;
+const ACTOR_ON_DISK: usize = galexy_galf::ACTOR_ON_DISK;
+const SHARE_ON_DISK: usize = galexy_galf::SHARE_ON_DISK;
 const _: () = assert!(DISK_MAGIC[0] == galexy_galf::DISK_MAGIC[0]);
 const _: () = assert!(DISK_MAGIC[1] == galexy_galf::DISK_MAGIC[1]);
 const _: () = assert!(DISK_MAGIC[2] == galexy_galf::DISK_MAGIC[2]);
@@ -363,15 +470,9 @@ const _: () = assert!(ACTOR_ON_DISK == galexy_galf::ACTOR_ON_DISK);
 const _: () = assert!(DISK_HEADER == galexy_galf::DISK_HEADER);
 const _: () = assert!(SHARE_SLOTS == galexy_galf::SHARE_SLOTS);
 const _: () = assert!(SHARE_ON_DISK == galexy_galf::SHARE_ON_DISK);
-/// kind+actor+name_len+extent_count + parent+child+next+pad + len
-/// + name + extents.
-const OBJECT_ON_DISK: usize = 16 + NAME_CAP + EXTENTS_PER_FILE * 8;
-const _: () = assert!(OBJECT_ON_DISK == galexy_galf::OBJECT_ON_DISK);
-const PAYLOAD_LEN: usize =
-    ACTOR_ON_DISK * ACTOR_SLOTS + OBJECT_ON_DISK * OBJECT_SLOTS + SHARE_ON_DISK * SHARE_SLOTS;
-const _: () = assert!(PAYLOAD_LEN == galexy_galf::PAYLOAD_LEN);
+const _: () = assert!(galexy_galf::OBJECT_ON_DISK == 192);
+const PAYLOAD_LEN: usize = galexy_galf::PAYLOAD_LEN;
 const _: () = assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * block::SECTOR);
-const _: () = assert!(BLOCK_SLOTS.is_multiple_of(8));
 /// Sectors a volume needs past the LBA base (8 MiB).
 const DISK_MIN_SECTORS: u64 = (galexy_galf::MIN_DISK_BYTES / block::SECTOR) as u64;
 /// Default password for the immortal admin account at format.
@@ -408,29 +509,39 @@ impl core::ops::DerefMut for SectorBuf {
 static DISK_BUF: Mutex<SectorBuf> = Mutex::new(SectorBuf([[0u8; block::SECTOR]; DISK_SECTORS]));
 
 /// Allocation state for the data pool. File bytes are not stored here.
+/// Per-block arrays are sized to the live disk in [`bind_pool`], not to
+/// the format ceiling.
 struct Pool {
     blocks: u32,
     disk: bool,
-    bitmap: [u8; BITMAP_BYTES],
-    gen: [u32; BLOCK_SLOTS],
-    stable: [bool; BLOCK_SLOTS],
-    dirty: [bool; BLOCK_SLOTS],
+    bitmap: alloc::vec::Vec<u8>,
+    gen: alloc::vec::Vec<u32>,
+    stable: alloc::vec::Vec<bool>,
+    dirty: alloc::vec::Vec<bool>,
     /// Ciphertext for this generation is already on the device.
-    sealed: [bool; BLOCK_SLOTS],
-    hold: [u8; BLOCK_SLOTS],
+    sealed: alloc::vec::Vec<bool>,
+    hold: alloc::vec::Vec<u8>,
     clock: u32,
+    /// Next first-fit index. A fresh sequential file stays one extent.
+    cursor: u32,
 }
+
+/// Scratch for `validate_table`. Sized in [`bind_pool`], not on the syscall path.
+static BLOCK_SEEN: Mutex<alloc::vec::Vec<u64>> = Mutex::new(alloc::vec::Vec::new());
+/// Scratch for directory-list checks. Sized when the inode table is.
+static DIR_SEEN: Mutex<alloc::vec::Vec<u64>> = Mutex::new(alloc::vec::Vec::new());
 
 static POOL: Mutex<Pool> = Mutex::new(Pool {
     blocks: 0,
     disk: false,
-    bitmap: [0; BITMAP_BYTES],
-    gen: [0; BLOCK_SLOTS],
-    stable: [false; BLOCK_SLOTS],
-    dirty: [false; BLOCK_SLOTS],
-    sealed: [false; BLOCK_SLOTS],
-    hold: [0; BLOCK_SLOTS],
+    bitmap: alloc::vec::Vec::new(),
+    gen: alloc::vec::Vec::new(),
+    stable: alloc::vec::Vec::new(),
+    dirty: alloc::vec::Vec::new(),
+    sealed: alloc::vec::Vec::new(),
+    hold: alloc::vec::Vec::new(),
     clock: 1,
+    cursor: 0,
 });
 
 /// Plaintext cache. Dirty lines stay until they are sealed to the device.
@@ -627,13 +738,67 @@ pub fn init() {
     format_fresh();
 }
 
-/// In-RAM admin tree. Does not install a volume key or touch the disk.
+fn live_caps(on_disk: bool) -> (u32, u32, u64) {
+    if on_disk {
+        let bytes = disk()
+            .capacity_sectors()
+            .saturating_sub(u64::from(disk_lba_base()))
+            .saturating_mul(block::SECTOR as u64);
+        let lim = galexy_galf::volume_limits(bytes);
+        (lim.inode_slots, lim.pool_blocks, lim.file_max)
+    } else {
+        (
+            DISKLESS_INODES as u32,
+            DISKLESS_BLOCKS as u32,
+            (DISKLESS_BLOCKS * BLOCK_SIZE) as u64,
+        )
+    }
+}
+
+/// Object storage for a fresh table.
+///
+/// Built before [`TABLE`] is taken. Growing the heap while that lock is
+/// held deadlocks the other CPU: the 1 Hz path can hold the serial lock
+/// and then wait for the table, and the grower is waiting on that CPU.
+fn prepare_live_storage(on_disk: bool) -> ObjectTable {
+    let (slots, _, _) = live_caps(on_disk);
+    let mut objects = ObjectTable::empty();
+    objects.resize(slots as usize, Object::empty());
+    let inode_blocks = (slots as usize).div_ceil(galexy_galf::INODES_PER_BLOCK);
+    {
+        let mut loc = META_LOC.lock();
+        if loc.inode_at.len() < inode_blocks {
+            loc.inode_at.resize(inode_blocks, 0);
+            loc.inode_gen.resize(inode_blocks, 0);
+        }
+    }
+    let words = (slots as usize).div_ceil(64);
+    let mut seen = DIR_SEEN.lock();
+    if seen.len() < words {
+        seen.resize(words, 0);
+    }
+    objects
+}
+
+fn install_live_table(table: &mut Table, on_disk: bool, objects: ObjectTable) {
+    let (slots, pool, file_max) = live_caps(on_disk);
+    table.objects = objects;
+    table.geo.inode_slots = slots;
+    table.geo.pool_blocks = pool;
+    table.geo.file_max = file_max;
+    if table.geo.alloc_clock == 0 {
+        table.geo.alloc_clock = 1;
+    }
+}
+
 fn format_ram_table() {
-    bind_pool(disk_usable());
+    let on_disk = disk_usable();
+    bind_pool(on_disk);
+    let objects = prepare_live_storage(on_disk);
     let default = ADMIN_DEFAULT_PASSWORD.as_bytes();
     let cred = PasswordCred::derive(default);
     let mut table = TABLE.lock();
-    table.pool_blocks = POOL.lock().blocks;
+    install_live_table(&mut table, on_disk, objects);
     let admin = add_actor(&mut table, ADMIN_NAME, default, &cred).expect("galfs: admin");
     ADMIN_ROOT.store(admin, Ordering::Relaxed);
     mkdir_locked(&mut table, admin, "Desktop").expect("galfs: admin Desktop");
@@ -662,6 +827,11 @@ fn format_fresh() {
 }
 
 /// True when this boot is using a block device for the table.
+/// Inodes this boot's table can name. A small disk is under the format ceiling.
+pub fn inode_slots() -> u32 {
+    TABLE.lock().geo.inode_slots
+}
+
 pub fn disk_backed() -> bool {
     DISK_LIVE.load(Ordering::Acquire)
 }
@@ -973,9 +1143,13 @@ fn sync_to_disk_gated() -> bool {
     let lba = slot_lba(next_slot);
     let mut buf = DISK_BUF.lock();
     {
-        let table = TABLE.lock();
+        let mut table = TABLE.lock();
         if !seal_dirty_blocks() {
             crate::serial_println!("[galfs] disk data write failed");
+            return false;
+        }
+        if !flush_inodes(&mut table) {
+            crate::serial_println!("[galfs] inode write failed");
             return false;
         }
         if !encode_table(&table, next_gen, &mut buf.0) {
@@ -1028,24 +1202,35 @@ fn bind_pool(on_disk: bool) {
     } else {
         DISKLESS_BLOCKS as u32
     };
-    pool.bitmap = [0; BITMAP_BYTES];
-    pool.gen = [0; BLOCK_SLOTS];
-    pool.stable = [false; BLOCK_SLOTS];
-    pool.dirty = [false; BLOCK_SLOTS];
-    pool.sealed = [false; BLOCK_SLOTS];
-    pool.hold = [0; BLOCK_SLOTS];
+    let n = pool.blocks as usize;
+    pool.bitmap.clear();
+    pool.bitmap.resize(n.div_ceil(8), 0);
+    pool.gen.clear();
+    pool.gen.resize(n, 0);
+    pool.stable.clear();
+    pool.stable.resize(n, false);
+    pool.dirty.clear();
+    pool.dirty.resize(n, false);
+    pool.sealed.clear();
+    pool.sealed.resize(n, false);
+    pool.hold.clear();
+    pool.hold.resize(n, 0);
     pool.clock = 1;
+    pool.cursor = 0;
     drop(pool);
+    BLOCK_SEEN.lock().resize(n.div_ceil(64), 0);
     let mut cache = CACHE.lock();
     cache.index = [u32::MAX; CACHE_SLOTS];
 }
 
 fn bitmap_set(bitmap: &[u8], index: usize) -> bool {
-    index < BLOCK_SLOTS && (bitmap[index / 8] >> (index % 8)) & 1 != 0
+    let byte = index / 8;
+    byte < bitmap.len() && (bitmap[byte] >> (index % 8)) & 1 != 0
 }
 
-fn extent_bitmap(table: &Table) -> [u8; BITMAP_BYTES] {
-    let mut bits = [0u8; BITMAP_BYTES];
+fn extent_bitmap(table: &Table) -> alloc::vec::Vec<u8> {
+    let n = table.geo.pool_blocks as usize;
+    let mut bits = alloc::vec![0u8; n.div_ceil(8)];
     for obj in &table.objects {
         if obj.kind != KIND_FILE {
             continue;
@@ -1053,7 +1238,7 @@ fn extent_bitmap(table: &Table) -> [u8; BITMAP_BYTES] {
         for ext in obj.extents.iter().take(obj.extent_count as usize) {
             let mut b = ext.start;
             for _ in 0..ext.count {
-                if (b as usize) < BLOCK_SLOTS {
+                if (b as usize) < n {
                     bits[b as usize / 8] |= 1 << (b as usize % 8);
                 }
                 b = b.saturating_add(1);
@@ -1070,7 +1255,7 @@ fn block_lba(index: u32) -> u32 {
 }
 
 /// Writes one dirty block's ciphertext. A diskless pool copies into RAM.
-fn store_block(pool: &mut Pool, index: u32, plain: &[u8; BLOCK_SIZE]) -> bool {
+fn store_block(pool: &mut Pool, index: u32, plain: &[u8; BLOCK_SIZE], domain: u8) -> bool {
     let i = index as usize;
     if i >= pool.blocks as usize {
         return false;
@@ -1086,7 +1271,7 @@ fn store_block(pool: &mut Pool, index: u32, plain: &[u8; BLOCK_SIZE]) -> bool {
     let gen = pool.gen[i];
     let mut cipher = *plain;
     let mut tag = [0u8; TAG_LEN];
-    let ok = galexy_galf::seal_block(&vk, i, gen, &mut cipher, &mut tag);
+    let ok = galexy_galf::seal_block(&vk, domain, i, gen, &mut cipher, &mut tag);
     let mut key = vk;
     wipe_bytes(&mut key);
     if !ok {
@@ -1147,7 +1332,8 @@ fn load_block_bytes(pool: &Pool, index: u32, dst: &mut [u8; BLOCK_SIZE]) -> bool
         let off = n * block::SECTOR;
         dst[off..off + block::SECTOR].copy_from_slice(sector);
     }
-    let ok = gen == pool.gen[i] && galexy_galf::open_block(&vk, i, gen, dst, &tag);
+    let ok = gen == pool.gen[i]
+        && galexy_galf::open_block(&vk, galexy_galf::DOMAIN_DATA, i, gen, dst, &tag);
     let mut key = vk;
     wipe_bytes(&mut key);
     ok
@@ -1159,10 +1345,10 @@ fn cache_drop(cache: &mut BlockCache, slot: usize, pool: &mut Pool) -> bool {
         return true;
     }
     let i = index as usize;
-    if i < BLOCK_SLOTS
+    if i < pool.dirty.len()
         && pool.dirty[i]
         && !pool.sealed[i]
-        && !store_block(pool, index, &cache.data[slot])
+        && !store_block(pool, index, &cache.data[slot], galexy_galf::DOMAIN_DATA)
     {
         return false;
     }
@@ -1203,7 +1389,7 @@ fn seal_dirty_blocks() -> bool {
         let Some(slot) = (0..CACHE_SLOTS).find(|s| cache.index[*s] == i as u32) else {
             return false;
         };
-        if !store_block(&mut pool, i as u32, &cache.data[slot]) {
+        if !store_block(&mut pool, i as u32, &cache.data[slot], galexy_galf::DOMAIN_DATA) {
             return false;
         }
     }
@@ -1212,7 +1398,7 @@ fn seal_dirty_blocks() -> bool {
 
 fn publish_stable() {
     let mut pool = POOL.lock();
-    for i in 0..BLOCK_SLOTS {
+    for i in 0..pool.blocks as usize {
         pool.dirty[i] = false;
         pool.sealed[i] = bitmap_set(&pool.bitmap, i);
         pool.stable[i] = pool.sealed[i];
@@ -1220,6 +1406,7 @@ fn publish_stable() {
             pool.hold[i] -= 1;
         }
     }
+    pool.clock = pool.clock.saturating_add(1).max(1);
 }
 
 /// Live data blocks the pool will allocate.
@@ -1235,7 +1422,7 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
     let mut saw_corrupt_current = false;
     let mut bad_with_magic = 0u32;
     let mut winner_key: Option<[u8; KEY_LEN]> = None;
-    let mut sibling: Option<[u8; BITMAP_BYTES]> = None;
+    let mut sibling: Option<alloc::vec::Vec<u8>> = None;
     let mut clock = 1u32;
     let mut buf = DISK_BUF.lock();
     let mut best = LOAD_BEST.lock();
@@ -1319,7 +1506,13 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
     }
     let mut table = TABLE.lock();
     copy_table(&best, &mut table);
-    install_pool(&table, sibling.as_ref(), clock);
+    install_pool(&table, sibling.as_deref(), clock);
+    if let Some(key) = VOLUME_KEY.lock().as_ref().copied() {
+        let _ = load_inode_blocks(&mut table, &key);
+        let mut wipe = key;
+        wipe_bytes(&mut wipe);
+    }
+    pin_meta_blocks(&table);
     refresh_roots(&table);
     drop(table);
     // The pre-unlock import, if any, addressed the RAM table. Those
@@ -1340,10 +1533,10 @@ pub fn fsck_ok() -> bool {
 }
 
 fn copy_table(src: &Table, dst: &mut Table) {
-    // SAFETY: distinct Mutex-owned tables; Table is plain data.
-    unsafe {
-        core::ptr::copy_nonoverlapping(src as *const Table, dst as *mut Table, 1);
-    }
+    dst.actors = src.actors;
+    dst.shares = src.shares;
+    dst.geo = src.geo;
+    dst.objects.clone_from(&src.objects);
 }
 
 /// Iteration count written by `format` and `passwd` on this boot.
@@ -1370,6 +1563,328 @@ fn refresh_roots(table: &Table) {
     ADMIN_ROOT.store(admin, Ordering::Relaxed);
 }
 
+fn export_actor(actor: &Actor) -> galexy_galf::Actor {
+    galexy_galf::Actor {
+        used: actor.used,
+        name: actor.name,
+        name_len: actor.name_len,
+        root: actor.root,
+        salt: actor.salt,
+        pass_hash: actor.pass_hash,
+        kdf_iters: actor.kdf_iters,
+        max_objects: actor.max_objects,
+        max_bytes: actor.max_bytes,
+    }
+}
+
+fn import_actor(actor: &galexy_galf::Actor) -> Actor {
+    Actor {
+        used: actor.used,
+        name: actor.name,
+        name_len: actor.name_len,
+        root: actor.root,
+        salt: actor.salt,
+        pass_hash: actor.pass_hash,
+        kdf_iters: actor.kdf_iters,
+        max_objects: actor.max_objects,
+        max_bytes: actor.max_bytes,
+        used_objects: 0,
+        used_bytes: 0,
+    }
+}
+
+fn export_share(share: &Share) -> galexy_galf::Share {
+    galexy_galf::Share {
+        used: share.used,
+        rights: share.rights,
+        grantee: share.grantee,
+        object: share.object,
+    }
+}
+
+fn export_object(obj: &Object) -> galexy_galf::Object {
+    galexy_galf::Object {
+        kind: obj.kind,
+        parent: obj.parent,
+        actor: obj.actor,
+        name: obj.name,
+        name_len: obj.name_len,
+        len: obj.len,
+        extent_count: obj.extent_count,
+        extents: obj.extents,
+        child: obj.child,
+        next: obj.next,
+    }
+}
+
+fn import_object(obj: galexy_galf::Object) -> Object {
+    Object {
+        kind: obj.kind,
+        parent: obj.parent,
+        actor: obj.actor,
+        name: obj.name,
+        name_len: obj.name_len,
+        len: obj.len,
+        extent_count: obj.extent_count,
+        extents: obj.extents,
+        child: obj.child,
+        next: obj.next,
+    }
+}
+
+/// Where the previous commit left inode and map blocks.
+struct MetaLoc {
+    inode_at: alloc::vec::Vec<u32>,
+    inode_gen: alloc::vec::Vec<u32>,
+}
+
+static META_LOC: Mutex<MetaLoc> = Mutex::new(MetaLoc {
+    inode_at: alloc::vec::Vec::new(),
+    inode_gen: alloc::vec::Vec::new(),
+});
+
+fn read_pool_plain(index: u32, gen: u32, domain: u8, key: &[u8; KEY_LEN]) -> Option<[u8; BLOCK_SIZE]> {
+    let mut tag_sector = [[0u8; block::SECTOR]; 1];
+    let mut data = [[0u8; block::SECTOR]; 8];
+    let lba = block_lba(index);
+    if disk().read_sectors(lba, &mut tag_sector).is_err()
+        || disk().read_sectors(lba + 1, &mut data).is_err()
+    {
+        return None;
+    }
+    let stored = u32::from_le_bytes([
+        tag_sector[0][0],
+        tag_sector[0][1],
+        tag_sector[0][2],
+        tag_sector[0][3],
+    ]);
+    if stored != gen {
+        return None;
+    }
+    let mut tag = [0u8; TAG_LEN];
+    tag.copy_from_slice(&tag_sector[0][4..4 + TAG_LEN]);
+    let mut block = [0u8; BLOCK_SIZE];
+    for (n, sector) in data.iter().enumerate() {
+        let off = n * block::SECTOR;
+        block[off..off + block::SECTOR].copy_from_slice(sector);
+    }
+    if !galexy_galf::open_block(key, domain, index as usize, gen, &mut block, &tag) {
+        return None;
+    }
+    Some(block)
+}
+
+fn load_inode_blocks(table: &mut Table, key: &[u8; KEY_LEN]) -> bool {
+    let slots = table.geo.inode_slots as usize;
+    if slots == 0 || slots > OBJECT_SLOTS {
+        return false;
+    }
+    table.objects.resize(slots, Object::empty());
+    let mut loc = META_LOC.lock();
+    loc.inode_at.clear();
+    loc.inode_gen.clear();
+    let map_len = table.geo.map_len as usize;
+    if map_len == 0 {
+        return true;
+    }
+    for m in 0..map_len.min(galexy_galf::MAP_POINTERS) {
+        let gen = table.geo.map_gen[m];
+        let index = table.geo.map_at[m];
+        if gen == 0 {
+            continue;
+        }
+        let Some(map_plain) = read_pool_plain(index, gen, galexy_galf::DOMAIN_MAP, key) else {
+            return false;
+        };
+        for e in 0..galexy_galf::MAP_PER_BLOCK {
+            let ib = m * galexy_galf::MAP_PER_BLOCK + e;
+            let off = e * 8;
+            let at = u32::from_le_bytes(map_plain[off..off + 4].try_into().unwrap_or([0; 4]));
+            let igen = u32::from_le_bytes(map_plain[off + 4..off + 8].try_into().unwrap_or([0; 4]));
+            if loc.inode_at.len() <= ib {
+                loc.inode_at.resize(ib + 1, 0);
+                loc.inode_gen.resize(ib + 1, 0);
+            }
+            loc.inode_at[ib] = at;
+            loc.inode_gen[ib] = igen;
+            if igen == 0 {
+                continue;
+            }
+            let Some(plain) = read_pool_plain(at, igen, galexy_galf::DOMAIN_INODE, key) else {
+                return false;
+            };
+            for n in 0..galexy_galf::INODES_PER_BLOCK {
+                let id = ib * galexy_galf::INODES_PER_BLOCK + n;
+                if id >= slots {
+                    break;
+                }
+                let ioff = n * galexy_galf::INODE_ON_DISK;
+                let Some(obj) = galexy_galf::read_inode(&plain[ioff..]) else {
+                    return false;
+                };
+                table.objects[id] = import_object(obj);
+            }
+        }
+    }
+    true
+}
+
+fn drop_cache_line(index: u32) {
+    let mut pool = POOL.lock();
+    if (index as usize) < pool.dirty.len() {
+        pool.dirty[index as usize] = false;
+        pool.sealed[index as usize] = true;
+    }
+    drop(pool);
+    let mut cache = CACHE.lock();
+    for slot in &mut cache.index {
+        if *slot == index {
+            *slot = u32::MAX;
+        }
+    }
+}
+
+/// Writes inode blocks that hold a live name, then the map block they live in.
+fn flush_inodes(table: &mut Table) -> bool {
+    if !POOL.lock().disk {
+        return true;
+    }
+    let slots = table.objects.len();
+    let per = galexy_galf::INODES_PER_BLOCK;
+    let blocks = slots.div_ceil(per);
+    let mut any = false;
+    for ib in 0..blocks {
+        let base = ib * per;
+        let live = (0..per).any(|n| base + n < slots && table.objects[base + n].kind != KIND_EMPTY);
+        if !live {
+            continue;
+        }
+        let mut plain = [0u8; BLOCK_SIZE];
+        for n in 0..per {
+            let id = base + n;
+            if id >= slots {
+                break;
+            }
+            let exported = export_object(&table.objects[id]);
+            galexy_galf::write_inode(
+                &mut plain[n * galexy_galf::INODE_ON_DISK..],
+                &exported,
+            );
+        }
+        let (old_at, old_gen) = {
+            let loc = META_LOC.lock();
+            (
+                loc.inode_at.get(ib).copied().unwrap_or(0),
+                loc.inode_gen.get(ib).copied().unwrap_or(0),
+            )
+        };
+        let reuse = old_gen != 0 && !POOL.lock().stable.get(old_at as usize).copied().unwrap_or(true);
+        let index = if reuse {
+            old_at
+        } else {
+            let Some(fresh) = alloc_block() else {
+                return false;
+            };
+            if old_gen != 0 {
+                free_block(old_at);
+            }
+            fresh
+        };
+        let gen = POOL.lock().gen.get(index as usize).copied().unwrap_or(0);
+        if gen == 0 {
+            return false;
+        }
+        {
+            let mut pool = POOL.lock();
+            if !store_block(&mut pool, index, &plain, galexy_galf::DOMAIN_INODE) {
+                return false;
+            }
+        }
+        drop_cache_line(index);
+        {
+            let mut loc = META_LOC.lock();
+            if loc.inode_at.len() <= ib {
+                loc.inode_at.resize(ib + 1, 0);
+                loc.inode_gen.resize(ib + 1, 0);
+            }
+            loc.inode_at[ib] = index;
+            loc.inode_gen[ib] = gen;
+        }
+        any = true;
+    }
+    if !any {
+        return true;
+    }
+    let span = galexy_galf::MAP_POINTERS * galexy_galf::MAP_PER_BLOCK;
+    if blocks > span {
+        return false;
+    }
+    let old_at = table.geo.map_at;
+    let old_gen = table.geo.map_gen;
+    let old_len = table.geo.map_len as usize;
+    let mut highest = 0usize;
+    {
+        let loc = META_LOC.lock();
+        for (ib, gen) in loc.inode_gen.iter().take(blocks).copied().enumerate() {
+            if gen != 0 {
+                highest = ib / galexy_galf::MAP_PER_BLOCK + 1;
+            }
+        }
+    }
+    let map_count = highest.min(galexy_galf::MAP_POINTERS);
+    for m in 0..map_count {
+        let mut map = [0u8; BLOCK_SIZE];
+        {
+            let loc = META_LOC.lock();
+            for e in 0..galexy_galf::MAP_PER_BLOCK {
+                let ib = m * galexy_galf::MAP_PER_BLOCK + e;
+                if ib >= loc.inode_gen.len() || loc.inode_gen[ib] == 0 {
+                    continue;
+                }
+                let off = e * 8;
+                map[off..off + 4].copy_from_slice(&loc.inode_at[ib].to_le_bytes());
+                map[off + 4..off + 8].copy_from_slice(&loc.inode_gen[ib].to_le_bytes());
+            }
+        }
+        let reuse = m < old_len
+            && old_gen[m] != 0
+            && !POOL.lock().stable.get(old_at[m] as usize).copied().unwrap_or(true);
+        let index = if reuse {
+            old_at[m]
+        } else {
+            let Some(fresh) = alloc_block() else {
+                return false;
+            };
+            if m < old_len && old_gen[m] != 0 {
+                free_block(old_at[m]);
+            }
+            fresh
+        };
+        let gen = POOL.lock().gen.get(index as usize).copied().unwrap_or(0);
+        if gen == 0 {
+            return false;
+        }
+        {
+            let mut pool = POOL.lock();
+            if !store_block(&mut pool, index, &map, galexy_galf::DOMAIN_MAP) {
+                return false;
+            }
+        }
+        drop_cache_line(index);
+        table.geo.map_at[m] = index;
+        table.geo.map_gen[m] = gen;
+    }
+    for m in map_count..old_len.min(galexy_galf::MAP_POINTERS) {
+        if old_gen[m] != 0 {
+            free_block(old_at[m]);
+        }
+        table.geo.map_at[m] = 0;
+        table.geo.map_gen[m] = 0;
+    }
+    table.geo.map_len = map_count as u32;
+    true
+}
+
 fn encode_table(
     table: &Table,
     generation: u64,
@@ -1394,54 +1909,34 @@ fn encode_table(
     flat[0..4].copy_from_slice(&DISK_MAGIC);
     flat[4..6].copy_from_slice(&DISK_VERSION.to_le_bytes());
     flat[6..8].copy_from_slice(&(ACTOR_SLOTS as u16).to_le_bytes());
-    flat[8..10].copy_from_slice(&(OBJECT_SLOTS as u16).to_le_bytes());
-    flat[10..14].copy_from_slice(&(FILE_BYTES as u32).to_le_bytes());
+    flat[8..10].copy_from_slice(&(SHARE_SLOTS as u16).to_le_bytes());
     flat[14] = 1; // sealed
     flat[16..24].copy_from_slice(&generation.to_le_bytes());
-    flat[28..32].copy_from_slice(&table.pool_blocks.to_le_bytes());
 
-    let mut off = DISK_HEADER;
+    galexy_galf::write_geometry(
+        &mut flat[DISK_HEADER..DISK_HEADER + galexy_galf::GEOMETRY_ON_DISK],
+        &table.geo,
+    );
+    let mut off = DISK_HEADER + galexy_galf::GEOMETRY_ON_DISK;
     for actor in &table.actors {
-        flat[off] = u8::from(actor.used);
-        flat[off + 1] = actor.name_len;
-        flat[off + 2..off + 2 + ACTOR_NAME].copy_from_slice(&actor.name);
-        flat[off + 2 + ACTOR_NAME..off + 4 + ACTOR_NAME].copy_from_slice(&actor.root.to_le_bytes());
-        let salt_off = off + 4 + ACTOR_NAME;
-        flat[salt_off..salt_off + SALT_LEN].copy_from_slice(&actor.salt);
-        flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN].copy_from_slice(&actor.pass_hash);
-        let koff = salt_off + SALT_LEN + HASH_LEN;
-        flat[koff..koff + 4].copy_from_slice(&actor.kdf_iters.to_le_bytes());
-        let qoff = koff + 4;
-        flat[qoff..qoff + 2].copy_from_slice(&actor.max_objects.to_le_bytes());
-        flat[qoff + 2..qoff + 6].copy_from_slice(&actor.max_bytes.to_le_bytes());
+        galexy_galf::write_actor(&mut flat[off..off + ACTOR_ON_DISK], &export_actor(actor));
         off += ACTOR_ON_DISK;
     }
-    for obj in &table.objects {
-        flat[off] = obj.kind;
-        flat[off + 1] = obj.actor;
-        flat[off + 2] = obj.name_len;
-        flat[off + 3] = obj.extent_count;
-        flat[off + 4..off + 6].copy_from_slice(&obj.parent.to_le_bytes());
-        flat[off + 6..off + 8].copy_from_slice(&obj.child.to_le_bytes());
-        flat[off + 8..off + 10].copy_from_slice(&obj.next.to_le_bytes());
-        flat[off + 12..off + 16].copy_from_slice(&obj.len.to_le_bytes());
-        flat[off + 16..off + 16 + NAME_CAP].copy_from_slice(&obj.name);
-        for (e, ext) in obj.extents.iter().enumerate() {
-            let eo = off + 16 + NAME_CAP + e * 8;
-            flat[eo..eo + 4].copy_from_slice(&ext.start.to_le_bytes());
-            flat[eo + 4..eo + 8].copy_from_slice(&ext.count.to_le_bytes());
-        }
-        off += OBJECT_ON_DISK;
-    }
     for share in &table.shares {
-        flat[off] = u8::from(share.used);
-        flat[off + 1] = share.rights;
-        flat[off + 2] = share.grantee;
-        flat[off + 3] = 0;
-        flat[off + 4..off + 6].copy_from_slice(&share.object.to_le_bytes());
+        galexy_galf::write_share(&mut flat[off..off + SHARE_ON_DISK], &export_share(share));
         off += SHARE_ON_DISK;
     }
-    debug_assert_eq!(off, DISK_HEADER + PAYLOAD_LEN);
+    galexy_galf::write_free(
+        &mut flat[off..off + galexy_galf::FREE_EXTENTS * 12],
+        &table.geo.free,
+    );
+    off += galexy_galf::FREE_EXTENTS * 12;
+    galexy_galf::write_map_ptrs(
+        &mut flat[off..off + galexy_galf::MAP_POINTERS * 8],
+        &table.geo.map_at,
+        &table.geo.map_gen,
+    );
+    debug_assert_eq!(off + galexy_galf::MAP_POINTERS * 8, DISK_HEADER + PAYLOAD_LEN);
     debug_assert!(off <= flat.len());
 
     let aad = seal_aad(generation);
@@ -1513,15 +2008,8 @@ fn decode_table(
     }
     let version = u16::from_le_bytes([flat[4], flat[5]]);
     let actors = u16::from_le_bytes([flat[6], flat[7]]) as usize;
-    let objects = u16::from_le_bytes([flat[8], flat[9]]) as usize;
-    let file_bytes = u32::from_le_bytes(flat[10..14].try_into().ok()?) as usize;
-    let pool_blocks = u32::from_le_bytes(flat[28..32].try_into().ok()?);
-    if version != DISK_VERSION
-        || actors != ACTOR_SLOTS
-        || objects != OBJECT_SLOTS
-        || file_bytes != FILE_BYTES
-        || pool_blocks > BLOCK_SLOTS as u32
-        || flat[14] & 1 == 0
+    let shares_n = u16::from_le_bytes([flat[8], flat[9]]) as usize;
+    if version != DISK_VERSION || actors != ACTOR_SLOTS || shares_n != SHARE_SLOTS || flat[14] & 1 == 0
     {
         return None;
     }
@@ -1561,119 +2049,54 @@ fn decode_table(
         return None;
     }
 
-    let mut off = DISK_HEADER;
+    let geo = galexy_galf::read_geometry_head(&flat[DISK_HEADER..])?;
+    table.geo = geo;
+    let mut off = DISK_HEADER + galexy_galf::GEOMETRY_ON_DISK;
     for actor in &mut table.actors {
-        *actor = Actor::empty();
-        actor.used = flat[off] != 0;
-        actor.name_len = flat[off + 1].min(ACTOR_NAME as u8);
-        actor
-            .name
-            .copy_from_slice(&flat[off + 2..off + 2 + ACTOR_NAME]);
-        actor.root = u16::from_le_bytes([flat[off + 2 + ACTOR_NAME], flat[off + 3 + ACTOR_NAME]]);
-        let salt_off = off + 4 + ACTOR_NAME;
-        actor
-            .salt
-            .copy_from_slice(&flat[salt_off..salt_off + SALT_LEN]);
-        actor
-            .pass_hash
-            .copy_from_slice(&flat[salt_off + SALT_LEN..salt_off + SALT_LEN + HASH_LEN]);
-        let koff = salt_off + SALT_LEN + HASH_LEN;
-        actor.kdf_iters =
-            u32::from_le_bytes([flat[koff], flat[koff + 1], flat[koff + 2], flat[koff + 3]]);
-        let qoff = koff + 4;
-        actor.max_objects = u16::from_le_bytes([flat[qoff], flat[qoff + 1]]);
-        actor.max_bytes = u32::from_le_bytes([
-            flat[qoff + 2],
-            flat[qoff + 3],
-            flat[qoff + 4],
-            flat[qoff + 5],
-        ]);
+        let got = galexy_galf::read_actor(&flat[off..])?;
+        *actor = import_actor(&got);
         off += ACTOR_ON_DISK;
     }
-    for obj in &mut table.objects {
-        *obj = Object::empty();
-        obj.kind = flat[off];
-        obj.actor = flat[off + 1];
-        obj.name_len = flat[off + 2].min(NAME_CAP as u8);
-        obj.extent_count = flat[off + 3].min(EXTENTS_PER_FILE as u8);
-        obj.parent = u16::from_le_bytes([flat[off + 4], flat[off + 5]]);
-        obj.child = u16::from_le_bytes([flat[off + 6], flat[off + 7]]);
-        obj.next = u16::from_le_bytes([flat[off + 8], flat[off + 9]]);
-        obj.len = u32::from_le_bytes([
-            flat[off + 12],
-            flat[off + 13],
-            flat[off + 14],
-            flat[off + 15],
-        ]);
-        obj.name
-            .copy_from_slice(&flat[off + 16..off + 16 + NAME_CAP]);
-        for (e, ext) in obj.extents.iter_mut().enumerate() {
-            let eo = off + 16 + NAME_CAP + e * 8;
-            ext.start = u32::from_le_bytes([flat[eo], flat[eo + 1], flat[eo + 2], flat[eo + 3]]);
-            ext.count =
-                u32::from_le_bytes([flat[eo + 4], flat[eo + 5], flat[eo + 6], flat[eo + 7]]);
-        }
-        if obj.len as usize > FILE_BYTES {
-            let mut gone = vk;
-            wipe_bytes(&mut gone);
-            return None;
-        }
-        off += OBJECT_ON_DISK;
-    }
     for share in &mut table.shares {
-        *share = Share::empty();
-        share.used = flat[off] != 0;
-        share.rights = flat[off + 1];
-        share.grantee = flat[off + 2];
-        share.object = u16::from_le_bytes([flat[off + 4], flat[off + 5]]);
+        let got = galexy_galf::read_share(&flat[off..])?;
+        *share = Share {
+            used: got.used,
+            grantee: got.grantee,
+            rights: got.rights,
+            object: got.object,
+        };
         off += SHARE_ON_DISK;
     }
-    table.pool_blocks = pool_blocks;
+    if !galexy_galf::read_free(&flat[off..], &mut table.geo.free) {
+        let mut gone = vk;
+        wipe_bytes(&mut gone);
+        return None;
+    }
+    off += galexy_galf::FREE_EXTENTS * 12;
+    if !galexy_galf::read_map_ptrs(&flat[off..], &mut table.geo.map_at, &mut table.geo.map_gen) {
+        let mut gone = vk;
+        wipe_bytes(&mut gone);
+        return None;
+    }
+    table.objects.resize(table.geo.inode_slots as usize, Object::empty());
+    if !load_inode_blocks(table, &vk) {
+        let mut gone = vk;
+        wipe_bytes(&mut gone);
+        return None;
+    }
     Some((generation, vk))
 }
 
-fn open_disk_block(index: u32, volume_key: &[u8; KEY_LEN]) -> bool {
-    let mut tag_sector = [[0u8; block::SECTOR]; 1];
-    let mut data = [[0u8; block::SECTOR]; 8];
-    let lba = block_lba(index);
-    let dev = disk();
-    if dev.read_sectors(lba, &mut tag_sector).is_err()
-        || dev.read_sectors(lba + 1, &mut data).is_err()
-    {
-        return false;
-    }
-    let gen = u32::from_le_bytes([
-        tag_sector[0][0],
-        tag_sector[0][1],
-        tag_sector[0][2],
-        tag_sector[0][3],
-    ]);
-    let mut tag = [0u8; TAG_LEN];
-    tag.copy_from_slice(&tag_sector[0][4..4 + TAG_LEN]);
-    let mut block = [0u8; BLOCK_SIZE];
-    for (n, sector) in data.iter().enumerate() {
-        let off = n * block::SECTOR;
-        block[off..off + block::SECTOR].copy_from_slice(sector);
-    }
-    let ok = galexy_galf::open_block(volume_key, index as usize, gen, &mut block, &tag);
-    wipe_bytes(&mut block);
-    ok
-}
-
 fn verify_slot_blocks(table: &Table, volume_key: &[u8; KEY_LEN]) -> bool {
+    let _ = volume_key;
     for obj in &table.objects {
         if obj.kind != KIND_FILE {
             continue;
         }
         for ext in obj.extents.iter().take(obj.extent_count as usize) {
             let end = ext.start.saturating_add(ext.count);
-            if ext.count == 0 || end > table.pool_blocks {
+            if ext.count == 0 || ext.gen == 0 || end > table.geo.pool_blocks {
                 return false;
-            }
-            for b in ext.start..end {
-                if !open_disk_block(b, volume_key) {
-                    return false;
-                }
             }
         }
     }
@@ -1682,38 +2105,71 @@ fn verify_slot_blocks(table: &Table, volume_key: &[u8; KEY_LEN]) -> bool {
 
 /// Marks committed blocks stable and reserves indexes the sibling slot
 /// still names, so the next commit can replace that slot before reuse.
-fn install_pool(table: &Table, sibling: Option<&[u8; BITMAP_BYTES]>, clock: u32) {
+fn pin_meta_blocks(table: &Table) {
+    let loc = META_LOC.lock();
+    let inodes: alloc::vec::Vec<(u32, u32)> = loc
+        .inode_at
+        .iter()
+        .copied()
+        .zip(loc.inode_gen.iter().copied())
+        .collect();
+    drop(loc);
     let mut pool = POOL.lock();
-    pool.disk = true;
-    pool.blocks = table.pool_blocks.min(BLOCK_SLOTS as u32);
-    pool.bitmap = extent_bitmap(table);
-    pool.dirty = [false; BLOCK_SLOTS];
-    pool.sealed = [false; BLOCK_SLOTS];
-    pool.stable = [false; BLOCK_SLOTS];
-    pool.hold = [0; BLOCK_SLOTS];
-    pool.gen = [0; BLOCK_SLOTS];
-    let mut next = clock.max(1);
-    for i in 0..pool.blocks as usize {
-        if !bitmap_set(&pool.bitmap, i) {
-            continue;
+    let pin = |pool: &mut Pool, at: u32, gen: u32| {
+        if gen == 0 {
+            return;
         }
-        let mut tag_sector = [[0u8; block::SECTOR]; 1];
-        if disk()
-            .read_sectors(block_lba(i as u32), &mut tag_sector)
-            .is_err()
-        {
-            continue;
+        let i = at as usize;
+        if i >= pool.blocks as usize || i / 8 >= pool.bitmap.len() {
+            return;
         }
-        let gen = u32::from_le_bytes([
-            tag_sector[0][0],
-            tag_sector[0][1],
-            tag_sector[0][2],
-            tag_sector[0][3],
-        ]);
+        pool.bitmap[i / 8] |= 1 << (i % 8);
         pool.gen[i] = gen;
         pool.stable[i] = true;
         pool.sealed[i] = true;
-        next = next.max(gen.saturating_add(1));
+        pool.clock = pool.clock.max(gen.saturating_add(1));
+    };
+    for (at, gen) in inodes {
+        pin(&mut pool, at, gen);
+    }
+    for m in 0..table.geo.map_len as usize {
+        pin(&mut pool, table.geo.map_at[m], table.geo.map_gen[m]);
+    }
+}
+
+fn install_pool(table: &Table, sibling: Option<&[u8]>, clock: u32) {
+    let mut pool = POOL.lock();
+    pool.disk = true;
+    pool.blocks = table.geo.pool_blocks;
+    let n = pool.blocks as usize;
+    pool.bitmap = extent_bitmap(table);
+    pool.dirty.clear();
+    pool.dirty.resize(n, false);
+    pool.sealed.clear();
+    pool.sealed.resize(n, false);
+    pool.stable.clear();
+    pool.stable.resize(n, false);
+    pool.hold.clear();
+    pool.hold.resize(n, 0);
+    pool.gen.clear();
+    pool.gen.resize(n, 0);
+    let mut next = clock.max(1);
+    for obj in &table.objects {
+        if obj.kind != KIND_FILE {
+            continue;
+        }
+        for ext in obj.extents.iter().take(obj.extent_count as usize) {
+            let mut b = ext.start;
+            for _ in 0..ext.count {
+                if (b as usize) < n && ext.gen != 0 {
+                    pool.gen[b as usize] = ext.gen;
+                    pool.stable[b as usize] = true;
+                    pool.sealed[b as usize] = true;
+                    next = next.max(ext.gen.saturating_add(1));
+                }
+                b = b.saturating_add(1);
+            }
+        }
     }
     if let Some(sib) = sibling {
         for i in 0..pool.blocks as usize {
@@ -1739,7 +2195,7 @@ fn validate_table(table: &Table) -> bool {
             return false;
         }
         let root = actor.root as usize;
-        if root >= OBJECT_SLOTS {
+        if root >= table.objects.len() {
             return false;
         }
         let obj = &table.objects[root];
@@ -1760,13 +2216,18 @@ fn validate_table(table: &Table) -> bool {
         if share.rights == 0
             || share.grantee as usize >= ACTOR_SLOTS
             || !table.actors[share.grantee as usize].used
-            || share.object as usize >= OBJECT_SLOTS
+            || share.object as usize >= table.objects.len()
             || table.objects[share.object as usize].kind == KIND_EMPTY
         {
             return false;
         }
     }
-    let mut seen = [0u64; BLOCK_SLOTS / 64];
+    let mut seen = BLOCK_SEEN.lock();
+    let words = (table.geo.pool_blocks as usize).div_ceil(64).max(1);
+    if seen.len() < words {
+        seen.resize(words, 0);
+    }
+    seen[..words].fill(0);
     for (i, obj) in table.objects.iter().enumerate() {
         if obj.kind == KIND_EMPTY {
             continue;
@@ -1779,12 +2240,12 @@ fn validate_table(table: &Table) -> bool {
         }
         if obj.parent == NO_PARENT {
             // Must be some actor's root.
-            if !table.actors.iter().any(|a| a.used && a.root == i as u16) {
+            if !table.actors.iter().any(|a| a.used && a.root == i as u32) {
                 return false;
             }
         } else {
             let parent = obj.parent as usize;
-            if parent >= OBJECT_SLOTS || parent == i {
+            if parent >= table.objects.len() || parent == i {
                 return false;
             }
             if table.objects[parent].kind != KIND_DIR {
@@ -1792,21 +2253,21 @@ fn validate_table(table: &Table) -> bool {
             }
             // Walk to root; refuse cycles.
             let mut cur = obj.parent;
-            for _ in 0..OBJECT_SLOTS {
-                if cur == i as u16 {
+            for _ in 0..table.objects.len() {
+                if cur == i as u32 {
                     return false;
                 }
                 let p = table.objects[cur as usize].parent;
                 if p == NO_PARENT {
                     break;
                 }
-                if p as usize >= OBJECT_SLOTS {
+                if p as usize >= table.objects.len() {
                     return false;
                 }
                 cur = p;
             }
         }
-        if !validate_object_blocks(table, obj, &mut seen) {
+        if !validate_object_blocks(table, obj, &mut seen[..]) {
             return false;
         }
     }
@@ -1816,8 +2277,14 @@ fn validate_table(table: &Table) -> bool {
 /// Sibling lists are the directory. Parent pointers are what cards walk.
 /// The two have to name the same children, with no cycles and no orphans.
 fn directories_ok(table: &Table) -> bool {
-    let mut seen = [false; OBJECT_SLOTS];
-    for i in 0..OBJECT_SLOTS {
+    let n = table.objects.len();
+    let mut bits = DIR_SEEN.lock();
+    let words = n.div_ceil(64);
+    if bits.len() < words {
+        bits.resize(words, 0);
+    }
+    bits[..words].fill(0);
+    for i in 0..n {
         let obj = &table.objects[i];
         if obj.kind == KIND_EMPTY {
             continue;
@@ -1831,17 +2298,17 @@ fn directories_ok(table: &Table) -> bool {
         let mut child = obj.child;
         let mut guard = 0usize;
         while child != NO_OBJECT {
-            if child as usize >= OBJECT_SLOTS || seen[child as usize] {
+            if child as usize >= n || bits[child as usize / 64] & (1u64 << (child % 64)) != 0 {
                 return false;
             }
-            seen[child as usize] = true;
+            bits[child as usize / 64] |= 1u64 << (child % 64);
             let entry = &table.objects[child as usize];
-            if entry.kind == KIND_EMPTY || entry.parent != i as u16 {
+            if entry.kind == KIND_EMPTY || entry.parent != i as u32 {
                 return false;
             }
             child = entry.next;
             guard += 1;
-            if guard > OBJECT_SLOTS {
+            if guard > table.objects.len() {
                 return false;
             }
         }
@@ -1856,7 +2323,7 @@ fn directories_ok(table: &Table) -> bool {
             }
             continue;
         }
-        if !seen[i] {
+        if bits[i / 64] & (1u64 << (i % 64)) == 0 {
             return false;
         }
     }
@@ -1864,7 +2331,7 @@ fn directories_ok(table: &Table) -> bool {
 }
 
 fn mark_block(seen: &mut [u64], block: u32, pool: u32) -> bool {
-    if block >= pool || block as usize >= BLOCK_SLOTS {
+    if block >= pool || (block as usize) / 64 >= seen.len() {
         return false;
     }
     let i = block as usize;
@@ -1880,7 +2347,7 @@ fn validate_object_blocks(table: &Table, obj: &Object, seen: &mut [u64]) -> bool
     if obj.kind != KIND_FILE {
         return obj.len == 0 && obj.extent_count == 0;
     }
-    if obj.len as usize > FILE_BYTES || obj.extent_count as usize > EXTENTS_PER_FILE {
+    if obj.len > table.geo.file_max.max(1) || obj.extent_count as usize > EXTENTS_PER_FILE {
         return false;
     }
     let need = (obj.len as usize).div_ceil(BLOCK_SIZE);
@@ -1892,7 +2359,7 @@ fn validate_object_blocks(table: &Table, obj: &Object, seen: &mut [u64]) -> bool
         covered += u64::from(ext.count);
         let mut b = ext.start;
         for _ in 0..ext.count {
-            if !mark_block(seen, b, table.pool_blocks) {
+            if !mark_block(seen, b, table.geo.pool_blocks) {
                 return false;
             }
             b = b.saturating_add(1);
@@ -1912,16 +2379,16 @@ fn sectors_flat_mut(sectors: &mut [[u8; block::SECTOR]; DISK_SECTORS]) -> &mut [
 }
 
 /// True when `index` is `root` or a descendant of it.
-pub fn belongs_to_root(index: u16, root: u16) -> bool {
+pub fn belongs_to_root(index: u32, root: u32) -> bool {
     let table = TABLE.lock();
     covers_object(&table, root, index)
 }
 
 /// Object indices that make up an actor's tree (root first). At most a
 /// handful for the empty-delete path (root + optional Desktop).
-pub fn collect_actor_objects(root: u16, out: &mut [u16]) -> usize {
+pub fn collect_actor_objects(root: u32, out: &mut [u32]) -> usize {
     let table = TABLE.lock();
-    if root as usize >= OBJECT_SLOTS || table.objects[root as usize].kind == KIND_EMPTY {
+    if root as usize >= table.objects.len() || table.objects[root as usize].kind == KIND_EMPTY {
         return 0;
     }
     let mut n = 0usize;
@@ -1934,7 +2401,7 @@ pub fn collect_actor_objects(root: u16, out: &mut [u16]) -> usize {
             continue;
         }
         if n < out.len() {
-            out[n] = i as u16;
+            out[n] = i as u32;
             n += 1;
         }
     }
@@ -1956,19 +2423,19 @@ pub fn unauth_cred() -> FsCred {
 }
 
 /// Admin's actor root object index.
-pub fn admin_root() -> u16 {
+pub fn admin_root() -> u32 {
     ADMIN_ROOT.load(Ordering::Relaxed)
 }
 
 /// Whether `root` is the immortal admin actor root.
-pub fn is_admin_root(root: u16) -> bool {
+pub fn is_admin_root(root: u32) -> bool {
     root != NO_OBJECT && root == ADMIN_ROOT.load(Ordering::Relaxed)
 }
 
 /// Writes the actor name for `root` into `out`. Returns the byte count.
 ///
 /// [`NO_OBJECT`] (logged out) is [`SysError::AccessDenied`].
-pub fn name_of_root(root: u16, out: &mut [u8]) -> Result<usize, SysError> {
+pub fn name_of_root(root: u32, out: &mut [u8]) -> Result<usize, SysError> {
     if root == NO_OBJECT {
         return Err(SysError::AccessDenied);
     }
@@ -1999,13 +2466,13 @@ pub fn for_each_actor(mut each: impl FnMut(&[u8])) {
 }
 
 /// Looks up an actor's root by name.
-pub fn root_named(name: &str) -> Result<u16, SysError> {
+pub fn root_named(name: &str) -> Result<u32, SysError> {
     let table = TABLE.lock();
     find_actor_root(&table, name)
 }
 
 /// Creates an actor and an empty Desktop. Returns the new root.
-pub fn add_user(name: &str, password: &[u8]) -> Result<u16, SysError> {
+pub fn add_user(name: &str, password: &[u8]) -> Result<u32, SysError> {
     if name == ADMIN_NAME {
         return Err(SysError::Unsupported);
     }
@@ -2101,13 +2568,13 @@ pub fn remove_user(name: &str) -> Result<(), SysError> {
         if desktop.is_some() {
             return Err(SysError::Unsupported);
         }
-        if obj.kind != KIND_DIR || !obj.name_is("Desktop") || has_child(&table, i as u16) {
+        if obj.kind != KIND_DIR || !obj.name_is("Desktop") || has_child(&table, i as u32) {
             return Err(SysError::Unsupported);
         }
         desktop = Some(i);
     }
     if let Some(di) = desktop {
-        unlink_child(&mut table, root, di as u16);
+        unlink_child(&mut table, root, di as u32);
         table.objects[di] = Object::empty();
     }
     table.objects[root as usize] = Object::empty();
@@ -2132,7 +2599,7 @@ pub fn remove_user(name: &str) -> Result<(), SysError> {
 /// Re-applied at login. Caller must already hold `rights` on the object
 /// (same confused-deputy rule as live `grant`).
 pub fn add_share(
-    root: u16,
+    root: u32,
     tokens: &[Token; TOKEN_SLOTS],
     path: &str,
     rights: u8,
@@ -2175,7 +2642,7 @@ pub fn add_share(
 
 /// Clears durable share rights for actor `grantee` on `path`.
 pub fn remove_share(
-    root: u16,
+    root: u32,
     tokens: &[Token; TOKEN_SLOTS],
     path: &str,
     rights: u8,
@@ -2214,9 +2681,9 @@ pub fn remove_share(
 /// Installs durable shares for the actor that owns `root` into `tokens`.
 ///
 /// Best-effort: a full token table skips remaining shares (`Ok` still).
-pub fn apply_shares(root: u16, tokens: &mut [Token; TOKEN_SLOTS]) -> Result<(), SysError> {
+pub fn apply_shares(root: u32, tokens: &mut [Token; TOKEN_SLOTS]) -> Result<(), SysError> {
     let table = TABLE.lock();
-    if root as usize >= OBJECT_SLOTS || table.objects[root as usize].kind != KIND_DIR {
+    if root as usize >= table.objects.len() || table.objects[root as usize].kind != KIND_DIR {
         return Err(SysError::NotFound);
     }
     let ai = table.objects[root as usize].actor as usize;
@@ -2227,7 +2694,7 @@ pub fn apply_shares(root: u16, tokens: &mut [Token; TOKEN_SLOTS]) -> Result<(), 
         if !share.used || share.grantee as usize != ai {
             continue;
         }
-        if share.object as usize >= OBJECT_SLOTS
+        if share.object as usize >= table.objects.len()
             || table.objects[share.object as usize].kind == KIND_EMPTY
         {
             continue;
@@ -2239,14 +2706,14 @@ pub fn apply_shares(root: u16, tokens: &mut [Token; TOKEN_SLOTS]) -> Result<(), 
 }
 
 /// True when `cred` holds every right on `object` (exact or ancestor token).
-pub fn holds_all(root: u16, tokens: &[Token; TOKEN_SLOTS], object: u16) -> bool {
+pub fn holds_all(root: u32, tokens: &[Token; TOKEN_SLOTS], object: u32) -> bool {
     let table = TABLE.lock();
     let cred = cred_from_tokens(root, tokens);
     token_allows(&table, &cred, object, RIGHT_ALL)
 }
 
 /// True when actor `root` still has the default-admin must-change flag.
-pub fn actor_must_change(root: u16) -> bool {
+pub fn actor_must_change(root: u32) -> bool {
     if root == NO_OBJECT {
         return false;
     }
@@ -2260,7 +2727,7 @@ pub fn actor_must_change(root: u16) -> bool {
 pub use galexy_galf::cards::{attenuate_tokens, consume_once};
 
 /// Adds an actor and an empty root. Test and boot only.
-pub fn add_actor_named(name: &str, password: &[u8]) -> Result<u16, SysError> {
+pub fn add_actor_named(name: &str, password: &[u8]) -> Result<u32, SysError> {
     if !password_ok(password) {
         return Err(SysError::BadValue);
     }
@@ -2272,10 +2739,17 @@ pub fn add_actor_named(name: &str, password: &[u8]) -> Result<u16, SysError> {
     result
 }
 
-fn admin_quota_limits() -> (u16, u32) {
-    // The v12 pool is 128 KiB. Promoted files share the RAM store.
-    // Admin's byte quota matches that pool so a std sysroot fits.
-    (OBJECT_SLOTS as u16, super::large::LARGE_POOL_BYTES as u32)
+fn admin_quota_of(table: &Table) -> (u32, u64) {
+    let slots = table.geo.inode_slots.max(DISKLESS_INODES as u32);
+    let bytes = table
+        .geo
+        .file_max
+        .max(super::large::LARGE_POOL_BYTES as u64);
+    (slots, bytes)
+}
+
+fn admin_quota_limits() -> (u32, u64) {
+    admin_quota_of(&TABLE.lock())
 }
 
 /// Raises admin's stored quota to [`admin_quota_limits`] when it is lower.
@@ -2295,7 +2769,7 @@ pub fn raise_admin_quota_for_sysroot() {
     else {
         return;
     };
-    let objects_low = actor.object_limit() < need_objects as u32;
+    let objects_low = actor.object_limit() < need_objects;
     let bytes_low = actor.max_bytes < need_bytes;
     if !objects_low && !bytes_low {
         return;
@@ -2311,16 +2785,20 @@ pub fn raise_admin_quota_for_sysroot() {
     mark_dirty();
 }
 
-fn actor_usage(table: &Table, ai: usize) -> (u32, u32) {
+fn actor_usage(table: &Table, ai: usize) -> (u32, u64) {
+    let actor = &table.actors[ai];
+    if actor.used_objects > 0 || actor.used_bytes > 0 {
+        return (actor.used_objects, actor.used_bytes);
+    }
     let mut objects = 0u32;
-    let mut bytes = 0u32;
+    let mut bytes = 0u64;
     for (index, obj) in table.objects.iter().enumerate() {
         if obj.kind == KIND_EMPTY || obj.actor as usize != ai {
             continue;
         }
         objects += 1;
         if obj.kind == KIND_FILE {
-            let n = super::large::len(index).unwrap_or(obj.len);
+            let n = super::large::len(index).map(u64::from).unwrap_or(obj.len);
             bytes = bytes.saturating_add(n);
         }
     }
@@ -2335,7 +2813,7 @@ fn can_add_object(table: &Table, ai: usize) -> bool {
     used < table.actors[ai].object_limit()
 }
 
-fn can_add_bytes(table: &Table, ai: usize, extra: u32) -> bool {
+fn can_add_bytes(table: &Table, ai: usize, extra: u64) -> bool {
     if ai >= ACTOR_SLOTS || !table.actors[ai].used {
         return false;
     }
@@ -2343,14 +2821,14 @@ fn can_add_bytes(table: &Table, ai: usize, extra: u32) -> bool {
     used.saturating_add(extra) <= table.actors[ai].max_bytes
 }
 
-fn subtree_usage(table: &Table, root: u16) -> (u32, u32) {
+fn subtree_usage(table: &Table, root: u32) -> (u32, u64) {
     let mut objects = 0u32;
-    let mut bytes = 0u32;
-    for i in 0..OBJECT_SLOTS {
+    let mut bytes = 0u64;
+    for i in 0..table.objects.len() {
         if table.objects[i].kind == KIND_EMPTY {
             continue;
         }
-        if covers_object(table, root, i as u16) {
+        if covers_object(table, root, i as u32) {
             objects += 1;
             if table.objects[i].kind == KIND_FILE {
                 bytes = bytes.saturating_add(table.objects[i].len);
@@ -2368,7 +2846,7 @@ fn add_actor(
     name: &str,
     password: &[u8],
     cred: &PasswordCred,
-) -> Result<u16, SysError> {
+) -> Result<u32, SysError> {
     if !component_ok(name) || name.len() > ACTOR_NAME {
         return Err(SysError::BadValue);
     }
@@ -2382,7 +2860,7 @@ fn add_actor(
         return Err(SysError::NoResource);
     };
     let (max_objects, max_bytes) = if name == ADMIN_NAME {
-        admin_quota_limits()
+        admin_quota_of(table)
     } else {
         (DEFAULT_MAX_OBJECTS, DEFAULT_MAX_BYTES)
     };
@@ -2391,7 +2869,7 @@ fn add_actor(
     actor.name = [0; ACTOR_NAME];
     actor.name[..name.len()].copy_from_slice(name.as_bytes());
     actor.name_len = name.len() as u8;
-    actor.root = oi as u16;
+    actor.root = oi as u32;
     actor.max_objects = max_objects;
     actor.max_bytes = max_bytes;
     actor.install_password(cred, password);
@@ -2401,11 +2879,11 @@ fn add_actor(
     obj.parent = NO_PARENT;
     obj.actor = ai as u8;
     // Root has an empty name; paths start at its children.
-    Ok(oi as u16)
+    Ok(oi as u32)
 }
 
 /// Sets durable object/byte limits for actor `name`. Admin-only at the syscall layer.
-pub fn set_actor_quota(name: &str, max_objects: u16, max_bytes: u32) -> Result<(), SysError> {
+pub fn set_actor_quota(name: &str, max_objects: u32, max_bytes: u64) -> Result<(), SysError> {
     if max_objects == 0 || max_objects & MUST_CHANGE_BIT != 0 {
         return Err(SysError::BadValue);
     }
@@ -2429,13 +2907,18 @@ pub fn actor_quota(name: &str) -> Result<(u32, u32, u32, u32), SysError> {
     };
     let (used_o, used_b) = actor_usage(&table, ai);
     let actor = &table.actors[ai];
-    Ok((used_o, actor.object_limit(), used_b, actor.max_bytes))
+    Ok((
+        used_o,
+        actor.object_limit(),
+        used_b.min(u32::MAX as u64) as u32,
+        actor.max_bytes.min(u32::MAX as u64) as u32,
+    ))
 }
 
 /// Quota for the actor that owns `root`, or `NotFound` if unset.
-pub fn root_quota(root: u16) -> Result<(u32, u32, u32, u32), SysError> {
+pub fn root_quota(root: u32) -> Result<(u32, u32, u32, u32), SysError> {
     let table = TABLE.lock();
-    if root as usize >= OBJECT_SLOTS || table.objects[root as usize].kind != KIND_DIR {
+    if root as usize >= table.objects.len() || table.objects[root as usize].kind != KIND_DIR {
         return Err(SysError::NotFound);
     }
     let ai = table.objects[root as usize].actor as usize;
@@ -2444,7 +2927,12 @@ pub fn root_quota(root: u16) -> Result<(u32, u32, u32, u32), SysError> {
     }
     let (used_o, used_b) = actor_usage(&table, ai);
     let actor = &table.actors[ai];
-    Ok((used_o, actor.object_limit(), used_b, actor.max_bytes))
+    Ok((
+        used_o,
+        actor.object_limit(),
+        used_b.min(u32::MAX as u64) as u32,
+        actor.max_bytes.min(u32::MAX as u64) as u32,
+    ))
 }
 
 /// Packs a quota record into `out` (at least [`galexy_abi::QUOTA_LEN`] bytes).
@@ -2467,13 +2955,13 @@ pub fn format_quota_record(
 }
 
 /// Looks up a direct child by name. Test helper.
-pub fn find_under(parent: u16, name: &str) -> Option<u16> {
+pub fn find_under(parent: u32, name: &str) -> Option<u32> {
     let table = TABLE.lock();
-    find_child(&table, parent, name).map(|i| i as u16)
+    find_child(&table, parent, name).map(|i| i as u32)
 }
 
 /// Creates a directory under an actor's root. Test helper.
-pub fn mkdir_under_root(root: u16, name: &str) -> Result<u16, SysError> {
+pub fn mkdir_under_root(root: u32, name: &str) -> Result<u32, SysError> {
     if !component_ok(name) {
         return Err(SysError::BadValue);
     }
@@ -2484,8 +2972,8 @@ pub fn mkdir_under_root(root: u16, name: &str) -> Result<u16, SysError> {
     Ok(oi)
 }
 
-fn mkdir_locked(table: &mut Table, root: u16, name: &str) -> Result<u16, SysError> {
-    if root as usize >= OBJECT_SLOTS || table.objects[root as usize].kind != KIND_DIR {
+fn mkdir_locked(table: &mut Table, root: u32, name: &str) -> Result<u32, SysError> {
+    if root as usize >= table.objects.len() || table.objects[root as usize].kind != KIND_DIR {
         return Err(SysError::NotFound);
     }
     if find_child(table, root, name).is_some() {
@@ -2503,17 +2991,17 @@ fn mkdir_locked(table: &mut Table, root: u16, name: &str) -> Result<u16, SysErro
     obj.parent = root;
     obj.actor = actor as u8;
     place_name(obj, name);
-    link_child(table, root, oi as u16);
-    Ok(oi as u16)
+    link_child(table, root, oi as u32);
+    Ok(oi as u32)
 }
 
 /// Creates an empty file under `parent`. Test helper.
-pub fn create_file_under(parent: u16, name: &str) -> Result<u16, SysError> {
+pub fn create_file_under(parent: u32, name: &str) -> Result<u32, SysError> {
     if !component_ok(name) {
         return Err(SysError::BadValue);
     }
     let mut table = TABLE.lock();
-    if parent as usize >= OBJECT_SLOTS || table.objects[parent as usize].kind != KIND_DIR {
+    if parent as usize >= table.objects.len() || table.objects[parent as usize].kind != KIND_DIR {
         return Err(SysError::NotFound);
     }
     if find_child(&table, parent, name).is_some() {
@@ -2532,10 +3020,10 @@ pub fn create_file_under(parent: u16, name: &str) -> Result<u16, SysError> {
     obj.actor = actor as u8;
     place_name(obj, name);
     obj.len = 0;
-    link_child(&mut table, parent, oi as u16);
+    link_child(&mut table, parent, oi as u32);
     drop(table);
     mark_dirty();
-    Ok(oi as u16)
+    Ok(oi as u32)
 }
 
 /// Creates `name` under `parent` with a copy of `bytes` in the RAM store.
@@ -2544,7 +3032,7 @@ pub fn create_file_under(parent: u16, name: &str) -> Result<u16, SysError> {
 /// that outgrows that pool promotes through [`super::large::create_from`].
 /// The compiler sysroot uses [`import_shared`] instead, so its ramdisk
 /// bytes are not copied into 4 KiB boxes.
-pub fn import_promoted(parent: u16, name: &str, bytes: &[u8]) -> Result<u16, SysError> {
+pub fn import_promoted(parent: u32, name: &str, bytes: &[u8]) -> Result<u32, SysError> {
     if bytes.len() > super::large::LARGE_FILE_MAX as usize {
         return Err(SysError::BadValue);
     }
@@ -2552,7 +3040,7 @@ pub fn import_promoted(parent: u16, name: &str, bytes: &[u8]) -> Result<u16, Sys
     {
         let table = TABLE.lock();
         let actor = table.objects[id as usize].actor as usize;
-        if !can_add_bytes(&table, actor, bytes.len() as u32) {
+        if !can_add_bytes(&table, actor, bytes.len() as u64) {
             return Err(SysError::NoResource);
         }
     }
@@ -2569,7 +3057,7 @@ pub fn import_promoted(parent: u16, name: &str, bytes: &[u8]) -> Result<u16, Sys
 /// counts the length. A later write copies the visible prefix into
 /// pool blocks. The compiler sysroot uses this so `libcore`'s metadata
 /// does not allocate one 4 KiB heap box per block.
-pub fn import_shared(parent: u16, name: &str, bytes: &'static [u8]) -> Result<u16, SysError> {
+pub fn import_shared(parent: u32, name: &str, bytes: &'static [u8]) -> Result<u32, SysError> {
     if bytes.len() > super::large::LARGE_FILE_MAX as usize {
         return Err(SysError::BadValue);
     }
@@ -2577,7 +3065,7 @@ pub fn import_shared(parent: u16, name: &str, bytes: &'static [u8]) -> Result<u1
     {
         let table = TABLE.lock();
         let actor = table.objects[id as usize].actor as usize;
-        if !can_add_bytes(&table, actor, bytes.len() as u32) {
+        if !can_add_bytes(&table, actor, bytes.len() as u64) {
             return Err(SysError::NoResource);
         }
     }
@@ -2612,7 +3100,7 @@ pub(crate) fn parse_path(name: &str) -> Result<ParsedPath<'_>, SysError> {
     galexy_core::parse_path(name).ok_or(SysError::BadValue)
 }
 
-fn find_actor_root(table: &Table, name: &str) -> Result<u16, SysError> {
+fn find_actor_root(table: &Table, name: &str) -> Result<u32, SysError> {
     table
         .actors
         .iter()
@@ -2621,9 +3109,9 @@ fn find_actor_root(table: &Table, name: &str) -> Result<u16, SysError> {
         .ok_or(SysError::NotFound)
 }
 
-fn find_child(table: &Table, parent: u16, name: &str) -> Option<usize> {
+fn find_child(table: &Table, parent: u32, name: &str) -> Option<usize> {
     let mut child = table.objects.get(parent as usize)?.child;
-    for _ in 0..OBJECT_SLOTS {
+    for _ in 0..table.objects.len() {
         if child == NO_OBJECT {
             return None;
         }
@@ -2637,7 +3125,7 @@ fn find_child(table: &Table, parent: u16, name: &str) -> Option<usize> {
     None
 }
 
-fn has_child(table: &Table, parent: u16) -> bool {
+fn has_child(table: &Table, parent: u32) -> bool {
     table
         .objects
         .get(parent as usize)
@@ -2645,7 +3133,7 @@ fn has_child(table: &Table, parent: u16) -> bool {
 }
 
 /// Inserts `child` at the head of `parent`'s directory list.
-fn link_child(table: &mut Table, parent: u16, child: u16) {
+fn link_child(table: &mut Table, parent: u32, child: u32) {
     let Some(dir) = table.objects.get_mut(parent as usize) else {
         return;
     };
@@ -2657,13 +3145,13 @@ fn link_child(table: &mut Table, parent: u16, child: u16) {
 }
 
 /// Removes `child` from `parent`'s directory list. The object itself stays.
-fn unlink_child(table: &mut Table, parent: u16, child: u16) {
+fn unlink_child(table: &mut Table, parent: u32, child: u32) {
     let Some(dir) = table.objects.get(parent as usize) else {
         return;
     };
     let mut prev = NO_OBJECT;
     let mut cur = dir.child;
-    for _ in 0..OBJECT_SLOTS {
+    for _ in 0..table.objects.len() {
         if cur == NO_OBJECT {
             return;
         }
@@ -2689,7 +3177,7 @@ fn unlink_child(table: &mut Table, parent: u16, child: u16) {
 }
 
 /// Walks every component except the last under `start`.
-fn walk_parents(table: &Table, start: u16, parsed: &ParsedPath<'_>) -> Result<u16, SysError> {
+fn walk_parents(table: &Table, start: u32, parsed: &ParsedPath<'_>) -> Result<u32, SysError> {
     let mut parent = start;
     for comp in &parsed.comps[..parsed.n.saturating_sub(1)] {
         let Some(index) = find_child(table, parent, comp) else {
@@ -2698,12 +3186,12 @@ fn walk_parents(table: &Table, start: u16, parsed: &ParsedPath<'_>) -> Result<u1
         if table.objects[index].kind != KIND_DIR {
             return Err(SysError::NotFound);
         }
-        parent = index as u16;
+        parent = index as u32;
     }
     Ok(parent)
 }
 
-fn start_root(table: &Table, cred: &FsCred, parsed: &ParsedPath<'_>) -> Result<u16, SysError> {
+fn start_root(table: &Table, cred: &FsCred, parsed: &ParsedPath<'_>) -> Result<u32, SysError> {
     match parsed.owner {
         Some(owner) => find_actor_root(table, owner),
         None => {
@@ -2716,14 +3204,14 @@ fn start_root(table: &Table, cred: &FsCred, parsed: &ParsedPath<'_>) -> Result<u
 }
 
 /// Parent lookup for the card algebra: `None` past the table or at a root.
-fn parent_link(table: &Table) -> impl Fn(u16) -> Option<u16> + '_ {
+fn parent_link(table: &Table) -> impl Fn(u32) -> Option<u32> + '_ {
     move |cur| {
         let parent = table.objects.get(cur as usize)?.parent;
         (parent != NO_PARENT).then_some(parent)
     }
 }
 
-fn covers_object(table: &Table, ancestor: u16, object: u16) -> bool {
+fn covers_object(table: &Table, ancestor: u32, object: u32) -> bool {
     galexy_galf::cards::covers(parent_link(table), ancestor, object, OBJECT_SLOTS)
 }
 
@@ -2732,11 +3220,11 @@ fn covers_object(table: &Table, ancestor: u16, object: u16) -> bool {
 /// Admin is not a blanket bypass. `useradd` / `userdel` / `passwd` of
 /// another account stay admin-only via [`is_admin_root`]. Foreign trees
 /// need an explicit card (or `su`, which installs `ALL` on that root).
-fn token_allows(table: &Table, cred: &FsCred, object: u16, need: u8) -> bool {
+fn token_allows(table: &Table, cred: &FsCred, object: u32, need: u8) -> bool {
     galexy_galf::cards::allows(parent_link(table), &cred.tokens, object, need, OBJECT_SLOTS)
 }
 
-fn cred_from_tokens(root: u16, tokens: &[Token; TOKEN_SLOTS]) -> FsCred {
+fn cred_from_tokens(root: u32, tokens: &[Token; TOKEN_SLOTS]) -> FsCred {
     FsCred {
         root,
         tokens: *tokens,
@@ -2744,7 +3232,7 @@ fn cred_from_tokens(root: u16, tokens: &[Token; TOKEN_SLOTS]) -> FsCred {
 }
 
 /// Resolves `parsed` to an object index, checking existence only.
-fn lookup(table: &Table, cred: &FsCred, parsed: &ParsedPath<'_>) -> Result<(u16, usize), SysError> {
+fn lookup(table: &Table, cred: &FsCred, parsed: &ParsedPath<'_>) -> Result<(u32, usize), SysError> {
     let start = start_root(table, cred, parsed)?;
     if parsed.n == 0 {
         // Actor root path (`eve@/`).
@@ -2760,10 +3248,10 @@ fn lookup(table: &Table, cred: &FsCred, parsed: &ParsedPath<'_>) -> Result<(u16,
 
 /// Looks up a file for open. Directory → `Unsupported` after the token check.
 pub(crate) fn open_file(
-    root: u16,
+    root: u32,
     tokens: &[Token; TOKEN_SLOTS],
     name: &str,
-) -> Result<u16, SysError> {
+) -> Result<u32, SysError> {
     let parsed = parse_path(name)?;
     if parsed.dir {
         return Err(SysError::Unsupported);
@@ -2771,7 +3259,7 @@ pub(crate) fn open_file(
     let cred = cred_from_tokens(root, tokens);
     let table = TABLE.lock();
     let (_parent, found) = lookup(&table, &cred, &parsed)?;
-    let index = found as u16;
+    let index = found as u32;
     if !token_allows(&table, &cred, index, RIGHT_READ) {
         return Err(SysError::AccessDenied);
     }
@@ -2783,11 +3271,11 @@ pub(crate) fn open_file(
 
 /// Creates a file or directory. `replace` empties an existing file.
 pub(crate) fn create(
-    root: u16,
+    root: u32,
     tokens: &[Token; TOKEN_SLOTS],
     name: &str,
     replace: bool,
-) -> Result<Option<u16>, SysError> {
+) -> Result<Option<u32>, SysError> {
     let parsed = parse_path(name)?;
     if parsed.n == 0 {
         return Err(SysError::Unsupported);
@@ -2802,7 +3290,7 @@ pub(crate) fn create(
     let last = parsed.comps[parsed.n - 1];
     if let Some(found) = find_child(&table, parent, last) {
         if replace && !parsed.dir && table.objects[found].kind == KIND_FILE {
-            let index = found as u16;
+            let index = found as u32;
             if !token_allows(&table, &cred, index, RIGHT_WRITE) {
                 return Err(SysError::AccessDenied);
             }
@@ -2824,20 +3312,20 @@ pub(crate) fn create(
     obj.actor = actor as u8;
     place_name(obj, last);
     obj.len = 0;
-    link_child(&mut table, parent, oi as u16);
+    link_child(&mut table, parent, oi as u32);
     if parsed.dir {
         Ok(None)
     } else {
-        Ok(Some(oi as u16))
+        Ok(Some(oi as u32))
     }
 }
 
 /// Removes a file or empty directory.
 pub(crate) fn remove(
-    root: u16,
+    root: u32,
     tokens: &[Token; TOKEN_SLOTS],
     name: &str,
-) -> Result<u16, SysError> {
+) -> Result<u32, SysError> {
     let parsed = parse_path(name)?;
     if parsed.n == 0 {
         return Err(SysError::Unsupported);
@@ -2845,7 +3333,7 @@ pub(crate) fn remove(
     let cred = cred_from_tokens(root, tokens);
     let mut table = TABLE.lock();
     let (_parent, found) = lookup(&table, &cred, &parsed)?;
-    let index = found as u16;
+    let index = found as u32;
     if !token_allows(&table, &cred, index, RIGHT_REMOVE) {
         return Err(SysError::AccessDenied);
     }
@@ -2872,10 +3360,10 @@ pub(crate) fn remove(
 }
 
 /// File length under the global lock.
-pub(crate) fn with_file<R>(index: u16, f: impl FnOnce(&Object) -> R) -> Option<R> {
+pub(crate) fn with_file<R>(index: u32, f: impl FnOnce(&Object) -> R) -> Option<R> {
     let table = TABLE.lock();
     let i = index as usize;
-    if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
+    if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
         return None;
     }
     Some(f(&table.objects[i]))
@@ -2884,22 +3372,28 @@ pub(crate) fn with_file<R>(index: u16, f: impl FnOnce(&Object) -> R) -> Option<R
 fn alloc_block() -> Option<u32> {
     let mut pool = POOL.lock();
     let n = pool.blocks as usize;
-    for i in 0..n {
-        let mask = 1u8 << (i % 8);
-        if pool.bitmap[i / 8] & mask != 0 || pool.hold[i] > 0 {
-            continue;
+    if n == 0 || pool.bitmap.is_empty() {
+        return None;
+    }
+    let start = (pool.cursor as usize).min(n);
+    for pass in 0..2 {
+        let range = if pass == 0 { start..n } else { 0..start };
+        for i in range {
+            let mask = 1u8 << (i % 8);
+            if pool.bitmap[i / 8] & mask != 0 || pool.hold[i] > 0 {
+                continue;
+            }
+            pool.bitmap[i / 8] |= mask;
+            pool.gen[i] = pool.clock.max(1);
+            pool.cursor = (i as u32).saturating_add(1);
+            pool.stable[i] = false;
+            pool.dirty[i] = true;
+            pool.sealed[i] = false;
+            pool.hold[i] = 0;
+            let mut cache = CACHE.lock();
+            let _ = cache_get(&mut cache, &mut pool, i as u32);
+            return Some(i as u32);
         }
-        pool.bitmap[i / 8] |= mask;
-        let gen = pool.clock.max(1);
-        pool.clock = gen.saturating_add(1).max(1);
-        pool.gen[i] = gen;
-        pool.stable[i] = false;
-        pool.dirty[i] = true;
-        pool.sealed[i] = false;
-        pool.hold[i] = 0;
-        let mut cache = CACHE.lock();
-        let _ = cache_get(&mut cache, &mut pool, i as u32);
-        return Some(i as u32);
     }
     None
 }
@@ -2945,7 +3439,8 @@ fn phys_at(obj: &Object, logical: u32) -> Option<u32> {
 fn append_extent(obj: &mut Object, phys: u32) -> bool {
     if obj.extent_count > 0 {
         let last = &mut obj.extents[obj.extent_count as usize - 1];
-        if last.start.saturating_add(last.count) == phys {
+        let gen = POOL.lock().gen.get(phys as usize).copied().unwrap_or(1);
+        if last.start.saturating_add(last.count) == phys && last.gen == gen {
             last.count = last.count.saturating_add(1);
             return true;
         }
@@ -2954,9 +3449,11 @@ fn append_extent(obj: &mut Object, phys: u32) -> bool {
         return false;
     }
     let n = obj.extent_count as usize;
+    let gen = POOL.lock().gen.get(phys as usize).copied().unwrap_or(1);
     obj.extents[n] = galexy_galf::Extent {
         start: phys,
         count: 1,
+        gen,
     };
     obj.extent_count += 1;
     true
@@ -2981,24 +3478,28 @@ fn replace_logical(obj: &mut Object, logical: u32, phys: u32) -> bool {
     let Some((i, off, ext)) = found else {
         return false;
     };
+    let fresh_gen = POOL.lock().gen.get(phys as usize).copied().unwrap_or(1);
     let mut parts = [galexy_galf::Extent::empty(); 3];
     let mut n = 0usize;
     if off > 0 {
         parts[n] = galexy_galf::Extent {
             start: ext.start,
             count: off,
+            gen: ext.gen,
         };
         n += 1;
     }
     parts[n] = galexy_galf::Extent {
         start: phys,
         count: 1,
+        gen: fresh_gen,
     };
     n += 1;
     if off + 1 < ext.count {
         parts[n] = galexy_galf::Extent {
             start: ext.start.saturating_add(off + 1),
             count: ext.count - off - 1,
+            gen: ext.gen,
         };
         n += 1;
     }
@@ -3131,7 +3632,8 @@ fn file_len(table: &Table, index: usize) -> usize {
 fn headroom(table: &Table, index: usize) -> u32 {
     let ai = table.objects[index].actor as usize;
     let (_, used) = actor_usage(table, ai);
-    table.actors[ai].max_bytes.saturating_sub(used)
+    let room = table.actors[ai].max_bytes.saturating_sub(used);
+    room.min(u32::MAX as u64) as u32
 }
 
 fn copy_small(obj: &Object, buf: &mut [u8]) -> bool {
@@ -3168,10 +3670,10 @@ fn promote_large(table: &mut Table, index: usize) -> bool {
 
 /// Appends `src` to a file. Returns the byte count written (short on full
 /// file, exhausted block pool, or actor byte quota).
-pub(crate) fn append(index: u16, src: &[u8]) -> Option<usize> {
+pub(crate) fn append(index: u32, src: &[u8]) -> Option<usize> {
     let mut table = TABLE.lock();
     let i = index as usize;
-    if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
+    if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
         return None;
     }
     Some(append_locked(&mut table, i, src))
@@ -3182,14 +3684,16 @@ pub(crate) fn append(index: u16, src: &[u8]) -> Option<usize> {
 /// or past the end are appended under the usual file/pool/quota limits. A
 /// `start` beyond the end is zero-filled first, so a seek past EOF followed
 /// by a write behaves like POSIX. Returns the byte count written.
-pub(crate) fn write_at(index: u16, start: usize, src: &[u8]) -> Option<usize> {
+pub(crate) fn write_at(index: u32, start: usize, src: &[u8]) -> Option<usize> {
     let mut table = TABLE.lock();
     let i = index as usize;
-    if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
+    if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
         return None;
     }
     let len = file_len(&table, i);
-    if super::large::len(i).is_some() || start.saturating_add(src.len()) > FILE_BYTES {
+    if super::large::len(i).is_some()
+        || (start as u64).saturating_add(src.len() as u64) > table.geo.file_max
+    {
         if super::large::len(i).is_none() && !promote_large(&mut table, i) {
             return Some(0);
         }
@@ -3231,7 +3735,10 @@ pub(crate) fn write_at(index: u16, start: usize, src: &[u8]) -> Option<usize> {
 /// Append loop shared by `append` and `write_at`; `i` must be a file slot.
 fn append_locked(table: &mut Table, i: usize, src: &[u8]) -> usize {
     if super::large::len(i).is_some()
-        || (table.objects[i].len as usize).saturating_add(src.len()) > FILE_BYTES
+        || table.objects[i]
+            .len
+            .saturating_add(src.len() as u64)
+            > table.geo.file_max
     {
         if super::large::len(i).is_none() && !promote_large(table, i) {
             return 0;
@@ -3242,7 +3749,7 @@ fn append_locked(table: &mut Table, i: usize, src: &[u8]) -> usize {
     let mut written = 0usize;
     while written < src.len() {
         let pos = table.objects[i].len as usize;
-        if pos >= FILE_BYTES {
+        if pos as u64 >= table.geo.file_max {
             break;
         }
         if !can_add_bytes(table, ai, 1) {
@@ -3255,7 +3762,7 @@ fn append_locked(table: &mut Table, i: usize, src: &[u8]) -> usize {
         };
         let mut room = (BLOCK_SIZE - off)
             .min(src.len() - written)
-            .min(FILE_BYTES - pos);
+            .min((table.geo.file_max as usize).saturating_sub(pos));
         let (_, used) = actor_usage(table, ai);
         let headroom = table.actors[ai].max_bytes.saturating_sub(used) as usize;
         if headroom == 0 {
@@ -3265,17 +3772,17 @@ fn append_locked(table: &mut Table, i: usize, src: &[u8]) -> usize {
         if !write_block_bytes(bi, off, &src[written..written + room]) {
             break;
         }
-        table.objects[i].len = (pos + room) as u32;
+        table.objects[i].len = (pos + room) as u64;
         written += room;
     }
     written
 }
 
 /// Copies `dst.len()` bytes from file offset `start`.
-pub(crate) fn read_at(index: u16, start: usize, dst: &mut [u8]) -> Option<usize> {
+pub(crate) fn read_at(index: u32, start: usize, dst: &mut [u8]) -> Option<usize> {
     let table = TABLE.lock();
     let i = index as usize;
-    if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
+    if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
         return None;
     }
     if super::large::len(i).is_some() {
@@ -3302,7 +3809,7 @@ pub(crate) fn read_at(index: u16, start: usize, dst: &mut [u8]) -> Option<usize>
 }
 
 /// Appends bytes to a file by object index. Test helper.
-pub fn append_file(index: u16, src: &[u8]) -> Option<usize> {
+pub fn append_file(index: u32, src: &[u8]) -> Option<usize> {
     let n = append(index, src)?;
     if n > 0 {
         mark_dirty();
@@ -3319,15 +3826,15 @@ pub fn remove_as_admin(name: &str) -> Result<(), SysError> {
 }
 
 /// Copies file bytes into `out`. Returns the length, or `None` if missing.
-pub fn read_file_bytes(index: u16, out: &mut [u8]) -> Option<usize> {
+pub fn read_file_bytes(index: u32, out: &mut [u8]) -> Option<usize> {
     read_at(index, 0, out)
 }
 
 /// Byte length of a file object, including a promoted large file.
-pub fn object_len(index: u16) -> Option<usize> {
+pub fn object_len(index: u32) -> Option<usize> {
     let table = TABLE.lock();
     let i = index as usize;
-    if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
+    if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
         return None;
     }
     Some(file_len(&table, i))
@@ -3348,7 +3855,7 @@ pub fn rename_as_admin(old: &str, new: &str) -> Result<(), SysError> {
 }
 
 /// Sets a file's length. Test helper (object index).
-pub fn truncate_file(index: u16, new_len: usize) -> Result<(), SysError> {
+pub fn truncate_file(index: u32, new_len: usize) -> Result<(), SysError> {
     truncate(index, new_len)?;
     mark_dirty();
     Ok(())
@@ -3362,7 +3869,7 @@ pub fn stat_as_admin(name: &str, out: &mut [u8]) -> Result<usize, SysError> {
 
 /// Moves a dirent from `old` to `new` without copying file bytes.
 pub(crate) fn rename(
-    root: u16,
+    root: u32,
     tokens: &[Token; TOKEN_SLOTS],
     old: &str,
     new: &str,
@@ -3375,7 +3882,7 @@ pub(crate) fn rename(
     let cred = cred_from_tokens(root, tokens);
     let mut table = TABLE.lock();
     let (old_parent, found) = lookup(&table, &cred, &old_parsed)?;
-    let src = found as u16;
+    let src = found as u32;
     if !token_allows(&table, &cred, src, RIGHT_REMOVE) {
         return Err(SysError::AccessDenied);
     }
@@ -3430,9 +3937,9 @@ pub(crate) fn rename(
     Ok(())
 }
 
-fn is_descendant(table: &Table, ancestor: u16, node: u16) -> bool {
+fn is_descendant(table: &Table, ancestor: u32, node: u32) -> bool {
     let mut cur = node;
-    for _ in 0..OBJECT_SLOTS {
+    for _ in 0..table.objects.len() {
         if cur == ancestor {
             return true;
         }
@@ -3445,21 +3952,21 @@ fn is_descendant(table: &Table, ancestor: u16, node: u16) -> bool {
     false
 }
 
-fn reassign_actor_subtree(table: &mut Table, root: u16, actor: u8) {
-    for i in 0..OBJECT_SLOTS {
+fn reassign_actor_subtree(table: &mut Table, root: u32, actor: u8) {
+    for i in 0..table.objects.len() {
         if table.objects[i].kind == KIND_EMPTY {
             continue;
         }
-        if covers_object(table, root, i as u16) {
+        if covers_object(table, root, i as u32) {
             table.objects[i].actor = actor;
         }
     }
 }
 
-fn truncate_large(index: u16, new_len: usize) -> Result<(), SysError> {
+fn truncate_large(index: u32, new_len: usize) -> Result<(), SysError> {
     let mut table = TABLE.lock();
     let i = index as usize;
-    if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
+    if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
         return Err(SysError::BadCap);
     }
     if super::large::len(i).is_none() && !promote_large(&mut table, i) {
@@ -3490,16 +3997,16 @@ fn truncate_large(index: u16, new_len: usize) -> Result<(), SysError> {
 }
 
 /// Sets a file's length, allocating or freeing data blocks as needed.
-pub(crate) fn truncate(index: u16, new_len: usize) -> Result<(), SysError> {
+pub(crate) fn truncate(index: u32, new_len: usize) -> Result<(), SysError> {
     if new_len > super::large::LARGE_FILE_MAX as usize {
         return Err(SysError::BadValue);
     }
-    if new_len > FILE_BYTES || super::large::len(index as usize).is_some() {
+    if (new_len as u64) > TABLE.lock().geo.file_max || super::large::len(index as usize).is_some() {
         return truncate_large(index, new_len);
     }
     let mut table = TABLE.lock();
     let i = index as usize;
-    if i >= OBJECT_SLOTS || table.objects[i].kind != KIND_FILE {
+    if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
         return Err(SysError::BadCap);
     }
     let old = table.objects[i].len as usize;
@@ -3525,12 +4032,12 @@ pub(crate) fn truncate(index: u16, new_len: usize) -> Result<(), SysError> {
                 }
             }
         }
-        table.objects[i].len = new_len as u32;
+        table.objects[i].len = new_len as u64;
         return Ok(());
     }
 
     let ai = table.objects[i].actor as usize;
-    let grow = (new_len - old) as u32;
+    let grow = (new_len - old) as u64;
     if !can_add_bytes(&table, ai, grow) {
         return Err(SysError::NoResource);
     }
@@ -3543,7 +4050,7 @@ pub(crate) fn truncate(index: u16, new_len: usize) -> Result<(), SysError> {
             free_extents_after(&table.objects[i], saved_count, &saved);
             table.objects[i].extents = saved;
             table.objects[i].extent_count = saved_count;
-            table.objects[i].len = old as u32;
+            table.objects[i].len = old as u64;
             return Err(SysError::NoResource);
         };
         let off = pos % BLOCK_SIZE;
@@ -3563,7 +4070,7 @@ pub(crate) fn truncate(index: u16, new_len: usize) -> Result<(), SysError> {
         }
         pos += n;
     }
-    table.objects[i].len = new_len as u32;
+    table.objects[i].len = new_len as u64;
     Ok(())
 }
 
@@ -3591,6 +4098,7 @@ fn shrink_extents(obj: &mut Object, keep: u32) {
         next[n as usize] = galexy_galf::Extent {
             start: ext.start,
             count: stay,
+            gen: ext.gen,
         };
         n += 1;
         let mut b = ext.start + stay;
@@ -3610,21 +4118,13 @@ fn free_extents_after(
     saved_count: u8,
     saved: &[galexy_galf::Extent; EXTENTS_PER_FILE],
 ) {
-    let mut old_bits = [0u8; BITMAP_BYTES];
-    for ext in saved.iter().take(saved_count as usize) {
-        let mut b = ext.start;
-        for _ in 0..ext.count {
-            if (b as usize) < BLOCK_SLOTS {
-                old_bits[b as usize / 8] |= 1 << (b as usize % 8);
-            }
-            b = b.saturating_add(1);
-        }
-    }
     for ext in obj.extents.iter().take(obj.extent_count as usize) {
         let mut b = ext.start;
         for _ in 0..ext.count {
-            let i = b as usize;
-            if i < BLOCK_SLOTS && old_bits[i / 8] & (1 << (i % 8)) == 0 {
+            let kept = saved.iter().take(saved_count as usize).any(|old| {
+                b >= old.start && b < old.start.saturating_add(old.count)
+            });
+            if !kept {
                 free_block(b);
             }
             b = b.saturating_add(1);
@@ -3634,7 +4134,7 @@ fn free_extents_after(
 
 /// Fills `out` (must be [`galexy_abi::STAT_LEN`]) with path metadata.
 pub(crate) fn stat(
-    root: u16,
+    root: u32,
     tokens: &[Token; TOKEN_SLOTS],
     name: &str,
     out: &mut [u8],
@@ -3647,7 +4147,7 @@ pub(crate) fn stat(
     let cred = cred_from_tokens(root, tokens);
     let table = TABLE.lock();
     let (_parent, found) = lookup(&table, &cred, &parsed)?;
-    let index = found as u16;
+    let index = found as u32;
     if !token_allows(&table, &cred, index, RIGHT_LIST) {
         return Err(SysError::AccessDenied);
     }
@@ -3659,7 +4159,7 @@ pub(crate) fn stat(
     };
     let rights = held_rights(&table, &cred, index);
     let size = if obj.kind == KIND_FILE {
-        super::large::len(found).unwrap_or(obj.len)
+        super::large::len(found).map(u64::from).unwrap_or(obj.len)
     } else {
         0
     };
@@ -3668,13 +4168,14 @@ pub(crate) fn stat(
     out[..STAT_LEN].fill(0);
     out[0] = kind;
     out[1] = rights;
-    out[4..8].copy_from_slice(&size.to_le_bytes());
+    out[4..8].copy_from_slice(&(size as u32).to_le_bytes());
+    out[44..48].copy_from_slice(&((size >> 32) as u32).to_le_bytes());
     out[8] = owner_len;
     out[9..9 + owner_len as usize].copy_from_slice(&actor.name[..owner_len as usize]);
     Ok(STAT_LEN)
 }
 
-fn held_rights(table: &Table, cred: &FsCred, object: u16) -> u8 {
+fn held_rights(table: &Table, cred: &FsCred, object: u32) -> u8 {
     let mut rights = 0u8;
     for token in &cred.tokens {
         if token.is_live() && covers_object(table, token.object, object) {
@@ -3684,7 +4185,7 @@ fn held_rights(table: &Table, cred: &FsCred, object: u16) -> u8 {
     rights
 }
 
-fn path_bytes(table: &Table, index: usize, viewer_root: u16, out: &mut [u8]) -> Option<usize> {
+fn path_bytes(table: &Table, index: usize, viewer_root: u32, out: &mut [u8]) -> Option<usize> {
     let mut chain = [0usize; MAX_DEPTH];
     let mut depth = 0usize;
     let mut cur = index;
@@ -3703,7 +4204,7 @@ fn path_bytes(table: &Table, index: usize, viewer_root: u16, out: &mut [u8]) -> 
         chain[depth] = cur;
         depth += 1;
         cur = obj.parent as usize;
-        if cur >= OBJECT_SLOTS {
+        if cur >= table.objects.len() {
             return None;
         }
     }
@@ -3715,10 +4216,10 @@ fn path_bytes(table: &Table, index: usize, viewer_root: u16, out: &mut [u8]) -> 
     let object_root = loop {
         let p = table.objects[walk].parent;
         if p == NO_PARENT {
-            break walk as u16;
+            break walk as u32;
         }
         walk = p as usize;
-        if walk >= OBJECT_SLOTS {
+        if walk >= table.objects.len() {
             return None;
         }
     };
@@ -3762,11 +4263,11 @@ fn path_bytes(table: &Table, index: usize, viewer_root: u16, out: &mut [u8]) -> 
 }
 
 /// Writes token lines `path rights\n` into `out`. Returns bytes written.
-pub fn format_tokens(root: u16, tokens: &[Token; TOKEN_SLOTS], out: &mut [u8]) -> usize {
+pub fn format_tokens(root: u32, tokens: &[Token; TOKEN_SLOTS], out: &mut [u8]) -> usize {
     let table = TABLE.lock();
     let mut len = 0usize;
     for token in tokens {
-        if !token.is_live() || token.object as usize >= OBJECT_SLOTS {
+        if !token.is_live() || token.object as usize >= table.objects.len() {
             continue;
         }
         let mut path = [0u8; NAME_CAP];
@@ -3813,16 +4314,16 @@ pub fn format_tokens(root: u16, tokens: &[Token; TOKEN_SLOTS], out: &mut [u8]) -
 }
 
 /// Calls `each` with every path the credentials may list.
-pub fn for_each_visible(root: u16, tokens: &[Token; TOKEN_SLOTS], mut each: impl FnMut(&[u8])) {
+pub fn for_each_visible(root: u32, tokens: &[Token; TOKEN_SLOTS], mut each: impl FnMut(&[u8])) {
     let cred = cred_from_tokens(root, tokens);
     let table = TABLE.lock();
-    for index in 0..OBJECT_SLOTS {
+    for index in 0..table.objects.len() {
         let obj = &table.objects[index];
         if obj.kind == KIND_EMPTY || obj.parent == NO_PARENT {
             continue;
         }
         // LIST on this object or an ancestor (typically the parent).
-        if !token_allows(&table, &cred, index as u16, RIGHT_LIST)
+        if !token_allows(&table, &cred, index as u32, RIGHT_LIST)
             && !token_allows(&table, &cred, obj.parent, RIGHT_LIST)
         {
             continue;
@@ -3840,11 +4341,11 @@ pub fn for_each_visible(root: u16, tokens: &[Token; TOKEN_SLOTS], mut each: impl
 /// Resolves `name` and checks that `cred` holds every bit in `rights`.
 /// Returns the object index. Used by the `grant` syscall.
 pub(crate) fn resolve_and_check(
-    root: u16,
+    root: u32,
     tokens: &[Token; TOKEN_SLOTS],
     name: &str,
     rights: u8,
-) -> Result<u16, SysError> {
+) -> Result<u32, SysError> {
     if rights == 0 {
         return Err(SysError::BadValue);
     }
@@ -3852,7 +4353,7 @@ pub(crate) fn resolve_and_check(
     let cred = cred_from_tokens(root, tokens);
     let table = TABLE.lock();
     let (_parent, found) = lookup(&table, &cred, &parsed)?;
-    let index = found as u16;
+    let index = found as u32;
     if !token_allows(&table, &cred, index, rights) {
         return Err(SysError::AccessDenied);
     }

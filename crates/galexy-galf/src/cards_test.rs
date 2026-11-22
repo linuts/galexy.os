@@ -37,24 +37,24 @@ impl Rng {
 
 /// Parent of each object, or `None` for a root. Acyclic by construction:
 /// a parent index is always smaller than its child's.
-fn forest(rng: &mut Rng) -> Vec<Option<u16>> {
-    (0..N as u16)
+fn forest(rng: &mut Rng) -> Vec<Option<u32>> {
+    (0..N as u32)
         .map(|i| {
             if i == 0 || rng.chance(4) {
                 None
             } else {
-                Some(rng.below(u64::from(i)) as u16)
+                Some(rng.below(u64::from(i)) as u32)
             }
         })
         .collect()
 }
 
-fn link(parents: &[Option<u16>]) -> impl Fn(u16) -> Option<u16> + '_ {
+fn link(parents: &[Option<u32>]) -> impl Fn(u32) -> Option<u32> + '_ {
     move |cur| parents.get(cur as usize).copied().flatten()
 }
 
 /// Independent model: `object` and every ancestor, root last.
-fn ancestry(parents: &[Option<u16>], object: u16) -> Vec<u16> {
+fn ancestry(parents: &[Option<u32>], object: u32) -> Vec<u32> {
     let mut chain = std::vec![object];
     let mut cur = object;
     while let Some(p) = parents[cur as usize] {
@@ -68,7 +68,7 @@ fn cards(rng: &mut Rng) -> [Token; TOKEN_SLOTS] {
     let mut tokens = [Token::empty(); TOKEN_SLOTS];
     let count = rng.below(TOKEN_SLOTS as u64 + 1) as usize;
     for _ in 0..count {
-        let object = rng.below(N as u64) as u16;
+        let object = rng.below(N as u64) as u32;
         let mut rights = (rng.next() & u64::from(RIGHT_ALL)) as u8;
         if rights == 0 {
             rights = RIGHT_READ;
@@ -86,9 +86,9 @@ fn covers_matches_ancestry_model() {
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
     for _ in 0..400 {
         let parents = forest(&mut rng);
-        for object in 0..N as u16 {
+        for object in 0..N as u32 {
             let chain = ancestry(&parents, object);
-            for ancestor in 0..N as u16 {
+            for ancestor in 0..N as u32 {
                 assert_eq!(
                     covers(link(&parents), ancestor, object, STEPS),
                     chain.contains(&ancestor),
@@ -107,7 +107,7 @@ fn allows_is_grant_intersect_ancestor_closure() {
     for _ in 0..400 {
         let parents = forest(&mut rng);
         let tokens = cards(&mut rng);
-        for object in 0..N as u16 {
+        for object in 0..N as u32 {
             let chain = ancestry(&parents, object);
             for need in 1..=RIGHT_ALL {
                 // Model: some live card on the chain carries all of `need`.
@@ -133,12 +133,12 @@ fn allowed_on_object_implies_allowed_on_every_descendant() {
     for _ in 0..400 {
         let parents = forest(&mut rng);
         let tokens = cards(&mut rng);
-        for object in 0..N as u16 {
+        for object in 0..N as u32 {
             for need in [RIGHT_READ, RIGHT_WRITE, RIGHT_LIST, RIGHT_ALL] {
                 if !allows(link(&parents), &tokens, object, need, STEPS) {
                     continue;
                 }
-                for child in 0..N as u16 {
+                for child in 0..N as u32 {
                     if parents[child as usize] == Some(object) {
                         assert!(
                             allows(link(&parents), &tokens, child, need, STEPS),
@@ -155,7 +155,7 @@ fn allowed_on_object_implies_allowed_on_every_descendant() {
 fn rights_do_not_sum_across_cards() {
     // READ on the root and WRITE on the leaf: READ|WRITE on the leaf is
     // not granted by either card alone, so it is not granted.
-    let parents = std::vec![None, Some(0u16), Some(1u16)];
+    let parents = std::vec![None, Some(0u32), Some(1u32)];
     let mut tokens = [Token::empty(); TOKEN_SLOTS];
     push_token(&mut tokens, 0, RIGHT_READ).unwrap();
     push_token(&mut tokens, 2, RIGHT_WRITE).unwrap();
@@ -176,7 +176,7 @@ fn revoke_is_exact_object() {
     for _ in 0..400 {
         let parents = forest(&mut rng);
         let before = cards(&mut rng);
-        let object = rng.below(N as u64) as u16;
+        let object = rng.below(N as u64) as u32;
         let rights = (rng.below(u64::from(RIGHT_ALL)) + 1) as u8;
         let mut after = before;
         let result = revoke_token(&mut after, object, rights);
@@ -221,7 +221,7 @@ fn revoke_is_exact_object() {
                 }
                 // Descendants lose exactly what the exact card lost when no
                 // ancestor card covers them.
-                for child in 0..N as u16 {
+                for child in 0..N as u32 {
                     if parents[child as usize] != Some(object) {
                         continue;
                     }
@@ -259,9 +259,9 @@ fn push_merges_same_object_and_caps_at_slots() {
     let mut rng = Rng(0xFEED_FACE_CAFE_BEEF);
     for _ in 0..400 {
         let mut tokens = [Token::empty(); TOKEN_SLOTS];
-        let mut model: Vec<(u16, u8)> = Vec::new();
+        let mut model: Vec<(u32, u8)> = Vec::new();
         for _ in 0..16 {
-            let object = rng.below(12) as u16;
+            let object = rng.below(12) as u32;
             let rights = (rng.below(u64::from(RIGHT_ALL)) + 1) as u8;
             let result = push_token(&mut tokens, object, rights);
             if let Some(entry) = model.iter_mut().find(|(o, _)| *o == object) {
@@ -273,7 +273,7 @@ fn push_merges_same_object_and_caps_at_slots() {
             } else {
                 assert_eq!(result, Err(SysError::NoResource));
             }
-            let live: Vec<(u16, u8)> = tokens
+            let live: Vec<(u32, u8)> = tokens
                 .iter()
                 .filter(|t| t.is_live())
                 .map(|t| (t.object, t.rights))
@@ -326,7 +326,7 @@ fn consume_once_only_takes_the_marked_exact_card() {
     let mut rng = Rng(0xA5A5_5A5A_0F0F_F0F0);
     for _ in 0..1000 {
         let before = cards(&mut rng);
-        let object = rng.below(N as u64) as u16;
+        let object = rng.below(N as u64) as u32;
         let mut after = before;
         let hit = consume_once(&mut after, object);
         let marked = before
@@ -348,8 +348,8 @@ fn drop_tokens_on_removes_exactly_the_listed_objects() {
     let mut rng = Rng(0x0BAD_F00D_DEAD_BEEF);
     for _ in 0..1000 {
         let before = cards(&mut rng);
-        let gone: Vec<u16> = (0..rng.below(4))
-            .map(|_| rng.below(N as u64) as u16)
+        let gone: Vec<u32> = (0..rng.below(4))
+            .map(|_| rng.below(N as u64) as u32)
             .collect();
         let mut after = before;
         drop_tokens_on(&mut after, &gone);
@@ -366,7 +366,7 @@ fn drop_tokens_on_removes_exactly_the_listed_objects() {
 #[test]
 fn covers_terminates_on_a_cyclic_parent_chain() {
     // 0 -> 1 -> 2 -> 0: a corrupt table must not hang the kernel.
-    let parents = std::vec![Some(1u16), Some(2u16), Some(0u16)];
+    let parents = std::vec![Some(1u32), Some(2u32), Some(0u32)];
     assert!(covers(link(&parents), 2, 0, STEPS));
     assert!(!covers(link(&parents), 7, 0, STEPS));
     let tokens = {

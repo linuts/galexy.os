@@ -166,6 +166,8 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(SPAWN_NAME_MAX, 64);
     assert_eq!(SPAWN_ARG_MAX, 4096);
     assert_eq!(STAT_LEN, 48);
+    assert_eq!(ABI_EPOCH, 2);
+    assert_eq!(OS_VERSION, "1.0.0");
     assert_eq!(USER_TOKENS, 8);
     assert_eq!(STAT_FILE, 1);
     assert_eq!(STAT_DIR, 2);
