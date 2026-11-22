@@ -1367,6 +1367,8 @@ main image and are listed at the end.
 | `test-galfs-corrupt`, `test-galfs-idempotent`, `test-crash` | `galfs_disk_recovers_*`, `galfs_disk_refuses_format_when_both_slots_corrupt`, `galfs_idempotent_after_recover`, `crash_injection_picks_consistent_slot` | M39 / M45 crash safety |
 | `test-ata` | `ata_absent_returns_unsupported` | M45 ATA error propagation |
 | `test-dmasplit` | `dmasplit_test_passes` | virtio-blk DMA splits at physical discontinuities (both transports); sentinel frame stays untouched |
+| `test-wire` | `wire_test_passes` | M78 virtio-net: a straddling transmit uses at least two data descriptors, the next physical frame keeps the sentinel, the MAC is `52:54:00:12:34:56`, and a task named `shell` is `AccessDenied` on the wire Cap |
+| `test-lane` | `lane_test_passes` | M82 `Syscall::Lane` is `AccessDenied` for `shell`. The task named `net` writes `lane ok` on one end and reads it on the other |
 | `test-users`, `test-mustchange`, `test-lockout`, `test-idle`, `test-unlock` | `users_test_passes`, `mustchange_test_passes`, `lockout_test_passes`, `idle_test_passes`, `unlock_test_passes` | M37 / M42 / M43 auth, M44 sealed unlock |
 | `test-pipe` | `pipe_test_passes` | M36 pipes + `give`, M57 block/wake |
 | `test-userheap`, `test-channel` | `userheap_test_passes`, `channel_test_passes` | M66 per-task `Map` budget and reap, `Clock`, channel send/recv and `give` |

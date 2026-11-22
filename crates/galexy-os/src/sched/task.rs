@@ -7,7 +7,7 @@ use super::iowait::*;
 use super::spawn::*;
 use super::thread::*;
 
-use super::{channel, galfs, loader, pipe};
+use super::{channel, galfs, lane, loader, pipe};
 use crate::arch::mm;
 use core::sync::atomic::Ordering;
 use galexy_abi::{Cap, CapRights, SysError, SyscallResult};
@@ -86,7 +86,7 @@ pub(in crate::sched) fn install_open(body: FileBody, rights: CapRights) -> Resul
 pub(crate) fn task_read(cap: Cap, dst: &mut [u8]) -> Result<usize, SysError> {
     match task_read_ex(cap, dst)? {
         IoOp::Ready(n) => Ok(n),
-        IoOp::ParkPipe { .. } => Ok(0),
+        IoOp::ParkPipe { .. } | IoOp::ParkLane { .. } => Ok(0),
     }
 }
 
@@ -102,6 +102,8 @@ pub(crate) enum IoOp {
     Ready(usize),
     /// Caller should park on this pipe end.
     ParkPipe { id: u8, read: bool },
+    /// Caller should park on this lane end.
+    ParkLane { id: u8, read: bool },
 }
 
 pub(in crate::sched) fn task_read_inner(cap: Cap, dst: &mut [u8]) -> Result<IoOp, SysError> {
@@ -144,9 +146,14 @@ pub(in crate::sched) fn task_read_inner(cap: Cap, dst: &mut [u8]) -> Result<IoOp
                 }
             }
             FileBody::Channel { .. } => return Err(SysError::Unsupported),
+            FileBody::Lane { id, end } => match lane::try_read(id, end, dst)? {
+                lane::ReadResult::Ready(n) => IoOp::Ready(n),
+                lane::ReadResult::Eof => IoOp::Ready(0),
+                lane::ReadResult::WouldBlock => IoOp::ParkLane { id, read: true },
+            },
         };
         if let IoOp::Ready(n) = op {
-            if !matches!(file.body, FileBody::Pipe { .. }) {
+            if !matches!(file.body, FileBody::Pipe { .. } | FileBody::Lane { .. }) {
                 file.offset = start + n;
             }
         }
@@ -168,7 +175,7 @@ pub(in crate::sched) fn task_read_inner(cap: Cap, dst: &mut [u8]) -> Result<IoOp
 pub(crate) fn task_write(cap: Cap, src: &[u8]) -> Result<usize, SysError> {
     match task_write_ex(cap, src)? {
         IoOp::Ready(n) => Ok(n),
-        IoOp::ParkPipe { .. } => Ok(0),
+        IoOp::ParkPipe { .. } | IoOp::ParkLane { .. } => Ok(0),
     }
 }
 
@@ -179,7 +186,7 @@ pub(crate) fn task_write_ex(cap: Cap, src: &[u8]) -> Result<IoOp, SysError> {
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    let (op, galfs_wrote, wake_pipe) = interrupts::without_interrupts(|| {
+    let (op, galfs_wrote, wake_pipe, wake_lane) = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let owner = running_proc_index(&threads, slot)?;
         let thread = &mut threads[owner];
@@ -190,7 +197,7 @@ pub(crate) fn task_write_ex(cap: Cap, src: &[u8]) -> Result<IoOp, SysError> {
             return Err(SysError::AccessDenied);
         }
         if src.is_empty() {
-            return Ok((IoOp::Ready(0), false, None));
+            return Ok((IoOp::Ready(0), false, None, None));
         }
         if must_change && matches!(file.body, FileBody::Galfs(_)) {
             return Err(SysError::AccessDenied);
@@ -199,20 +206,27 @@ pub(crate) fn task_write_ex(cap: Cap, src: &[u8]) -> Result<IoOp, SysError> {
             FileBody::Galfs(obj) => {
                 let n = galfs::write_at(obj, file.offset, src).ok_or(SysError::BadCap)?;
                 file.offset += n;
-                Ok((IoOp::Ready(n), n > 0, None))
+                Ok((IoOp::Ready(n), n > 0, None, None))
             }
             FileBody::Pipe { id, end } => {
                 if end != pipe::PipeEnd::Write {
                     return Err(SysError::AccessDenied);
                 }
                 match pipe::try_write(id, src)? {
-                    pipe::WriteResult::Ready(n) => Ok((IoOp::Ready(n), false, Some(id))),
+                    pipe::WriteResult::Ready(n) => Ok((IoOp::Ready(n), false, Some(id), None)),
                     pipe::WriteResult::WouldBlock => {
-                        Ok((IoOp::ParkPipe { id, read: false }, false, None))
+                        Ok((IoOp::ParkPipe { id, read: false }, false, None, None))
                     }
                     pipe::WriteResult::Closed => Err(SysError::Unsupported),
                 }
             }
+            FileBody::Lane { id, end } => match lane::try_write(id, end, src)? {
+                lane::WriteResult::Ready(n) => Ok((IoOp::Ready(n), false, None, Some(id))),
+                lane::WriteResult::WouldBlock => {
+                    Ok((IoOp::ParkLane { id, read: false }, false, None, None))
+                }
+                lane::WriteResult::Closed => Err(SysError::Unsupported),
+            },
             FileBody::Archive(_) | FileBody::Channel { .. } => Err(SysError::Unsupported),
         }
     })?;
@@ -221,6 +235,9 @@ pub(crate) fn task_write_ex(cap: Cap, src: &[u8]) -> Result<IoOp, SysError> {
     }
     if let Some(id) = wake_pipe {
         wake_pipe_waiters(id);
+    }
+    if let Some(id) = wake_lane {
+        wake_lane_waiters(id);
     }
     Ok(op)
 }
@@ -383,9 +400,10 @@ pub(crate) fn task_truncate(cap: Cap, new_len: u64) -> Result<(), SysError> {
                 }
                 Ok(())
             }
-            FileBody::Archive(_) | FileBody::Pipe { .. } | FileBody::Channel { .. } => {
-                Err(SysError::Unsupported)
-            }
+            FileBody::Archive(_)
+            | FileBody::Pipe { .. }
+            | FileBody::Channel { .. }
+            | FileBody::Lane { .. } => Err(SysError::Unsupported),
         }
     })?;
     galfs::mark_dirty();
@@ -420,6 +438,7 @@ pub(in crate::sched) fn release_file(file: OpenFile) {
                 release_file(cap);
             }
         }
+        FileBody::Lane { id, end } => lane::close_end(id, end),
         FileBody::Archive(_) | FileBody::Galfs(_) => {}
     }
 }
@@ -510,6 +529,9 @@ pub(crate) fn task_channel() -> Result<(Cap, Cap), SysError> {
         if thread.is_init {
             let _ = INIT_CTRL.compare_exchange(0xFF, id, Ordering::AcqRel, Ordering::Acquire);
         }
+        if thread.name() == "net" {
+            let _ = NET_CTRL.compare_exchange(0xFF, id, Ordering::AcqRel, Ordering::Acquire);
+        }
         let rights = CapRights::READ.union(CapRights::WRITE);
         for (end, index) in [free[0], free[1]].into_iter().enumerate() {
             thread.files[index] = Some(OpenFile {
@@ -547,9 +569,17 @@ pub(crate) fn task_send(cap: Cap, bytes: &[u8], cap0: u64, cap1: u64) -> Result<
     let id = interrupts::without_interrupts(|| -> Result<u8, SysError> {
         let mut threads = THREADS.lock();
         let owner = running_proc_index(&threads, slot)?;
-        let thread = &mut threads[owner];
-        let (id, end) = channel_end(thread, cap)?;
+        let (id, end) = {
+            let thread = &mut threads[owner];
+            channel_end(thread, cap)?
+        };
         let ctrl = INIT_CTRL.load(Ordering::Acquire);
+        let net = NET_CTRL.load(Ordering::Acquire);
+        if net != 0xFF && id == net && end == 0 {
+            deliver_net_send(&mut threads, owner, bytes, cap0, cap1)?;
+            return Ok(id);
+        }
+        let thread = &mut threads[owner];
         if ctrl != 0xFF && id == ctrl && end == 0 {
             if cap0 != 0 || cap1 != 0 {
                 return Err(SysError::BadValue);
@@ -685,6 +715,183 @@ pub(in crate::sched) fn deliver_init_reply(
     };
     finish_chan_waiter(&threads[index], result);
     Ok(())
+}
+
+/// `net` answering a control `send`. One optional lane Cap moves onto
+/// the waiter. The reply the waiter reads is 8 little-endian Cap bits
+/// (0 when there is no lane) followed by `bytes`.
+fn deliver_net_send(
+    threads: &mut [Thread],
+    sender: usize,
+    bytes: &[u8],
+    cap0: u64,
+    cap1: u64,
+) -> Result<(), SysError> {
+    if cap0 != 0 && cap1 != 0 {
+        return Err(SysError::BadValue);
+    }
+    let bits = if cap0 != 0 { cap0 } else { cap1 };
+    let taken = if bits == 0 {
+        None
+    } else {
+        let index = file_slot(Cap::from_bits(bits))?;
+        let Some(file) = threads[sender].files[index].take() else {
+            return Err(SysError::BadCap);
+        };
+        Some((index, file))
+    };
+    let moved = taken.as_ref().map(|(_, file)| *file);
+    if let Err((err, restore)) = install_net_reply(threads, bytes, moved) {
+        if restore {
+            if let Some((index, file)) = taken {
+                threads[sender].files[index] = Some(file);
+            }
+        }
+        return Err(err);
+    }
+    Ok(())
+}
+
+/// `Err((_, true))` means the caller still owns `file` and must put it back.
+fn install_net_reply(
+    threads: &mut [Thread],
+    bytes: &[u8],
+    file: Option<OpenFile>,
+) -> Result<(), (SysError, bool)> {
+    let Some(index) = threads.iter().position(|t| {
+        t.state.load(Ordering::Acquire) == STATE_WAITING
+            && t.io_kind.load(Ordering::Acquire) == IO_NET_RPC
+    }) else {
+        return Err((SysError::NoResource, true));
+    };
+    let addr = threads[index].io_addr.load(Ordering::Acquire);
+    let len = threads[index].io_len.load(Ordering::Acquire) as usize;
+    let cr3 = threads[index].cr3.load(Ordering::Acquire);
+    if len < 8 {
+        return Err((SysError::BadValue, true));
+    }
+    let (cap_bits, slot, owner) = if let Some(file) = file.as_ref() {
+        let owner = proc_index(threads, index + 1).ok_or((SysError::BadCap, true))?;
+        let Some(slot) = threads[owner].files.iter().position(|s| s.is_none()) else {
+            return Err((SysError::NoResource, true));
+        };
+        let rights = file.rights;
+        (
+            Cap::new(galexy_abi::FILE_CAP_BASE + slot as u64, rights).bits(),
+            Some(slot),
+            Some(owner),
+        )
+    } else {
+        (0, None, None)
+    };
+    let mut raw = [0u8; galexy_abi::CHAN_MSG_MAX];
+    raw[..8].copy_from_slice(&cap_bits.to_le_bytes());
+    let text = bytes.len().min(len - 8).min(raw.len() - 8);
+    raw[8..8 + text].copy_from_slice(&bytes[..text]);
+    let n = 8 + text;
+    let root = PhysFrame::from_start_address(PhysAddr::new(cr3)).expect("waiter cr3");
+    // SAFETY: parked waiter's tree, not CR3-active. Phys-map copy.
+    let copied = unsafe {
+        crate::arch::mm::with_table(root, |mapper| copy_to_user_via(mapper, addr, &raw[..n]))
+    };
+    if !copied {
+        return Err((SysError::BadBuffer, true));
+    }
+    if let (Some(file), Some(slot), Some(owner)) = (file, slot, owner) {
+        threads[owner].files[slot] = Some(file);
+    }
+    finish_chan_waiter(&threads[index], SyscallResult::ok(n as u64));
+    Ok(())
+}
+
+/// Mints a lane. Only the task named `net` may call this.
+pub(crate) fn task_lane() -> Result<(Cap, Cap), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &mut threads[owner];
+        if thread.name() != "net" {
+            return Err(SysError::AccessDenied);
+        }
+        let mut free = [usize::MAX; 2];
+        let mut nfree = 0usize;
+        for (i, slot) in thread.files.iter().enumerate() {
+            if slot.is_none() {
+                free[nfree] = i;
+                nfree += 1;
+                if nfree == 2 {
+                    break;
+                }
+            }
+        }
+        if nfree < 2 {
+            return Err(SysError::NoResource);
+        }
+        let id = lane::alloc()?;
+        let rights = CapRights::READ.union(CapRights::WRITE);
+        for (end, index) in [free[0], free[1]].into_iter().enumerate() {
+            thread.files[index] = Some(OpenFile {
+                body: FileBody::Lane { id, end: end as u8 },
+                offset: 0,
+                rights,
+            });
+        }
+        Ok((
+            Cap::new(galexy_abi::FILE_CAP_BASE + free[0] as u64, rights),
+            Cap::new(galexy_abi::FILE_CAP_BASE + free[1] as u64, rights),
+        ))
+    })
+}
+
+/// One net control RPC is in flight. `Ok(())` means the caller is parked.
+pub(crate) fn task_net_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(), SysError> {
+    if bytes.len() > galexy_abi::INIT_RPC_MAX || reply_len as usize > galexy_abi::CHAN_MSG_MAX {
+        return Err(SysError::BadValue);
+    }
+    if (reply_len as usize) < 8 {
+        return Err(SysError::BadValue);
+    }
+    let ctrl = NET_CTRL.load(Ordering::Acquire);
+    if ctrl == 0xFF {
+        return Err(SysError::Unsupported);
+    }
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let (admin, tty, debug_id, session_gen) = {
+            let owner = running_proc_index(&threads, slot)?;
+            let thread = &threads[owner];
+            if thread.fs_root == galfs::NO_OBJECT {
+                return Err(SysError::AccessDenied);
+            }
+            let admin = u8::from(galfs::is_admin_root(thread.fs_root));
+            (admin, thread.tty, thread.debug_id, thread.session_gen)
+        };
+        if threads.iter().any(|t| {
+            t.state.load(Ordering::Acquire) == STATE_WAITING
+                && t.io_kind.load(Ordering::Acquire) == IO_NET_RPC
+        }) {
+            return Err(SysError::NoResource);
+        }
+        let mut msg = [0u8; galexy_abi::CHAN_MSG_MAX];
+        let n = galexy_abi::INIT_RPC_HDR + bytes.len();
+        msg[0] = admin;
+        msg[1] = tty;
+        msg[4..12].copy_from_slice(&debug_id.to_le_bytes());
+        msg[12..20].copy_from_slice(&session_gen.to_le_bytes());
+        msg[galexy_abi::INIT_RPC_HDR..n].copy_from_slice(bytes);
+        channel::enqueue(ctrl, 1, &msg[..n], [None, None])?;
+        park_io(&mut threads, slot, IO_NET_RPC, ctrl, reply, reply_len, 0);
+        wake_net_for_control(&mut threads);
+        Ok(())
+    })
 }
 
 /// Lets init observe a queued control message without waiting out a backoff
@@ -864,7 +1071,7 @@ pub(crate) fn task_close(cap: Cap) -> Result<(), SysError> {
         });
     }
     let index = file_slot(cap)?;
-    let (wake_pipe, wake_chan) = interrupts::without_interrupts(|| {
+    let (wake_pipe, wake_chan, wake_lane) = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let owner = running_proc_index(&threads, slot)?;
         let thread = &mut threads[owner];
@@ -874,16 +1081,20 @@ pub(crate) fn task_close(cap: Cap) -> Result<(), SysError> {
         Ok(match file.body {
             FileBody::Pipe { id, end } => {
                 pipe::close_end(id, end);
-                (Some(id), None)
+                (Some(id), None, None)
             }
             FileBody::Channel { id, end } => {
                 let held = channel::close_end(id, end);
                 for cap in held.into_iter().flatten() {
                     release_file(cap);
                 }
-                (None, Some(id))
+                (None, Some(id), None)
             }
-            _ => (None, None),
+            FileBody::Lane { id, end } => {
+                lane::close_end(id, end);
+                (None, None, Some(id))
+            }
+            _ => (None, None, None),
         })
     })?;
     // Wake outside THREADS — the wake helpers take the same lock.
@@ -892,6 +1103,9 @@ pub(crate) fn task_close(cap: Cap) -> Result<(), SysError> {
     }
     if let Some(id) = wake_chan {
         wake_channel_waiters(id);
+    }
+    if let Some(id) = wake_lane {
+        wake_lane_waiters(id);
     }
     Ok(())
 }

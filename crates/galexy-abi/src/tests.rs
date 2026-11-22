@@ -78,6 +78,8 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(reserved::FILES_INDEX, 0x8006);
     assert_eq!(reserved::DMESG_INDEX, 0x8007);
     assert_eq!(reserved::INIT_INDEX, 0x8008);
+    assert_eq!(reserved::WIRE_INDEX, 0x8009);
+    assert_eq!(reserved::NET_INDEX, 0x800A);
     assert_eq!(INIT_RPC_HDR, 20);
     assert_eq!(INIT_RPC_MAX, 236);
     assert_eq!(INIT_OP_STATUS, 1);
@@ -93,8 +95,17 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(DATE_SET, 1);
     assert_eq!(RECV_POLL, 1);
     assert_eq!(WAIT_POLL, 1);
-    assert_eq!(MAX_SYSCALL, 34);
+    assert_eq!(MAX_SYSCALL, 35);
     assert!(matches!(SYSCALLS[34], Syscall::Date));
+    assert!(matches!(SYSCALLS[35], Syscall::Lane));
+    assert_eq!(NET_OP_LINK, 1);
+    assert_eq!(NET_OP_DIAL, 2);
+    assert_eq!(NET_OP_ALLOW, 3);
+    assert_eq!(NET_OP_GRANT, 4);
+    assert_eq!(NET_OP_REVOKE, 5);
+    assert_eq!(NET_OP_SERVE, 6);
+    assert_eq!(LANE_SLOTS, 32);
+    assert_eq!(LANE_BYTES, 16 * 1024);
     assert_eq!(POWER_SHUTDOWN, 0);
     assert_eq!(POWER_REBOOT, 1);
     assert_eq!(CapRights::POWER.bits(), 1 << 5);

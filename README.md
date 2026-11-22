@@ -23,15 +23,19 @@ Milestones 72–77 run a Cranelift `rustc` on Galexy and put it on the
 login image: `rustc hello.rs -o /hello`, then `/hello`.
 Milestones 91–96 put RustPython on that same boot: `python hello.py`,
 and `python` with no file is the REPL.
-The QEMU suite is 127 runner tests plus host tests (`test-big` boots
+The QEMU suite is 150 runner tests plus host tests (`test-big` boots
 only under KVM; the rustc and python boots run when those ELFs were
-present at image build). The Milestone 52 review checklist is complete except
+present at image build). Phase 10 adds `wire_test_passes`,
+`lane_test_passes`, `net_udp_and_tcp_reach_the_host`,
+`fetch_grant_typing_e2e`, and `net_flood_deadline_leaves_the_seat`.
+The Milestone 52 review checklist is complete except
 the `review-rc1` tag, which is the owner's call. The `v1.0` tag waits
-on Phase 10 (Milestones 78–85, an address, a datagram, and a lane
-you can `fetch`; [`docs/NET.md`](docs/NET.md)), on Phase 13
+on Phase 13
 (Milestones 86–88, a listed USB device and the driver table;
 [`docs/USB.md`](docs/USB.md)),
 and on a KVM pass (BIOS+UEFI, TCG+KVM, q35+pc, `PERF.md`).
+Phase 10 has landed ([`docs/NET.md`](docs/NET.md)): an address, a
+datagram, and a lane you can `fetch`.
 Phase 15 (Milestones 97–99, [`docs/GALFS.md`](docs/GALFS.md)) is the
 sealed-commit plan: one virtio request, then a commit of the changed
 bytes plus one metadata seal. It does not gate `v1.0`.

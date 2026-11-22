@@ -12,6 +12,7 @@ path = "src/main.rs"
 galexy-rt = { path = "../galexy-rt" }
 galexy-abi = { path = "../../galexy-abi" }
 galexy-core = { path = "../../galexy-core" }
+galexy-netcfg = { path = "../../galexy-netcfg" }
 
 [build-dependencies]
 galexy-abi = { path = "../../galexy-abi" }

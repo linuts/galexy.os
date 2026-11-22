@@ -73,8 +73,9 @@ gaps or duplicates). Appending is allowed; inserting is not.
 | 32 | `thread_exit` | stable (M70) | `RDI` = exit code. The calling thread only. From the process leader this is `exit` |
 | 33 | `futex` | stable (M70) | `RDI` = `FUTEX_WAIT` (0) or `FUTEX_WAKE` (1), `RSI` = aligned `u32`, `RDX` = expected or count, `R8` = timeout ms (`0` = none, clamped to `SLEEP_MS_MAX`). Wait returns `0` on wake or on a mismatched word, `TimedOut` if the timeout fires first. Wake returns how many woke. Keyed by address space and address |
 | 34 | `date` | stable (M90) | `RDI` = `DATE_READ` (0) or `DATE_SET` (1). Read returns UTC seconds since 1970-01-01 00:00:00, or `NoResource` when unset. Set takes those seconds in `RSI`, admin only (`AccessDenied` otherwise, `BadValue` outside 1970..=2099). No timezone, no leap second. `clock` and `sleep` stay monotonic |
+| 35 | `lane` | experimental (M82) | Only the task named `net` may call it. `RDI` is 16 writable user bytes. On success the kernel writes two Cap words, end 0 then end 1. Everyone else is `AccessDenied`. `read` and `write` on those Caps move plaintext. 32 lanes, 16 KiB each direction. The number does not change shape after Milestone 85 without an entry here |
 
-`MAX_SYSCALL = 34`. The table is capped at 64 entries until there is
+`MAX_SYSCALL = 35`. The table is capped at 64 entries until there is
 an ABI version story.
 
 ## Error codes (`SysError`) — stable
@@ -95,7 +96,7 @@ Unknown codes decode to `Unsupported`. New codes append.
 | --- | --- | --- |
 | `Cap` | `u64`: bits 0..48 index, bits 48..64 rights snapshot | stable |
 | `CapRights` | `u16` mask: READ 1, WRITE 2, SIGNAL 4, WAIT 8, EXEC 16, POWER 32, PROC_WAIT 64, PROC_KILL 128, PROC_TRANSFER 256, PROC_INSPECT 512 | stable (SIGNAL / WAIT are reserved groundwork, unused) |
-| Reserved indexes | console 1, self 2, keyboard 0x8000, loader 0x8001, stats 0x8002, tasks 0x8003, threads 0x8004, power 0x8005, files 0x8006, dmesg 0x8007, init 0x8008 | stable |
+| Reserved indexes | console 1, self 2, keyboard 0x8000, loader 0x8001, stats 0x8002, tasks 0x8003, threads 0x8004, power 0x8005, files 0x8006, dmesg 0x8007, init 0x8008, wire 0x8009, net 0x800A | stable through init. Wire and net are experimental (M78, M82): only the task named `net` may read or write the wire. `send` on net index `0x800A` parks for a reply the way init does. The first 8 reply bytes are a lane Cap (0 if none), then the text. Opcodes 1–6 are link, dial, allow, grant, revoke, serve. Logged-out is `AccessDenied`. The kernel stamps the same 20-byte header as init. These opcodes do not change shape after Milestone 85 without an entry here |
 | File cap band | `FILE_CAP_BASE = 3`, sixty-four per task (`MAX_OPEN_FILES`) | stable (ceiling raised in Milestone 71) |
 | Process cap band | `PROC_CAP_BASE = 0x80`, `MAX_PROC_CAPS = 16` per task | stable as of Milestone 71 (base moved from `0x40` so file caps `3..=66` do not overlap; ceiling stays 16). `SPAWN_WITH_CAPS` nibbles still name slots 0–14 |
 | Query snapshots (`stats`, `tasks`, `threads`, `files`, `dmesg`, self) | text, one record per line; field names are informational | **unstable** — parse defensively; field set grows |

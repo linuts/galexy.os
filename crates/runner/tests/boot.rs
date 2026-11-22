@@ -11,6 +11,9 @@ use common::{
     boot_with_galfs_torn, boot_with_galfs_virtio, boot_with_galfs_virtio_legacy, boot_with_tpm,
     image, uart_login_serial, use_kvm, GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
 };
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 #[test]
@@ -2312,6 +2315,7 @@ fn keystroke(c: char) -> (String, String) {
         '{' => "shift+bracket_left".to_string(),
         '}' => "shift+bracket_right".to_string(),
         ';' => "semicolon".to_string(),
+        ':' => "shift+semicolon".to_string(),
         '.' => "dot".to_string(),
         ',' => "comma".to_string(),
         '-' => "minus".to_string(),
@@ -5793,6 +5797,265 @@ fn uefi_shell_live(serial: &str) -> bool {
 
 /// Highest `Ns:` uptime prefix seen in a serial transcript (tickless may
 /// skip printing on the exact `1s:` boundary).
+fn net_lines(lines: &[(&str, &str)], final_marker: &str, timeout: Duration) -> String {
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    for (line, marker) in lines {
+        owned.extend(type_line(line, marker));
+    }
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        final_marker,
+        Duration::from_millis(30),
+        timeout,
+    )
+}
+
+#[test]
+fn wire_test_passes() {
+    let (code, serial) = boot_galfs_once_virtio(&image("test-wire"), false);
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-wire should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-wire] passed"),
+        "wire proof missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-wire] mac 52:54:00:12:34:56"),
+        "logged mac; serial:\n{serial}"
+    );
+}
+
+#[test]
+fn lane_test_passes() {
+    let (code, serial) = boot(&image("test-lane"));
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-lane should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-lane] passed"),
+        "lane proof missing; serial:\n{serial}"
+    );
+    assert!(serial.contains("[test-lane] shell denied"));
+}
+
+/// Milestone 80: the service takes the QEMU user-net lease and the host
+/// receives one datagram whose payload is `galexy`.
+#[test]
+fn net_udp_and_tcp_reach_the_host() {
+    let udp = std::net::UdpSocket::bind("0.0.0.0:4580").expect("bind udp 4580");
+    udp.set_read_timeout(Some(Duration::from_millis(200)))
+        .expect("udp timeout");
+    let tcp = std::net::TcpListener::bind("0.0.0.0:4581").expect("bind tcp 4581");
+    tcp.set_nonblocking(true).expect("tcp nonblocking");
+    let got = Arc::new(AtomicUsize::new(0));
+    let flag = Arc::clone(&got);
+    let reader = std::thread::spawn(move || {
+        let mut buf = [0u8; 256];
+        for _ in 0..500 {
+            if let Ok((n, _)) = udp.recv_from(&mut buf) {
+                if buf[..n].windows(6).any(|w| w == b"galexy") {
+                    flag.store(n, Ordering::Relaxed);
+                    return;
+                }
+            }
+        }
+    });
+    let serial = boot_liveness_until(&image("galexy-os"), Duration::from_secs(120), |s| {
+        s.contains("[net] addr 10.0.2.15/24")
+            && s.contains("[net] udp ok")
+            && s.contains("[net] tcp ok")
+            && s.contains("[net] link up mac=52:54:00:12:34:56")
+    });
+    let _ = tcp.accept();
+    reader.join().expect("udp reader");
+    assert!(
+        got.load(Ordering::Relaxed) > 0,
+        "host did not receive the galexy datagram; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[net] udp ok") && serial.contains("[net] tcp ok"),
+        "guest did not finish the proofs; serial:\n{serial}"
+    );
+}
+
+/// Milestone 84: `fetch` before a grant opens nothing. After the grant it
+/// prints the peer's body. A different key is rejected.
+#[test]
+fn fetch_grant_typing_e2e() {
+    let (cert_der, key_der, pin) = host_echo_cert();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_bg = Arc::clone(&hits);
+    let server = std::thread::spawn(move || host_echo_serve(cert_der, key_der, hits_bg));
+    let wrong = "11".repeat(32);
+    let save_pin = format!("echo {pin} > k");
+    let save_wrong = format!("echo {wrong} > b");
+    let serial = net_lines(
+        &[
+            (save_pin.as_str(), "admin@galexy>"),
+            ("net allow echo 10.0.2.2:4582 k", "ok"),
+            ("fetch echo", "access denied"),
+            ("net grant echo admin", "ok"),
+            ("fetch echo", "lane ok"),
+            (save_wrong.as_str(), "admin@galexy>"),
+            ("net allow bad 10.0.2.2:4582 b", "ok"),
+            ("net grant bad admin", "ok"),
+            ("fetch bad", "access denied"),
+        ],
+        "lane ok",
+        Duration::from_secs(150),
+    );
+    drop(server);
+    assert!(
+        serial.contains("lane ok"),
+        "granted fetch did not print the body; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("access denied"),
+        "ungranted fetch was not refused; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("fp=") && serial.contains("result=") && !serial.contains("key="),
+        "audit line; serial:\n{serial}"
+    );
+    let n = hits.load(Ordering::Relaxed);
+    assert_eq!(
+        n, 2,
+        "expected the granted dial and the wrong-key dial, not the ungranted one; got {n}; serial:\n{serial}"
+    );
+}
+
+/// Milestone 85: connections a peer never finishes are closed on the
+/// deadline, and `svc status shell` still answers.
+#[test]
+fn net_flood_deadline_leaves_the_seat() {
+    let stall = std::net::TcpListener::bind("0.0.0.0:4583").expect("bind tcp 4583");
+    stall.set_nonblocking(true).expect("stall nonblocking");
+    let held = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&held);
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_bg = Arc::clone(&stop);
+    let accepter = std::thread::spawn(move || {
+        let mut open = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(200);
+        while !stop_bg.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
+            if let Ok((sock, _)) = stall.accept() {
+                let _ = sock.set_read_timeout(Some(Duration::from_secs(30)));
+                open.push(sock);
+                count.fetch_add(1, Ordering::Relaxed);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        drop(open);
+    });
+    let serial = net_lines(
+        &[
+            ("net link", "up 10.0.2.15/24"),
+            ("svc status net", "net running"),
+            ("svc status shell", "shell running"),
+        ],
+        "[net] deadline",
+        Duration::from_secs(180),
+    );
+    stop.store(true, Ordering::Relaxed);
+    let _ = accepter.join();
+    assert!(
+        serial.contains("shell running"),
+        "svc status shell did not answer; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[net] deadline"),
+        "the deadline never fired; serial:\n{serial}"
+    );
+    let running_at = serial.find("shell running").unwrap_or(usize::MAX);
+    let deadline_at = serial.find("[net] deadline").unwrap_or(0);
+    assert!(
+        running_at < deadline_at,
+        "status answered after the deadline; serial:\n{serial}"
+    );
+    assert!(
+        held.load(Ordering::Relaxed) > 0,
+        "the stall peer accepted nothing; serial:\n{serial}"
+    );
+}
+
+fn host_echo_cert() -> (Vec<u8>, Vec<u8>, String) {
+    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).expect("ed25519 key");
+    let params = rcgen::CertificateParams::new(vec!["echo".into()]).expect("cert params");
+    let cert = params.self_signed(&key).expect("self sign");
+    let der = cert.der().to_vec();
+    let pin = ed25519_pin(&der);
+    let key_der = key.serialize_der();
+    (der, key_der, pin)
+}
+
+fn ed25519_pin(der: &[u8]) -> String {
+    let oid = [0x06, 0x03, 0x2b, 0x65, 0x70];
+    let pos = der
+        .windows(oid.len())
+        .position(|w| w == oid)
+        .expect("ed25519 oid");
+    let rest = &der[pos + oid.len()..];
+    let bit = rest
+        .windows(3)
+        .position(|w| w == [0x03, 0x21, 0x00])
+        .expect("ed25519 bit string");
+    rest[bit + 3..bit + 35]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn host_echo_serve(cert_der: Vec<u8>, key_der: Vec<u8>, hits: Arc<AtomicUsize>) {
+    let cert = rustls::pki_types::CertificateDer::from(cert_der);
+    let key = rustls::pki_types::PrivateKeyDer::try_from(key_der).expect("key der");
+    let provider = rustls::crypto::ring::default_provider();
+    let config = Arc::new(
+        rustls::ServerConfig::builder_with_provider(provider.into())
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .expect("tls 1.3")
+            .with_no_client_auth()
+            .with_single_cert(vec![cert], key)
+            .expect("server config"),
+    );
+    let listener = std::net::TcpListener::bind("0.0.0.0:4582").expect("bind tcp 4582");
+    listener.set_nonblocking(true).expect("echo nonblocking");
+    let deadline = std::time::Instant::now() + Duration::from_secs(260);
+    while std::time::Instant::now() < deadline {
+        let Ok((mut sock, _)) = listener.accept() else {
+            std::thread::sleep(Duration::from_millis(50));
+            continue;
+        };
+        hits.fetch_add(1, Ordering::Relaxed);
+        let _ = sock.set_nonblocking(false);
+        let _ = sock.set_read_timeout(Some(Duration::from_secs(8)));
+        let _ = sock.set_write_timeout(Some(Duration::from_secs(8)));
+        let mut conn = rustls::ServerConnection::new(Arc::clone(&config)).expect("tls");
+        {
+            let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+            let _ = tls.write_all(b"lane ok");
+        }
+        conn.send_close_notify();
+        while conn.wants_write() {
+            let _ = conn.write_tls(&mut sock);
+        }
+        let _ = sock.shutdown(std::net::Shutdown::Both);
+    }
+}
+
 fn serial_uptime_secs(serial: &str) -> u64 {
     let mut best = 0u64;
     for line in serial.lines() {

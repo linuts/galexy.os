@@ -124,6 +124,11 @@ pub(crate) fn task_spawn(
             if seat && !threads[slot - 1].is_init {
                 return Err(SysError::Unsupported);
             }
+            // The wire holder is a label only init may create. A seat that
+            // spawned `net` would own the device.
+            if name == "net" && !threads[slot - 1].is_init {
+                return Err(SysError::AccessDenied);
+            }
             let thread = &threads[owner];
             let (cap0, cap1) = (caps[0], caps[1]);
             if cap0 != 0xFF {
@@ -1641,7 +1646,9 @@ pub(crate) fn task_seek(cap: Cap, offset: i64, whence: u64) -> Result<u64, SysEr
             FileBody::Galfs(obj) => {
                 galfs::with_file(obj, |o| o.len as usize).ok_or(SysError::BadCap)?
             }
-            FileBody::Pipe { .. } | FileBody::Channel { .. } => return Err(SysError::Unsupported),
+            FileBody::Pipe { .. } | FileBody::Channel { .. } | FileBody::Lane { .. } => {
+                return Err(SysError::Unsupported);
+            }
         };
         let base = match whence {
             galexy_abi::SEEK_SET => 0i64,

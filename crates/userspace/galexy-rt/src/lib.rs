@@ -764,6 +764,44 @@ pub fn chan_recv(cap: Cap, buf: &mut [u8], caps_out: Option<&mut [u64; 2]>) -> S
     )
 }
 
+/// Asks the `net` service to run `payload`. Parks until it replies.
+///
+/// `reply` must hold at least 8 bytes. The first 8 are a little-endian
+/// lane Cap (`0` when the reply has no lane). The rest is text.
+/// `Unsupported` means `net` has not created its control channel.
+pub fn net_rpc(payload: &[u8], reply: &mut [u8]) -> SyscallResult {
+    if payload.len() > galexy_abi::INIT_RPC_MAX
+        || reply.len() < 8
+        || reply.len() > galexy_abi::CHAN_MSG_MAX
+    {
+        return SyscallResult::err(galexy_abi::SysError::BadValue);
+    }
+    syscall_r8r9(
+        Syscall::Send as u64,
+        galexy_abi::reserved::net(CapRights::WRITE).bits(),
+        payload.as_ptr() as u64,
+        payload.len() as u64,
+        reply.as_mut_ptr() as u64,
+        reply.len() as u64,
+    )
+}
+
+/// Mints a lane pair. Only the task named `net` succeeds. `out` is
+/// `[our end, the end to give away]`.
+pub fn lane_pair(out: &mut [u64; 2]) -> SyscallResult {
+    syscall(Syscall::Lane as u64, out.as_mut_ptr() as u64, 0, 0)
+}
+
+/// One received Ethernet frame. `value == 0` means the queue is empty.
+pub fn wire_read(buf: &mut [u8]) -> SyscallResult {
+    read(galexy_abi::reserved::wire(CapRights::READ), buf)
+}
+
+/// Transmits one Ethernet frame.
+pub fn wire_write(buf: &[u8]) -> SyscallResult {
+    write(galexy_abi::reserved::wire(CapRights::WRITE), buf)
+}
+
 /// Like [`chan_recv`], but an empty queue is [`galexy_abi::SysError::NoResource`]
 /// and the caller does not park. EOF is still success with `value == 0`.
 pub fn chan_recv_poll(cap: Cap, buf: &mut [u8]) -> SyscallResult {

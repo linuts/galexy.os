@@ -2,7 +2,9 @@
 
 Phase 10. Milestones **78–85**. Required before the `v1.0` tag.
 Checkboxes live in `TODO.md`. This page is the design those boxes
-implement. Nothing in this phase is built yet.
+implement. Milestones 78–85 have landed, except one gate on
+`serve`: the listener is attached, and a second call does not yet
+receive the next inbound lane. That TODO box stays open.
 
 Galexy has no network today, and that is why nothing in the tree is
 reachable remotely (`THREAT.md`). The tag should not ship that way.
@@ -180,8 +182,7 @@ no pinned resolver fails closed.
 
 ## Adversary this adds
 
-`THREAT.md` adversary **A6**, once Milestone 78 merges. Until then the
-row is planned, not defended.
+`THREAT.md` adversary **A6** is defended by the tests named there.
 
 | Has | Wants | What answers |
 | --- | --- | --- |
@@ -265,8 +266,10 @@ on serial or `dmesg`. `docs/ABI.md` marks syscall 35 and index
 The directory, `allow` / `grant` / `revoke` / `serve` / `dial`.
 Each change rewrites the record, so a restart of `net` keeps it.
 A name the seat was not granted does not open a TCP connection.
-Admin grants it; dial then returns a lane. A gate delivers the next
-lane to the listener task and to nobody else. Locators and ports
+Admin grants it; dial then returns a lane. `serve` attaches a gate.
+Handing the next inbound lane to that listener, and to nobody else,
+is still open: a second `serve` does not return a lane Cap, and raw
+TCP is not delivered as cleartext. Locators and ports
 exist in the record and in the admin opcode payload. They do not
 appear in `galexy-abi` as a general argument, and `fetch` will not
 take them. Literal locators are enough; DNS is wired here only as
@@ -306,8 +309,7 @@ API beside it.
 3. Update `docs/ABI.md` when a reserved index or syscall number is
    involved, `docs/STYLE.md` when a rule changes, and `docs/DEVICES.md`
    when a device row changes.
-4. The wiki page Network is the reading copy. It stays in step with
-   this file.
+4. This file is the reading copy. The repo has no `wiki/` directory.
 5. A test is named before the box is checked. A box is checked only
    after a run shows the behavior.
 
@@ -327,9 +329,7 @@ QUIC, 0-RTT, device checksum offload, and a CA bundle are later
 carriers and later rights. They attach to the lane. They do not add
 `socket`.
 
-## Files this phase will touch
-
-When the milestones start, not in the plan PR:
+## Files this phase touches
 
 | Piece | Where |
 | --- | --- |
