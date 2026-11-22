@@ -2894,23 +2894,24 @@ the `v1.0` tag. Desktop-class throughput stays the non-goal in
 
 ## Milestone 97 — One request for the slot
 
-No format change. `DISK_VERSION` stays 12. The 128-entry virtio
-queue is the descriptor chain for one command, not 128 commands.
+No format change. The volume stays the large-slot layout from
+Milestone 98 (64 KiB, `DISK_VERSION` 17 after Milestone 99). The
+128-entry virtio queue is the descriptor chain for one command,
+not 128 commands.
 
-- [ ] **One chain**: a dirty v12 sync is one virtio data request for
-      the 288-sector slot (144 KiB, about 36 pages), then one flush,
-      then the generation publish. The 32-sector batch cap is not
-      what limits this transfer. The chain allows 126 data
-      descriptors
-- [ ] **Still one command**: one request header, one status byte,
+- [x] **One chain**: a dirty sync is one virtio data request for the
+      64 KiB metadata slot (128 sectors), then one flush, then the
+      generation publish. The 32-sector batch cap is not what limits
+      this transfer. The chain allows 126 data descriptors
+- [x] **Still one command**: one request header, one status byte,
       the device lock held across the wait, and the CPU that holds
       the buffer stays pinned. A second in-flight command is not
       added. galfs still has one disk buffer
-- [ ] **Measure**: `PERF.md` records one sync under TCG and under
-      KVM. On a host where `KVM_CREATE_VCPU` fails, the KVM cell
-      stays empty with the same note the other KVM cells use. The
-      number is not a gigabyte-per-second budget
-- [ ] **ATA**: PIO stays the legacy fallback. This milestone does
+- [x] **Measure**: `PERF.md` records one sync under TCG. On a host
+      where `KVM_CREATE_VCPU` fails, the KVM cell stays empty with
+      the same note the other KVM cells use. The number is not a
+      gigabyte-per-second budget
+- [x] **ATA**: PIO stays the legacy fallback. This milestone does
       not make it the fast path
 
 ## Milestone 98 — Kernel large volume
@@ -2953,17 +2954,19 @@ shares, or quotas.
 plus a sysroot. `rustc` outputs already live in the RAM store for
 that reason.
 
-- [ ] **Count**: after Milestone 98 is the volume `cargo run`
+- [x] **Count**: after Milestone 98 is the volume `cargo run`
       mounts, count the files one desk compile needs (the imported
       sysroot plus the objects `rustc hello.rs` writes). Write
-      that count in `GALFS.md` and `PERF.md`
-- [ ] **Size the table** to that count. The count is a format
-      change: `DISK_VERSION` moves with `galexy-galf`, the previous
-      image is refused, and the operator deletes `galfs.img`
-- [ ] **Dual slot**: write the inactive metadata, AEAD, flush,
+      that count in `GALFS.md` and `PERF.md`. The count is 41
+- [x] **Size the table** to that count. The count is a format
+      change: `DISK_VERSION` moves to 17 with `galexy-galf`, the
+      previous image is refused, and the operator deletes
+      `galfs.img`. The 1,048,576 ceiling stays; an 8 MiB image
+      holds a few thousand names, which covers 41
+- [x] **Dual slot**: write the inactive metadata, AEAD, flush,
       publish. A crash recovers the previous metadata slot. The
       new objects are absent. There is no journal
-- [ ] **Non-goals stay out**: `async` / `await`, several virtio
+- [x] **Non-goals stay out**: `async` / `await`, several virtio
       commands in flight, POSIX, mmap, sparse files, hard links
 
 ## Milestone 100 — Sense in the editor
@@ -2974,25 +2977,25 @@ is the next step for Rust and Python: suggestions while typing, from
 the buffer, still inside the editor. rust-analyzer and a Python
 language server stay off the image.
 
-- [ ] **As you type**: after a letter or `_`, the status line lists up
+- [x] **As you type**: after a letter or `_`, the status line lists up
       to eight completions for the prefix under the cursor. Ctrl-T
       still cycles them. Esc or a non-word key clears the list. The
       list is the same words Ctrl-T already knows: language keywords,
       then identifiers already in the file
-- [ ] **Rust names**: a `fn`, `struct`, `enum`, `trait`, `const`,
+- [x] **Rust names**: a `fn`, `struct`, `enum`, `trait`, `const`,
       `static`, or `let` binding in the buffer is a completion, with
       the line number on the status line when that name is the one
       shown. A name that is not in the buffer is not invented
-- [ ] **Python names**: a `def` or `class` in the buffer is a
+- [x] **Python names**: a `def` or `class` in the buffer is a
       completion the same way. Indent and `:` diagnostics stay as
       they are
-- [ ] **One row**: the list does not cover the text. It replaces the
+- [x] **One row**: the list does not cover the text. It replaces the
       diagnostic on the status line while it is open, and the
       diagnostic returns when the list closes
-- [ ] **Proof**: `edit t.rs` typing `pri` shows `println` before
+- [x] **Proof**: `edit t.rs` typing `pri` shows `println` before
       Ctrl-T. `edit h.py` typing `pri` shows `print`. A boot test
       covers both
-- [ ] **Out of this milestone**: type-aware completion, signature
+- [x] **Out of this milestone**: type-aware completion, signature
       help, go to definition across files, and running an external
       language server
 

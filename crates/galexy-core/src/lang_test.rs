@@ -134,4 +134,26 @@ fn complete_println_and_a_word_in_the_file() {
     assert_eq!(&out[0].bytes[..out[0].len], b"hello");
     assert_eq!(&out[1].bytes[..out[1].len], b"helper");
     assert_eq!(complete(Lang::Rust, b"fn", b"", &mut out), 0);
+    assert_eq!(out[0].line, 0, "println is a keyword, not a definition");
+    let doc = b"fn ready() {}\nlet mut other = 1;\n";
+    let n = complete(Lang::Rust, doc, b"rea", &mut out);
+    assert!(n >= 1);
+    assert_eq!(&out[0].bytes[..out[0].len], b"ready");
+    assert_eq!(out[0].line, 1);
+    let _n = complete(Lang::Rust, doc, b"oth", &mut out);
+    assert_eq!(&out[0].bytes[..out[0].len], b"other");
+    assert_eq!(out[0].line, 2);
+    let py = b"def price():\n    pass\nclass Prize:\n    pass\n";
+    let n = complete(Lang::Python, py, b"pri", &mut out);
+    assert!(n >= 1);
+    assert_eq!(&out[0].bytes[..out[0].len], b"print");
+    assert_eq!(out[0].line, 0);
+    let price = out
+        .iter()
+        .take(n)
+        .find(|slot| &slot.bytes[..slot.len] == b"price");
+    assert_eq!(price.map(|slot| slot.line), Some(1));
+    let _n = complete(Lang::Python, py, b"Pri", &mut out);
+    assert_eq!(&out[0].bytes[..out[0].len], b"Prize");
+    assert_eq!(out[0].line, 3);
 }

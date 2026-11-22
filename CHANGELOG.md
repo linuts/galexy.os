@@ -8,6 +8,9 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#156](https://github.com/linuts/galexy.os/pull/156) — Milestones 97, 99, and 100 —
+  one virtio request seals the 64 KiB slot, one desk compile names 41
+  objects (GALF v17), and the editor lists completions while typing.
 - [#155](https://github.com/linuts/galexy.os/pull/155) — Net — ICMP echo.
   A logged-in seat runs `ping <ip>`. The `net` service sends the request
   on the wire it already holds and prints the reply. `ping 10.0.2.2`

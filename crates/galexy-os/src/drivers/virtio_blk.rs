@@ -243,9 +243,10 @@ pub fn read_sectors(lba: u32, dst: &mut [[u8; SECTOR]]) -> Result<(), SysError> 
 
 /// Writes `src.len()` sectors starting at `lba`.
 ///
-/// Batches up to [`MAX_BATCH_SECTORS`] into one virtio request (one
-/// descriptor per physically contiguous run) so a 288-sector GALF slot is
-/// nine kicks, not 288.
+/// One virtio request covers a whole 64 KiB metadata slot (128 sectors).
+/// The chain is one header, one descriptor per physically contiguous run,
+/// and one status byte. A second command is not posted until this one
+/// finishes.
 pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
     if src.is_empty() {
         return Err(SysError::BadValue);
@@ -269,9 +270,11 @@ pub fn write_sectors(lba: u32, src: &[[u8; SECTOR]]) -> Result<(), SysError> {
     Ok(())
 }
 
-/// Sectors per request. 16 KiB spans at most five pages, so a request
-/// never needs more than five data descriptors (`push_data_descs`).
-const MAX_BATCH_SECTORS: usize = 32;
+/// Sectors per request. A metadata slot is 128 sectors (64 KiB, 16 pages
+/// when the buffer is page-aligned). The queue allows 126 data
+/// descriptors, so the slot is one request even when each page is its
+/// own descriptor. The old 32-sector cap is not what limits this transfer.
+const MAX_BATCH_SECTORS: usize = 128;
 
 /// How many leading sectors of `src` go into one request.
 ///
@@ -516,6 +519,14 @@ pub fn xfer_wait_cpu() -> Option<usize> {
     }
 }
 
+/// Virtio commands submitted since boot, including flushes.
+static REQUESTS: AtomicU64 = AtomicU64::new(0);
+
+/// How many virtio commands have been submitted.
+pub fn requests() -> u64 {
+    REQUESTS.load(Ordering::Relaxed)
+}
+
 /// True when an in-flight request's used index has landed.
 pub fn completion_ready() -> bool {
     if !WANT_ARMED.load(Ordering::Acquire) {
@@ -563,6 +574,9 @@ fn xfer(type_: u32, lba: u32, buf: *mut u8, len: usize) -> Result<(), SysError> 
         return Err(SysError::Unsupported);
     };
     let submitted = submit_xfer(state, type_, lba, buf, len);
+    if submitted.is_ok() {
+        REQUESTS.fetch_add(1, Ordering::Relaxed);
+    }
     let want = match submitted {
         Ok(want) => want,
         Err(err) => {
@@ -666,6 +680,10 @@ fn submit_xfer(
 
 /// Data descriptors one request may use: the chain is `req` + data + `status`.
 const MAX_DATA_DESCS: usize = QUEUE_SIZE - 2;
+
+/// A page-aligned batch of [`MAX_BATCH_SECTORS`], plus one page when the
+/// buffer is not aligned, still fits in the descriptor chain.
+const _: () = assert!(MAX_BATCH_SECTORS * SECTOR / 4096 < MAX_DATA_DESCS);
 
 /// Fills `desc[1..]` with one descriptor per PHYSICALLY contiguous run of
 /// `[buf, buf + len)` and returns the index the status descriptor takes.

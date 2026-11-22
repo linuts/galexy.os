@@ -202,7 +202,8 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     }
     serial_println!("[test-dmasplit] straddling write came from the buffer");
 
-    // 4. A request longer than the batch cap splits cleanly and reads back.
+    // 4. A 48-sector request is one chain (under the 128-sector slot batch)
+    // and reads back.
     let mut big = [[0u8; SECTOR]; 48];
     for (k, sector) in big.iter_mut().enumerate() {
         for (i, b) in sector.iter_mut().enumerate() {

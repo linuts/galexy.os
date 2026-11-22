@@ -733,7 +733,7 @@ only indexes a slot on the IF=0 path. Indexes from `FILE_CAP_BASE`
 (short-read at 1 KiB, 0 at EOF);
 `close` drops the slot. `create(name, len, flags)` (syscall 9) puts a
 path in the galfs table (32 actors with one root each, 64-byte
-component names, 4 KiB extents, eight per file, GALF v16). The format
+component names, 4 KiB extents, eight per file, GALF v17). The format
 ceiling is 1,048,576 names and 64 GiB per file. A live disk gives
 fewer: inode and map blocks take at most a quarter of the pool, and
 the rest is file bytes, capped at 64 GiB. A write that does not fit
@@ -903,8 +903,13 @@ The screen is a reverse title, a line-number gutter
 status line, and two shortcut rows. Rust, Python, Lisp, JSON, CSV,
 TOML, and XML are colored in the editor. The status line shows the
 first diagnostic (an unclosed delimiter, a Python header missing `:`,
-or a body that is not indented). Ctrl-T completes from that language's
-words and from identifiers already in the file. Tab inserts a tab.
+or a body that is not indented). After a letter or `_`, the status
+line lists up to eight completions and the diagnostic waits. Ctrl-T
+still cycles them. Esc or a non-word key clears the list. The words
+are that language's keywords, then identifiers already in the file.
+A Rust `fn`, `struct`, `enum`, `trait`, `const`, `static`, or `let`,
+and a Python `def` or `class`, carry the line number of that
+definition when that name is the one shown. Tab inserts a tab.
 The editor stores that byte and draws it to the next column of 8.
 A redraw hides the cursor until the cursor cell is known, so
 moving between lines does not paint the mark at the end of every row.
@@ -1368,7 +1373,7 @@ main image and are listed at the end.
 | `test-scratch`, `test-rm`, `test-seek` | `scratch_test_passes`, `rm_test_passes`, `seek_test_passes` | M27 / M30 / M36 scratch files, remove, seek |
 | `test-galfs`, `test-paths`, `test-cards` | `galfs_test_passes`, `paths_test_passes`, `cards_test_passes` | M34–M35 tokens and grant, M45 path policy and confused deputy |
 | `test-blocks`, `test-quota`, `test-shares`, `test-indirect`, `test-ops`, `test-fsck` | `blocks_test_passes`, `quota_test_passes`, `shares_test_passes`, `indirect_test_passes`, `ops_test_passes`, `fsck_test_passes` | M39 / M45 galfs for real usage |
-| `test-galfs-disk`, `test-galfs-part`, `test-share-disk` | `galfs_disk_persists_*`, `assert_galfs_disk_persists`, `galfs_disk_persists_partition_offset`, `share_disk_persists_across_reboot` | M38 / M46 disk-backed galfs, cache modes, virtio, partition offset |
+| `test-galfs-disk`, `test-galfs-part`, `test-share-disk` | `galfs_disk_persists_*`, `assert_galfs_disk_persists`, `galfs_disk_persists_partition_offset`, `share_disk_persists_across_reboot` | M38 / M46 disk-backed galfs, cache modes, virtio, partition offset. M97: the virtio boot's slot write is `sync data_reqs=1`. M99: the format line is `desk files 41` |
 | `test-galfs-corrupt`, `test-galfs-idempotent`, `test-crash` | `galfs_disk_recovers_*`, `galfs_disk_refuses_format_when_both_slots_corrupt`, `galfs_idempotent_after_recover`, `crash_injection_picks_consistent_slot` | M39 / M45 crash safety |
 | `test-ata` | `ata_absent_returns_unsupported` | M45 ATA error propagation |
 | `test-dmasplit` | `dmasplit_test_passes` | virtio-blk DMA splits at physical discontinuities (both transports); sentinel frame stays untouched |
@@ -1391,7 +1396,7 @@ main image and are listed at the end.
 | `test-badelf`, `test-negative` | `badelf_test_passes`, `negative_test_passes` | M51 hostile ELF oracle and negative suite; M63 loader returns `SysError` and caps image pages |
 | `test-smep`, `test-smap`, `test-umip`, `test-kaslr` | `smep_test_passes`, `smap_test_passes`, `umip_test_passes`, `kaslr_kernel_base_differs_across_boots` | M63 SMEP, SMAP, UMIP, kernel KASLR (`kaslr` boots the image twice) |
 | `test-soak`, `test-fairness`, `test-pathological`, `test-bench` | `soak_test_passes`, `fairness_test_passes`, `pathological_test_passes`, `bench_test_passes` | M51 soak (exact table closure per round), steal fairness under load, console-budget flood; M64 `test-bench` prints `[bench] name=… us=…` and the runner asserts KVM ceilings |
-| main image | `main_kernel_boots_and_timer_ticks`, `uefi_image_boots_and_timer_ticks`, `shell_*_typing_e2e`, `shell_run_hello_typing_e2e_uefi`, `shell_tty_switch_e2e`, `util_typing_e2e_on`, `assert_passwords_masked`, `uart_console_login_e2e`, `shell_stdmin_typing_e2e` | M21 / M29 / M33 / M40 / M43 / M50 / M54 seats, shell, utilities, masked prompts; `shell_password_paste_typing_e2e` (M51 pathological input), `default_image_has_no_crash_seam_e2e` (M52 default-build audit), `uart_console_login_e2e` (COM1 is the console: DEL, CR, masked password); `shell_stdmin_typing_e2e` (M68 `std` on the galexy target) |
+| main image | `main_kernel_boots_and_timer_ticks`, `uefi_image_boots_and_timer_ticks`, `shell_*_typing_e2e`, `shell_run_hello_typing_e2e_uefi`, `shell_tty_switch_e2e`, `util_typing_e2e_on`, `assert_passwords_masked`, `uart_console_login_e2e`, `shell_stdmin_typing_e2e` | M21 / M29 / M33 / M40 / M43 / M50 / M54 seats, shell, utilities, masked prompts; `shell_password_paste_typing_e2e` (M51 pathological input), `default_image_has_no_crash_seam_e2e` (M52 default-build audit), `uart_console_login_e2e` (COM1 is the console: DEL, CR, masked password); `shell_stdmin_typing_e2e` (M68 `std` on the galexy target); `shell_edit_complete_typing_e2e` (M100: `pri` lists `println` and `print`) |
 | `gxld` image | `gxld_image_run_hello_typing_e2e`, `gxld_image_util_typing_e2e` | M69 linker differential |
 
 Host suites (no QEMU): `galexy-abi` (table integrity), `galexy-core`

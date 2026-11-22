@@ -449,7 +449,9 @@ static ADMIN_ROOT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
 /// Extent volume (directory lists + 4 KiB blocks outside the seal).
 /// Older images are refused with a serial line; there is no silent migrate.
-pub const DISK_VERSION: u16 = 16;
+/// Milestone 99 records the desk-compile file count in the geometry and
+/// moves this with `galexy-galf`. The slot layout stays two 64 KiB seals.
+pub const DISK_VERSION: u16 = 17;
 /// Sectors per metadata slot (64 KiB).
 pub const DISK_SECTORS: usize = 128;
 pub const DISK_SLOT_COUNT: usize = 2;
@@ -816,6 +818,11 @@ fn format_fresh() {
     *VOLUME_KEY.lock() = Some(vk);
     wipe_bytes(&mut vk);
     store_passphrase(VOLUME_PASSPHRASE);
+    crate::serial_println!(
+        "[galfs] desk files {} slots {}",
+        galexy_galf::DESK_COMPILE_FILES,
+        inode_slots()
+    );
     if sync_to_disk() {
         crate::serial_println!(
             "[galfs] formatted sealed disk (LBA base {})",
@@ -1167,13 +1174,20 @@ fn sync_to_disk_gated() -> bool {
     LOCKED_SKIP_LOGGED.store(false, Ordering::Release);
     crate::serial_println!("[galfs] committing slot {}", next_slot);
     let d = disk();
+    let reqs_before = crate::drivers::virtio_blk::requests();
+    let t0 = crate::arch::timer_ticks();
     if d.write_sectors(lba, &buf.0).is_err() {
         crate::serial_println!("[galfs] disk sync write failed");
         return false;
     }
+    let data_reqs = crate::drivers::virtio_blk::requests().saturating_sub(reqs_before);
     if d.flush().is_err() {
         crate::serial_println!("[galfs] disk flush failed");
         return false;
+    }
+    if crate::drivers::virtio_blk::present() {
+        let ms = crate::arch::timer_ticks().saturating_sub(t0);
+        crate::serial_println!("[galfs] sync data_reqs={} ms={}", data_reqs, ms);
     }
     publish_stable();
     ACTIVE_SLOT.store(next_slot, Ordering::Release);
@@ -1389,7 +1403,12 @@ fn seal_dirty_blocks() -> bool {
         let Some(slot) = (0..CACHE_SLOTS).find(|s| cache.index[*s] == i as u32) else {
             return false;
         };
-        if !store_block(&mut pool, i as u32, &cache.data[slot], galexy_galf::DOMAIN_DATA) {
+        if !store_block(
+            &mut pool,
+            i as u32,
+            &cache.data[slot],
+            galexy_galf::DOMAIN_DATA,
+        ) {
             return false;
         }
     }
@@ -1643,7 +1662,12 @@ static META_LOC: Mutex<MetaLoc> = Mutex::new(MetaLoc {
     inode_gen: alloc::vec::Vec::new(),
 });
 
-fn read_pool_plain(index: u32, gen: u32, domain: u8, key: &[u8; KEY_LEN]) -> Option<[u8; BLOCK_SIZE]> {
+fn read_pool_plain(
+    index: u32,
+    gen: u32,
+    domain: u8,
+    key: &[u8; KEY_LEN],
+) -> Option<[u8; BLOCK_SIZE]> {
     let mut tag_sector = [[0u8; block::SECTOR]; 1];
     let mut data = [[0u8; block::SECTOR]; 8];
     let lba = block_lba(index);
@@ -1766,10 +1790,7 @@ fn flush_inodes(table: &mut Table) -> bool {
                 break;
             }
             let exported = export_object(&table.objects[id]);
-            galexy_galf::write_inode(
-                &mut plain[n * galexy_galf::INODE_ON_DISK..],
-                &exported,
-            );
+            galexy_galf::write_inode(&mut plain[n * galexy_galf::INODE_ON_DISK..], &exported);
         }
         let (old_at, old_gen) = {
             let loc = META_LOC.lock();
@@ -1778,7 +1799,13 @@ fn flush_inodes(table: &mut Table) -> bool {
                 loc.inode_gen.get(ib).copied().unwrap_or(0),
             )
         };
-        let reuse = old_gen != 0 && !POOL.lock().stable.get(old_at as usize).copied().unwrap_or(true);
+        let reuse = old_gen != 0
+            && !POOL
+                .lock()
+                .stable
+                .get(old_at as usize)
+                .copied()
+                .unwrap_or(true);
         let index = if reuse {
             old_at
         } else {
@@ -1848,7 +1875,12 @@ fn flush_inodes(table: &mut Table) -> bool {
         }
         let reuse = m < old_len
             && old_gen[m] != 0
-            && !POOL.lock().stable.get(old_at[m] as usize).copied().unwrap_or(true);
+            && !POOL
+                .lock()
+                .stable
+                .get(old_at[m] as usize)
+                .copied()
+                .unwrap_or(true);
         let index = if reuse {
             old_at[m]
         } else {
@@ -1936,7 +1968,10 @@ fn encode_table(
         &table.geo.map_at,
         &table.geo.map_gen,
     );
-    debug_assert_eq!(off + galexy_galf::MAP_POINTERS * 8, DISK_HEADER + PAYLOAD_LEN);
+    debug_assert_eq!(
+        off + galexy_galf::MAP_POINTERS * 8,
+        DISK_HEADER + PAYLOAD_LEN
+    );
     debug_assert!(off <= flat.len());
 
     let aad = seal_aad(generation);
@@ -2009,7 +2044,10 @@ fn decode_table(
     let version = u16::from_le_bytes([flat[4], flat[5]]);
     let actors = u16::from_le_bytes([flat[6], flat[7]]) as usize;
     let shares_n = u16::from_le_bytes([flat[8], flat[9]]) as usize;
-    if version != DISK_VERSION || actors != ACTOR_SLOTS || shares_n != SHARE_SLOTS || flat[14] & 1 == 0
+    if version != DISK_VERSION
+        || actors != ACTOR_SLOTS
+        || shares_n != SHARE_SLOTS
+        || flat[14] & 1 == 0
     {
         return None;
     }
@@ -2078,7 +2116,9 @@ fn decode_table(
         wipe_bytes(&mut gone);
         return None;
     }
-    table.objects.resize(table.geo.inode_slots as usize, Object::empty());
+    table
+        .objects
+        .resize(table.geo.inode_slots as usize, Object::empty());
     if !load_inode_blocks(table, &vk) {
         let mut gone = vk;
         wipe_bytes(&mut gone);
@@ -3735,10 +3775,7 @@ pub(crate) fn write_at(index: u32, start: usize, src: &[u8]) -> Option<usize> {
 /// Append loop shared by `append` and `write_at`; `i` must be a file slot.
 fn append_locked(table: &mut Table, i: usize, src: &[u8]) -> usize {
     if super::large::len(i).is_some()
-        || table.objects[i]
-            .len
-            .saturating_add(src.len() as u64)
-            > table.geo.file_max
+        || table.objects[i].len.saturating_add(src.len() as u64) > table.geo.file_max
     {
         if super::large::len(i).is_none() && !promote_large(table, i) {
             return 0;
@@ -4121,9 +4158,10 @@ fn free_extents_after(
     for ext in obj.extents.iter().take(obj.extent_count as usize) {
         let mut b = ext.start;
         for _ in 0..ext.count {
-            let kept = saved.iter().take(saved_count as usize).any(|old| {
-                b >= old.start && b < old.start.saturating_add(old.count)
-            });
+            let kept = saved
+                .iter()
+                .take(saved_count as usize)
+                .any(|old| b >= old.start && b < old.start.saturating_add(old.count));
             if !kept {
                 free_block(b);
             }

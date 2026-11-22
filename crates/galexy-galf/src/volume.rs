@@ -6,13 +6,24 @@
 //! larger than 16 GiB.
 
 use super::{
-    ACTOR_NAME, ACTOR_SLOTS, BLOCK_SIZE, BLOCK_STRIDE, DISK_SECTORS, DISK_SLOT_COUNT, EXTENTS_PER_FILE,
-    NAME_CAP, SECTOR, SHARE_SLOTS,
+    ACTOR_NAME, ACTOR_SLOTS, BLOCK_SIZE, BLOCK_STRIDE, DISK_SECTORS, DISK_SLOT_COUNT,
+    EXTENTS_PER_FILE, NAME_CAP, SECTOR, SHARE_SLOTS,
 };
 use galexy_crypto::{HASH_LEN, SALT_LEN};
 
 /// Files and directories one volume may name. A smaller disk holds fewer.
 pub const OBJECT_CAP: u32 = 1_048_576;
+/// Names one `rustc hello.rs -o /hello` tree uses on the login volume.
+///
+/// The importer reports `rustc-sysroot: 33 entries` (the target JSON plus
+/// the `srlib/` files) and creates four directories (`lib`, `rustlib`,
+/// `x86_64-unknown-galexy`, `lib`). The volume already has the admin root
+/// and `Desktop`. The compile adds `hello.rs` and the linked `/hello`.
+/// `-Cincremental` is not passed, so that command does not write a file
+/// per query. This is not the format ceiling.
+pub const DESK_COMPILE_FILES: u32 = 33 + 4 + 2 + 1 + 1;
+
+const _: () = assert!(DESK_COMPILE_FILES == 41);
 /// Largest durable file. One extent can describe it: the count is a `u32`
 /// of 4 KiB blocks (64 GiB is 16,777,216 blocks).
 pub const FILE_CAP: u64 = 64 * 1024 * 1024 * 1024;
@@ -182,6 +193,7 @@ pub fn write_geometry(flat: &mut [u8], geo: &Geometry) {
     flat[24..28].copy_from_slice(&geo.alloc_clock.to_le_bytes());
     flat[28..32].copy_from_slice(&geo.epoch.to_le_bytes());
     flat[32..36].copy_from_slice(&geo.map_len.to_le_bytes());
+    flat[36..40].copy_from_slice(&DESK_COMPILE_FILES.to_le_bytes());
 }
 
 pub fn read_geometry_head(flat: &[u8]) -> Option<Geometry> {
@@ -197,6 +209,10 @@ pub fn read_geometry_head(flat: &[u8]) -> Option<Geometry> {
     geo.alloc_clock = u32::from_le_bytes(flat[24..28].try_into().ok()?);
     geo.epoch = u32::from_le_bytes(flat[28..32].try_into().ok()?);
     geo.map_len = u32::from_le_bytes(flat[32..36].try_into().ok()?);
+    let desk = u32::from_le_bytes(flat[36..40].try_into().ok()?);
+    if desk != DESK_COMPILE_FILES {
+        return None;
+    }
     if geo.inode_slots == 0
         || geo.inode_slots > OBJECT_CAP
         || geo.file_max > FILE_CAP
@@ -239,7 +255,11 @@ pub fn write_map_ptrs(flat: &mut [u8], at: &[u32; MAP_POINTERS], gen: &[u32; MAP
     }
 }
 
-pub fn read_map_ptrs(flat: &[u8], at: &mut [u32; MAP_POINTERS], gen: &mut [u32; MAP_POINTERS]) -> bool {
+pub fn read_map_ptrs(
+    flat: &[u8],
+    at: &mut [u32; MAP_POINTERS],
+    gen: &mut [u32; MAP_POINTERS],
+) -> bool {
     if flat.len() < MAP_POINTERS * 8 {
         return false;
     }
@@ -339,7 +359,9 @@ pub fn read_actor(src: &[u8]) -> Option<super::Actor> {
     let root_at = 2 + ACTOR_NAME;
     actor.root = u32::from_le_bytes(src[root_at..root_at + 4].try_into().ok()?);
     let salt_at = root_at + 4;
-    actor.salt.copy_from_slice(&src[salt_at..salt_at + SALT_LEN]);
+    actor
+        .salt
+        .copy_from_slice(&src[salt_at..salt_at + SALT_LEN]);
     let hash_at = salt_at + SALT_LEN;
     actor
         .pass_hash
