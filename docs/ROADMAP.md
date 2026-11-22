@@ -36,6 +36,15 @@ the KVM cells.
 Vendor USB and NIC drivers stay unwritten. Python's `socket`
 module stays refused.
 
+Milestones **97–102** have since landed. Milestone **103**'s boxes
+are still open (the lane boot was not run here). Milestone **83**'s
+`serve` handoff is still open. Phase 16 (Milestones **104–110**)
+is the plan for the CPUs the kernel can already start, for cards
+on the network and on USB, and for Rust and Python asking before
+they connect. An SSH/SFTP service is in that plan. None of those
+boxes are checked by the plan. The `v1.0` tag still waits on the
+KVM cells, and it also waits on Phase 16.
+
 ## Phase 0 — Boot & TTY ✅
 
 Goal: bootable image, working text display, working keyboard, echo shell.
@@ -657,6 +666,54 @@ Phase 13. It does not move the `v1.0` tag.
 Non-goals: `async` / `await`, several virtio commands in flight,
 ATA PIO as the fast path, a journal, POSIX, mmap, sparse files,
 hard links.
+
+## Phase 16 — Cards, then a reachable machine
+
+Plan only. Nothing here is implemented, and nothing here tags
+`v1.0`. Checkboxes live in `TODO.md` (Milestones **104–110**). The
+reading copies are `DESIGN.md` (CPUs), `NET.md` (firewall, sockets,
+SSH), `USB.md` (device cards), `GALFS.md` (the card those two
+reuse), and `PYTHON.md` (the ask).
+
+The kernel can already start more than two CPUs. `boot_aps` walks
+every enabled MADT local-APIC id, and `MAX_CPUS` is 8. The suite
+never asks for more than `-smp 2`. A machine with more than eight
+enabled type-0 records panics: the id array is eight long and the
+count is not capped. x2APIC processor records (MADT `0xA` / `0xB`)
+are ignored, and the IPI destination is a `u8`. Milestone 104
+proves 4 and 8. It does not lift that ceiling.
+
+Storage already gates an object with a token. The network does not.
+A dial is an actor string inside `/net`, and ping is any logged-in
+seat. USB does not either: cap `0x800B` is the task named `usb`,
+and cap `0x800C` is any task whose `fs_root` is set. Milestones 105
+and 106 make both a card. The firewall is that card, checked in
+`net`, default deny. There is no rule language.
+
+Rust and Python ask before they connect. The seat prints one line
+(`python wants the network`, `rustc wants storage`). Yes installs a
+token for that run. No is `AccessDenied`. The call is still a lane
+through `net`. It is not an ambient BSD socket and not a second
+stack. Milestone 83's inbound handoff and Milestone 103's lane boot
+stay open until their own runs; 109 does not edit 103's
+`ImportError` assertion before that.
+
+True `v1.0` adds one more gate to the KVM cells that are already
+open: a person on the host opens SSH, then reads a file over SFTP,
+on current algorithms only. The service is Rust. Legacy protocols
+stay out.
+
+What this phase does not add:
+
+- A `MAX_CPUS` above 8, an x2APIC id, or a shell that leaves the BSP
+- iptables, nftables, eBPF, NAT, raw frames, or promiscuous capture
+- `socket` / `bind` / `listen` / `setsockopt` as syscall numbers, or
+  a port in the ABI
+- Telnet, FTP, rsh, SSHv1, `ssh-rsa`, CBC, SHA-1, or TLS before 1.3
+- OpenSSH, libssh, CPython, or a TCP stack inside `rustc` or Python
+- A second grant language beside the galfs token
+- Checking Milestone 83, Milestone 103, or the KVM `v1.0` boxes
+- The `v1.0` tag
 
 ## Standing principles
 

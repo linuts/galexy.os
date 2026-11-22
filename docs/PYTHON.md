@@ -54,7 +54,7 @@ Milestone 96 checks that the run did not leave a child task.
 | CPython, `libpython`, and C extensions | A second language runtime, and C in a Rust kernel tree. The interpreter is RustPython. |
 | Copying the RustPython tree into this repository | It is MIT or Apache-2.0. The pin stays a host checkout, the way `rustc` does. A patch, if one is required, is `scripts/galexy-rustpython.patch`. The license notices stay with the checkout. |
 | `pip`, `venv`, `ensurepip`, and a package index | Same non-goal as on-OS `cargo`. |
-| `socket`, `ssl`, and `asyncio` networks | `std::net` stays unsupported (`NET.md`). Milestone 103 speaks a lane: `import lane` then `lane.read(name)`. That is the dial `fetch` already uses. It is not a BSD socket with a Python name. |
+| `socket`, `ssl`, and `asyncio` networks | `std::net` stays unsupported (`NET.md`). Milestone 103 speaks a lane: `import lane` then `lane.read(name)`. That is the dial `fetch` already uses. Milestone 109 may later allow `import socket` as a granted connect. Until that box is checked, `import socket` is `ImportError`. |
 | `sqlite3`, `ctypes`, `cffi` | Those need C. |
 | `os.fork`, `os.exec`, `os.system`, `os.environ`, `subprocess`, `multiprocessing` | There is no environment block and no fork. Spawn stays the kernel's, and this program does not call it. |
 | A second editor | `edit` is already the editor. The REPL reads the seat keyboard and does not draw a screen of its own. |
@@ -241,15 +241,32 @@ absent at image build. Rebuild with
 A checkout patched before this milestone is reset to the pin and
 the current patch is applied when `fn lane_read` is missing.
 
+## Phase 16 — Ask, then connect
+
+Milestones **107** and **109**. The boxes in `TODO.md` are open.
+`socket` stays off the allow-list until 109, and 109 does not
+start while 103's boxes are open.
+
+A Python program that connects, and does not hold a network card,
+parks. The seat prints `python wants the network`. Yes installs a
+token for this run. No is `OSError` and the interpreter stays up.
+`connect` then dials through `net` and reads the lane, the same
+bytes `lane.read` returns. `bind` to an address, `listen`,
+`setsockopt`, UDP, and `ssl` stay refused. There is still no
+second stack and no new syscall unless 107's ask cannot ride the
+grant path that already exists.
+
 ## Changing this subsystem
 
 1. One milestone in `TODO.md` and in this file.
 2. A new module is a line in `scripts/python-allow.txt` in the
    same change. A refused module stays refused until a milestone
    names it.
-3. A socket-shaped API is still refused. A later milestone that
-   wants the network speaks a lane (`NET.md`). It does not enable
-   `std::net`.
+3. A socket-shaped API stays refused until Milestone 109. That
+   milestone is a granted connect through `net` (`NET.md` →
+   Phase 16). It does not enable `std::net` as an ambient stack,
+   and it does not edit Milestone 103's `ImportError` assertion
+   before that box is checked.
 4. `docs/ABI.md` gains a row only if a number appears. This phase
    has none. `docs/STYLE.md` carries the rules below.
 5. The wiki page Python stays in step with this file.

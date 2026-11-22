@@ -2339,7 +2339,14 @@ unset.
       `-accel kvm` there instead of waiting on an empty serial log)
 - [ ] `PERF.md` numbers within budget under KVM (TCG release cells
       recorded; KVM cells empty for the same host reason)
-- [ ] Tag `v1.0` with the changelog
+- [ ] Phase 16 — Milestones 104–110 (`docs/ROADMAP.md`). A boot shows
+      4 and 8 CPUs online. A dial, a ping, and a USB list without a
+      card are denied. Rust and Python connect only after the seat
+      allows it. A host SSH client reads one file over SFTP, and a
+      legacy algorithm is refused. Milestone 83's `serve` box and
+      Milestone 103's lane boxes stay open until their own runs
+- [ ] Tag `v1.0` with the changelog. The tag needs the KVM cells and
+      Phase 16. This plan does not apply it
 
 ---
 
@@ -3075,6 +3082,161 @@ syscall.
       This host has no `galexy` toolchain, so the box stays open
       until that boot is run
 
+## Phase 16 — Cards, then a reachable machine
+
+Plan only. `docs/ROADMAP.md` is the phase. `DESIGN.md`, `NET.md`,
+`USB.md`, `GALFS.md`, and `PYTHON.md` are the reading copies. No
+code in the change that added these boxes. Do not check Milestone
+83, Milestone 103, or the KVM rows under the `v1.0` gate from this
+phase's text.
+
+## Milestone 104 — Prove four and eight CPUs
+
+`boot_aps` (`arch/cpu.rs`) already starts every enabled MADT
+local-APIC id after the BSP. `MAX_CPUS` is 8. The runner, the
+suite, and `cargo run` pass `-smp 2`, and `test-smp` asserts
+`online == 2`. Nothing in the start loop stops at two.
+
+- [ ] **Four and eight**: one test kernel, not the whole suite,
+      boots at `-smp 4` and at `-smp 8`. Serial shows
+      `online=4` and `online=8`, and each AP rank prints
+      `online`. The shell stays on the BSP
+- [ ] **The ceiling, written where the code stops**: a ninth
+      enabled type-0 record panics. `enabled_ids` is `[u8; 8]` and
+      `cpus` is not capped, so `enabled_ids()` slices off the end.
+      MADT types `0xA` and `0xB` are ignored. `send_init` /
+      `send_sipi` take a `u8`. This milestone does not raise
+      `MAX_CPUS`, does not parse x2APIC processor records, and
+      does not widen the IPI destination
+- [ ] **Out of this milestone**: moving the framebuffer, the
+      keyboard IRQ, or the shell off the BSP
+
+## Milestone 105 — The network card is the firewall
+
+A dial is allowed when the caller's name is a string in
+`Name.actors`. Ping is any logged-in seat. The `net` service holds
+one token, on `/net` only. That is not how storage gates an object.
+
+- [ ] **One object per name**: the locator and the pinned key stay
+      in the service record. Who may use the name is a galfs token.
+      Read is dial. Write is accept. `may_dial` becomes
+      `resolve_and_check`. The actor strings are not an authority
+      once the token exists
+- [ ] **Default deny**: a dial, a ping, or an accept with no token
+      does not open TCP. Logged-out stays `AccessDenied`. The check
+      is in `net`. The kernel still only moves frames
+- [ ] **No second language**: no chains, no interface match, no
+      packet filter. Admin mints the token with the `grant` the
+      tree already has
+- [ ] **Proof**: a seat without the card sees `access denied` and
+      the peer sees no handshake. A seat with the card still
+      fetches. A ping without a card is denied
+- [ ] **Out of this milestone**: iptables, nftables, eBPF, NAT,
+      raw frames, promiscuous capture, and a port in the syscall ABI
+
+## Milestone 106 — A USB device is a card
+
+Cap `0x800B` is the task named `usb`. Cap `0x800C` is any task
+with `fs_root` set. Init does not grant a USB object. A claim is
+the driver row plus the port byte.
+
+- [ ] **One object per listed device**: `usb list` and a claim
+      require a token on that object. The controller cap stays
+      with the task named `usb`
+- [ ] **A seat without the card**: logged in, `usb list` returns
+      `access denied`. A seat with the card sees the list line
+- [ ] **The keyboard stays in the service**: arm still types.
+      Holding the card does not hand HID reports to another program
+- [ ] **Out of this milestone**: a new controller, a vendor driver,
+      and a `DISK_VERSION` bump. If a device will not fit an
+      existing object, stop and name the layout. Do not guess one
+
+## Milestone 107 — The program asks
+
+Access is a grant. A program that wants the network or storage,
+and does not hold the card, does not fail inside the library
+with no one watching.
+
+- [ ] **One line**: the foreground seat prints `<name> wants the
+      network` or `<name> wants storage`. Yes installs a token for
+      this run of that task. No is `AccessDenied` and the program
+      stays up. A second ask for the same right in the same run
+      does not print
+- [ ] **The seat answers**: the shell reads yes or no. The kernel
+      does not draw a dialog. No new syscall number unless `grant`
+      cannot carry the ask. If it cannot, stop and say why before
+      adding a number
+- [ ] **Already held**: a task that has the token does not ask
+- [ ] **Out of this milestone**: a system-wide "always" that
+      survives reboot, a prompt on every packet, and a grant the
+      program can mint for itself
+
+## Milestone 108 — Rust connects
+
+`std::net` on the galexy target is `unsupported`. A lane already
+exists. This milestone is the ask in front of that lane.
+
+- [ ] **`TcpStream::connect`**: asks (Milestone 107), then dials
+      through `net`. The value the caller holds is a lane. rustls
+      stays in the service. The PAL does not parse TCP
+- [ ] **Still unsupported**: `bind` to an address, `UdpSocket`,
+      `setsockopt`, and any call that passes an IP or a port
+- [ ] **Proof**: a program on the login image connects to a granted
+      name after the seat answers yes, and is denied before that
+      answer. The peer sees no handshake on the denial
+- [ ] **Out of this milestone**: a second stack, a C shim, and
+      enabling `std::net` for the host target
+
+## Milestone 109 — Python connects
+
+Milestone 103's boxes are open: `import lane` is specified, and
+`import socket` is `ImportError`. This milestone does not edit
+that assertion, and it does not land, until those boxes are
+checked by a run.
+
+- [ ] **After 103**: `import socket` succeeds. `connect` without a
+      card is `OSError`. `connect` after the seat says yes reads
+      the lane to EOF, the same body as `lane.read`
+- [ ] **The allow-list**: `socket` is a line in
+      `scripts/python-allow.txt` in the same change. `ssl`,
+      `asyncio` networks, `bind`, `listen`, `setsockopt`, and UDP
+      stay refused. The host allow-list test matches the file
+- [ ] **Proof**: `python_lane_typing_e2e`'s `ImportError` line moves
+      here, to a connect that is denied, plus one connect that
+      prints the body after yes. The test still skips when
+      `target/galexy-python/python` was not built
+- [ ] **Out of this milestone**: CPython, `pip`, and a socket
+      syscall number
+
+## Milestone 110 — SSH and SFTP
+
+The machine a person can log into from the host. Newest algorithms
+only. The listener is Milestone 83's open box: the next inbound
+lane goes to that listener and to nobody else. Check 83 when that
+handoff is shown. Do not check it from this text.
+
+- [ ] **One Rust service**: an init row, the same shape as `net`.
+      No OpenSSH, no libssh, no C. Authentication is the existing
+      PBKDF2 password path
+- [ ] **What it speaks**: host key ed25519, key exchange
+      `curve25519-sha256`, cipher `chacha20-poly1305` or
+      `aes256-gcm`. The MAC is the AEAD. If a newer hybrid KEM
+      will not link on `x86_64-unknown-galexy`, say so. Do not
+      fall back to a legacy group
+- [ ] **What it refuses**: SSHv1, FTP, telnet, rsh, `ssh-rsa`,
+      `ssh-dss`, CBC, SHA-1, `hmac-sha1`,
+      `diffie-hellman-group1-sha1`, `diffie-hellman-group14-sha1`,
+      and any cleartext file transfer. A client that offers only
+      a refused algorithm gets no session
+- [ ] **SFTP**: a subsystem of that session, not a second port and
+      not a second daemon. The files it can see are the cards of
+      the user who authenticated
+- [ ] **Proof**: the host opens one session and reads one file.
+      Serial does not contain the host-key private bytes or the
+      password. A refused algorithm is a failed handshake
+- [ ] **Out of this milestone**: a port in the ABI, a root shell
+      that bypasses cards, and tagging `v1.0`
+
 ---
 
 ## Known limitations / follow-ups
@@ -3111,6 +3273,11 @@ items stay here with rationale.
       - [x] Everything still single-consumer by DESIGN stays that way:
             cooperative tasks + shell + framebuffer + keyboard all live
             on the BSP (waived in the Milestone 48 concurrency note)
+      - [ ] More than two CPUs is Milestone **104**. `boot_aps` already
+            walks the MADT, and `MAX_CPUS` is 8. The suite still boots
+            `-smp 2`. Above 8 panics (`enabled_ids` is eight long and
+            the count is not capped; x2APIC processor records are
+            ignored)
 - [x] ~~SYSCALL leaves DS/ES/FS/GS as kernel bootstrap selectors when
       the task resumes in ring 3~~ — CLOSED by Milestone 47
       (`USER_DS_RPL3` reload on every ring-3 return tail)

@@ -171,6 +171,33 @@ attached.
 A driver that skips the row does not build. The table is the list
 the service walks. There is nowhere else to register.
 
+## Cards (Milestone 106)
+
+The bus does not use a galfs card today.
+
+Cap `0x800B` (the controller) accepts a read, and a one-byte arm
+write, only when `current_is_usb()` is true. That is
+`thread.name() == "usb"`, plus `READ` or `WRITE` on the cap. Cap
+`0x800C` (list, and the rest of the service RPC) parks any task
+whose `fs_root` is set. Logged-out is `AccessDenied`. The admin
+bit is stamped into the message and is not required for the list.
+Init spawns `usb` the way it spawns `net`, and it does not `grant`
+a USB object to that task. The `/net` token is the only service
+token init installs. A HID claim is the driver row plus the port
+byte. No token is consulted.
+
+Milestone 106 adds one galfs object per device the service has
+listed. `usb list` and a claim require a token on that object, the
+same check storage uses. The controller cap stays with the task
+named `usb`. A logged-in seat with no token gets `AccessDenied`.
+The keyboard path stays inside the service: a card is not a way
+for an arbitrary program to read HID reports.
+
+Proof, when the milestone is implemented: a seat without the card
+sees `access denied`, a seat with the card sees the list line, and
+the keyboard still types after arm. The box stays open until that
+boot. This section does not check it.
+
 ## Changing this subsystem
 
 Same habit as `NET.md`.

@@ -522,3 +522,14 @@ and the legacy virtio I/O BAR (`disable-modern=on`, serial line
 Demo limits above are the shipped contract. A second indirect block
 is not scheduled; object `len` is already `u64`. New code must not
 invent a second ambient “path implies permission” API beside tokens.
+
+## Cards outside the tree (Milestones 105 and 106)
+
+A token stays an object id and rights. The network firewall
+(`NET.md` → Phase 16) and the USB list (`USB.md` → Cards) will
+require that token. The actor strings inside `/net`, and the
+"task is named `usb`" check, are not a second model once those
+milestones land. This plan does not bump `DISK_VERSION`. A layout
+change, if a name or a device will not fit an existing object, is
+a later milestone that names the version and refuses the previous
+image. Repair of anything other than a bad share stays unwritten.
