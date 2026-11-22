@@ -14,7 +14,7 @@ use common::{
 };
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[test]
@@ -6111,6 +6111,100 @@ fn ping_gateway_replies() {
     );
 }
 
+/// A logged-in seat pings a DNS name. The name is resolved over the
+/// pinned DNS-over-TLS resolver, then one ICMP echo goes to that
+/// answer. A bad pin and a seat without the ping card send no query.
+#[test]
+fn ping_name_resolves() {
+    let (cert_der, key_der) = listener_identity();
+    let dot_hits = Arc::new(AtomicUsize::new(0));
+    let query = Arc::new(Mutex::new(Vec::new()));
+    let dot_bg = Arc::clone(&dot_hits);
+    let query_bg = Arc::clone(&query);
+    let dot = std::thread::spawn(move || host_dot_serve(cert_der, key_der, dot_bg, Some(query_bg)));
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line("net link", "up 10.0.2.15/24"));
+    owned.extend(type_line("connect --putkey", "wrote"));
+    owned.extend(type_line("net pin 172.30.0.2 /bad", "ok"));
+    owned.extend(type_line("ping google.com", "access denied"));
+    owned.extend(type_line("net pin 172.30.0.2 /k", "ok"));
+    owned.extend(type_line("useradd eve", "Password: "));
+    owned.extend([
+        ("e".into(), "*".into()),
+        ("v".into(), "*".into()),
+        ("e".into(), "*".into()),
+        ("ret".into(), "admin@galexy> ".into()),
+        ("f2".into(), "[tty] 2".into()),
+    ]);
+    owned.extend(type_line("eve", "Password: "));
+    owned.extend([
+        ("e".into(), "*".into()),
+        ("v".into(), "*".into()),
+        ("e".into(), "*".into()),
+        ("ret".into(), "eve@galexy> ".into()),
+    ]);
+    owned.extend(type_line("ping google.com", "access denied"));
+    owned.push(("f1".into(), "[tty] 1".into()));
+    owned.extend(type_line("ping google.com", "reply from 172.30.0.2"));
+    owned.extend(type_line("ping 10.0.2.2", "reply from 10.0.2.2"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "reply from 10.0.2.2",
+        Duration::from_millis(30),
+        Duration::from_secs(240),
+    );
+    drop(dot);
+    let pin = listener_pin();
+    let mut hex = String::new();
+    for byte in pin {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    let asked = query.lock().map(|q| q.clone()).unwrap_or_default();
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains(&hex),
+        "serial carried the resolver key; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("udp/53") && !serial.contains("port 53"),
+        "plaintext DNS showed up; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("reply from 172.30.0.2"),
+        "the name did not answer; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("reply from 10.0.2.2"),
+        "an address ping stopped answering; serial:\n{serial}"
+    );
+    assert_eq!(
+        serial.matches("[net] dot ").count(),
+        1,
+        "the lookup ran more than once; serial:\n{serial}"
+    );
+    assert_eq!(
+        dot_hits.load(Ordering::Relaxed),
+        1,
+        "a denied card or a bad pin sent a query; hits"
+    );
+    assert!(
+        asked.windows(6).any(|w| w == b"google") && asked.windows(3).any(|w| w == b"com"),
+        "the query was not for google.com: {asked:?}"
+    );
+}
+
 /// Milestone 84, after 105: admin's root card covers a name once `net
 /// allow` creates it, so `fetch` connects. A different key still
 /// handshakes and is refused. A seat with no card is
@@ -6755,7 +6849,7 @@ fn milestones_110_through_114() {
     let dot_key = key_der.clone();
     let echo_cert = cert_der.clone();
     let echo_key = key_der;
-    let dot = std::thread::spawn(move || host_dot_serve(dot_cert, dot_key, dot_bg));
+    let dot = std::thread::spawn(move || host_dot_serve(dot_cert, dot_key, dot_bg, None));
     let echo = std::thread::spawn(move || host_pinned_echo(4594, echo_cert, echo_key, echo_bg));
     let mut owned: Vec<(String, String)> = with_login(&[])
         .into_iter()
@@ -7647,7 +7741,12 @@ fn host_pinned_echo(port: u16, cert_der: Vec<u8>, key_der: Vec<u8>, hits: Arc<At
     }
 }
 
-fn host_dot_serve(cert_der: Vec<u8>, key_der: Vec<u8>, hits: Arc<AtomicUsize>) {
+fn host_dot_serve(
+    cert_der: Vec<u8>,
+    key_der: Vec<u8>,
+    hits: Arc<AtomicUsize>,
+    query_out: Option<Arc<Mutex<Vec<u8>>>>,
+) {
     let config = tls_server(cert_der, key_der);
     let listener = std::net::TcpListener::bind(("0.0.0.0", 853)).expect("bind dot 853");
     listener.set_nonblocking(true).expect("dot nonblocking");
@@ -7675,6 +7774,12 @@ fn host_dot_serve(cert_der: Vec<u8>, key_der: Vec<u8>, hits: Arc<AtomicUsize>) {
             continue;
         }
         hits.fetch_add(1, Ordering::Relaxed);
+        if let Some(slot) = &query_out {
+            if let Ok(mut saved) = slot.lock() {
+                saved.clear();
+                saved.extend_from_slice(&query);
+            }
+        }
         let answer = dns_a_response(&query, [172, 30, 0, 2]);
         let _ = tls.write_all(&answer);
     }

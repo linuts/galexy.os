@@ -975,9 +975,12 @@ pub const NET_OP_GRANT: u8 = 4;
 pub const NET_OP_REVOKE: u8 = 5;
 /// Net control: attach a gate for a name to the calling task. Admin only.
 pub const NET_OP_SERVE: u8 = 6;
-/// Net control: ICMP echo to an IPv4 address. Any logged-in seat.
-/// The payload is four address bytes. The reply is text (`reply from`
-/// or `timeout`). It is not a lane and not a socket.
+/// Net control: ICMP echo. Any logged-in seat that holds the ping
+/// card. Four payload bytes are an IPv4 address. A longer payload is
+/// a length-prefixed DNS name. `net` resolves that name over the
+/// pinned DNS-over-TLS resolver and echoes the answer. The reply is
+/// text (`reply from` or `timeout`). It is not a lane and not a
+/// socket. A missing card sends no query.
 pub const NET_OP_PING: u8 = 7;
 /// Net control: resolve a name over DNS-over-TLS. The payload is the
 /// name, then `whoami`. The reply text is the address. The lane Cap is
