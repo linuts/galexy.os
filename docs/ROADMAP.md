@@ -38,12 +38,11 @@ module stays refused.
 
 Milestones **97–102** have since landed. Milestone **103**'s boxes
 are still open (the lane boot was not run here). Milestone **83**'s
-`serve` handoff is still open. Phase 16 (Milestones **104–110**)
-is the plan for the CPUs the kernel can already start, for cards
-on the network and on USB, and for Rust and Python asking before
-they connect. An SSH/SFTP service is in that plan. None of those
-boxes are checked by the plan. The `v1.0` tag still waits on the
-KVM cells, and it also waits on Phase 16.
+`serve` handoff is still open. Milestones **104–107** landed:
+four and eight CPUs, a card on each network name and each listed
+USB port, and a foreground ask the shell answers. Milestones
+**108–110** stay open, including SSH/SFTP. The `v1.0` tag still
+waits on the KVM cells, and it also waits on the rest of Phase 16.
 
 ## Phase 0 — Boot & TTY ✅
 
@@ -669,38 +668,38 @@ hard links.
 
 ## Phase 16 — Cards, then a reachable machine
 
-Plan only. Nothing here is implemented, and nothing here tags
-`v1.0`. Checkboxes live in `TODO.md` (Milestones **104–110**). The
-reading copies are `DESIGN.md` (CPUs), `NET.md` (firewall, sockets,
-SSH), `USB.md` (device cards), `GALFS.md` (the card those two
-reuse), and `PYTHON.md` (the ask).
+Milestones **104–107** landed. Milestones **108–110** are still
+the plan. Nothing here tags `v1.0`. Checkboxes live in `TODO.md`.
+The reading copies are `DESIGN.md` (CPUs), `NET.md` (firewall,
+sockets, SSH), `USB.md` (device cards), `GALFS.md` (the card
+those two reuse), and `PYTHON.md` (the ask).
 
-The kernel can already start more than two CPUs. `boot_aps` walks
-every enabled MADT local-APIC id, and `MAX_CPUS` is 8. The suite
-never asks for more than `-smp 2`. A machine with more than eight
-enabled type-0 records panics: the id array is eight long and the
-count is not capped. x2APIC processor records (MADT `0xA` / `0xB`)
-are ignored, and the IPI destination is a `u8`. Milestone 104
-proves 4 and 8. It does not lift that ceiling.
+`boot_aps` walks every enabled MADT local-APIC id, and `MAX_CPUS`
+is 8. The suite and `cargo run` stay at `-smp 2`. `test-cpus`
+boots at 4 and at 8. A machine with more than eight enabled
+type-0 records panics: the id array is eight long and the count
+is not capped. x2APIC processor records (MADT `0xA` / `0xB`) are
+ignored, and the IPI destination is a `u8`. Milestone 104 did
+not lift that ceiling.
 
-Storage already gates an object with a token. The network does not.
-A dial is an actor string inside `/net`, and ping is any logged-in
-seat. USB does not either: cap `0x800B` is the task named `usb`,
-and cap `0x800C` is any task whose `fs_root` is set. Milestones 105
-and 106 make both a card. The firewall is that card, checked in
-`net`, default deny. There is no rule language.
+A network name and a listed USB port are galfs cards, the same
+token storage already uses. The check for a dial, a ping, or an
+accept is in `net`, and it is default deny. Cap `0x800B` stays
+with the task named `usb`. The list on `0x800C` is what the seat
+token gates. There is no rule language.
 
-Rust and Python ask before they connect. The seat prints one line
-(`python wants the network`, `rustc wants storage`). Yes installs a
-token for that run. No is `AccessDenied`. Milestones 108 and 109
-are a compatibility layer: `std::net::TcpStream::connect` and
-Python `socket.connect` keep those names, ask, then dial a granted
-name through `net`. The value is still a lane. There is no socket
-syscall and no second stack. `bind`, `listen`, UDP, `setsockopt`,
-and any call that passes an IP or a port stay unsupported. That
-is not a Berkeley socket. Milestone 83's inbound handoff and
-Milestone 103's lane boot stay open until their own runs; 109
-does not edit 103's `ImportError` assertion before that.
+A foreground program without the card asks. The shell prints
+`<name> wants the network` or `<name> wants storage`. Yes
+installs a token for that run. No is `AccessDenied`. Milestones
+108 and 109 are still a compatibility layer: `std::net::TcpStream::connect`
+and Python `socket.connect` keep those names, ask, then dial a
+granted name through `net`. The value is still a lane. There is
+no socket syscall and no second stack. `bind`, `listen`, UDP,
+`setsockopt`, and any call that passes an IP or a port stay
+unsupported. That is not a Berkeley socket. Milestone 83's
+inbound handoff and Milestone 103's lane boot stay open until
+their own runs; 109 does not edit 103's `ImportError` assertion
+before that.
 
 True `v1.0` adds one more gate to the KVM cells that are already
 open: a person on the host opens SSH, then reads a file over SFTP,

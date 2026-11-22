@@ -194,12 +194,12 @@ fn handle(
                 reply(rx, b"down\n", 0);
             }
         }
-        NET_OP_DIAL => dial(rx, engine, record, admin, actor_id, rest, now),
+        NET_OP_DIAL => dial(rx, engine, record, admin, actor_id, msg[2], rest, now),
         NET_OP_ALLOW if admin => allow(rx, record, rest),
         NET_OP_GRANT if admin => grant_op(rx, record, rest, true),
         NET_OP_REVOKE if admin => grant_op(rx, record, rest, false),
-        NET_OP_SERVE if admin => serve(rx, engine, record, gates, rest),
-        NET_OP_PING => ping(rx, engine, rest),
+        NET_OP_SERVE if admin => serve(rx, engine, record, msg[2], gates, rest),
+        NET_OP_PING => ping(rx, engine, msg[2], rest),
         NET_OP_ALLOW | NET_OP_GRANT | NET_OP_REVOKE | NET_OP_SERVE => {
             reply(rx, b"access denied\n", 0);
         }
@@ -211,26 +211,24 @@ fn dial(
     rx: Cap,
     engine: &mut Engine,
     record: &Record,
-    admin: bool,
+    _admin: bool,
     actor_id: u64,
+    held: u8,
     rest: &[u8],
     now: u64,
 ) {
-    let Some((name, claimed)) = two_fields(rest) else {
+    let Some((name, _claimed)) = two_fields(rest) else {
         reply(rx, b"bad\n", 0);
         return;
-    };
-    let actor_ok = if claimed == b"admin" {
-        admin && record.may_dial(name, b"admin")
-    } else {
-        record.may_dial(name, claimed)
     };
     let Some(entry) = record.find(name) else {
         audit(actor_id, name, &[0; 32], "missing");
         reply(rx, b"access denied\n", 0);
         return;
     };
-    if !actor_ok {
+    // Read on the name's galfs object is dial. Actor strings are not
+    // an authority. No bit means no TCP.
+    if held & 1 == 0 {
         audit(actor_id, name, &entry.key, "denied");
         reply(rx, b"access denied\n", 0);
         return;
@@ -503,12 +501,24 @@ fn grant_op(rx: Cap, record: &mut Record, rest: &[u8], grant: bool) {
     reply(rx, b"ok\n", 0);
 }
 
-fn serve(rx: Cap, engine: &mut Engine, record: &Record, gates: &mut Vec<Gate>, rest: &[u8]) {
+fn serve(
+    rx: Cap,
+    engine: &mut Engine,
+    record: &Record,
+    held: u8,
+    gates: &mut Vec<Gate>,
+    rest: &[u8],
+) {
     let name = rest;
     let Some(entry) = record.find(name) else {
         reply(rx, b"missing\n", 0);
         return;
     };
+    // Write on the name's object is accept. No token, no listener.
+    if held & 2 == 0 {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
     if gates.iter().any(|g| g.port == entry.port) {
         reply(rx, b"ok\n", 0);
         return;
@@ -545,7 +555,11 @@ fn two_fields(rest: &[u8]) -> Option<(&[u8], &[u8])> {
     Some((name, actor))
 }
 
-fn ping(rx: Cap, engine: &mut Engine, rest: &[u8]) {
+fn ping(rx: Cap, engine: &mut Engine, held: u8, rest: &[u8]) {
+    if held & 1 == 0 {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
     if rest.len() < 4 {
         reply(rx, b"bad\n", 0);
         return;

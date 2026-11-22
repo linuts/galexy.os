@@ -392,6 +392,18 @@ pub(in crate::sched) struct Thread {
     pub(in crate::sched) heap_pages: u32,
     /// Second user pointer for a parked channel `recv` (cap-out buffer).
     pub(in crate::sched) io_extra: AtomicU64,
+    /// Path the seat grants for a parked card ask (Milestone 107).
+    pub(in crate::sched) ask_buf: [u8; 96],
+    /// Length of [`ask_buf`].
+    pub(in crate::sched) ask_len: u8,
+    /// Net payload replayed when the seat says yes. Empty for storage.
+    pub(in crate::sched) ask_arg: [u8; 96],
+    /// Length of [`ask_arg`].
+    pub(in crate::sched) ask_arg_len: u8,
+    /// Rights the ask would install (`RIGHT_READ` or `RIGHT_WRITE`).
+    pub(in crate::sched) ask_rights: u8,
+    /// Bits already asked this run: 1 network, 2 storage.
+    pub(in crate::sched) ask_done: AtomicU8,
     /// Milestone 70: `0` for a process leader (the slot the loader made).
     /// A thread from [`galexy_abi::Syscall::ThreadSpawn`] stores its
     /// leader's 1-based slot here; `files`, `procs`, `heap_pages`, and
@@ -976,6 +988,12 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
             console_budget_used: 0,
             heap_pages: 0,
             io_extra: AtomicU64::new(0),
+            ask_buf: [0; 96],
+            ask_len: 0,
+            ask_arg: [0; 96],
+            ask_arg_len: 0,
+            ask_rights: 0,
+            ask_done: AtomicU8::new(0),
             leader_slot: 0,
             fs_base: AtomicU64::new(0),
         });
@@ -1113,6 +1131,12 @@ pub(in crate::sched) fn register_thread(leader: &LeaderSnapshot, kstack: Vec<u8>
             console_budget_used: 0,
             heap_pages: 0,
             io_extra: AtomicU64::new(0),
+            ask_buf: [0; 96],
+            ask_len: 0,
+            ask_arg: [0; 96],
+            ask_arg_len: 0,
+            ask_rights: 0,
+            ask_done: AtomicU8::new(0),
             leader_slot: leader.leader_slot,
             fs_base: AtomicU64::new(0),
         });
@@ -1191,6 +1215,12 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             console_budget_used: 0,
             heap_pages: 0,
             io_extra: AtomicU64::new(0),
+            ask_buf: [0; 96],
+            ask_len: 0,
+            ask_arg: [0; 96],
+            ask_arg_len: 0,
+            ask_rights: 0,
+            ask_done: AtomicU8::new(0),
             leader_slot: 0,
             fs_base: AtomicU64::new(0),
         });
@@ -1521,6 +1551,12 @@ pub(crate) fn spawn_user_with_grants(
             console_budget_used: 0,
             heap_pages: 0,
             io_extra: AtomicU64::new(0),
+            ask_buf: [0; 96],
+            ask_len: 0,
+            ask_arg: [0; 96],
+            ask_arg_len: 0,
+            ask_rights: 0,
+            ask_done: AtomicU8::new(0),
             leader_slot: 0,
             fs_base: AtomicU64::new(0),
         });
@@ -1874,12 +1910,25 @@ pub(crate) fn task_proc_inspect(cap: Cap, dst: &mut [u8]) -> Result<usize, SysEr
             STATE_FREED => "freed",
             _ => "unknown",
         };
-        Ok(format_inspect_line(
-            dst,
-            child.debug_id,
-            child.name(),
-            state,
-        ))
+        let mut n = format_inspect_line(dst, child.debug_id, child.name(), state);
+        if child.io_kind.load(Ordering::Acquire) == IO_ASK && n > 0 && dst[n - 1] == b'\n' {
+            n -= 1;
+            let kind = if child.io_pipe.load(Ordering::Acquire) == ASK_NETWORK {
+                b" ask=network path=".as_slice()
+            } else {
+                b" ask=storage path=".as_slice()
+            };
+            n += push_bytes(dst, n, kind);
+            let plen = child.ask_len as usize;
+            n += push_bytes(dst, n, &child.ask_buf[..plen]);
+            n += push_bytes(dst, n, b" rights=");
+            n += push_dec(dst, n, u64::from(child.ask_rights));
+            if n < dst.len() {
+                dst[n] = b'\n';
+                n += 1;
+            }
+        }
+        Ok(n)
     })
 }
 

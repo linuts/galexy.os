@@ -525,11 +525,12 @@ invent a second ambient “path implies permission” API beside tokens.
 
 ## Cards outside the tree (Milestones 105 and 106)
 
-A token stays an object id and rights. The network firewall
-(`NET.md` → Phase 16) and the USB list (`USB.md` → Cards) will
-require that token. The actor strings inside `/net`, and the
-"task is named `usb`" check, are not a second model once those
-milestones land. This plan does not bump `DISK_VERSION`. A layout
-change, if a name or a device will not fit an existing object, is
-a later milestone that names the version and refuses the previous
-image. Repair of anything other than a bad share stays unwritten.
+A token stays an object id and rights. A network name is
+`/card/<name>` and ping is `/card/ping`. A listed USB port is
+`/usb/<port>`. Both live under the admin root, so
+`/admin@card/<name>` and `/admin@usb/<port>` are the same
+objects. `NAME_CAP` is 64. A port is one to three digits. Neither
+needed a `DISK_VERSION` bump. The actor strings inside `/net`
+are not an authority. Cap `0x800B` stays with the task named
+`usb`; the seat token gates the list, not that cap. Repair of
+anything other than a bad share stays unwritten.

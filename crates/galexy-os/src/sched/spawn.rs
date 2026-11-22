@@ -1176,6 +1176,11 @@ pub(crate) fn task_wait(cap: Cap, poll: bool) -> Result<Option<u64>, SysError> {
             return Err(SysError::BadCap);
         }
         let state = threads[ci - 1].state.load(Ordering::Acquire);
+        if threads[ci - 1].io_kind.load(Ordering::Acquire) == IO_ASK
+            && (state == STATE_RUNNING || state == STATE_WAITING)
+        {
+            return Err(SysError::Interrupted);
+        }
         if state == STATE_EXITED || state == STATE_FREED {
             let code = threads[ci - 1].exit_code.load(Ordering::Acquire);
             threads[ci - 1].exit_waited.store(true, Ordering::Release);
@@ -1335,6 +1340,77 @@ fn live_named_proc(threads: &[Thread], target: &str) -> Option<usize> {
     proc_index(threads, ti + 1)
 }
 
+fn ask_matches(thread: &Thread, path: &str, rights: u8) -> bool {
+    if thread.io_kind.load(Ordering::Acquire) != IO_ASK {
+        return false;
+    }
+    if thread.ask_rights != rights {
+        return false;
+    }
+    let n = thread.ask_len as usize;
+    n == path.len() && &thread.ask_buf[..n] == path.as_bytes()
+}
+
+/// The parent of a parked ask may install the card without already
+/// holding it. The program itself cannot. Returns true when the ask
+/// was answered.
+fn approve_ask(
+    threads: &mut [Thread],
+    caller_slot: usize,
+    ti: usize,
+    path: &str,
+    rights: u8,
+) -> Result<bool, SysError> {
+    if !ask_matches(&threads[ti], path, rights) {
+        return Ok(false);
+    }
+    if threads[ti].parent_slot != caller_slot as u8 || ti + 1 == caller_slot {
+        return Err(SysError::AccessDenied);
+    }
+    let root = threads[ti].fs_root;
+    let tokens = threads[ti].fs_tokens;
+    let object = galfs::lookup_index(root, &tokens, path)?;
+    galfs::push_token(&mut threads[ti].fs_tokens, object, rights)?;
+    super::task::complete_ask(threads, ti, true);
+    Ok(true)
+}
+
+/// Parent says no. The program gets `AccessDenied` and keeps running.
+fn deny_ask(threads: &mut [Thread], caller_slot: usize, ti: usize, path: &str, rights: u8) -> bool {
+    if !ask_matches(&threads[ti], path, rights) {
+        return false;
+    }
+    if threads[ti].parent_slot != caller_slot as u8 {
+        return false;
+    }
+    super::task::complete_ask(threads, ti, false);
+    true
+}
+
+/// Wakes a shell that is Cap-waiting on a child parked for a card ask.
+pub(in crate::sched) fn wake_ask_parent(threads: &mut [Thread], child_slot: u8) {
+    if child_slot == 0 {
+        return;
+    }
+    let parent = threads[child_slot as usize - 1].parent_slot;
+    if parent == 0 {
+        return;
+    }
+    let index = parent as usize - 1;
+    if threads[index].state.load(Ordering::Acquire) != STATE_WAITING {
+        return;
+    }
+    if !threads[index].wait_for_exit.load(Ordering::Acquire) {
+        return;
+    }
+    if threads[index].wait_child_slot.load(Ordering::Acquire) != child_slot {
+        return;
+    }
+    clear_wait_fields(&threads[index]);
+    stamp_waiter_frame(&threads[index], SyscallResult::err(SysError::Interrupted));
+    set_running(&threads[index]);
+}
+
 /// Installs a galfs token on a live user task named `target`.
 ///
 /// The current task must already hold every bit in `rights` on the
@@ -1358,11 +1434,16 @@ pub(crate) fn task_grant(path: &str, rights: u8, target: &str) -> Result<(), Sys
         if need == 0 {
             return Err(SysError::BadValue);
         }
-        let object = galfs::resolve_and_check(fs_root, &fs_tokens, path, need)?;
         let Some(ti) = live_named_proc(&threads, target) else {
             return Err(SysError::NotFound);
         };
-        galfs::push_token(&mut threads[ti].fs_tokens, object, rights)
+        if approve_ask(&mut threads, slot, ti, path, rights)? {
+            return Ok(());
+        }
+        let object = galfs::resolve_and_check(fs_root, &fs_tokens, path, need)?;
+        galfs::push_token(&mut threads[ti].fs_tokens, object, rights)?;
+        crate::sched::task::complete_ask(&mut threads, ti, true);
+        Ok(())
     });
     log_token(
         "grant", &actor_buf, actor_len, path, rights, target, &result,
@@ -1390,10 +1471,13 @@ pub(crate) fn task_revoke(path: &str, rights: u8, target: &str) -> Result<(), Sy
         if need == 0 {
             return Err(SysError::BadValue);
         }
-        let object = galfs::resolve_and_check(fs_root, &fs_tokens, path, need)?;
         let Some(ti) = live_named_proc(&threads, target) else {
             return Err(SysError::NotFound);
         };
+        if deny_ask(&mut threads, slot, ti, path, rights) {
+            return Ok(());
+        }
+        let object = galfs::resolve_and_check(fs_root, &fs_tokens, path, need)?;
         galfs::revoke_token(&mut threads[ti].fs_tokens, object, rights)
     });
     log_token(

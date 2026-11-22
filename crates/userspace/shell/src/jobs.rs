@@ -5,8 +5,10 @@ use super::state::*;
 use core::cell::UnsafeCell;
 use core::sync::atomic::Ordering;
 
-use galexy_abi::Cap;
-use galexy_rt::{close, kill, pipe, spawn_with, wait, write_console};
+use galexy_abi::{Cap, SysError, SyscallResult};
+use galexy_rt::{
+    close, grant, keyboard_cap, kill, pipe, read, revoke, sleep_ms, spawn_with, wait, write_console,
+};
 
 pub(crate) const JOB_MAX: usize = 4;
 pub(crate) const STAGE_MAX: usize = 4;
@@ -562,11 +564,126 @@ pub(crate) fn run_pipeline(cwd: &Cwd, stages: &[&[u8]]) {
 
 pub(crate) fn wait_caps(caps: &[u64]) {
     for (i, bits) in caps.iter().enumerate() {
-        let waited = wait(Cap::from_bits(*bits));
+        let waited = wait_answer(Cap::from_bits(*bits));
         if i + 1 == caps.len() {
             LAST_STATUS.store(if waited.ok { waited.value } else { 1 }, Ordering::Relaxed);
         }
     }
+}
+
+/// Cap-wait that lets the seat answer a card ask. The kernel wakes this
+/// wait with `Interrupted` and does not draw the line.
+pub(crate) fn wait_answer(cap: Cap) -> SyscallResult {
+    loop {
+        let waited = wait(cap);
+        if waited.ok {
+            return waited;
+        }
+        if SysError::from_code(waited.value) != SysError::Interrupted {
+            return waited;
+        }
+        if !answer_card(cap) {
+            let _ = sleep_ms(20);
+        }
+    }
+}
+
+fn answer_card(cap: Cap) -> bool {
+    let mut buf = [0u8; 256];
+    let got = read(cap, &mut buf);
+    if !got.ok || got.value == 0 {
+        return false;
+    }
+    let text = &buf[..(got.value as usize).min(buf.len())];
+    let Some(kind_at) = find_bytes(text, b" ask=") else {
+        return false;
+    };
+    let network = text[kind_at..].starts_with(b" ask=network");
+    let Some(name) = field(text, b"name=") else {
+        return false;
+    };
+    let Some(path) = field(text, b"path=") else {
+        return false;
+    };
+    let Some(rights_text) = field(text, b"rights=") else {
+        return false;
+    };
+    let rights = parse_u64(rights_text);
+    if rights == 0 {
+        return false;
+    }
+    write_console(name);
+    if network {
+        write_console(b" wants the network\n");
+    } else {
+        write_console(b" wants storage\n");
+    }
+    let yes = read_yes();
+    let result = if yes {
+        grant(path, rights, name)
+    } else {
+        revoke(path, rights, name)
+    };
+    if !result.ok {
+        let _ = revoke(path, rights, name);
+    }
+    true
+}
+
+fn read_yes() -> bool {
+    let kbd = keyboard_cap();
+    let mut yes = false;
+    let mut first = true;
+    loop {
+        let mut chunk = [0u8; 8];
+        let got = read(kbd, &mut chunk);
+        if !got.ok {
+            return false;
+        }
+        if got.value == 0 {
+            let _ = sleep_ms(20);
+            continue;
+        }
+        for &byte in &chunk[..got.value as usize] {
+            if byte == b'\n' || byte == b'\r' {
+                write_console(b"\n");
+                return yes;
+            }
+            if byte < 0x20 {
+                continue;
+            }
+            write_console(&[byte]);
+            if first {
+                yes = byte == b'y' || byte == b'Y';
+                first = false;
+            }
+        }
+    }
+}
+
+fn find_bytes(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+fn field<'a>(text: &'a [u8], key: &[u8]) -> Option<&'a [u8]> {
+    let at = find_bytes(text, key)? + key.len();
+    let rest = &text[at..];
+    let end = rest
+        .iter()
+        .position(|b| *b == b' ' || *b == b'\n')
+        .unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+fn parse_u64(text: &[u8]) -> u64 {
+    let mut n = 0u64;
+    for &b in text {
+        if !b.is_ascii_digit() {
+            break;
+        }
+        n = n.saturating_mul(10).saturating_add(u64::from(b - b'0'));
+    }
+    n
 }
 
 pub(crate) fn close_pipe_ends(ends: &[[u64; 2]]) {

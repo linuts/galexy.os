@@ -912,7 +912,10 @@ pub const CHAN_MSG_MAX: usize = 256;
 /// these):
 /// - `0`: admin (`1` when the sender's root is the admin actor)
 /// - `1`: sender TTY, 0-based
-/// - `2..4`: zero
+/// - `2`: card rights on a net RPC ([`TOKEN_READ`] is dial, [`TOKEN_WRITE`]
+///   is accept). On a usb RPC, `2..4` is a bit mask of ports 1..=16
+///   the caller may list (bit 0 is port 1)
+/// - `3`: high byte of that usb mask; zero on a net RPC
 /// - `4..12`: seat debug id (`u64`)
 /// - `12..20`: session generation (`u64`)
 ///

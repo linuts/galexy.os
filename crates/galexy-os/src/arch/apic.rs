@@ -711,11 +711,14 @@ pub fn send_fixed_ipi(apic_id: u8, vector: u8) {
 }
 
 /// Sends the INIT IPI (assert) to `apic_id`.
+/// `apic_id` is a `u8`. Milestone 104 does not widen the IPI destination.
 pub fn send_init(apic_id: u8) {
     send_ipi(apic_id, ICR_DELIVERY_INIT, 0, true);
 }
 
 /// Sends the SIPI (start-up) IPI to `apic_id` at 4-KiB-page `page_phys`.
+///
+/// `apic_id` is a `u8`, same ceiling as [`send_init`].
 pub fn send_sipi(apic_id: u8, page_phys: u64) {
     debug_assert_eq!(page_phys & 0xFFF, 0, "SIPI vector must be 4 KiB aligned");
     debug_assert!(page_phys < 0x10_0000, "SIPI page must live under 1 MiB");

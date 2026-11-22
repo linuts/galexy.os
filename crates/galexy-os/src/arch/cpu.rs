@@ -668,6 +668,9 @@ pub fn boot_aps() {
     build_ap_tables();
     for rank in 1..ids.len() {
         let apic_id = ids[rank];
+        // A ninth enabled type-0 record panics in `enabled_ids` before
+        // this warning. `MAX_CPUS` stays 8. The shell is not started
+        // here; it stays on the BSP (`no_steal`).
         if rank >= MAX_CPUS {
             serial_println!(
                 "[cpu] warning: AP beyond MAX_CPUS skipped (apic id {})",

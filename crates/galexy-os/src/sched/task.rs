@@ -876,14 +876,21 @@ pub(crate) fn task_net_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let (admin, tty, debug_id, session_gen) = {
+        let (admin, tty, debug_id, session_gen, root, tokens) = {
             let owner = running_proc_index(&threads, slot)?;
             let thread = &threads[owner];
             if thread.fs_root == galfs::NO_OBJECT {
                 return Err(SysError::AccessDenied);
             }
             let admin = u8::from(galfs::is_admin_root(thread.fs_root));
-            (admin, thread.tty, thread.debug_id, thread.session_gen)
+            (
+                admin,
+                thread.tty,
+                thread.debug_id,
+                thread.session_gen,
+                thread.fs_root,
+                thread.fs_tokens,
+            )
         };
         if threads.iter().any(|t| {
             t.state.load(Ordering::Acquire) == STATE_WAITING
@@ -891,10 +898,28 @@ pub(crate) fn task_net_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(
         }) {
             return Err(SysError::NoResource);
         }
+        let (held, need, ask_path) = net_card(&tokens, root, bytes);
+        if need != 0
+            && held & need == 0
+            && net_card_denied(root, &tokens, &ask_path)
+            && park_card_ask(
+                &mut threads,
+                slot,
+                ASK_NETWORK,
+                need,
+                ask_path.as_str(),
+                bytes,
+                reply,
+                reply_len,
+            )
+        {
+            return Ok(());
+        }
         let mut msg = [0u8; galexy_abi::CHAN_MSG_MAX];
         let n = galexy_abi::INIT_RPC_HDR + bytes.len();
         msg[0] = admin;
         msg[1] = tty;
+        msg[2] = held;
         msg[4..12].copy_from_slice(&debug_id.to_le_bytes());
         msg[12..20].copy_from_slice(&session_gen.to_le_bytes());
         msg[galexy_abi::INIT_RPC_HDR..n].copy_from_slice(bytes);
@@ -922,14 +947,15 @@ pub(crate) fn task_usb_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let (admin, tty, debug_id, session_gen) = {
+        let (admin, tty, debug_id, session_gen, mask) = {
             let owner = running_proc_index(&threads, slot)?;
             let thread = &threads[owner];
             if thread.fs_root == galfs::NO_OBJECT {
                 return Err(SysError::AccessDenied);
             }
             let admin = u8::from(galfs::is_admin_root(thread.fs_root));
-            (admin, thread.tty, thread.debug_id, thread.session_gen)
+            let mask = usb_mask(thread.fs_root, &thread.fs_tokens);
+            (admin, thread.tty, thread.debug_id, thread.session_gen, mask)
         };
         if threads.iter().any(|t| {
             t.state.load(Ordering::Acquire) == STATE_WAITING
@@ -941,6 +967,9 @@ pub(crate) fn task_usb_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(
         let n = galexy_abi::INIT_RPC_HDR + bytes.len();
         msg[0] = admin;
         msg[1] = tty;
+        // Ports 1..=16 the caller may list. Bit 0 is port 1.
+        msg[2] = mask as u8;
+        msg[3] = (mask >> 8) as u8;
         msg[4..12].copy_from_slice(&debug_id.to_le_bytes());
         msg[12..20].copy_from_slice(&session_gen.to_le_bytes());
         msg[galexy_abi::INIT_RPC_HDR..n].copy_from_slice(bytes);
@@ -1198,4 +1227,334 @@ pub(crate) fn task_close(cap: Cap) -> Result<(), SysError> {
         wake_lane_waiters(id);
     }
     Ok(())
+}
+
+struct CardPath {
+    raw: [u8; 80],
+    len: usize,
+}
+
+impl CardPath {
+    const fn empty() -> Self {
+        Self {
+            raw: [0; 80],
+            len: 0,
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.raw[..self.len]).unwrap_or("")
+    }
+}
+
+fn card_path(prefix: &[u8], name: &[u8]) -> CardPath {
+    let mut out = CardPath::empty();
+    if prefix.len() + name.len() > out.raw.len() || name.is_empty() {
+        return out;
+    }
+    out.raw[..prefix.len()].copy_from_slice(prefix);
+    out.raw[prefix.len()..prefix.len() + name.len()].copy_from_slice(name);
+    out.len = prefix.len() + name.len();
+    out
+}
+
+fn net_name(bytes: &[u8]) -> &[u8] {
+    if bytes.is_empty() {
+        return b"";
+    }
+    match bytes[0] {
+        galexy_abi::NET_OP_DIAL => {
+            if bytes.len() < 2 {
+                return b"";
+            }
+            let n = bytes[1] as usize;
+            if bytes.len() < 2 + n {
+                return b"";
+            }
+            &bytes[2..2 + n]
+        }
+        galexy_abi::NET_OP_SERVE => {
+            if bytes.len() < 2 {
+                return b"";
+            }
+            &bytes[1..]
+        }
+        _ => b"",
+    }
+}
+
+/// `(held bits, needed bit, path)`. Needed bit 0 means this op is not a card.
+fn net_card(
+    tokens: &[galfs::Token; galfs::TOKEN_SLOTS],
+    root: u32,
+    bytes: &[u8],
+) -> (u8, u8, CardPath) {
+    if bytes.is_empty() {
+        return (0, 0, CardPath::empty());
+    }
+    let (path, need) = match bytes[0] {
+        galexy_abi::NET_OP_DIAL => (
+            card_path(b"/admin@card/", net_name(bytes)),
+            galfs::RIGHT_READ,
+        ),
+        galexy_abi::NET_OP_PING => (card_path(b"/admin@card/", b"ping"), galfs::RIGHT_READ),
+        galexy_abi::NET_OP_SERVE => (
+            card_path(b"/admin@card/", net_name(bytes)),
+            galfs::RIGHT_WRITE,
+        ),
+        _ => return (0, 0, CardPath::empty()),
+    };
+    if path.len == 0 {
+        return (0, 0, path);
+    }
+    let text = path.as_str();
+    let mut held = 0u8;
+    if galfs::resolve_and_check(root, tokens, text, galfs::RIGHT_READ).is_ok() {
+        held |= galfs::RIGHT_READ;
+    }
+    if galfs::resolve_and_check(root, tokens, text, galfs::RIGHT_WRITE).is_ok() {
+        held |= galfs::RIGHT_WRITE;
+    }
+    (held, need, path)
+}
+
+fn net_card_denied(
+    root: u32,
+    tokens: &[galfs::Token; galfs::TOKEN_SLOTS],
+    path: &CardPath,
+) -> bool {
+    if root == galfs::NO_OBJECT || path.len == 0 {
+        return false;
+    }
+    matches!(
+        galfs::resolve_and_check(root, tokens, path.as_str(), galfs::RIGHT_READ),
+        Err(SysError::AccessDenied)
+    ) || matches!(
+        galfs::resolve_and_check(root, tokens, path.as_str(), galfs::RIGHT_WRITE),
+        Err(SysError::AccessDenied)
+    )
+}
+
+fn usb_mask(root: u32, tokens: &[galfs::Token; galfs::TOKEN_SLOTS]) -> u16 {
+    let mut mask = 0u16;
+    for port in 1u8..=16 {
+        let mut name = [0u8; 8];
+        let n = if port >= 10 {
+            name[0] = b'0' + port / 10;
+            name[1] = b'0' + port % 10;
+            2
+        } else {
+            name[0] = b'0' + port;
+            1
+        };
+        let path = card_path(b"/admin@usb/", &name[..n]);
+        if galfs::resolve_and_check(root, tokens, path.as_str(), galfs::RIGHT_READ).is_ok() {
+            mask |= 1u16 << (port - 1);
+        }
+    }
+    mask
+}
+
+fn shell_parent(name: &str) -> bool {
+    name == "shell"
+        || name
+            .strip_prefix("shell")
+            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn seat_can_answer(threads: &[Thread], slot: usize) -> bool {
+    let Some(thread) = threads.get(slot - 1) else {
+        return false;
+    };
+    let parent = thread.parent_slot as usize;
+    if parent == 0 || parent > threads.len() {
+        return false;
+    }
+    if !shell_parent(threads[parent - 1].name()) {
+        return false;
+    }
+    let tty = thread.tty as usize;
+    tty < FG_SLOTS.len() && FG_SLOTS[tty].load(Ordering::Acquire) == slot as u8
+}
+
+#[allow(clippy::too_many_arguments)]
+fn park_card_ask(
+    threads: &mut [Thread],
+    slot: usize,
+    kind: u8,
+    rights: u8,
+    path: &str,
+    payload: &[u8],
+    reply: u64,
+    reply_len: u32,
+) -> bool {
+    if path.is_empty() || path.len() > 96 || payload.len() > 96 || !seat_can_answer(threads, slot) {
+        return false;
+    }
+    let done_bit = if kind == ASK_NETWORK {
+        ASK_DONE_NETWORK
+    } else {
+        ASK_DONE_STORAGE
+    };
+    let done = threads[slot - 1].ask_done.load(Ordering::Acquire);
+    if done & done_bit != 0 {
+        return false;
+    }
+    let thread = &mut threads[slot - 1];
+    thread.ask_buf[..path.len()].copy_from_slice(path.as_bytes());
+    thread.ask_len = path.len() as u8;
+    thread.ask_arg[..payload.len()].copy_from_slice(payload);
+    thread.ask_arg_len = payload.len() as u8;
+    thread.ask_rights = rights;
+    thread.ask_done.store(done | done_bit, Ordering::Release);
+    park_io(threads, slot, IO_ASK, kind, reply, reply_len, 0);
+    true
+}
+
+/// Parks a foreground program that opened a file it has no card for.
+///
+/// The shell reads yes or no. A second open of storage in this run
+/// does not park. Logged-out and a missing path do not ask.
+pub(crate) fn begin_storage_ask(name: &str) -> bool {
+    if name.len() > 96 || name.is_empty() {
+        return false;
+    }
+    let slot = current_slot();
+    if slot == 0 {
+        return false;
+    }
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let Ok(owner) = running_proc_index(&threads, slot) else {
+            return false;
+        };
+        let root = threads[owner].fs_root;
+        let tokens = threads[owner].fs_tokens;
+        if root == galfs::NO_OBJECT {
+            return false;
+        }
+        if !matches!(
+            galfs::resolve_and_check(root, &tokens, name, galfs::RIGHT_READ),
+            Err(SysError::AccessDenied)
+        ) {
+            return false;
+        }
+        park_card_ask(
+            &mut threads,
+            slot,
+            ASK_STORAGE,
+            galfs::RIGHT_READ,
+            name,
+            b"",
+            0,
+            0,
+        )
+    })
+}
+
+/// Finishes a parked card ask. `yes` retries the open or the net call.
+/// Anything else returns `AccessDenied` and leaves the program running.
+pub(in crate::sched) fn complete_ask(threads: &mut [Thread], index: usize, yes: bool) {
+    let Some(thread) = threads.get(index) else {
+        return;
+    };
+    if thread.io_kind.load(Ordering::Acquire) != IO_ASK {
+        return;
+    }
+    if !yes {
+        finish_ask_denied(threads, index);
+        return;
+    }
+    let kind = threads[index].io_pipe.load(Ordering::Acquire);
+    if kind == ASK_STORAGE {
+        finish_storage_ask(threads, index);
+    } else if kind == ASK_NETWORK {
+        finish_network_ask(threads, index);
+    } else {
+        finish_ask_denied(threads, index);
+    }
+}
+
+fn finish_ask_denied(threads: &mut [Thread], index: usize) {
+    threads[index].io_kind.store(IO_NONE, Ordering::Release);
+    stamp_waiter_frame(&threads[index], SyscallResult::err(SysError::AccessDenied));
+    set_running(&threads[index]);
+}
+
+fn finish_storage_ask(threads: &mut [Thread], index: usize) {
+    let len = threads[index].ask_len as usize;
+    let mut raw = [0u8; 96];
+    raw[..len].copy_from_slice(&threads[index].ask_buf[..len]);
+    let path = core::str::from_utf8(&raw[..len]).unwrap_or("");
+    let owner = proc_index(threads, index + 1).unwrap_or(index);
+    let root = threads[owner].fs_root;
+    let tokens = threads[owner].fs_tokens;
+    let opened = galfs::open_file(root, &tokens, path);
+    let result = match opened {
+        Ok(found) => {
+            let Some(slot_i) = threads[owner].files.iter().position(|s| s.is_none()) else {
+                finish_ask_err(threads, index, SysError::NoResource);
+                return;
+            };
+            let rights = CapRights::READ.union(CapRights::WRITE);
+            threads[owner].files[slot_i] = Some(OpenFile {
+                body: FileBody::Galfs(found),
+                offset: 0,
+                rights,
+            });
+            SyscallResult::ok(Cap::new(galexy_abi::FILE_CAP_BASE + slot_i as u64, rights).bits())
+        }
+        Err(err) => SyscallResult::err(err),
+    };
+    threads[index].io_kind.store(IO_NONE, Ordering::Release);
+    stamp_waiter_frame(&threads[index], result);
+    set_running(&threads[index]);
+}
+
+fn finish_ask_err(threads: &mut [Thread], index: usize, err: SysError) {
+    threads[index].io_kind.store(IO_NONE, Ordering::Release);
+    stamp_waiter_frame(&threads[index], SyscallResult::err(err));
+    set_running(&threads[index]);
+}
+
+fn finish_network_ask(threads: &mut [Thread], index: usize) {
+    let len = threads[index].ask_arg_len as usize;
+    let mut payload = [0u8; 96];
+    payload[..len].copy_from_slice(&threads[index].ask_arg[..len]);
+    let reply = threads[index].io_addr.load(Ordering::Acquire);
+    let reply_len = threads[index].io_len.load(Ordering::Acquire);
+    let owner = proc_index(threads, index + 1).unwrap_or(index);
+    let root = threads[owner].fs_root;
+    let tokens = threads[owner].fs_tokens;
+    let (held, _, _) = net_card(&tokens, root, &payload[..len]);
+    let ctrl = NET_CTRL.load(Ordering::Acquire);
+    if ctrl == 0xFF {
+        finish_ask_err(threads, index, SysError::Unsupported);
+        return;
+    }
+    let admin = u8::from(galfs::is_admin_root(root));
+    let tty = threads[index].tty;
+    let debug_id = threads[index].debug_id;
+    let session_gen = threads[index].session_gen;
+    let mut msg = [0u8; galexy_abi::CHAN_MSG_MAX];
+    let n = galexy_abi::INIT_RPC_HDR + len;
+    if n > msg.len() {
+        finish_ask_err(threads, index, SysError::BadValue);
+        return;
+    }
+    msg[0] = admin;
+    msg[1] = tty;
+    msg[2] = held;
+    msg[4..12].copy_from_slice(&debug_id.to_le_bytes());
+    msg[12..20].copy_from_slice(&session_gen.to_le_bytes());
+    msg[galexy_abi::INIT_RPC_HDR..n].copy_from_slice(&payload[..len]);
+    if channel::enqueue(ctrl, 1, &msg[..n], [None, None]).is_err() {
+        finish_ask_err(threads, index, SysError::NoResource);
+        return;
+    }
+    threads[index].io_kind.store(IO_NET_RPC, Ordering::Release);
+    threads[index].io_pipe.store(ctrl, Ordering::Relaxed);
+    threads[index].io_addr.store(reply, Ordering::Relaxed);
+    threads[index].io_len.store(reply_len, Ordering::Relaxed);
+    wake_net_for_control(threads);
 }

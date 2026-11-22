@@ -71,7 +71,7 @@ ceiling is `NoResource`, never a panic.
 | Resource | Cap | Where |
 | --- | --- | --- |
 | Thread slots (kernel threads + user tasks, including seats) | 64 | `sched::MAX_THREADS` |
-| CPUs | `MAX_CPUS = 8` per-CPU slots; the suite and `cargo run` boot `-smp 2` | `arch/cpu` |
+| CPUs | `MAX_CPUS = 8` per-CPU slots; the suite and `cargo run` boot `-smp 2`. `test-cpus` boots `-smp 4` and `-smp 8` | `arch/cpu` |
 | TTYs / seats | 12 (F1–F12) | `console` |
 | Open file caps per task | 64 (`FILE_CAP_BASE..+64`) | `sched::MAX_OPEN_FILES` |
 | Process caps per task | 16 | `galexy_abi::MAX_PROC_CAPS` |

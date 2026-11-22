@@ -31,6 +31,7 @@ fn main() -> i32 {
     let _peer = ends[1];
     let mut lines = [[0u8; LINE]; MAX_DEV];
     let mut lens = [0usize; MAX_DEV];
+    let mut ports = [0u8; MAX_DEV];
     let mut count = 0usize;
     let mut logged_miss = false;
     loop {
@@ -43,10 +44,11 @@ fn main() -> i32 {
             }
         } else if got.value > 0 {
             let n = (got.value as usize).min(rec.len());
-            if let Some((line, len)) = accept(&rec[..n]) {
+            if let Some((line, len, port)) = accept(&rec[..n]) {
                 if count < MAX_DEV {
                     lines[count][..len].copy_from_slice(&line[..len]);
                     lens[count] = len;
+                    ports[count] = port;
                     count += 1;
                 }
             }
@@ -61,17 +63,33 @@ fn main() -> i32 {
                 0
             };
             if op == USB_OP_LIST {
+                let mask = u16::from_le_bytes([msg[2], msg[3]]);
                 let mut reply = [0u8; galexy_abi::CHAN_MSG_MAX];
                 let mut at = 0usize;
+                let mut shown = 0usize;
                 for i in 0..count {
+                    let port = ports[i];
+                    let bit = if port == 0 || port > 16 {
+                        0
+                    } else {
+                        1u16 << (port - 1)
+                    };
+                    if mask & bit == 0 {
+                        continue;
+                    }
                     let len = lens[i];
                     if at + len > reply.len() {
                         break;
                     }
                     reply[at..at + len].copy_from_slice(&lines[i][..len]);
                     at += len;
+                    shown += 1;
                 }
-                let _ = chan_send(rx, &reply[..at], 0, 0);
+                if count > 0 && shown == 0 {
+                    let _ = chan_send(rx, b"access denied\n", 0, 0);
+                } else {
+                    let _ = chan_send(rx, &reply[..at], 0, 0);
+                }
             } else {
                 let _ = chan_send(rx, b"bad\n", 0, 0);
             }
@@ -84,7 +102,7 @@ fn main() -> i32 {
 ///
 /// A matching table row's function runs here. No row means the device
 /// stays unclaimed. The line is also what `usb list` prints later.
-fn accept(buf: &[u8]) -> Option<([u8; LINE], usize)> {
+fn accept(buf: &[u8]) -> Option<([u8; LINE], usize, u8)> {
     if buf.len() < 24 {
         return None;
     }
@@ -140,5 +158,5 @@ fn accept(buf: &[u8]) -> Option<([u8; LINE], usize)> {
     dispatch(core::slice::from_ref(&ids), drivers::TABLE, |_| {
         write_console(b"unclaimed\n");
     });
-    Some((line, n))
+    Some((line, n, port))
 }

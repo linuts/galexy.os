@@ -2467,6 +2467,60 @@ pub fn admin_root() -> u32 {
     ADMIN_ROOT.load(Ordering::Relaxed)
 }
 
+/// Creates `dir/name` under the admin root when it is missing.
+///
+/// A network name and a USB port both fit the existing object name
+/// (`NAME_CAP` is 64). This does not change `DISK_VERSION`.
+pub(crate) fn ensure_card(dir: &str, name: &str) -> Result<u32, SysError> {
+    if !component_ok(dir) || !component_ok(name) {
+        return Err(SysError::BadValue);
+    }
+    let mut table = TABLE.lock();
+    let root = admin_root();
+    if root == NO_OBJECT || (root as usize) >= table.objects.len() {
+        return Err(SysError::NotFound);
+    }
+    let dir_index = match find_child(&table, root, dir) {
+        Some(i) => {
+            if table.objects[i].kind != KIND_DIR {
+                return Err(SysError::Unsupported);
+            }
+            i as u32
+        }
+        None => make_child(&mut table, root, dir, KIND_DIR)?,
+    };
+    let file = match find_child(&table, dir_index, name) {
+        Some(i) => {
+            if table.objects[i].kind != KIND_FILE {
+                return Err(SysError::Unsupported);
+            }
+            i as u32
+        }
+        None => make_child(&mut table, dir_index, name, KIND_FILE)?,
+    };
+    drop(table);
+    mark_dirty();
+    Ok(file)
+}
+
+fn make_child(table: &mut Table, parent: u32, name: &str, kind: u8) -> Result<u32, SysError> {
+    let actor = table.objects[parent as usize].actor as usize;
+    if !can_add_object(table, actor) {
+        return Err(SysError::NoResource);
+    }
+    let Some(oi) = free_object(table) else {
+        return Err(SysError::NoResource);
+    };
+    let obj = &mut table.objects[oi];
+    *obj = Object::empty();
+    obj.kind = kind;
+    obj.parent = parent;
+    obj.actor = actor as u8;
+    place_name(obj, name);
+    link_child(table, parent, oi as u32);
+    Ok(oi as u32)
+}
+
 /// Whether `root` is the immortal admin actor root.
 pub fn is_admin_root(root: u32) -> bool {
     root != NO_OBJECT && root == ADMIN_ROOT.load(Ordering::Relaxed)
@@ -4376,8 +4430,19 @@ pub fn for_each_visible(root: u32, tokens: &[Token; TOKEN_SLOTS], mut each: impl
     }
 }
 
-/// Resolves `name` and checks that `cred` holds every bit in `rights`.
-/// Returns the object index. Used by the `grant` syscall.
+/// Object index of `name`, without a rights check. Missing is `NotFound`.
+pub(crate) fn lookup_index(
+    root: u32,
+    tokens: &[Token; TOKEN_SLOTS],
+    name: &str,
+) -> Result<u32, SysError> {
+    let parsed = parse_path(name)?;
+    let cred = cred_from_tokens(root, tokens);
+    let table = TABLE.lock();
+    let (_parent, found) = lookup(&table, &cred, &parsed)?;
+    Ok(found as u32)
+}
+
 pub(crate) fn resolve_and_check(
     root: u32,
     tokens: &[Token; TOKEN_SLOTS],

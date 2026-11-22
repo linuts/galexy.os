@@ -77,6 +77,11 @@ impl Madt {
 
     /// APIC IDs of the enabled processors, in MADT order (index 0 = BSP).
     /// The slice is exactly `cpus()` long.
+    ///
+    /// The array is eight long and `cpus` is not capped. A ninth enabled
+    /// type-0 record panics here. MADT types `0xA` and `0xB` (x2APIC)
+    /// are ignored, so they never reach this slice. Milestone 104 does
+    /// not raise the cap.
     pub fn enabled_ids(&self) -> &[u8] {
         &self.enabled_ids[..usize::from(self.cpus)]
     }

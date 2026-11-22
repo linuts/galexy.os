@@ -5662,6 +5662,38 @@ fn smp_test_passes() {
     );
 }
 
+/// Milestone 104: one kernel at `-smp 4` and `-smp 8`. The suite stays
+/// at 2. A ninth CPU is not booted; `enabled_ids` panics on a ninth
+/// type-0 record and the destination of an IPI is still a `u8`.
+#[test]
+fn cpus_four_and_eight() {
+    for smp in [4u8, 8] {
+        let (code, serial) = common::boot_smp(&image("test-cpus"), smp);
+        assert_eq!(
+            code,
+            Some(QEMU_EXIT_SUCCESS),
+            "test-cpus -smp {smp} should exit Success; serial:\n{serial}"
+        );
+        assert!(
+            serial.contains("[test-cpus] passed"),
+            "-smp {smp} marker missing; serial:\n{serial}"
+        );
+        assert!(
+            serial.contains(&format!("[test-cpus] online={smp}")),
+            "-smp {smp} online count; serial:\n{serial}"
+        );
+        let last = smp - 1;
+        assert!(
+            serial.contains(&format!("ap rank {last}")) && serial.contains("online"),
+            "AP rank {last} did not print online; serial:\n{serial}"
+        );
+        assert!(
+            serial.contains("ap rank 1") && serial.contains("online"),
+            "AP rank 1 did not print online; serial:\n{serial}"
+        );
+    }
+}
+
 #[test]
 fn ipi_test_passes() {
     // The shootdown IPI machinery (M19): broadcast + lock-free ack, end to
@@ -5920,6 +5952,24 @@ fn usb_list_shows_the_keyboard() {
         .collect();
     owned.extend(type_line("usb", "0627:0001"));
     owned.extend(type_line("svc status usb", "usb running"));
+    owned.extend(type_line("useradd eve", "Password: "));
+    owned.extend([
+        ("e".to_string(), "*".to_string()),
+        ("v".to_string(), "*".to_string()),
+        ("e".to_string(), "*".to_string()),
+        ("ret".to_string(), "admin@galexy> ".to_string()),
+    ]);
+    // The USB keyboard's F-keys are not console switches. Log eve in
+    // on this seat. The password is typed through the same HID pipe.
+    owned.extend(type_line("logout", "Login as: "));
+    owned.extend(type_line("eve", "Password: "));
+    owned.extend([
+        ("e".to_string(), "*".to_string()),
+        ("v".to_string(), "*".to_string()),
+        ("e".to_string(), "*".to_string()),
+        ("ret".to_string(), "eve@galexy> ".to_string()),
+    ]);
+    owned.extend(type_line("usb", "access denied"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
         .map(|(code, echo)| (code.as_str(), echo.as_str()))
@@ -5928,9 +5978,9 @@ fn usb_list_shows_the_keyboard() {
         &image("galexy-os"),
         &keys,
         "0627:0001",
-        "usb running",
+        "access denied",
         Duration::from_millis(30),
-        Duration::from_secs(180),
+        Duration::from_secs(240),
     );
     let hits = serial.matches("0627:0001").count();
     assert!(
@@ -5952,6 +6002,13 @@ fn usb_list_shows_the_keyboard() {
     assert!(
         serial.contains("usb running"),
         "svc status usb; serial:\n{serial}"
+    );
+    let eve = serial
+        .find("[auth] session login user=eve")
+        .expect("eve never logged in");
+    assert!(
+        serial[eve..].contains("access denied"),
+        "a seat without the usb card should not see the list; serial:\n{serial}"
     );
 }
 
@@ -6049,14 +6106,16 @@ fn ping_gateway_replies() {
     );
 }
 
-/// Milestone 84: `fetch` before a grant opens nothing. After the grant it
-/// prints the peer's body. A different key is rejected.
+/// Milestone 84, after 105: admin's root card covers a name once `net
+/// allow` creates it, so `fetch` connects. A different key still
+/// handshakes and is refused. A seat with no card is
+/// [`cards_and_asks_typing_e2e`].
 #[test]
 fn fetch_grant_typing_e2e() {
     let (cert_der, key_der, pin) = host_echo_cert();
     let hits = Arc::new(AtomicUsize::new(0));
     let hits_bg = Arc::clone(&hits);
-    let server = std::thread::spawn(move || host_echo_serve(cert_der, key_der, hits_bg));
+    let server = std::thread::spawn(move || host_echo_serve(4582, cert_der, key_der, hits_bg));
     let wrong = "11".repeat(32);
     let save_pin = format!("echo {pin} > k");
     let save_wrong = format!("echo {wrong} > b");
@@ -6064,7 +6123,7 @@ fn fetch_grant_typing_e2e() {
         &[
             (save_pin.as_str(), "admin@galexy>"),
             ("net allow echo 10.0.2.2:4582 k", "ok"),
-            ("fetch echo", "access denied"),
+            ("fetch echo", "lane ok"),
             ("net grant echo admin", "ok"),
             ("fetch echo", "lane ok"),
             (save_wrong.as_str(), "admin@galexy>"),
@@ -6072,7 +6131,7 @@ fn fetch_grant_typing_e2e() {
             ("net grant bad admin", "ok"),
             ("fetch bad", "access denied"),
         ],
-        "lane ok",
+        "access denied",
         Duration::from_secs(150),
     );
     drop(server);
@@ -6090,8 +6149,119 @@ fn fetch_grant_typing_e2e() {
     );
     let n = hits.load(Ordering::Relaxed);
     assert_eq!(
-        n, 2,
-        "expected the granted dial and the wrong-key dial, not the ungranted one; got {n}; serial:\n{serial}"
+        n, 3,
+        "admin's two echo dials and the wrong-key dial; got {n}; serial:\n{serial}"
+    );
+}
+
+/// Milestone 105–107: a seat without the card cannot dial, ping, or
+/// accept. `dial` and `cat` park until the seat answers. No is
+/// `AccessDenied` and the program stays up. Yes installs a token for
+/// that run only. A second ask in the same run does not print.
+#[test]
+fn cards_and_asks_typing_e2e() {
+    let (cert_der, key_der, pin) = host_echo_cert();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_bg = Arc::clone(&hits);
+    let server = std::thread::spawn(move || host_echo_serve(4584, cert_der, key_der, hits_bg));
+    let save_pin = format!("echo {pin} > k");
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line(save_pin.as_str(), "admin@galexy>"));
+    owned.extend(type_line("net allow echo 10.0.2.2:4584 k", "ok"));
+    // Admin holds the root card. This run does not ask.
+    owned.extend(type_line("dial echo", "lane ok"));
+    owned.extend(type_line("useradd eve", "Password: "));
+    owned.extend([
+        ("e".to_string(), "*".to_string()),
+        ("v".to_string(), "*".to_string()),
+        ("e".to_string(), "*".to_string()),
+        ("ret".to_string(), "admin@galexy> ".to_string()),
+        ("f2".to_string(), "[tty] 2".to_string()),
+    ]);
+    owned.extend(type_line("eve", "Password: "));
+    owned.extend([
+        ("e".to_string(), "*".to_string()),
+        ("v".to_string(), "*".to_string()),
+        ("e".to_string(), "*".to_string()),
+        ("ret".to_string(), "eve@galexy> ".to_string()),
+    ]);
+    owned.extend(type_line("fetch echo", "access denied"));
+    owned.extend(type_line("ping 10.0.2.2", "access denied"));
+    owned.extend(type_line("net serve echo", "access denied"));
+    owned.extend(type_line("dial echo", "wants the network"));
+    owned.extend(type_line("no", "still up"));
+    owned.extend(type_line("dial echo", "wants the network"));
+    owned.extend(type_line("yes", "lane ok"));
+    owned.push(("f1".to_string(), "[tty] 1".to_string()));
+    owned.extend(type_line("cd Desktop", "admin@galexy:/Desktop> "));
+    owned.extend(type_line("echo hi > note", "admin@galexy:/Desktop> "));
+    owned.extend(type_line("cd /", "admin@galexy> "));
+    owned.push(("f2".to_string(), "[tty] 2".to_string()));
+    owned.extend(type_line(
+        "cat /admin@Desktop/note /admin@Desktop/note",
+        "wants storage",
+    ));
+    owned.extend(type_line("no", "cat: failed"));
+    owned.extend(type_line("cat /admin@Desktop/note", "wants storage"));
+    owned.extend(type_line("yes", "hi"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "hi",
+        Duration::from_millis(30),
+        Duration::from_secs(300),
+    );
+    drop(server);
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+    let eve = serial.find("eve@galexy>").expect("eve never logged in");
+    assert!(
+        !serial[..eve].contains("wants the network"),
+        "admin's dial asked; serial:\n{serial}"
+    );
+    assert_eq!(
+        serial.matches("wants the network").count(),
+        2,
+        "one prompt per dial run; serial:\n{serial}"
+    );
+    assert_eq!(
+        serial.matches("wants storage").count(),
+        2,
+        "one prompt per cat run; serial:\n{serial}"
+    );
+    assert!(
+        serial.matches("cat: failed").count() >= 2,
+        "no must refuse both opens; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("still up"),
+        "dial must stay up after no; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("task 'dial' killed") && !serial.contains("task 'cat' killed"),
+        "a no must not kill the program; serial:\n{serial}"
+    );
+    let yes_at = serial.rfind("wants storage").expect("storage yes");
+    assert!(
+        serial[yes_at..].contains("hi"),
+        "yes did not open the file; serial:\n{serial}"
+    );
+    // Admin dials twice in one run, eve's yes dials twice. The no run
+    // and eve's fetch, ping, and serve open no TCP.
+    assert_eq!(
+        hits.load(Ordering::Relaxed),
+        4,
+        "handshakes; serial:\n{serial}"
     );
 }
 
@@ -6107,7 +6277,7 @@ fn python_lane_typing_e2e() {
     let (cert_der, key_der, pin) = host_echo_cert();
     let hits = Arc::new(AtomicUsize::new(0));
     let hits_bg = Arc::clone(&hits);
-    let server = std::thread::spawn(move || host_echo_serve(cert_der, key_der, hits_bg));
+    let server = std::thread::spawn(move || host_echo_serve(4582, cert_der, key_der, hits_bg));
     let save_pin = format!("echo {pin} > k");
     let serial = boot_typed(
         "galexy-os-desk",
@@ -6224,7 +6394,7 @@ fn ed25519_pin(der: &[u8]) -> String {
         .collect()
 }
 
-fn host_echo_serve(cert_der: Vec<u8>, key_der: Vec<u8>, hits: Arc<AtomicUsize>) {
+fn host_echo_serve(port: u16, cert_der: Vec<u8>, key_der: Vec<u8>, hits: Arc<AtomicUsize>) {
     let cert = rustls::pki_types::CertificateDer::from(cert_der);
     let key = rustls::pki_types::PrivateKeyDer::try_from(key_der).expect("key der");
     let provider = rustls::crypto::ring::default_provider();
@@ -6236,9 +6406,9 @@ fn host_echo_serve(cert_der: Vec<u8>, key_der: Vec<u8>, hits: Arc<AtomicUsize>) 
             .with_single_cert(vec![cert], key)
             .expect("server config"),
     );
-    let listener = std::net::TcpListener::bind("0.0.0.0:4582").expect("bind tcp 4582");
+    let listener = std::net::TcpListener::bind(("0.0.0.0", port)).expect("bind echo");
     listener.set_nonblocking(true).expect("echo nonblocking");
-    let deadline = std::time::Instant::now() + Duration::from_secs(260);
+    let deadline = std::time::Instant::now() + Duration::from_secs(400);
     while std::time::Instant::now() < deadline {
         let Ok((mut sock, _)) = listener.accept() else {
             std::thread::sleep(Duration::from_millis(50));

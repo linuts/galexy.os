@@ -3084,11 +3084,11 @@ syscall.
 
 ## Phase 16 — Cards, then a reachable machine
 
-Plan only. `docs/ROADMAP.md` is the phase. `DESIGN.md`, `NET.md`,
-`USB.md`, `GALFS.md`, and `PYTHON.md` are the reading copies. No
-code in the change that added these boxes. Do not check Milestone
-83, Milestone 103, or the KVM rows under the `v1.0` gate from this
-phase's text.
+Milestones 104–107 landed. Milestones 108–110 stay open.
+`docs/ROADMAP.md` is the phase. Do not check Milestone 83,
+Milestone 103, or the KVM rows under the `v1.0` gate. 109 does
+not land until 103's boxes are checked by a run, and it does not
+edit the `import socket` assertion until then.
 
 ## Milestone 104 — Prove four and eight CPUs
 
@@ -3097,18 +3097,18 @@ local-APIC id after the BSP. `MAX_CPUS` is 8. The runner, the
 suite, and `cargo run` pass `-smp 2`, and `test-smp` asserts
 `online == 2`. Nothing in the start loop stops at two.
 
-- [ ] **Four and eight**: one test kernel, not the whole suite,
+- [x] **Four and eight**: one test kernel, not the whole suite,
       boots at `-smp 4` and at `-smp 8`. Serial shows
       `online=4` and `online=8`, and each AP rank prints
       `online`. The shell stays on the BSP
-- [ ] **The ceiling, written where the code stops**: a ninth
+- [x] **The ceiling, written where the code stops**: a ninth
       enabled type-0 record panics. `enabled_ids` is `[u8; 8]` and
       `cpus` is not capped, so `enabled_ids()` slices off the end.
       MADT types `0xA` and `0xB` are ignored. `send_init` /
       `send_sipi` take a `u8`. This milestone does not raise
       `MAX_CPUS`, does not parse x2APIC processor records, and
       does not widen the IPI destination
-- [ ] **Out of this milestone**: moving the framebuffer, the
+- [x] **Out of this milestone**: moving the framebuffer, the
       keyboard IRQ, or the shell off the BSP
 
 ## Milestone 105 — The network card is the firewall
@@ -3117,21 +3117,21 @@ A dial is allowed when the caller's name is a string in
 `Name.actors`. Ping is any logged-in seat. The `net` service holds
 one token, on `/net` only. That is not how storage gates an object.
 
-- [ ] **One object per name**: the locator and the pinned key stay
+- [x] **One object per name**: the locator and the pinned key stay
       in the service record. Who may use the name is a galfs token.
       Read is dial. Write is accept. `may_dial` becomes
       `resolve_and_check`. The actor strings are not an authority
       once the token exists
-- [ ] **Default deny**: a dial, a ping, or an accept with no token
+- [x] **Default deny**: a dial, a ping, or an accept with no token
       does not open TCP. Logged-out stays `AccessDenied`. The check
       is in `net`. The kernel still only moves frames
-- [ ] **No second language**: no chains, no interface match, no
+- [x] **No second language**: no chains, no interface match, no
       packet filter. Admin mints the token with the `grant` the
       tree already has
-- [ ] **Proof**: a seat without the card sees `access denied` and
+- [x] **Proof**: a seat without the card sees `access denied` and
       the peer sees no handshake. A seat with the card still
       fetches. A ping without a card is denied
-- [ ] **Out of this milestone**: iptables, nftables, eBPF, NAT,
+- [x] **Out of this milestone**: iptables, nftables, eBPF, NAT,
       raw frames, promiscuous capture, and a port in the syscall ABI
 
 ## Milestone 106 — A USB device is a card
@@ -3140,14 +3140,14 @@ Cap `0x800B` is the task named `usb`. Cap `0x800C` is any task
 with `fs_root` set. Init does not grant a USB object. A claim is
 the driver row plus the port byte.
 
-- [ ] **One object per listed device**: `usb list` and a claim
+- [x] **One object per listed device**: `usb list` and a claim
       require a token on that object. The controller cap stays
       with the task named `usb`
-- [ ] **A seat without the card**: logged in, `usb list` returns
+- [x] **A seat without the card**: logged in, `usb list` returns
       `access denied`. A seat with the card sees the list line
-- [ ] **The keyboard stays in the service**: arm still types.
+- [x] **The keyboard stays in the service**: arm still types.
       Holding the card does not hand HID reports to another program
-- [ ] **Out of this milestone**: a new controller, a vendor driver,
+- [x] **Out of this milestone**: a new controller, a vendor driver,
       and a `DISK_VERSION` bump. If a device will not fit an
       existing object, stop and name the layout. Do not guess one
 
@@ -3157,17 +3157,17 @@ Access is a grant. A program that wants the network or storage,
 and does not hold the card, does not fail inside the library
 with no one watching.
 
-- [ ] **One line**: the foreground seat prints `<name> wants the
+- [x] **One line**: the foreground seat prints `<name> wants the
       network` or `<name> wants storage`. Yes installs a token for
       this run of that task. No is `AccessDenied` and the program
       stays up. A second ask for the same right in the same run
       does not print
-- [ ] **The seat answers**: the shell reads yes or no. The kernel
+- [x] **The seat answers**: the shell reads yes or no. The kernel
       does not draw a dialog. No new syscall number unless `grant`
       cannot carry the ask. If it cannot, stop and say why before
       adding a number
-- [ ] **Already held**: a task that has the token does not ask
-- [ ] **Out of this milestone**: a system-wide "always" that
+- [x] **Already held**: a task that has the token does not ask
+- [x] **Out of this milestone**: a system-wide "always" that
       survives reboot, a prompt on every packet, and a grant the
       program can mint for itself
 

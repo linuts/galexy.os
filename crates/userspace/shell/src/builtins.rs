@@ -8,10 +8,10 @@ use core::sync::atomic::Ordering;
 
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
-    close, dmesg_cap, grant, init_rpc, init_rpc_at, init_rpc_every, net_rpc, open, read, reboot,
-    revoke, share, shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, usb_rpc,
-    user, user_lock, user_login, user_logout, user_name, user_name_pass, user_passwd, user_quota,
-    user_setquota, user_volpass, volume_query, wait, write_console,
+    close, create, dmesg_cap, grant, init_rpc, init_rpc_at, init_rpc_every, net_rpc, open, read,
+    reboot, revoke, self_cap, share, shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap,
+    unshare, usb_rpc, user, user_lock, user_login, user_logout, user_name, user_name_pass,
+    user_passwd, user_quota, user_setquota, user_volpass, volume_query, write_console,
 };
 
 /// Sectioned help — short command column + one-line blurb.
@@ -1859,11 +1859,11 @@ pub(crate) fn spawn_and_prompt(
     } else if bg {
         if !push_job(&[result.value]) {
             write_console(b"jobs: table full; waiting\n");
-            let waited = wait(Cap::from_bits(result.value));
+            let waited = wait_answer(Cap::from_bits(result.value));
             LAST_STATUS.store(if waited.ok { waited.value } else { 1 }, Ordering::Relaxed);
         }
     } else if wait_exit {
-        let waited = wait(Cap::from_bits(result.value));
+        let waited = wait_answer(Cap::from_bits(result.value));
         LAST_STATUS.store(if waited.ok { waited.value } else { 1 }, Ordering::Relaxed);
     } else {
         // Fire-and-forget: drop the Cap so an exited child can be reaped.
@@ -1983,19 +1983,75 @@ fn net_actor(cwd: &Cwd, op: u8, tail: &[u8]) {
     };
     let name = trim(&tail[..sp]);
     let actor = trim(&tail[sp + 1..]);
-    let mut payload = [0u8; 160];
-    if name.is_empty() || actor.is_empty() || 3 + name.len() + actor.len() > payload.len() {
+    if name.is_empty() || actor.is_empty() || name.len() > 64 {
         write_console(b"bad\n");
         prompt(cwd);
         return;
     }
-    payload[0] = op;
-    payload[1] = name.len() as u8;
-    payload[2..2 + name.len()].copy_from_slice(name);
-    let at = 2 + name.len();
-    payload[at] = actor.len() as u8;
-    payload[at + 1..at + 1 + actor.len()].copy_from_slice(actor);
-    finish_net(cwd, &payload[..at + 1 + actor.len()], false);
+    let mut path = [0u8; 80];
+    let prefix = b"/card/";
+    if prefix.len() + name.len() > path.len() {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    }
+    path[..prefix.len()].copy_from_slice(prefix);
+    path[prefix.len()..prefix.len() + name.len()].copy_from_slice(name);
+    let path = &path[..prefix.len() + name.len()];
+    let mut own = [0u8; 32];
+    let target = if actor_is_self(actor) {
+        match own_task_name(&mut own) {
+            Some(n) => &own[..n],
+            None => actor,
+        }
+    } else {
+        actor
+    };
+    let grant_op = op == galexy_abi::NET_OP_GRANT;
+    let rights = if grant_op {
+        galexy_abi::TOKEN_READ
+    } else {
+        galexy_abi::TOKEN_READ | galexy_abi::TOKEN_WRITE
+    };
+    let result = if grant_op {
+        grant(path, rights, target)
+    } else {
+        revoke(path, rights, target)
+    };
+    if result.ok {
+        write_console(b"ok\n");
+    } else {
+        write_console(b"missing\n");
+    }
+    prompt(cwd);
+}
+
+fn actor_is_self(actor: &[u8]) -> bool {
+    let mut who = [0u8; 32];
+    let got = user(&mut who, galexy_abi::USER_WHOAMI);
+    if !got.ok {
+        return false;
+    }
+    let n = (got.value as usize).min(who.len());
+    trim(&who[..n]) == actor
+}
+
+fn own_task_name(out: &mut [u8]) -> Option<usize> {
+    let mut buf = [0u8; 128];
+    let got = read(self_cap(), &mut buf);
+    if !got.ok || got.value == 0 {
+        return None;
+    }
+    let text = &buf[..(got.value as usize).min(buf.len())];
+    let key = b"name=";
+    let at = text.windows(key.len()).position(|w| w == key)? + key.len();
+    let rest = &text[at..];
+    let end = rest.iter().position(|b| *b == b' ').unwrap_or(rest.len());
+    if end == 0 || end > out.len() {
+        return None;
+    }
+    out[..end].copy_from_slice(&rest[..end]);
+    Some(end)
 }
 
 fn net_allow(cwd: &Cwd, tail: &[u8]) {
@@ -2058,6 +2114,32 @@ fn net_allow(cwd: &Cwd, tail: &[u8]) {
     finish_net(cwd, &payload[..at], false);
 }
 
+fn reply_is_ok(text: &[u8]) -> bool {
+    text.windows(2).any(|w| w == b"ok")
+}
+
+fn create_card(payload: &[u8]) {
+    if payload.len() < 2 {
+        return;
+    }
+    let nlen = payload[1] as usize;
+    if payload.len() < 2 + nlen || nlen == 0 {
+        return;
+    }
+    let name = &payload[2..2 + nlen];
+    let mut path = [0u8; 80];
+    let prefix = b"/card/";
+    if prefix.len() + name.len() > path.len() {
+        return;
+    }
+    path[..prefix.len()].copy_from_slice(prefix);
+    path[prefix.len()..prefix.len() + name.len()].copy_from_slice(name);
+    let made = create(&path[..prefix.len() + name.len()]);
+    if made.ok {
+        let _ = close(Cap::from_bits(made.value));
+    }
+}
+
 fn finish_net(cwd: &Cwd, payload: &[u8], body: bool) {
     let mut reply = [0u8; galexy_abi::CHAN_MSG_MAX];
     let got = net_rpc(payload, &mut reply);
@@ -2071,6 +2153,9 @@ fn finish_net(cwd: &Cwd, payload: &[u8], body: bool) {
         write_console(b"bad\n");
         prompt(cwd);
         return;
+    }
+    if payload.first() == Some(&galexy_abi::NET_OP_ALLOW) && reply_is_ok(&reply[8..n]) {
+        create_card(payload);
     }
     let mut bits = [0u8; 8];
     bits.copy_from_slice(&reply[..8]);

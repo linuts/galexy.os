@@ -173,30 +173,26 @@ the service walks. There is nowhere else to register.
 
 ## Cards (Milestone 106)
 
-The bus does not use a galfs card today.
-
 Cap `0x800B` (the controller) accepts a read, and a one-byte arm
 write, only when `current_is_usb()` is true. That is
 `thread.name() == "usb"`, plus `READ` or `WRITE` on the cap. Cap
-`0x800C` (list, and the rest of the service RPC) parks any task
-whose `fs_root` is set. Logged-out is `AccessDenied`. The admin
-bit is stamped into the message and is not required for the list.
-Init spawns `usb` the way it spawns `net`, and it does not `grant`
-a USB object to that task. The `/net` token is the only service
-token init installs. A HID claim is the driver row plus the port
-byte. No token is consulted.
+`0x800C` (list) parks any task whose `fs_root` is set. Logged-out
+is `AccessDenied`. Init creates `/usb/` and does not grant a USB
+object. `DISK_VERSION` stays 17. A port is one to three decimal
+digits and fits `NAME_CAP`.
 
-Milestone 106 adds one galfs object per device the service has
-listed. `usb list` and a claim require a token on that object, the
-same check storage uses. The controller cap stays with the task
-named `usb`. A logged-in seat with no token gets `AccessDenied`.
-The keyboard path stays inside the service: a card is not a way
-for an arbitrary program to read HID reports.
+Each listed device is one object, `/usb/<port>` under the admin
+root (the same object as `/admin@usb/<port>`). The kernel stamps
+a mask of ports 1..=16 into header bytes 2 and 3 (bit 0 is port
+1). The service prints a line only when that bit is set. A seat
+with no bit, and a device on the bus, gets `access denied`. An
+empty bus stays `none`. Admin's root token covers the objects, so
+admin sees the list line.
 
-Proof, when the milestone is implemented: a seat without the card
-sees `access denied`, a seat with the card sees the list line, and
-the keyboard still types after arm. The box stays open until that
-boot. This section does not check it.
+The seat-facing claim is that list. The HID arm stays inside the
+service: the driver row plus the port byte, on `0x800B`, with no
+seat token. Holding the card does not hand HID reports to another
+program. Login still types through the armed keyboard.
 
 ## Changing this subsystem
 
