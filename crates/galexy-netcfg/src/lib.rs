@@ -20,6 +20,9 @@ pub const KIND_IPV6: u8 = 6;
 pub const KIND_ADDR: u8 = 8;
 /// Port card. The name is the decimal port.
 pub const KIND_PORT: u8 = 9;
+/// Datagram card. The name is a label. The address and port are the
+/// one peer a read may send to. Port 53 is not a peer.
+pub const KIND_DGRAM: u8 = 10;
 /// DNS-over-TLS port. The record does not store another one.
 pub const DOT_PORT: u16 = 853;
 /// Mode byte: ask DHCP.
@@ -66,7 +69,8 @@ pub struct Name {
     pub name_len: u8,
     /// Remote port. `0` on an address card means the card does not dial.
     pub port: u16,
-    /// [`KIND_DNS`], [`KIND_IPV4`], [`KIND_IPV6`], [`KIND_ADDR`], or [`KIND_PORT`].
+    /// [`KIND_DNS`], [`KIND_IPV4`], [`KIND_IPV6`], [`KIND_ADDR`],
+    /// [`KIND_PORT`], or [`KIND_DGRAM`].
     pub kind: u8,
     /// Address. IPv4 uses the first four bytes.
     pub ip: [u8; 16],
@@ -288,7 +292,7 @@ pub fn encode(record: &Record, out: &mut [u8]) -> Result<usize, CfgError> {
 fn kind_ok(kind: u8) -> bool {
     matches!(
         kind,
-        KIND_DNS | KIND_IPV4 | KIND_IPV6 | KIND_ADDR | KIND_PORT
+        KIND_DNS | KIND_IPV4 | KIND_IPV6 | KIND_ADDR | KIND_PORT | KIND_DGRAM
     )
 }
 
@@ -455,6 +459,7 @@ mod tests {
         rec.allow(b"echo", 4582, KIND_IPV4, ip, [0xAB; 32]).unwrap();
         rec.allow(b"docs", 4594, KIND_DNS, [0; 16], [0xCD; 32])
             .unwrap();
+        rec.allow(b"peer", 4597, KIND_DGRAM, ip, [0; 32]).unwrap();
         rec.pin([172, 30, 0, 2], [0x11; 32]).unwrap();
         assert!(rec.pin([10, 0, 2, 2], [0x11; 32]).is_err());
         assert!(rec.pin([10, 0, 2, 3], [0x11; 32]).is_err());

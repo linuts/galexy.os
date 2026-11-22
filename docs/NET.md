@@ -44,11 +44,11 @@ checked.
 
 | Refused | Why |
 | --- | --- |
-| BSD sockets and Winsock (`socket`, `bind`, `listen`, `accept`, `connect`, `sendto`, `recvfrom`, `setsockopt`) | That API is an ambient port namespace. Galexy does not grow one. Milestones 112–114 honor one address, one port, and one local bind, each with its card. `listen`, a datagram, and `setsockopt` stay refused. |
-| `std::net::TcpStream` and a POSIX shim in the PAL | Milestone 108 keeps the name `TcpStream::connect`. It asks, then dials a granted name, one stored address, or one stored `address:port`. The value is still a lane. `TcpListener::bind` binds the stored local address when the seat holds write on that card, and `accept` stays unsupported. UDP and `setsockopt` stay refused. There is no socket syscall and no POSIX shim. |
+| BSD sockets and Winsock (`socket`, `bind`, `listen`, `accept`, `connect`, `sendto`, `recvfrom`, `setsockopt`) | That API is an ambient port namespace. Galexy does not grow one. Milestones 112–116 honor one address, one port, one local bind, one listen, and one datagram peer, each with its card. `setsockopt` stays refused. |
+| `std::net::TcpStream` and a POSIX shim in the PAL | Milestone 108 keeps the name `TcpStream::connect`. It asks, then dials a granted name, one stored address, or one stored `address:port`. The value is still a lane. `TcpListener::bind` binds the stored local address when the seat holds write on that card. `listen_port` accepts on the stored port with write on that card, and the value is a lane. `UdpSocket::send_card` sends to the stored peer. A receive, `accept` on a bound listener, and `setsockopt` stay refused. There is no socket syscall and no POSIX shim. |
 | In-kernel TCP/IP | A parse bug on a packet would be ring 0. The kernel moves frames. The `net` service speaks the protocols. A second stack, a C stack, raw sockets, and promiscuous mode stay out. |
 | IP addresses and port numbers in the syscall ABI | Ports stay an internal demux. A program does not pass them to a syscall. Milestones 112 and 113 let a program pass one exact address or port on the existing net cap, and only with that card. An app still cannot bind `0.0.0.0`, spoof a source, or race a port it does not hold. |
-| Cleartext as an application right | The bytes an app reads on a lane are the plaintext of a finished TLS 1.3 session. There is no raw TCP Cap. An ordinary task has no datagram Cap. Milestone 116 grants one exact peer, and only with that card. |
+| Cleartext as an application right | The bytes an app reads on a lane are the plaintext of a finished TLS 1.3 session. There is no raw TCP Cap. Milestone 116 grants one exact datagram peer, and only with that card. Write on the card does not capture. |
 | The public WebPKI as the default trust | A name is pinned to a key the admin installed. Trust-on-first-use is not silent. A system CA bundle is not in the image. |
 | TLS before 1.3, renegotiation, compression, 0-RTT | Replay and oracle bugs we do not have to accept. 0-RTT can be a later right. It is off in this phase. |
 | A hand-rolled handshake | The service links a maintained Rust TLS 1.3 implementation (rustls-class) with a pure-Rust crypto provider. No C. If that crate will not link on `x86_64-unknown-galexy`, Milestone 82 fixes the link. It does not replace the handshake. |
@@ -338,8 +338,8 @@ Milestone 109: the same lane, by name. There is no new syscall.
 
 QUIC, 0-RTT, device checksum offload, and a CA bundle are later
 carriers and later rights. They attach to the lane. They do not add
-an ambient socket. Phase 16's extra calls are cards. They are not
-this phase, and they do not exist yet.
+an ambient socket. Phase 16's extra calls are cards. Milestones
+110–116 have landed. SSH is still Milestone 117.
 
 ## Phase 16 — A card is the firewall
 
@@ -381,8 +381,8 @@ Python `socket.connect`: the call asks, then dials, and a no is
 `OSError`. There is no socket syscall and no second stack. rustls
 stays in `net`. The PAL does not parse TCP. This is not a Berkeley
 socket. Those two milestones do not pass an IP or a port.
-`listen`, UDP, and `setsockopt` stay refused until Milestones
-115 and 116. `setsockopt` stays refused after those as well.
+`setsockopt` stays refused. Listen is Milestone 115. One datagram
+peer is Milestone 116.
 
 Milestone 110 is the lookup: DNS-over-TLS to a pinned resolver,
 not UDP/53, and not `10.0.2.3`. Milestone 111 is the reach. A
@@ -397,13 +397,20 @@ lets the program pass that address and no other. Milestone 113
 stores one destination port. An address card does not imply the
 port. Milestone 114 binds the stored local address, and only
 with write on the address card. Read does not bind. `0.0.0.0`
-is denied. `accept` does not listen. The record is version 2;
-version 1 is refused. No new syscall, and no new right bit.
-`milestones_110_through_114` is that run. Milestone 83 hands
-the next lane to the one listener that attached the gate, and
-only when that seat holds the write bit.
-`serve_hands_the_lane_to_its_listener` is that run. Inbound
-from outside stays closed until Milestone 115.
+is denied. The record is version 2; version 1 is refused. No new
+syscall, and no new right bit. `milestones_110_through_114` is
+that run. Milestone 83 hands the next lane to the one listener
+that attached the gate, and only when that seat holds the write
+bit. `serve_hands_the_lane_to_its_listener` is that run.
+
+Milestone 115 opens the gate with write on the port card. Without
+that card, no gate opens. The runner forwards one host TCP
+connection. The guest does not dial `10.0.2.2`. A second listener
+receives nothing. `milestones_115_and_116` is that run. Milestone
+116 sends one datagram to the peer stored on the card, and only
+with read. Write does not send and does not capture. Port 53
+stays unused. The Milestone 80 datagram to the gateway stays
+inside `net`.
 
 Milestone 117 is the server a person connects to, and it is last.
 It waits on 111. One init row, in-tree Rust,

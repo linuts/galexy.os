@@ -8,12 +8,14 @@ use std::io::{Read, Write};
 use std::sync::Arc;
 
 use galexy_abi::{
-    Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DIAL, NET_OP_GRANT, NET_OP_LINK,
-    NET_OP_PIN, NET_OP_PING, NET_OP_RESOLVE, NET_OP_REVOKE, NET_OP_SERVE,
+    Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DGRAM, NET_OP_DIAL,
+    NET_OP_GRANT, NET_OP_LINK, NET_OP_LISTEN, NET_OP_PIN, NET_OP_PING, NET_OP_RESOLVE,
+    NET_OP_REVOKE, NET_OP_SERVE,
 };
 use galexy_net::Engine;
 use galexy_netcfg::{
-    decode, encode, Record, KIND_ADDR, KIND_DNS, KIND_IPV4, KIND_PORT, MODE_FIXED, NAME_MAX,
+    decode, encode, Record, KIND_ADDR, KIND_DGRAM, KIND_DNS, KIND_IPV4, KIND_PORT, MODE_FIXED,
+    NAME_MAX,
 };
 use galexy_rt::{
     chan_recv_poll, chan_send, channel, clock_ms, close, lane_pair, open, read, seek, sleep_ms,
@@ -35,6 +37,8 @@ const LISTENER_KEY: &[u8] = include_bytes!("listener_key.der");
 const HANDSHAKE_MS: u64 = 5_000;
 const MAX_GATES: usize = 8;
 const PENDING: usize = 4;
+/// Source port for a card datagram. Not 53, and not a program argument.
+const DGRAM_SPORT: u16 = 4598;
 
 fn main() {
     fill_random_once();
@@ -187,6 +191,8 @@ fn handle(
         NET_OP_RESOLVE => resolve(rx, engine, record, actor_id, msg[2], rest, now),
         NET_OP_PIN if admin => pin(rx, record, rest),
         NET_OP_BIND => bind_local(rx, engine, record, msg[2], rest),
+        NET_OP_LISTEN => listen(rx, engine, record, msg[2], actor_id, gates, rest),
+        NET_OP_DGRAM => datagram(rx, engine, record, msg[2], rest),
         NET_OP_ALLOW if admin => allow(rx, record, rest),
         NET_OP_GRANT if admin => grant_op(rx, record, rest, true),
         NET_OP_REVOKE if admin => grant_op(rx, record, rest, false),
@@ -922,6 +928,51 @@ fn serve(
     }
     let port = entry.port;
     let key = entry.key;
+    hand_gate(rx, engine, actor_id, gates, name, port, key, false);
+}
+
+fn listen(
+    rx: Cap,
+    engine: &mut Engine,
+    record: &Record,
+    held: u8,
+    actor_id: u64,
+    gates: &mut Vec<Gate>,
+    rest: &[u8],
+) {
+    let Some(name) = one_name(rest) else {
+        reply(rx, b"bad\n", 0);
+        return;
+    };
+    if held & 2 == 0 {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    let Some(port) = parse_port(name) else {
+        reply(rx, b"access denied\n", 0);
+        return;
+    };
+    let Some(entry) = record.find(name) else {
+        reply(rx, b"access denied\n", 0);
+        return;
+    };
+    if entry.kind != KIND_PORT || entry.port != port {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    hand_gate(rx, engine, actor_id, gates, name, port, entry.key, true);
+}
+
+fn hand_gate(
+    rx: Cap,
+    engine: &mut Engine,
+    actor_id: u64,
+    gates: &mut Vec<Gate>,
+    name: &[u8],
+    port: u16,
+    key: [u8; 32],
+    announce: bool,
+) {
     if let Some(gate) = gates.iter().find(|g| g.port == port) {
         if gate.listener != actor_id {
             reply(rx, b"held\n", 0);
@@ -941,6 +992,9 @@ fn serve(
             listener: actor_id,
             pending: Vec::new(),
         });
+        if announce {
+            log(&format!("[net] listen {port}"));
+        }
         reply(rx, b"attached\n", 0);
         return;
     }
@@ -1092,6 +1146,67 @@ fn two_fields(rest: &[u8]) -> Option<(&[u8], &[u8])> {
     }
     let actor = &rest[2 + nlen..2 + nlen + alen];
     Some((name, actor))
+}
+
+fn datagram(rx: Cap, engine: &mut Engine, record: &Record, held: u8, rest: &[u8]) {
+    let Some((name, payload)) = name_and_body(rest) else {
+        reply(rx, b"bad\n", 0);
+        return;
+    };
+    // Read sends. Write does not capture, and it does not send.
+    if held & 1 == 0 {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    let Some(entry) = record.find(name) else {
+        reply(rx, b"access denied\n", 0);
+        return;
+    };
+    if entry.kind != KIND_DGRAM || entry.port == 0 || entry.port == 53 {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    let ip = [entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]];
+    if ip == [0, 0, 0, 0] || ip == [255, 255, 255, 255] {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    if engine
+        .udp_send(ip, entry.port, DGRAM_SPORT, payload)
+        .is_err()
+    {
+        reply(rx, b"unavailable\n", 0);
+        return;
+    }
+    let start = clock_ms();
+    while !engine.udp_idle() && clock_ms().saturating_sub(start) < 1_000 {
+        pump(engine);
+        engine.poll(clock_ms());
+        pump(engine);
+        let _ = sleep_ms(20);
+    }
+    if !engine.udp_idle() {
+        reply(rx, b"timed out\n", 0);
+        return;
+    }
+    log(&format!(
+        "[net] dgram {}.{}.{}.{} {}",
+        ip[0], ip[1], ip[2], ip[3], entry.port
+    ));
+    reply(rx, b"ok\n", 0);
+}
+
+fn name_and_body(rest: &[u8]) -> Option<(&[u8], &[u8])> {
+    let name = one_name(rest)?;
+    let at = 1 + name.len();
+    if rest.len() < at + 1 {
+        return None;
+    }
+    let plen = rest[at] as usize;
+    if plen == 0 || rest.len() < at + 1 + plen {
+        return None;
+    }
+    Some((name, &rest[at + 1..at + 1 + plen]))
 }
 
 fn ping(rx: Cap, engine: &mut Engine, held: u8, rest: &[u8]) {

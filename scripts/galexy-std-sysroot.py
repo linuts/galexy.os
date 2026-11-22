@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-PATCH_VERSION = "3"
+PATCH_VERSION = "4"
 REPO = Path(__file__).resolve().parent.parent
 STD_PAL = REPO / "std-pal"
 ABI_SRC = REPO / "crates/galexy-abi/src/lib.rs"
@@ -418,6 +418,45 @@ mod common;
     #[cfg(target_os = "galexy")]
     pub fn lookup(name: &str) -> io::Result<String> {
         net_imp::TcpStream::lookup(name)
+    }
+""",
+    )
+    patch_text(
+        src / "net/tcp.rs",
+        """    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<TcpListener> {
+        net_imp::TcpListener::bind(addr).map(TcpListener)
+    }
+""",
+        """    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<TcpListener> {
+        net_imp::TcpListener::bind(addr).map(TcpListener)
+    }
+
+    /// Listen on a stored port. `Ok(None)` is an attached gate.
+    #[stable(feature = "rust1", since = "1.0.0")]
+    #[cfg(target_os = "galexy")]
+    pub fn listen_port(port: &str) -> io::Result<Option<TcpStream>> {
+        match net_imp::TcpListener::listen_port(port)? {
+            Some(stream) => Ok(Some(TcpStream(stream))),
+            None => Ok(None),
+        }
+    }
+""",
+    )
+    patch_text(
+        src / "net/udp.rs",
+        """    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<UdpSocket> {
+        net_imp::UdpSocket::bind(addr).map(UdpSocket)
+    }
+""",
+        """    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<UdpSocket> {
+        net_imp::UdpSocket::bind(addr).map(UdpSocket)
+    }
+
+    /// Send one datagram to the peer stored on `name`.
+    #[stable(feature = "rust1", since = "1.0.0")]
+    #[cfg(target_os = "galexy")]
+    pub fn send_card(name: &str, payload: &[u8]) -> io::Result<()> {
+        net_imp::UdpSocket::send_card(name, payload)
     }
 """,
     )

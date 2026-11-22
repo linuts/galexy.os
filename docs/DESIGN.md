@@ -1162,8 +1162,8 @@ TCP, and rustls stays in `net`.
 
 This is not a Berkeley socket. `bind`, `listen`, UDP,
 `setsockopt`, and any call that passes an IP or a port are not
-part of these two milestones. They do not exist yet. They stay
-refused until Milestones 112–116 grant that exact card.
+part of these two milestones. Milestones 112–116 grant each of
+those calls with a card, except `setsockopt`, which stays refused.
 `connect` on the login image is the Rust proof.
 `python_lane_typing_e2e` is the Python proof: `lane.read` prints
 the body, a denied `socket.connect` is `OSError`, and yes prints
@@ -1179,11 +1179,10 @@ TCP. A path or an address is not authority. The card is. Read
 dials. Write accepts. Logged-out is denied. A grant from the
 ask lasts for that run.
 
-A passed IP, a passed port, `bind`, `listen`, and UDP stay
-refused until Milestones 112–116 grant that exact card. None of
-those calls exist today. `setsockopt` stays refused. Inbound
-from outside stays closed until a write card is held and
-Milestone 83 hands the lane to that one listener. SSH is
+A passed IP, a passed port, `bind`, `listen`, and one datagram
+are the cards from Milestones 112–116. `setsockopt` stays refused.
+Inbound from outside is Milestone 115: write on the port card,
+then Milestone 83 hands the lane to that one listener. SSH is
 Milestone 117, after that stack: one ring-3 Rust service,
 `/card/ssh`, no new syscall. The `v1.0` tag is not applied here.
 

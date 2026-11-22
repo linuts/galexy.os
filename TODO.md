@@ -3352,21 +3352,21 @@ Inbound connections from outside stay closed until a card with
 write is held and Milestone 83 hands the lane to that one
 listener. `listen` does not exist before this run.
 
-- [ ] **Write listens**: write on the port card is the only
+- [x] **Write listens**: write on the port card is the only
       accept. Without it, no gate opens. virtio-net stays the
       device. `net` stays the only stack. No new syscall
-- [ ] **One listener**: Milestone 83 hands the next inbound lane
+- [x] **One listener**: Milestone 83 hands the next inbound lane
       to that listener and to nobody else. That box is checked
-      (`serve_hands_the_lane_to_its_listener`). This milestone's
-      `listen` card is still open
-- [ ] **From outside**: the peer is not `10.0.2.2` answering the
+      (`serve_hands_the_lane_to_its_listener`). The listen card
+      uses that handoff. `milestones_115_and_116` is the run
+- [x] **From outside**: the peer is not `10.0.2.2` answering the
       guest. The runner forwards one host TCP connection on the
       same user network. Until the write card is held, that
       connection is not accepted
-- [ ] **Proof**: with the write card, one program reads the
+- [x] **Proof**: with the write card, one program reads the
       inbound body. Without the card, the peer's handshake does
       not complete. A second listener receives nothing
-- [ ] **Out of this milestone**: SSH, a packet filter, raw
+- [x] **Out of this milestone**: SSH, a packet filter, raw
       sockets, promiscuous mode, a second stack, plaintext DNS,
       `setsockopt`, the `v1.0` tag, and the KVM rows
 
@@ -3375,14 +3375,14 @@ listener. `listen` does not exist before this run.
 A UDP call does not exist yet. This milestone grants one exact
 peer with a card. It is not DNS, and it is not a raw socket.
 
-- [ ] **One peer**: read sends to the peer stored on that card.
+- [x] **One peer**: read sends to the peer stored on that card.
       No card, nothing is sent. Write does not capture. Port 53
       stays unused. Milestone 80's datagram to the gateway stays
       inside `net`. No new syscall
-- [ ] **Proof**: a granted seat sends one payload and the peer
+- [x] **Proof**: a granted seat sends one payload and the peer
       receives it. A seat without the card sends nothing. The
       run shows no UDP/53 query
-- [ ] **Out of this milestone**: SSH, raw sockets, promiscuous
+- [x] **Out of this milestone**: SSH, raw sockets, promiscuous
       mode, a second stack, plaintext DNS, `setsockopt`, the
       `v1.0` tag, and the KVM rows
 

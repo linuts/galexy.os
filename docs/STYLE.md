@@ -219,20 +219,20 @@ machines: ACPI, x2APIC, PCIe, virtio 1.x, UEFI + GOP.
 
 Rules for Phase 10 (`docs/NET.md`; Milestones **78–85**). Binding
 once the first of those milestones lands; the plan is binding now.
-Phase 16 (Milestones **108–117**) is the later plan. 108 and 109
-landed as name-only connect. 110–117 stay open. This text does
-not check those later boxes.
+Phase 16 (Milestones **108–117**) is the later plan. 108 through
+116 have landed. 117 stays open. This text does not check that
+last box.
 
 - **A lane is the application object.** One TLS 1.3 session, one peer,
   `READ` and `WRITE`. Phase 10 has no `socket`, `bind`, `listen`,
   `accept`, `connect`, or `setsockopt`. `std::net` stays unsupported
   in that phase.
-- **Name-only until 112.** Milestones 108 and 109 keep `connect` as a
-  granted name. The value is still a lane. A passed IP, a port,
-  `bind`, `listen`, and UDP do not exist yet. 112 is the address
-  card, 113 the port, 114 bind, 115 listen, and 116 the datagram.
-  Each is one card. Read dials. Write accepts. `setsockopt` stays
-  refused. No new syscall. SSH is 117, and it is last.
+- **A card is the call.** Milestones 108 and 109 keep `connect` as a
+  granted name. The value is still a lane. 112 is the address card,
+  113 the port, 114 bind, 115 listen, and 116 the datagram. Each is
+  one card. Read dials and sends the stored datagram. Write accepts
+  and binds. `setsockopt` stays refused. No new syscall. SSH is 117,
+  and it is last.
 - **The kernel moves frames.** virtio-net DMA follows the virtio-blk
   rule: one descriptor per physically contiguous run. The interrupt
   handler does not parse IP. TCP, UDP, and TLS live in the ring-3
@@ -298,11 +298,12 @@ not wait on Phase 10, and Phase 10 does not wait on it.
   is not listed raises `ImportError`. `ssl`, `asyncio`, `pip`,
   `subprocess`, `ctypes`, and `os.fork` stay off that list.
   `socket` is the Milestone 109 name: `socket.connect` by name only.
-- **Name-only until 112.** Milestone 109 does not pass an address,
-  a port, `bind`, `listen`, or UDP. Those stay refused until
-  112–116 grant that card. `ssl` stays refused. TLS stays inside
-  `net`. `std::net::TcpStream::connect` is the same lane
-  (Milestone 108).
+- **Python stays on the name.** Milestone 109 does not pass an
+  address or a port. Listen and one datagram are cards in `net`
+  (Milestones 115 and 116). Python `socket` still only connects by
+  name. `bind`, `listen`, UDP, and `setsockopt` in Python stay
+  `OSError`. `ssl` stays refused. TLS stays inside `net`.
+  `std::net::TcpStream::connect` is the same lane (Milestone 108).
 - **Two clocks stay two clocks.** `time.monotonic` is `Clock`.
   `time.time` is `Date`, and it raises when the date is unset.
 - **Budgets are the ones in `PYTHON.md`.** 2 GiB until a boot shows

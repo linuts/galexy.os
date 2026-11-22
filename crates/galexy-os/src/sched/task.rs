@@ -1265,7 +1265,11 @@ fn net_name(bytes: &[u8]) -> &[u8] {
         return b"";
     }
     match bytes[0] {
-        galexy_abi::NET_OP_DIAL | galexy_abi::NET_OP_RESOLVE | galexy_abi::NET_OP_BIND => {
+        galexy_abi::NET_OP_DIAL
+        | galexy_abi::NET_OP_RESOLVE
+        | galexy_abi::NET_OP_BIND
+        | galexy_abi::NET_OP_LISTEN
+        | galexy_abi::NET_OP_DGRAM => {
             if bytes.len() < 2 {
                 return b"";
             }
@@ -1369,7 +1373,10 @@ fn net_card(
             (card_path(b"/admin@card/", name), galfs::RIGHT_READ)
         }
         galexy_abi::NET_OP_RESOLVE => (card_path(b"/admin@card/", name), galfs::RIGHT_READ),
-        galexy_abi::NET_OP_BIND => (card_path(b"/admin@card/", name), galfs::RIGHT_WRITE),
+        galexy_abi::NET_OP_BIND | galexy_abi::NET_OP_LISTEN => {
+            (card_path(b"/admin@card/", name), galfs::RIGHT_WRITE)
+        }
+        galexy_abi::NET_OP_DGRAM => (card_path(b"/admin@card/", name), galfs::RIGHT_READ),
         galexy_abi::NET_OP_PING => (card_path(b"/admin@card/", b"ping"), galfs::RIGHT_READ),
         galexy_abi::NET_OP_SERVE => (card_path(b"/admin@card/", name), galfs::RIGHT_WRITE),
         _ => return (0, 0, CardPath::empty()),

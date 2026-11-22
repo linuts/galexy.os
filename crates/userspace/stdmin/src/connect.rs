@@ -2,7 +2,9 @@
 //!
 //! A granted name asks the seat, then dials through `net`. The value
 //! is a lane: this program reads it to EOF. `--bind <address>` binds
-//! the stored local address. UDP and a timeout stay `unsupported`.
+//! the stored local address. `--listen <port>` accepts on the stored
+//! port. `--send <name>` sends one datagram to the stored peer. A
+//! receive, a timeout, and a socket option stay `unsupported`.
 
 use std::io::{ErrorKind, Read};
 use std::net::{TcpListener, TcpStream, UdpSocket};
@@ -52,6 +54,44 @@ fn main() -> ExitCode {
             format!("{spec}:0")
         };
         return report(TcpListener::bind(spec).err());
+    }
+    if arg == "--listen" {
+        let port = std::env::args().nth(2).unwrap_or_default();
+        return match TcpListener::listen_port(&port) {
+            Ok(None) => {
+                println!("attached");
+                ExitCode::SUCCESS
+            }
+            Ok(Some(mut stream)) => {
+                let mut body = Vec::new();
+                if stream.read_to_end(&mut body).is_err() {
+                    println!("connect: read failed");
+                    return ExitCode::from(1);
+                }
+                let text = String::from_utf8_lossy(&body);
+                if text.ends_with('\n') {
+                    print!("{text}");
+                } else {
+                    println!("{text}");
+                }
+                ExitCode::SUCCESS
+            }
+            Err(err) if err.kind() == ErrorKind::AddrInUse => {
+                println!("held");
+                ExitCode::SUCCESS
+            }
+            Err(err) => report(Some(err)),
+        };
+    }
+    if arg == "--send" {
+        let name = std::env::args().nth(2).unwrap_or_default();
+        return match UdpSocket::send_card(&name, b"card-datagram") {
+            Ok(()) => {
+                println!("sent");
+                ExitCode::SUCCESS
+            }
+            Err(err) => report(Some(err)),
+        };
     }
     if arg == "--udp" {
         return report(UdpSocket::bind("127.0.0.1:1").err());
