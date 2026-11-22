@@ -2332,6 +2332,7 @@ fn keystroke(c: char) -> (String, String) {
         '.' => "dot".to_string(),
         ',' => "comma".to_string(),
         '-' => "minus".to_string(),
+        '=' => "equal".to_string(),
         '/' => "slash".to_string(),
         '@' => "shift+2".to_string(),
         _ => panic!("no qcode for {c:?}"),
@@ -7042,6 +7043,320 @@ fn parse_dotted(text: &str) -> Option<[u8; 4]> {
     }
 }
 
+/// The usual socket calls are the cards. Eve's `connect` asks. No
+/// leaves the program up and opens nothing. Yes binds the stored
+/// address, accepts on the stored port, dials `address:port`, sends
+/// one datagram, and receives one reply from that peer. Port 53 is
+/// refused. `setsockopt` is not accepted.
+#[test]
+fn socket_compat_cards() {
+    let peer = host_ipv4();
+    let peer_text = format!("{}.{}.{}.{}", peer[0], peer[1], peer[2], peer[3]);
+    let (cert_der, key_der) = listener_identity();
+    let echo_hits = Arc::new(AtomicUsize::new(0));
+    let dgram_hits = Arc::new(AtomicUsize::new(0));
+    let refused = Arc::new(AtomicUsize::new(0));
+    let echo_bg = Arc::clone(&echo_hits);
+    let dgram_bg = Arc::clone(&dgram_hits);
+    let refused_bg = Arc::clone(&refused);
+    let echo = std::thread::spawn(move || host_pinned_echo(4604, cert_der, key_der, echo_bg));
+    let udp = std::thread::spawn(move || {
+        host_dgram_reply(4602, b"card-datagram", b"card-back", dgram_bg)
+    });
+    let inbound = std::thread::spawn(move || {
+        host_card_listen(
+            4601,
+            b"outside-lane",
+            "still up",
+            "[net] listen 4601",
+            refused_bg,
+            280,
+        )
+    });
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line("connect --putkey", "wrote"));
+    let addr = format!("net addr {peer_text} 4604 /k");
+    owned.extend(type_line(&addr, "ok"));
+    let port = format!("net port 4604 {peer_text}");
+    owned.extend(type_line(&port, "ok"));
+    owned.extend(type_line("net link", "10.0.2.15"));
+    owned.extend(type_line("net addr 10.0.2.15 0 /k", "ok"));
+    owned.extend(type_line("net port 4601 10.0.2.15", "ok"));
+    let peer_cmd = format!("net peer peer {peer_text} 4602");
+    owned.extend(type_line(&peer_cmd, "ok"));
+    let dns = format!("net peer nope {peer_text} 53");
+    owned.extend(type_line(&dns, "bad"));
+    owned.extend(type_line("useradd eve", "Password: "));
+    owned.extend([
+        ("e".into(), "*".into()),
+        ("v".into(), "*".into()),
+        ("e".into(), "*".into()),
+        ("ret".into(), "admin@galexy> ".into()),
+        ("f2".into(), "[tty] 2".into()),
+    ]);
+    owned.extend(type_line("eve", "Password: "));
+    owned.extend([
+        ("e".into(), "*".into()),
+        ("v".into(), "*".into()),
+        ("e".into(), "*".into()),
+        ("ret".into(), "eve@galexy> ".into()),
+    ]);
+    let dial = format!("connect {peer_text}:4604");
+    owned.extend(type_line(&dial, "wants the network"));
+    owned.extend(type_line("no", "still up"));
+    owned.extend(type_line(&dial, "wants the network"));
+    owned.extend(type_line("yes", "wants the network"));
+    owned.extend(type_line("yes", "lane ok"));
+    owned.extend(type_line("connect --bind 10.0.2.15", "wants the network"));
+    owned.extend(type_line("no", "access denied"));
+    owned.extend(type_line("connect --bind 10.0.2.15", "wants the network"));
+    owned.extend(type_line("yes", "[net] bound 10.0.2.15"));
+    owned.extend(type_line(
+        "connect --accept 10.0.2.15:4601",
+        "wants the network",
+    ));
+    owned.extend(type_line("yes", "[net] bound 10.0.2.15"));
+    owned.extend(type_line("yes", "outside-lane"));
+    owned.extend(type_line("connect --send peer", "wants the network"));
+    owned.extend(type_line("no", "access denied"));
+    owned.extend(type_line("connect --send peer", "wants the network"));
+    owned.extend(type_line("yes", "sent"));
+    owned.extend(type_line("connect --recv peer", "wants the network"));
+    owned.extend(type_line("yes", "card-back"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type_fwd(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "card-back",
+        Duration::from_millis(30),
+        Duration::from_secs(420),
+        4601,
+    );
+    drop(echo);
+    drop(udp);
+    let _ = inbound.join();
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("nodelay"),
+        "setsockopt was accepted; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("udp/53") && !serial.contains("port 53"),
+        "port 53 was used; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("still up"),
+        "no must leave the program up; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("task 'connect' killed"),
+        "a no must not kill the program; serial:\n{serial}"
+    );
+    assert!(
+        refused.load(Ordering::Relaxed) > 0,
+        "the handshake completed before the listen card; serial:\n{serial}"
+    );
+    assert_eq!(
+        echo_hits.load(Ordering::Relaxed),
+        1,
+        "only the accepted address:port dial opens TCP; serial:\n{serial}"
+    );
+    assert_eq!(
+        serial.matches("[net] bound 10.0.2.15").count(),
+        2,
+        "bind should run for the yes and for accept; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[net] listen 4601"),
+        "listen did not open the gate; serial:\n{serial}"
+    );
+    assert_eq!(
+        serial.matches("outside-lane").count(),
+        1,
+        "the inbound body should arrive once; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains(&format!("[net] dgram {peer_text} 4602")),
+        "the datagram was not sent; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains(&format!("[net] dgram in {peer_text} 4602")),
+        "the datagram was not received; serial:\n{serial}"
+    );
+    assert!(
+        dgram_hits.load(Ordering::Relaxed) >= 1,
+        "the peer did not see the datagram; serial:\n{serial}"
+    );
+    assert!(
+        serial.matches("wants the network").count() >= 10,
+        "each missing card should ask; serial:\n{serial}"
+    );
+}
+
+/// Python `socket` calls the same cards. No is `OSError`. Yes binds,
+/// dials an address and a port, sends, receives, and listens.
+#[test]
+fn python_socket_cards() {
+    if env!("GALEXY_HAVE_PYTHON") != "1" {
+        eprintln!("python_socket_cards: skipped (no python ELF)");
+        return;
+    }
+    let peer = host_ipv4();
+    let peer_text = format!("{}.{}.{}.{}", peer[0], peer[1], peer[2], peer[3]);
+    let (cert_der, key_der) = listener_identity();
+    let echo_hits = Arc::new(AtomicUsize::new(0));
+    let dgram_hits = Arc::new(AtomicUsize::new(0));
+    let refused = Arc::new(AtomicUsize::new(0));
+    let echo_bg = Arc::clone(&echo_hits);
+    let dgram_bg = Arc::clone(&dgram_hits);
+    let refused_bg = Arc::clone(&refused);
+    let echo = std::thread::spawn(move || host_pinned_echo(4607, cert_der, key_der, echo_bg));
+    let udp = std::thread::spawn(move || {
+        host_dgram_reply(4606, b"card-datagram", b"card-back", dgram_bg)
+    });
+    let inbound = std::thread::spawn(move || {
+        host_card_listen(
+            4605,
+            b"py-body",
+            "OSError",
+            "[net] listen 4605",
+            refused_bg,
+            800,
+        )
+    });
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line("connect --putkey", "wrote"));
+    let addr = format!("net addr {peer_text} 4607 /k");
+    owned.extend(type_line(&addr, "ok"));
+    let port = format!("net port 4607 {peer_text}");
+    owned.extend(type_line(&port, "ok"));
+    owned.extend(type_line("net link", "10.0.2.15"));
+    owned.extend(type_line("net addr 10.0.2.15 0 /k", "ok"));
+    owned.extend(type_line("net port 4605 10.0.2.15", "ok"));
+    let peer_cmd = format!("net peer peer {peer_text} 4606");
+    owned.extend(type_line(&peer_cmd, "ok"));
+    owned.extend(type_line("useradd eve", "Password: "));
+    owned.extend([
+        ("e".into(), "*".into()),
+        ("v".into(), "*".into()),
+        ("e".into(), "*".into()),
+        ("ret".into(), "admin@galexy> ".into()),
+        ("f2".into(), "[tty] 2".into()),
+    ]);
+    owned.extend(type_line("eve", "Password: "));
+    owned.extend([
+        ("e".into(), "*".into()),
+        ("v".into(), "*".into()),
+        ("e".into(), "*".into()),
+        ("ret".into(), "eve@galexy> ".into()),
+    ]);
+    owned.extend(type_line(
+        "echo import socket; print(socket.bind(\"10.0.2.15\")) > deny.py",
+        "eve@galexy>",
+    ));
+    owned.extend(type_line("python deny.py", "wants the network"));
+    owned.extend(type_line("no", "OSError"));
+    owned.extend(type_line("python deny.py", "wants the network"));
+    owned.extend(type_line("yes", "ok"));
+    let dial = format!("echo import socket; print(socket.connect(\"{peer_text}:4607\")) > dial.py");
+    owned.extend(type_line(&dial, "eve@galexy>"));
+    owned.extend(type_line("python dial.py", "wants the network"));
+    owned.extend(type_line("yes", "wants the network"));
+    owned.extend(type_line("yes", "lane ok"));
+    owned.extend(type_line(
+        "echo import socket; print(socket.send(\"peer\",\"card-datagram\")) > send.py",
+        "eve@galexy>",
+    ));
+    owned.extend(type_line("python send.py", "wants the network"));
+    owned.extend(type_line("yes", "ok"));
+    owned.extend(type_line(
+        "echo import socket; print(socket.recv(\"peer\")) > recv.py",
+        "eve@galexy>",
+    ));
+    owned.extend(type_line("python recv.py", "wants the network"));
+    owned.extend(type_line("yes", "card-back"));
+    owned.extend(type_line(
+        "echo import socket;a=socket.listen;print(a(\"4605\"));print(a(\"4605\")) > a",
+        "eve@galexy>",
+    ));
+    owned.extend(type_line("python a", "wants the network"));
+    owned.extend(type_line("yes", "attached"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type_fwd(
+        &image("galexy-os-python"),
+        &keys,
+        "[boot] main loop ready",
+        "py-body",
+        Duration::from_millis(30),
+        Duration::from_secs(900),
+        4605,
+    );
+    drop(echo);
+    drop(udp);
+    let _ = inbound.join();
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("OSError"),
+        "a denied bind was not OSError; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("task 'python' killed"),
+        "a no must not kill the interpreter; serial:\n{serial}"
+    );
+    assert!(
+        refused.load(Ordering::Relaxed) > 0,
+        "the handshake completed before the listen card; serial:\n{serial}"
+    );
+    assert_eq!(
+        echo_hits.load(Ordering::Relaxed),
+        1,
+        "only the granted connect opens TCP; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[net] bound 10.0.2.15"),
+        "bind did not run; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[net] listen 4605"),
+        "listen did not open the gate; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("py-body"),
+        "the inbound body did not arrive; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains(&format!("[net] dgram {peer_text} 4606")),
+        "the datagram was not sent; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains(&format!("[net] dgram in {peer_text} 4606")),
+        "the datagram was not received; serial:\n{serial}"
+    );
+    assert!(
+        dgram_hits.load(Ordering::Relaxed) >= 1,
+        "the peer did not see the datagram; serial:\n{serial}"
+    );
+}
+
 fn host_dgram_count(
     port: u16,
     needle: &[u8],
@@ -7108,6 +7423,90 @@ fn host_listen_body(port: u16, body: &'static [u8], refused: Arc<AtomicUsize>) {
         std::thread::sleep(Duration::from_millis(50));
     }
     if !serial_fwd_contains("held") {
+        return;
+    }
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = Arc::new(HostPin {
+        pin: listener_pin(),
+        provider: provider.clone(),
+    });
+    let config = Arc::new(
+        rustls::ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .expect("tls 1.3")
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth(),
+    );
+    let mut sock = loop {
+        if std::time::Instant::now() > deadline {
+            return;
+        }
+        match std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            Duration::from_secs(2),
+        ) {
+            Ok(sock) => break sock,
+            Err(_) => std::thread::sleep(Duration::from_millis(50)),
+        }
+    };
+    let _ = sock.set_read_timeout(Some(Duration::from_secs(60)));
+    let _ = sock.set_write_timeout(Some(Duration::from_secs(30)));
+    let name = rustls::pki_types::ServerName::try_from("echo").expect("server name");
+    let mut conn = rustls::ClientConnection::new(config, name).expect("tls client");
+    {
+        let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+        let _ = tls.write_all(body);
+    }
+    conn.send_close_notify();
+    while conn.wants_write() {
+        let _ = conn.write_tls(&mut sock);
+    }
+}
+
+/// Count one datagram, then keep replying to its source so a later
+/// receive on the card can take a copy. Port 53 is not this socket.
+fn host_dgram_reply(port: u16, needle: &[u8], reply: &[u8], hits: Arc<AtomicUsize>) {
+    let Ok(sock) = std::net::UdpSocket::bind(("0.0.0.0", port)) else {
+        return;
+    };
+    let _ = sock.set_read_timeout(Some(Duration::from_millis(200)));
+    let mut buf = [0u8; 256];
+    let mut src = None;
+    let deadline = std::time::Instant::now() + Duration::from_secs(400);
+    while std::time::Instant::now() < deadline {
+        if let Ok((n, from)) = sock.recv_from(&mut buf) {
+            if buf[..n].windows(needle.len()).any(|w| w == needle) {
+                hits.fetch_add(1, Ordering::Relaxed);
+                src = Some(from);
+            }
+        }
+        if let Some(from) = src {
+            let _ = sock.send_to(reply, from);
+        }
+    }
+}
+
+/// One TLS probe before `ready` must fail. After `ready`, write `body`.
+fn host_card_listen(
+    port: u16,
+    body: &'static [u8],
+    early: &str,
+    ready: &str,
+    refused: Arc<AtomicUsize>,
+    secs: u64,
+) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+    while std::time::Instant::now() < deadline && !serial_fwd_contains(early) {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if !serial_fwd_contains(ready) && !tls_body(port, body, Duration::from_millis(800)) {
+        refused.fetch_add(1, Ordering::Relaxed);
+    }
+    while std::time::Instant::now() < deadline && !serial_fwd_contains(ready) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if !serial_fwd_contains(ready) {
         return;
     }
     let provider = Arc::new(rustls::crypto::ring::default_provider());

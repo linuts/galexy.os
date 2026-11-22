@@ -106,6 +106,7 @@ pub struct Engine {
     conns: [Conn; CONNS],
     egress: Vec<Frame>,
     pending_udp: Option<PendingUdp>,
+    udp_inbox: Option<UdpInbox>,
     echo_seq: u16,
     pending_icmp: Option<PendingIcmp>,
     await_echo: Option<AwaitEcho>,
@@ -117,6 +118,14 @@ struct PendingUdp {
     dport: u16,
     sport: u16,
     payload: Vec<u8>,
+}
+
+/// One datagram the card is willing to take. Anything else is dropped.
+struct UdpInbox {
+    peer: [u8; 4],
+    peer_port: u16,
+    local_port: u16,
+    payload: Option<Vec<u8>>,
 }
 
 struct PendingIcmp {
@@ -161,6 +170,7 @@ impl Engine {
             conns: core::array::from_fn(|_| Conn::blank()),
             egress: Vec::new(),
             pending_udp: None,
+            udp_inbox: None,
             echo_seq: 0,
             pending_icmp: None,
             await_echo: None,
@@ -309,6 +319,37 @@ impl Engine {
     /// True when a datagram is not waiting on neighbor discovery.
     pub fn udp_idle(&self) -> bool {
         self.pending_udp.is_none()
+    }
+
+    /// Arm a receive for one stored peer. Port 53 is refused. A later
+    /// datagram from any other address or port is not queued.
+    pub fn udp_arm(&mut self, peer: [u8; 4], peer_port: u16, local_port: u16) -> bool {
+        if peer == [0, 0, 0, 0]
+            || peer == [255, 255, 255, 255]
+            || peer_port == 0
+            || peer_port == 53
+            || local_port == 0
+            || local_port == 53
+        {
+            self.udp_inbox = None;
+            return false;
+        }
+        self.udp_inbox = Some(UdpInbox {
+            peer,
+            peer_port,
+            local_port,
+            payload: None,
+        });
+        true
+    }
+
+    /// Take the one datagram the arm accepted, if it has arrived.
+    pub fn udp_take(&mut self) -> Option<Vec<u8>> {
+        let ready = self.udp_inbox.as_ref().is_some_and(|w| w.payload.is_some());
+        if !ready {
+            return None;
+        }
+        self.udp_inbox.take().and_then(|w| w.payload)
     }
 
     /// Queue an ICMP echo request. `Err` when we have no address, or the
@@ -719,7 +760,23 @@ impl Engine {
         let dport = u16::from_be_bytes([body[2], body[3]]);
         if dport == 68 && sport == 67 {
             self.ingest_dhcp(src, &body[8..]);
+            return;
         }
+        // Port 53 is not a card datagram. Neither is any peer we did not arm.
+        if sport == 53 || dport == 53 {
+            return;
+        }
+        let Some(wait) = self.udp_inbox.as_mut() else {
+            return;
+        };
+        if src != wait.peer || sport != wait.peer_port || dport != wait.local_port {
+            return;
+        }
+        let payload = &body[8..];
+        if payload.is_empty() || payload.len() > 64 || wait.payload.is_some() {
+            return;
+        }
+        wait.payload = Some(payload.to_vec());
     }
 
     fn ingest_dhcp(&mut self, _src: [u8; 4], p: &[u8]) {
@@ -1202,6 +1259,48 @@ mod tests {
         assert_eq!(&udp[30..34], &[172, 30, 0, 2]);
         assert!(udp.ends_with(b"card"));
         assert_ne!(&udp[30..34], &[10, 0, 2, 2]);
+    }
+
+    #[test]
+    fn udp_arm_takes_only_the_stored_peer() {
+        let mut e = Engine::new([1; 6], false);
+        e.set_fixed([10, 0, 2, 15], 24, [10, 0, 2, 2]);
+        assert!(!e.udp_arm([172, 30, 0, 2], 53, 4598));
+        assert!(e.udp_arm([172, 30, 0, 2], 4602, 4598));
+        let other = udp_frame(
+            [9; 6],
+            [1; 6],
+            [9, 9, 9, 9],
+            [10, 0, 2, 15],
+            4602,
+            4598,
+            b"nope",
+        );
+        e.ingest(&other);
+        assert!(e.udp_take().is_none());
+        let dns = udp_frame(
+            [9; 6],
+            [1; 6],
+            [172, 30, 0, 2],
+            [10, 0, 2, 15],
+            53,
+            4598,
+            b"dns",
+        );
+        e.ingest(&dns);
+        assert!(e.udp_take().is_none());
+        let frame = udp_frame(
+            [9; 6],
+            [1; 6],
+            [172, 30, 0, 2],
+            [10, 0, 2, 15],
+            4602,
+            4598,
+            b"card-back",
+        );
+        e.ingest(&frame);
+        assert_eq!(e.udp_take().as_deref(), Some(&b"card-back"[..]));
+        assert!(e.udp_take().is_none());
     }
 
     #[test]

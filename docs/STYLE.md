@@ -231,7 +231,9 @@ last box.
   granted name. The value is still a lane. 112 is the address card,
   113 the port, 114 bind, 115 listen, and 116 the datagram. Each is
   one card. Read dials and sends the stored datagram. Write accepts
-  and binds. `setsockopt` stays refused. No new syscall. SSH is 117,
+  and binds. `std::net` and Python `socket` call those cards:
+  bind, listen, datagram send and receive, and an address or a
+  port. `setsockopt` stays refused. No new syscall. SSH is 117,
   and it is last.
 - **The kernel moves frames.** virtio-net DMA follows the virtio-blk
   rule: one descriptor per physically contiguous run. The interrupt
@@ -297,13 +299,14 @@ not wait on Phase 10, and Phase 10 does not wait on it.
 - **The allow-list is `scripts/python-allow.txt`.** A module that
   is not listed raises `ImportError`. `ssl`, `asyncio`, `pip`,
   `subprocess`, `ctypes`, and `os.fork` stay off that list.
-  `socket` is the Milestone 109 name: `socket.connect` by name only.
-- **Python stays on the name.** Milestone 109 does not pass an
-  address or a port. Listen and one datagram are cards in `net`
-  (Milestones 115 and 116). Python `socket` still only connects by
-  name. `bind`, `listen`, UDP, and `setsockopt` in Python stay
-  `OSError`. `ssl` stays refused. TLS stays inside `net`.
-  `std::net::TcpStream::connect` is the same lane (Milestone 108).
+  `socket` names the card calls: `connect`, `bind`, `listen`,
+  `send`, and `recv`. `setsockopt` stays off.
+- **Python calls the cards.** `socket.connect` takes a name, one
+  stored address, or one stored `address:port`. `socket.bind`,
+  `socket.listen`, `socket.send`, and `socket.recv` are the bind,
+  listen, and datagram cards. A missing card asks. No is
+  `OSError`. `setsockopt` stays `OSError`. `ssl` stays refused.
+  TLS stays inside `net`. `std::net` is the same layer.
 - **Two clocks stay two clocks.** `time.monotonic` is `Clock`.
   `time.time` is `Date`, and it raises when the date is unset.
 - **Budgets are the ones in `PYTHON.md`.** 2 GiB until a boot shows

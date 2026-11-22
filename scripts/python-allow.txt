@@ -2,7 +2,16 @@
 # The first four are the public surface. The rest are the VM's own
 # frozen and builtin modules at the pin in scripts/rustpython.rev.
 # ssl, asyncio, pip, venv, subprocess, ctypes, sqlite3, and os are absent.
-# `lane` is the dial in Milestone 103. `socket.connect` is Milestone 109.
+# `lane` is the dial in Milestone 103.
+# socket operations that are cards: connect, bind, listen, send, recv.
+# An address or a port argument uses the address card and the port card.
+# socket.setsockopt and socket.socket stay refused.
+# ssl and asyncio stay off this list.
+# socket.connect
+# socket.bind
+# socket.listen
+# socket.send
+# socket.recv
 builtins
 sys
 io
