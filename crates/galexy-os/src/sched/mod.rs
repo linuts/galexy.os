@@ -287,7 +287,7 @@ fn sysroot_lib_path(name: &str) -> alloc::string::String {
 /// length is kept. A different length is removed via `remove_path` (an
 /// admin-root path) and written again.
 fn place_sysroot_file(
-    parent: u16,
+    parent: u32,
     name: &str,
     bytes: &'static [u8],
     remove_path: &str,
@@ -311,7 +311,7 @@ fn place_sysroot_file(
     }
 }
 
-fn sysroot_mkdir(parent: u16, name: &str) -> u16 {
+fn sysroot_mkdir(parent: u32, name: &str) -> u32 {
     if let Some(existing) = galfs::find_under(parent, name) {
         return existing;
     }

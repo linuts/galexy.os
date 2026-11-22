@@ -243,7 +243,7 @@ const SPAWN_FILE_MAX: usize = 16 * 1024 * 1024;
 /// Tokens are the caller's. A path outside them is
 /// [`SysError::AccessDenied`], not a loader panic. The bytes must be an ELF.
 pub fn read_spawn_file(
-    root: u16,
+    root: u32,
     tokens: &[galfs::Token; galfs::TOKEN_SLOTS],
     name: &str,
 ) -> Result<alloc::vec::Vec<u8>, SysError> {
@@ -1295,7 +1295,7 @@ pub(crate) fn task_kill(cap: Cap) -> Result<(), SysError> {
 
 /// Test helper: install `rights` on `object` for a live user task by name.
 /// Callable from the kernel main loop (slot 0) — no caller-card check.
-pub fn test_push_token(target: &str, object: u16, rights: u8) -> Result<(), SysError> {
+pub fn test_push_token(target: &str, object: u32, rights: u8) -> Result<(), SysError> {
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let Some(ti) = threads.iter().position(|t| {
@@ -1308,7 +1308,7 @@ pub fn test_push_token(target: &str, object: u16, rights: u8) -> Result<(), SysE
 }
 
 /// Test helper: drop `rights` on `object` for a live user task by name.
-pub fn test_revoke_token(target: &str, object: u16, rights: u8) -> Result<(), SysError> {
+pub fn test_revoke_token(target: &str, object: u32, rights: u8) -> Result<(), SysError> {
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let Some(ti) = threads.iter().position(|t| {
@@ -1672,7 +1672,7 @@ pub(crate) fn task_seek(cap: Cap, offset: i64, whence: u64) -> Result<u64, SysEr
 }
 
 pub(in crate::sched) fn admin_caller(
-    fs_root: u16,
+    fs_root: u32,
     _tokens: &[galfs::Token; galfs::TOKEN_SLOTS],
 ) -> bool {
     galfs::is_admin_root(fs_root)
@@ -1765,7 +1765,7 @@ pub(crate) fn task_quota(out: &mut [u8], name: Option<&str>) -> Result<usize, Sy
 }
 
 /// Sets durable quotas for `name`. Caller must be admin.
-pub(crate) fn task_setquota(name: &str, max_objects: u16, max_bytes: u32) -> Result<(), SysError> {
+pub(crate) fn task_setquota(name: &str, max_objects: u32, max_bytes: u64) -> Result<(), SysError> {
     let slot = current_slot();
     if slot == 0 {
         return Err(SysError::BadCap);
@@ -2023,7 +2023,7 @@ pub(crate) fn task_unlock_session(password: &[u8]) -> Result<(), SysError> {
 /// **not** clear born-admin — the seat can `su admin` to return (AUTH.md).
 pub(in crate::sched) fn install_session(
     caller: &mut Thread,
-    target: u16,
+    target: u32,
     from_login: bool,
     init_live: bool,
 ) -> Result<u64, SysError> {
@@ -2474,7 +2474,7 @@ fn foreground_idle_due(last: u64, now: u64) -> bool {
 pub fn spawn_with_given_files(
     name: &str,
     bytes: &[u8],
-    caps: &[(u16, CapRights)],
+    caps: &[(u32, CapRights)],
 ) -> Result<u8, SysError> {
     if caps.len() > MAX_OPEN_FILES {
         return Err(SysError::NoResource);

@@ -11,8 +11,9 @@ use galexy_abi::SysError;
 /// Cards per task.
 pub const TOKEN_SLOTS: usize = 8;
 
-/// No object / empty card.
-pub const NO_OBJECT: u16 = 0xffff;
+/// No object / empty card. Object ids are `u32` so a volume can name
+/// more than a million files and directories.
+pub const NO_OBJECT: u32 = u32::MAX;
 
 pub const RIGHT_READ: u8 = 1;
 pub const RIGHT_WRITE: u8 = 2;
@@ -26,7 +27,7 @@ pub const RIGHT_ONCE: u8 = 128;
 /// One card: an object index plus a rights mask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Token {
-    pub object: u16,
+    pub object: u32,
     pub rights: u8,
 }
 
@@ -47,9 +48,9 @@ impl Token {
 /// `parent_of` (`None` = no parent / not an object). Walks at most
 /// `max_steps` links, so a corrupt cyclic parent chain terminates.
 pub fn covers(
-    parent_of: impl Fn(u16) -> Option<u16>,
-    ancestor: u16,
-    object: u16,
+    parent_of: impl Fn(u32) -> Option<u32>,
+    ancestor: u32,
+    object: u32,
     max_steps: usize,
 ) -> bool {
     let mut cur = object;
@@ -71,9 +72,9 @@ pub fn covers(
 /// A single card must carry the whole `need` — rights do not sum across
 /// cards on different ancestors.
 pub fn allows(
-    parent_of: impl Fn(u16) -> Option<u16>,
+    parent_of: impl Fn(u32) -> Option<u32>,
     tokens: &[Token],
-    object: u16,
+    object: u32,
     need: u8,
     max_steps: usize,
 ) -> bool {
@@ -91,7 +92,7 @@ pub fn allows(
 /// Installs a card into a fixed slot array. Same object merges rights.
 pub fn push_token(
     tokens: &mut [Token; TOKEN_SLOTS],
-    object: u16,
+    object: u32,
     rights: u8,
 ) -> Result<(), SysError> {
     if object == NO_OBJECT || rights == 0 {
@@ -113,7 +114,7 @@ pub fn push_token(
 /// ancestors are untouched — revocation does not climb the tree.
 pub fn revoke_token(
     tokens: &mut [Token; TOKEN_SLOTS],
-    object: u16,
+    object: u32,
     rights: u8,
 ) -> Result<(), SysError> {
     if object == NO_OBJECT || rights == 0 {
@@ -149,7 +150,7 @@ pub fn attenuate_tokens(tokens: &mut [Token; TOKEN_SLOTS], mask: u8) {
 }
 
 /// Drops a one-shot card that names `object` exactly. Returns whether one was removed.
-pub fn consume_once(tokens: &mut [Token; TOKEN_SLOTS], object: u16) -> bool {
+pub fn consume_once(tokens: &mut [Token; TOKEN_SLOTS], object: u32) -> bool {
     let mut hit = false;
     for token in tokens.iter_mut() {
         if token.is_live() && token.object == object && token.rights & RIGHT_ONCE != 0 {
@@ -161,7 +162,7 @@ pub fn consume_once(tokens: &mut [Token; TOKEN_SLOTS], object: u16) -> bool {
 }
 
 /// Drops every card whose object is in `objects`.
-pub fn drop_tokens_on(tokens: &mut [Token; TOKEN_SLOTS], objects: &[u16]) {
+pub fn drop_tokens_on(tokens: &mut [Token; TOKEN_SLOTS], objects: &[u32]) {
     for token in tokens.iter_mut() {
         if objects.contains(&token.object) {
             *token = Token::empty();

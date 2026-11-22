@@ -150,7 +150,7 @@ Names, grants, pinned keys, and the address mode survive a restart of `net`. The
 | Who parses it | The crate. Host tests round-trip a record. `net` links the same crate. A version it does not know is refused: the service logs the version and will not dial until an admin rewrites the file. |
 | Who may read it | `net`, and admin. Init creates an empty version-1 record (mode `ask`, no names) when the file is absent, then spawns `net` with one token: `READ` and `WRITE` on that object and on nothing else. Init holds the admin credential, so it can mint that card. The service does not receive the admin root. |
 | Who writes it | `net`, from `allow`, `grant`, and `revoke`, and from a finished DHCP lease. The shell does not poke the file. |
-| Disk version | Unchanged. `DISK_VERSION` stays 12. This is a file in the sealed table, not a new GALF layout. |
+| Disk version | Unchanged by this phase. The record is a file in the sealed table, not a new GALF layout. |
 
 There is no environment block and no `/etc`. Shell history is the other file a program already keeps (`shell.history` in the user's tree). The network record follows that idea and is typed, because a lease and a key are not a line of history.
 

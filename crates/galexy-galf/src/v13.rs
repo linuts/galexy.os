@@ -308,13 +308,13 @@ pub fn check(image: &[u8], passphrase: &[u8]) -> Report {
     let mut seen_words = [0u64; (FILE_MAX as usize / BLOCK) / 64 + 8];
     for (i, file) in opened.files.iter().take(opened.file_count).enumerate() {
         if file.len > FILE_MAX {
-            report.push(Issue::FileTooLarge { object: i as u16 });
+            report.push(Issue::FileTooLarge { object: i as u32 });
         }
         let mut covered = 0u64;
         for ext in file.extents.iter().take(file.extent_count as usize) {
             let end = ext.start as u64 + ext.count as u64;
             if ext.count == 0 || end > u64::from(opened.pool_blocks) {
-                report.push(Issue::BlockMissing { block: i as u16 });
+                report.push(Issue::BlockMissing { block: i as u32 });
                 continue;
             }
             covered += u64::from(ext.count) * BLOCK as u64;
@@ -322,7 +322,7 @@ pub fn check(image: &[u8], passphrase: &[u8]) -> Report {
                 let word = (b as usize) / 64;
                 let bit = 1u64 << (b % 64);
                 if word >= seen_words.len() || seen_words[word] & bit != 0 {
-                    report.push(Issue::BlockDuplicate { block: i as u16 });
+                    report.push(Issue::BlockDuplicate { block: i as u32 });
                     break;
                 }
                 if word < seen_words.len() {
@@ -331,7 +331,7 @@ pub fn check(image: &[u8], passphrase: &[u8]) -> Report {
             }
         }
         if u64::from(file.len) > covered {
-            report.push(Issue::BlockMissing { block: i as u16 });
+            report.push(Issue::BlockMissing { block: i as u32 });
         }
     }
     if report.issue_count == 0 {

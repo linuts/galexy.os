@@ -40,10 +40,10 @@ Phase 15 (Milestones 97–99, [`docs/GALFS.md`](docs/GALFS.md)) is the
 sealed-commit plan: one virtio request, then a commit of the changed
 bytes plus one metadata seal. It does not gate `v1.0`.
 The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md) → Where
-we stand. Known gap today: there is no network device and no USB
-controller. When `target/galexy-rustc/rustc` and
+we stand. Known gap today: there is no USB controller. When
+`target/galexy-rustc/rustc` and
 `target/galexy-python/python` were built, a normal `cargo run` logs
-into a seat that has both. The network plan is a ring-3 `net` service, DHCP,
+into a seat that has both. The network is a ring-3 `net` service, DHCP,
 and a granted TLS 1.3 lane, not a socket API. The USB plan sees
 devices and stops there. Python is upstream RustPython
 as a login-shell command, not CPython and not a socket module.
@@ -188,7 +188,7 @@ Typing `shell` is refused — seats are F-keys, not programs you spawn.
 - **SMP kernel** — two CPUs, per-CPU deadline timers, tickless idle, work-stealing idle, TLB shootdown
 - **Ring-3 userland** — ELF from a tar ramdisk, per-task address spaces, W^X maps, SYSCALL ABI in `galexy-abi` (26 syscalls)
 - **Capabilities day one** — keyboard, console, loader, files, power, queries, dmesg; process Caps for wait / kill / give; no fd table, no PIDs
-- **galfs** — sealed dual-slot GALF v12 on virtio-blk or IDE; 32 actors, quotas, durable shares, rename / truncate / stat, host `fsck`
+- **galfs** — sealed dual-slot GALF v16 on virtio-blk or IDE; directory lists, 4 KiB extents sized to the disk, up to 1,048,576 names and 64 GiB per file on a large enough disk, quotas, durable shares, rename / truncate / stat, host `fsck`
 - **Auth** — PBKDF2 passwords, lockout, idle lock, forced first `passwd`; every seat boots logged out; audit lines carry no secrets
 - **Init and seats** — userspace `init` is the orphan root and respawns F-key seats; Ctrl-C kills the TTY foreground job
 - **Scheduling** — RR + pin-at-spawn + idle steal; `sleep`; blocking keyboard and pipe reads park and wake (`docs/SCHEDULING.md`)
@@ -350,11 +350,12 @@ crates/
   (bench, KVM, LTO, IRQ completion), modern (q35, ECAM, virtio 1.x,
   MSI-X, TSC-deadline), full userland (heap, argv, clock, channels,
   jobs), init-owned shutdown. The `v1.0` tag is not this phase; it
-  waits on Phase 10, Phase 13, and the KVM cells
-- **Phase 10** — network, before `v1.0`. virtio-net in the kernel, DHCP
+  waits on Phase 13 and the KVM cells
+- **Phase 10** ✅ — network. virtio-net in the kernel, DHCP
   and one datagram, then a ring-3 `net` service and TLS 1.3 lanes
   granted by name. The record is a file in the admin tree. No sockets.
-  Milestones 78–85. Plan: [`docs/NET.md`](docs/NET.md)
+  Milestones 78–85. `serve` attaches a gate and does not yet hand the
+  next lane to that listener. Plan: [`docs/NET.md`](docs/NET.md)
 - **Phase 13** — USB, after Phase 10 and before `v1.0`. xHCI, a list
   of devices, and one driver table. No vendor drivers. Milestones
   86–88. Plan: [`docs/USB.md`](docs/USB.md). Inventory:
@@ -367,7 +368,7 @@ crates/
 - **Phase 15** — sealed commits. A dirty sync becomes one virtio
   request, then a commit of the changed bytes plus one metadata
   seal. The login table stays. Milestones 97–99. It can land beside
-  Phase 10 and Phase 13, and it does not gate `v1.0`. Plan:
+  Phase 13, and it does not gate `v1.0`. Plan:
   [`docs/GALFS.md`](docs/GALFS.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
   static linker (LINKER.md, ✅ Milestone 69), `std` PAL (✅ Milestone

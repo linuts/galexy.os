@@ -1,5 +1,4 @@
-//! Integration test: galfs block store (GALF v8+; pool fill uses current
-//! [`galfs::FILE_BYTES`], including single-indirect on v11).
+//! Integration test: galfs block store. Pool fill uses 4 KiB chunks.
 //!
 //! Writes a multi-block file, fills the block pool to exhaustion, frees
 //! on remove, and proves a block can be reused.
@@ -41,29 +40,28 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let desktop = galfs::find_under(admin, "Desktop").expect("Desktop");
     assert_eq!(galfs::blocks_used(), 0, "fresh table has no blocks");
 
-    // Multi-block write: 3 × 512 + 100 = 1636 bytes.
     let file = galfs::create_file_under(desktop, "big").expect("create big");
-    let mut pattern = [0u8; 1636];
+    let mut pattern = [0u8; galfs::BLOCK_SIZE + 100];
     for (i, b) in pattern.iter_mut().enumerate() {
         *b = (i % 251) as u8;
     }
     let n = galfs::append_file(file, &pattern).expect("append big");
     assert_eq!(n, pattern.len(), "multi-block append must fit");
-    assert_eq!(galfs::blocks_used(), 4, "1636 bytes use four blocks");
+    assert_eq!(
+        galfs::blocks_used(),
+        2,
+        "one extra byte past a block takes two"
+    );
 
-    let mut got = [0u8; 1636];
+    let mut got = [0u8; galfs::BLOCK_SIZE + 100];
     let rn = galfs::read_file_bytes(file, &mut got).expect("read big");
     assert_eq!(rn, pattern.len());
     assert_eq!(&got[..], &pattern[..], "multi-block bytes round-trip");
 
-    // Fill the pool: each file takes DIRECT_BLOCKS until blocks run out.
+    let chunk = [0xA5u8; galfs::BLOCK_SIZE];
     let mut created = 0u32;
-    let mut names = [[0u8; 8]; 64];
-    loop {
-        if created as usize >= names.len() {
-            break;
-        }
-        let name = &mut names[created as usize];
+    while galfs::blocks_used() < galfs::pool_blocks() && created < 64 {
+        let mut name = [0u8; 4];
         name[0] = b'f';
         name[1] = b'0' + ((created / 10) as u8);
         name[2] = b'0' + ((created % 10) as u8);
@@ -72,17 +70,20 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
             break;
         };
         created += 1;
-        let chunk = [0xA5u8; galfs::FILE_BYTES];
-        let wrote = galfs::append_file(fi, &chunk).unwrap_or(0);
-        if wrote < galfs::FILE_BYTES {
-            // Block pool exhausted mid-file or at capacity.
-            break;
+        loop {
+            if galfs::blocks_used() >= galfs::pool_blocks() {
+                break;
+            }
+            let wrote = galfs::append_file(fi, &chunk).unwrap_or(0);
+            if wrote < chunk.len() {
+                break;
+            }
         }
     }
     assert!(created >= 1, "must create at least one fill file");
     assert_eq!(
         galfs::blocks_used(),
-        galfs::BLOCK_SLOTS,
+        galfs::pool_blocks(),
         "block pool must be full"
     );
 
@@ -97,7 +98,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     // Remove the multi-block file and reuse its blocks.
     let before = galfs::blocks_used();
     galfs::remove_as_admin("Desktop/big").expect("remove big");
-    assert_eq!(galfs::blocks_used(), before - 4, "remove frees four blocks");
+    assert_eq!(galfs::blocks_used(), before - 2, "remove frees two blocks");
 
     let reuse = galfs::create_file_under(desktop, "reuse").expect("reuse");
     let again = [0x5Au8; galfs::BLOCK_SIZE + 16];

@@ -42,9 +42,9 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galfs::add_user("dan", b"dan-pass").expect("add dan");
     let (uo, um, ub, ux) = galfs::actor_quota("dan").expect("dan quota");
     assert_eq!(uo, 2, "root + Desktop");
-    assert_eq!(um, galfs::DEFAULT_MAX_OBJECTS as u32);
+    assert_eq!(um, galfs::DEFAULT_MAX_OBJECTS);
     assert_eq!(ub, 0);
-    assert_eq!(ux, galfs::DEFAULT_MAX_BYTES);
+    assert_eq!(ux as u64, galfs::DEFAULT_MAX_BYTES);
 
     galfs::set_actor_quota("dan", 3, 100).expect("tighten dan");
     let dan = galfs::root_named("dan").expect("dan root");
@@ -79,7 +79,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     );
     galfs::raise_admin_quota_for_sysroot();
     let (_, am, _, ax) = galfs::actor_quota("admin").expect("admin after raise");
-    assert!(am >= galfs::OBJECT_SLOTS as u32, "object cap");
+    assert!(am >= galfs::inode_slots(), "object cap");
     assert!(ax >= 128 * 1024 * 1024, "byte cap");
     assert!(galfs::actor_must_change(admin), "raise keeps must-change");
 

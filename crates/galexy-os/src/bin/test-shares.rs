@@ -13,7 +13,7 @@ use galexy_os::{
 
 entry_point!(test_main_entry, config = &galexy_os::BOOTLOADER_CONFIG);
 
-fn has_share_card(tokens: &[Token; galfs::TOKEN_SLOTS], object: u16, rights: u8) -> bool {
+fn has_share_card(tokens: &[Token; galfs::TOKEN_SLOTS], object: u32, rights: u8) -> bool {
     tokens
         .iter()
         .any(|t| t.is_live() && t.object == object && t.rights & rights == rights)

@@ -138,14 +138,14 @@ fn install_sysroot() {
     serial_println!("rustc-sysroot: {} entries", names.len());
 }
 
-fn mkdir(parent: u16, name: &str) -> u16 {
+fn mkdir(parent: u32, name: &str) -> u32 {
     if let Some(existing) = sched::galfs::find_under(parent, name) {
         return existing;
     }
     sched::galfs::mkdir_under_root(parent, name).unwrap_or_else(|_| panic!("mkdir {name}"))
 }
 
-fn copy_file(parent: u16, name: &str, bytes: &[u8]) {
+fn copy_file(parent: u32, name: &str, bytes: &[u8]) {
     let id =
         sched::galfs::create_file_under(parent, name).unwrap_or_else(|_| panic!("create {name}"));
     let n = sched::galfs::append_file(id, bytes).unwrap_or(0);
