@@ -979,6 +979,17 @@ pub const NET_OP_SERVE: u8 = 6;
 /// The payload is four address bytes. The reply is text (`reply from`
 /// or `timeout`). It is not a lane and not a socket.
 pub const NET_OP_PING: u8 = 7;
+/// Net control: resolve a name over DNS-over-TLS. The payload is the
+/// name, then `whoami`. The reply text is the address. The lane Cap is
+/// zero. The resolver key is not in the reply.
+pub const NET_OP_RESOLVE: u8 = 8;
+/// Net control: pin the DNS-over-TLS resolver. Admin only. Four address
+/// bytes, then the 32-byte key. `10.0.2.2` and `10.0.2.3` are refused.
+pub const NET_OP_PIN: u8 = 9;
+/// Net control: bind the stored local address. Write on that address
+/// card. The payload is the address text. The reply is `ok` or
+/// `access denied`. This opcode does not listen.
+pub const NET_OP_BIND: u8 = 10;
 
 /// USB control: list enumerated devices, one per line. The reply is
 /// plain text. It does not begin with a lane capability.

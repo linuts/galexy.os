@@ -161,6 +161,22 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     );
     serial_println!("[test-init] logged-out init rpc denied");
 
+    let denied_net = run_rpc_on(
+        "net-denied",
+        galexy_os::sched::galfs::unauth_cred(),
+        &[galexy_abi::NET_OP_RESOLVE, 1, b'a', 0],
+        galexy_abi::reserved::net(galexy_abi::CapRights::WRITE).bits(),
+    );
+    sched::reap();
+    assert_eq!(denied_net.rdx, 0, "logged-out net send must fail");
+    assert_eq!(
+        denied_net.rax,
+        SysError::AccessDenied as u64,
+        "logged-out net send is AccessDenied, got {}",
+        denied_net.rax
+    );
+    serial_println!("[test-init] logged-out net rpc denied");
+
     // A non-admin session may ask status but may not change service
     // state: `svc stop` on another user's seat is refused in the reply
     // and the seat keeps running.
@@ -536,6 +552,36 @@ fn run_rpc(name: &str, fs: galexy_os::sched::galfs::FsCred, payload: &[u8]) -> R
     run_rpc_reply(name, fs, payload).0
 }
 
+fn run_rpc_on(
+    name: &str,
+    fs: galexy_os::sched::galfs::FsCred,
+    payload: &[u8],
+    cap: u64,
+) -> RpcReport {
+    let (region, _) = sched::spawn_user_launcher_with(name, fs, |gr| {
+        unsafe {
+            core::ptr::write_bytes(mm::frame_virt(gr.scratch_phys).as_mut_ptr::<u8>(), 0, 4096);
+        }
+        build_rpc_blob_cap(gr.code.as_u64(), gr.scratch.as_u64(), payload, cap)
+    });
+    let base = mm::frame_virt(region.scratch_phys);
+    let scratch: *const RpcReport = base.as_ptr();
+    let mut elapsed = 0u64;
+    loop {
+        x86_64::instructions::hlt();
+        sched::drain_spawn();
+        let done = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*scratch).done)) };
+        if done == DONE {
+            break;
+        }
+        elapsed += 1;
+        if elapsed > TICK_TIMEOUT {
+            panic!("{name} never finished");
+        }
+    }
+    unsafe { core::ptr::read_volatile(scratch) }
+}
+
 /// Like [`run_rpc`], also returning init's reply bytes (scratch + 0x100).
 fn run_rpc_reply(
     name: &str,
@@ -569,6 +615,20 @@ fn run_rpc_reply(
 }
 
 fn build_rpc_blob(code_base: u64, scratch: u64, payload: &[u8]) -> alloc::vec::Vec<u8> {
+    build_rpc_blob_cap(
+        code_base,
+        scratch,
+        payload,
+        reserved::init(CapRights::WRITE).bits(),
+    )
+}
+
+fn build_rpc_blob_cap(
+    code_base: u64,
+    scratch: u64,
+    payload: &[u8],
+    cap: u64,
+) -> alloc::vec::Vec<u8> {
     let mut code = alloc::vec::Vec::new();
     code.push(0xEB);
     code.push(payload.len() as u8);
@@ -576,7 +636,6 @@ fn build_rpc_blob(code_base: u64, scratch: u64, payload: &[u8]) -> alloc::vec::V
     code.extend_from_slice(payload);
 
     mov_r64_imm(&mut code, 15, scratch);
-    let cap = reserved::init(CapRights::WRITE).bits();
     mov_eax(&mut code, Syscall::Send as u32);
     mov_r64_imm(&mut code, 7, cap);
     mov_r64_imm(&mut code, 6, payload_addr);

@@ -34,16 +34,19 @@ can land beside the USB work that has already landed. It does not move the
 `v1.0` tag. The `v1.0` tag waits on
 the KVM cells.
 Vendor USB and NIC drivers stay unwritten. Python `socket.connect`
-is a lane. `bind`, UDP, and `ssl` stay refused until 112–116.
+is a lane. `listen`, UDP, and `ssl` stay refused. Milestones
+**112–114** grant one address, one port, and one local bind.
 
-Milestones **83** and **97–109** have since landed.
+Milestones **83** and **97–114** have since landed.
 `serve_hands_the_lane_to_its_listener` hands the next inbound lane
 to the listener that attached the gate. Milestones **104–107** are
 four and eight CPUs, a card on each network name and each listed
 USB port, and a foreground ask the shell answers. Milestone
 **108** is `TcpStream::connect`. Milestone **109** is
-`socket.connect`. Both are name-only. Milestones **110–116** are
-the real stack, and **117** is SSH, last. The `v1.0` tag still
+`socket.connect`. Milestones **110–114** resolve a name over
+DNS-over-TLS, dial that address past `10.0.2.2`, and grant one
+address, one port, and one local bind. Milestones **115–116**
+are still open, and **117** is SSH, last. The `v1.0` tag still
 waits on the KVM cells and on that sequence. This plan does not
 apply it.
 
@@ -703,22 +706,24 @@ reboot. No is `AccessDenied`. Milestones 108 and 109 keep the
 names `std::net::TcpStream::connect` and Python `socket.connect`.
 Each asks, then dials a granted name through `net`. The value is
 still a lane. The lane boot was run. There is no socket syscall
-and no second stack. The PAL does not parse TCP. A passed IP, a
-passed port, `bind`, `listen`, and UDP do not exist yet. They
-stay refused until the milestone that grants that exact card:
-112 address, 113 port, 114 bind, 115 listen, 116 UDP.
+and no second stack. The PAL does not parse TCP. Milestones
+112–114 grant one stored address, one stored port, and one
+local bind. `listen` and UDP stay refused until 115 and 116.
 `setsockopt` stays refused. That is not a Berkeley socket.
 Milestone 83's inbound handoff is
 `serve_hands_the_lane_to_its_listener`: the attaching seat
 receives the TLS body, and another admin seat receives `held`.
 
-Real outside access is 110 and 111. `net` resolves a name over
-TLS to a pinned resolver (not UDP/53, not `10.0.2.3`) and dials
-the address that comes back. The destination is not the QEMU
-user gateway `10.0.2.2`. virtio-net stays the device. `net`
-stays the only packet stack. Outbound TCP and TLS stay inside
-`net`. Milestone 83 hands the next lane to the listener that holds
-the write bit. Inbound from outside stays closed until Milestone 115.
+Real outside access is 110 and 111, and `milestones_110_through_114`
+is that run. `net` resolves a name over TLS to a pinned resolver
+(not UDP/53, not `10.0.2.3`) and dials the address that comes
+back. The destination is not the QEMU user gateway `10.0.2.2`.
+The gateway may be the next hop. virtio-net stays the device.
+`net` stays the only packet stack. Outbound TCP and TLS stay
+inside `net`. An address card, a port card, and a bind of the
+stored local address are in that same run. Milestone 83 hands
+the next lane to the listener that holds the write bit. Inbound
+from outside stays closed until Milestone 115.
 
 SSH does not start before that stack. Milestone 117 is one
 ring-3 Rust service. `/card/ssh` write accepts. Read lets a
@@ -735,12 +740,12 @@ What this phase does not add:
 - iptables, nftables, eBPF, NAT, raw frames, raw sockets, or promiscuous mode
 - A second stack, a C stack, or a Berkeley socket. `setsockopt` stays refused.
   `TcpStream::connect` and `socket.connect` are the name layer above.
-  A passed IP, port, `bind`, `listen`, or UDP is a later card, not a call that exists today
+  A passed IP, port, or local bind is the card from 112–114. `listen` and UDP stay closed until 115 and 116
 - Plaintext DNS (UDP/53)
 - Telnet, FTP, rsh, SSHv1, `ssh-rsa`, CBC, SHA-1, or TLS before 1.3
 - OpenSSH, libssh, a crates.io SSH library, CPython, or a TCP stack inside `rustc` or Python
 - A second grant language beside the galfs token, or a reboot-persistent always
-- Checking Milestone 83, Milestones 110–117, or the KVM `v1.0` boxes
+- Checking Milestones 115–117, or the KVM `v1.0` boxes
 - The `v1.0` tag
 
 ## Standing principles

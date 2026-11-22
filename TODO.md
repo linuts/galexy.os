@@ -3243,22 +3243,22 @@ passes only the name. DNS is DNS-over-TLS to a resolver the admin
 pinned, the lookup `NET.md` already prefers. Plaintext UDP/53 is
 refused.
 
-- [ ] **One lookup**: TLS to port 853. The resolver is pinned, and
+- [x] **One lookup**: TLS to port 853. The resolver is pinned, and
       it is not `10.0.2.2` and not QEMU's DNS at `10.0.2.3`. The
       answer is an address other than `10.0.2.2`. The program does
       not pass that address
-- [ ] **The card**: no read card, no query. Logged-out is
+- [x] **The card**: no read card, no query. Logged-out is
       `AccessDenied`. A program without the card asks (Milestone
       107). Yes lasts for that run. It is not an always that
       survives reboot
-- [ ] **Fail closed**: no pin, a bad pin, or a timeout does not
+- [x] **Fail closed**: no pin, a bad pin, or a timeout does not
       fall through to UDP/53. QUIC stays the later lane carrier.
       It is not this lookup
-- [ ] **Proof**: a run shows one TLS query and an answer that is
+- [x] **Proof**: a run shows one TLS query and an answer that is
       not `10.0.2.2`. A seat without the card sends no query.
       Serial does not carry the resolver key. A UDP datagram to
       port 53 is absent
-- [ ] **Out of this milestone**: the dial (Milestone 111), a
+- [x] **Out of this milestone**: the dial (Milestone 111), a
       program-supplied resolver, raw sockets, a second stack, a C
       resolver, plaintext DNS, the `v1.0` tag, and the KVM rows
 
@@ -3271,19 +3271,19 @@ stack. The program passes a name. `net` resolves (Milestone 110)
 and dials. Outbound TCP to the resolved address is inside `net`.
 TLS stays inside `net`. The PAL does not parse TCP.
 
-- [ ] **By name**: the TCP destination is the resolved address.
+- [x] **By name**: the TCP destination is the resolved address.
       The gateway may be the next hop. It is not the destination.
       A literal locator on `10.0.2.2` does not check this box
-- [ ] **The card**: read dials. No card, no handshake. Logged-out
+- [x] **The card**: read dials. No card, no handshake. Logged-out
       is denied. The ask is Milestone 107, for that run only. An
       address is not authority
-- [ ] **One stack**: no second stack, no C stack, no raw socket,
+- [x] **One stack**: no second stack, no C stack, no raw socket,
       no promiscuous mode. The kernel still only moves frames.
       There is no new syscall
-- [ ] **Proof**: a granted seat reads a body from that peer. The
+- [x] **Proof**: a granted seat reads a body from that peer. The
       peer sees one TLS 1.3 handshake. The destination is not
       `10.0.2.2`. A seat without the card opens no TCP
-- [ ] **Out of this milestone**: a passed IP, a passed port,
+- [x] **Out of this milestone**: a passed IP, a passed port,
       `bind`, `listen`, and UDP. Those stay refused until 112–116.
       Also out: a public CA bundle, TLS before 1.3, `setsockopt`,
       plaintext DNS, raw sockets, the `v1.0` tag, and the KVM rows
@@ -3297,16 +3297,16 @@ The path is a label. The address lives in the record, the way a
 locator already does. `net` trusts the card, not the bytes the
 program passed.
 
-- [ ] **One address**: admin stores it the way `allow` stores a
+- [x] **One address**: admin stores it the way `allow` stores a
       locator. Read on that card lets the program pass the stored
       address. A different address does not open TCP. Holding a
       name card is not this right. No new syscall, and no new
       right bit. A new record field bumps the `galexy-netcfg`
       version. An old version is refused, not guessed
-- [ ] **Proof**: the seat that holds the card reads a body from
+- [x] **Proof**: the seat that holds the card reads a body from
       that address. The same program with a second address, or
       without the card, is denied, and the peer sees no handshake
-- [ ] **Out of this milestone**: a port the program picks, `bind`,
+- [x] **Out of this milestone**: a port the program picks, `bind`,
       `listen`, UDP, `setsockopt`, raw sockets, promiscuous mode,
       a second stack, plaintext DNS, the `v1.0` tag, and the KVM
       rows. IPv6 stays a locator inside `net`. The path charset
@@ -3318,13 +3318,13 @@ A program that passes a port is still refused. This milestone
 grants that exact destination port with a card. Source ports stay
 inside `net`.
 
-- [ ] **One port**: read lets the program pass the stored port and
+- [x] **One port**: read lets the program pass the stored port and
       no other. `0.0.0.0` is not a program argument. An address
       card from Milestone 112 does not imply a port. No new
       syscall
-- [ ] **Proof**: the granted port completes one handshake. A
+- [x] **Proof**: the granted port completes one handshake. A
       second port is denied. Logged-out is `AccessDenied`
-- [ ] **Out of this milestone**: `bind`, `listen`, UDP,
+- [x] **Out of this milestone**: `bind`, `listen`, UDP,
       `setsockopt`, a well-known port raced without the card, raw
       sockets, a second stack, plaintext DNS, the `v1.0` tag, and
       the KVM rows
@@ -3335,14 +3335,14 @@ inside `net`.
 address, and only with write on the address card from Milestone
 112. Read does not bind.
 
-- [ ] **Write binds**: write binds the stored local address. No
+- [x] **Write binds**: write binds the stored local address. No
       write, `bind` is denied. `0.0.0.0`, or any address the card
       does not store, is denied. No new syscall. The PAL does not
       parse TCP
-- [ ] **Proof**: a seat with write binds that address, and the run
+- [x] **Proof**: a seat with write binds that address, and the run
       shows it. A seat with only read, or with no card, is denied
       and sends no packet
-- [ ] **Out of this milestone**: `listen`, the inbound handoff,
+- [x] **Out of this milestone**: `listen`, the inbound handoff,
       UDP, `setsockopt`, raw sockets, promiscuous mode, a second
       stack, plaintext DNS, the `v1.0` tag, and the KVM rows
 

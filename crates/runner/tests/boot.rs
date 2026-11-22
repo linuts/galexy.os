@@ -12,7 +12,7 @@ use common::{
     boot_with_galfs_virtio_legacy, boot_with_tpm, boot_xhci, image, uart_login_serial, use_kvm,
     GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
 };
-use std::io::Write;
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -1466,6 +1466,10 @@ fn init_test_passes() {
     assert!(
         serial.contains("[test-init] logged-out init rpc denied"),
         "logged-out init rpc was not denied; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-init] logged-out net rpc denied"),
+        "logged-out net rpc was not denied; serial:\n{serial}"
     );
 }
 
@@ -6266,8 +6270,9 @@ fn cards_and_asks_typing_e2e() {
 }
 
 /// Milestone 108: `connect` is `TcpStream::connect`. A name asks, then
-/// dials. An address, `bind`, UDP, and a timeout stay `unsupported`
-/// and open no TCP. No leaves the program up. Yes reads the lane.
+/// dials. UDP and a timeout stay `unsupported`. An address or a bind
+/// with no card is `access denied` and opens no TCP. No leaves the
+/// program up. Yes reads the lane.
 #[test]
 fn connect_asks_then_dials() {
     let (cert_der, key_der, pin) = host_echo_cert();
@@ -6296,10 +6301,10 @@ fn connect_asks_then_dials() {
         ("e".to_string(), "*".to_string()),
         ("ret".to_string(), "eve@galexy> ".to_string()),
     ]);
-    owned.extend(type_line("connect --bind", "unsupported"));
+    owned.extend(type_line("connect --bind", "access denied"));
     owned.extend(type_line("connect --udp", "unsupported"));
     owned.extend(type_line("connect --timeout", "unsupported"));
-    owned.extend(type_line("connect 10.0.2.2:9", "unsupported"));
+    owned.extend(type_line("connect 10.0.2.2:9", "access denied"));
     owned.extend(type_line("connect echo", "wants the network"));
     owned.extend(type_line("no", "still up"));
     owned.extend(type_line("connect echo", "wants the network"));
@@ -6336,8 +6341,12 @@ fn connect_asks_then_dials() {
         "one prompt per connect run; serial:\n{serial}"
     );
     assert!(
-        serial.matches("unsupported").count() >= 4,
-        "address, bind, udp, and timeout should be refused; serial:\n{serial}"
+        serial.matches("unsupported").count() >= 2,
+        "udp and timeout stay unsupported; serial:\n{serial}"
+    );
+    assert!(
+        serial.matches("access denied").count() >= 2,
+        "an ungranted address and bind stay denied; serial:\n{serial}"
     );
     assert!(
         serial.contains("still up"),
@@ -6731,6 +6740,143 @@ fn cert_ed25519(der: &[u8]) -> Option<[u8; 32]> {
     Some(key)
 }
 
+/// Milestones 110–114. One boot: DNS-over-TLS to a pinned resolver,
+/// a dial whose destination is that answer, one address card, one
+/// port card, and a bind of the stored local address.
+#[test]
+fn milestones_110_through_114() {
+    let (cert_der, key_der) = listener_identity();
+    let dot_hits = Arc::new(AtomicUsize::new(0));
+    let echo_hits = Arc::new(AtomicUsize::new(0));
+    let dot_bg = Arc::clone(&dot_hits);
+    let echo_bg = Arc::clone(&echo_hits);
+    let dot_cert = cert_der.clone();
+    let dot_key = key_der.clone();
+    let echo_cert = cert_der.clone();
+    let echo_key = key_der;
+    let dot = std::thread::spawn(move || host_dot_serve(dot_cert, dot_key, dot_bg));
+    let echo = std::thread::spawn(move || host_pinned_echo(4594, echo_cert, echo_key, echo_bg));
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line("connect --putkey", "wrote"));
+    owned.extend(type_line("net pin 172.30.0.2 /bad", "ok"));
+    owned.extend(type_line("net allow docs dns:4594 /k", "ok"));
+    owned.extend(type_line("net resolve docs", "access denied"));
+    owned.extend(type_line("net pin 172.30.0.2 /k", "ok"));
+    owned.extend(type_line("net resolve docs", "172.30.0.2"));
+    owned.extend(type_line("useradd eve", "Password: "));
+    owned.extend([
+        ("e".into(), "*".into()),
+        ("v".into(), "*".into()),
+        ("e".into(), "*".into()),
+        ("ret".into(), "admin@galexy> ".into()),
+        ("f2".into(), "[tty] 2".into()),
+    ]);
+    owned.extend(type_line("eve", "Password: "));
+    owned.extend([
+        ("e".into(), "*".into()),
+        ("v".into(), "*".into()),
+        ("e".into(), "*".into()),
+        ("ret".into(), "eve@galexy> ".into()),
+    ]);
+    owned.extend(type_line("connect --resolve docs", "wants the network"));
+    owned.extend(type_line("no", "access denied"));
+    owned.push(("f1".into(), "[tty] 1".into()));
+    owned.extend(type_line("connect docs", "lane ok"));
+    owned.push(("f2".into(), "[tty] 2".into()));
+    owned.extend(type_line("connect docs", "wants the network"));
+    owned.extend(type_line("no", "still up"));
+    owned.push(("f1".into(), "[tty] 1".into()));
+    owned.extend(type_line("net addr 172.30.0.2 4594 /k", "ok"));
+    owned.extend(type_line("connect 172.30.0.2", "lane ok"));
+    owned.extend(type_line("connect 10.9.9.9", "access denied"));
+    owned.push(("f2".into(), "[tty] 2".into()));
+    owned.extend(type_line("connect 172.30.0.2", "wants the network"));
+    owned.extend(type_line("no", "still up"));
+    owned.push(("f1".into(), "[tty] 1".into()));
+    owned.extend(type_line("net port 4594 172.30.0.2", "ok"));
+    owned.extend(type_line("connect 172.30.0.2:4594", "lane ok"));
+    owned.extend(type_line("connect 172.30.0.2:9", "access denied"));
+    owned.extend(type_line("net link", "10.0.2.15"));
+    owned.extend(type_line("net addr 10.0.2.15 0 /k", "ok"));
+    owned.extend(type_line("connect --bind 0.0.0.0", "access denied"));
+    owned.extend(type_line(
+        "connect --bind 10.0.2.15",
+        "[net] bound 10.0.2.15",
+    ));
+    owned.push(("f2".into(), "[tty] 2".into()));
+    owned.extend(type_line("connect --bind 10.0.2.15", "wants the network"));
+    owned.extend(type_line("no", "access denied"));
+    owned.push(("f1".into(), "[tty] 1".into()));
+    owned.extend(type_line("net grant 10.0.2.15 shell2", "ok"));
+    owned.push(("f2".into(), "[tty] 2".into()));
+    owned.extend(type_line("connect --bind 10.0.2.15", "wants the network"));
+    owned.extend(type_line("no", "access denied"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "[net] bound 10.0.2.15",
+        Duration::from_millis(30),
+        Duration::from_secs(300),
+    );
+    drop(dot);
+    drop(echo);
+    let pin = "a758b0f4e66caafe2efc3136f19126281107cd81384526e92e9cf153fda1e38f";
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains(pin),
+        "serial carried the resolver key; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("udp/53") && !serial.contains("port 53"),
+        "plaintext DNS showed up; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[net] dot 172.30.0.2"),
+        "the lookup did not print an answer; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[net] dot 10.0.2.2") && !serial.contains("[net] dial 10.0.2.2"),
+        "the gateway was the destination; serial:\n{serial}"
+    );
+    assert_eq!(
+        serial.matches("[net] bound 10.0.2.15").count(),
+        1,
+        "bind ran more than once; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("rights=0x1"),
+        "the read grant was not logged; serial:\n{serial}"
+    );
+    assert_eq!(
+        dot_hits.load(Ordering::Relaxed),
+        2,
+        "DNS-over-TLS queries; serial:\n{serial}"
+    );
+    assert_eq!(
+        echo_hits.load(Ordering::Relaxed),
+        3,
+        "peer handshakes; serial:\n{serial}"
+    );
+}
+
+fn listener_identity() -> (Vec<u8>, Vec<u8>) {
+    (
+        include_bytes!("../../userspace/net/src/listener_cert.der").to_vec(),
+        include_bytes!("../../userspace/net/src/listener_key.der").to_vec(),
+    )
+}
+
 fn host_echo_cert() -> (Vec<u8>, Vec<u8>, String) {
     let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).expect("ed25519 key");
     let params = rcgen::CertificateParams::new(vec!["echo".into()]).expect("cert params");
@@ -6793,6 +6939,116 @@ fn host_echo_serve(port: u16, cert_der: Vec<u8>, key_der: Vec<u8>, hits: Arc<Ato
         }
         let _ = sock.shutdown(std::net::Shutdown::Both);
     }
+}
+
+fn host_pinned_echo(port: u16, cert_der: Vec<u8>, key_der: Vec<u8>, hits: Arc<AtomicUsize>) {
+    let config = tls_server(cert_der, key_der);
+    let listener = std::net::TcpListener::bind(("0.0.0.0", port)).expect("bind echo");
+    listener.set_nonblocking(true).expect("echo nonblocking");
+    let deadline = std::time::Instant::now() + Duration::from_secs(400);
+    while std::time::Instant::now() < deadline {
+        let Ok((mut sock, _)) = listener.accept() else {
+            std::thread::sleep(Duration::from_millis(50));
+            continue;
+        };
+        let _ = sock.set_nonblocking(false);
+        let _ = sock.set_read_timeout(Some(Duration::from_secs(8)));
+        let _ = sock.set_write_timeout(Some(Duration::from_secs(8)));
+        let mut conn = rustls::ServerConnection::new(Arc::clone(&config)).expect("tls");
+        {
+            let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+            if tls.write_all(b"lane ok").is_ok() {
+                hits.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        conn.send_close_notify();
+        while conn.wants_write() {
+            let _ = conn.write_tls(&mut sock);
+        }
+        let _ = sock.shutdown(std::net::Shutdown::Both);
+    }
+}
+
+fn host_dot_serve(cert_der: Vec<u8>, key_der: Vec<u8>, hits: Arc<AtomicUsize>) {
+    let config = tls_server(cert_der, key_der);
+    let listener = std::net::TcpListener::bind(("0.0.0.0", 853)).expect("bind dot 853");
+    listener.set_nonblocking(true).expect("dot nonblocking");
+    let deadline = std::time::Instant::now() + Duration::from_secs(400);
+    while std::time::Instant::now() < deadline {
+        let Ok((mut sock, _)) = listener.accept() else {
+            std::thread::sleep(Duration::from_millis(50));
+            continue;
+        };
+        let _ = sock.set_nonblocking(false);
+        let _ = sock.set_read_timeout(Some(Duration::from_secs(8)));
+        let _ = sock.set_write_timeout(Some(Duration::from_secs(8)));
+        let mut conn = rustls::ServerConnection::new(Arc::clone(&config)).expect("tls");
+        let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+        let mut len_buf = [0u8; 2];
+        if tls.read_exact(&mut len_buf).is_err() {
+            continue;
+        }
+        let n = u16::from_be_bytes(len_buf) as usize;
+        if n > 512 {
+            continue;
+        }
+        let mut query = vec![0u8; n];
+        if tls.read_exact(&mut query).is_err() {
+            continue;
+        }
+        hits.fetch_add(1, Ordering::Relaxed);
+        let answer = dns_a_response(&query, [172, 30, 0, 2]);
+        let _ = tls.write_all(&answer);
+    }
+}
+
+fn tls_server(cert_der: Vec<u8>, key_der: Vec<u8>) -> Arc<rustls::ServerConfig> {
+    let cert = rustls::pki_types::CertificateDer::from(cert_der);
+    let key = rustls::pki_types::PrivateKeyDer::try_from(key_der).expect("key der");
+    let provider = rustls::crypto::ring::default_provider();
+    Arc::new(
+        rustls::ServerConfig::builder_with_provider(provider.into())
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .expect("tls 1.3")
+            .with_no_client_auth()
+            .with_single_cert(vec![cert], key)
+            .expect("server config"),
+    )
+}
+
+fn dns_a_response(query: &[u8], answer: [u8; 4]) -> Vec<u8> {
+    let mut msg = Vec::new();
+    let id = if query.len() >= 2 {
+        [query[0], query[1]]
+    } else {
+        [0, 1]
+    };
+    msg.extend_from_slice(&id);
+    msg.extend_from_slice(&0x8180u16.to_be_bytes());
+    msg.extend_from_slice(&1u16.to_be_bytes());
+    msg.extend_from_slice(&1u16.to_be_bytes());
+    msg.extend_from_slice(&[0, 0, 0, 0]);
+    let qend = query.len().min(if query.len() > 12 {
+        query.len() - 4
+    } else {
+        12
+    });
+    if query.len() > 12 {
+        msg.extend_from_slice(&query[12..]);
+    } else {
+        msg.extend_from_slice(&[0, 0, 1, 0, 1]);
+    }
+    let _ = qend;
+    msg.extend_from_slice(&[0xc0, 0x0c]);
+    msg.extend_from_slice(&1u16.to_be_bytes());
+    msg.extend_from_slice(&1u16.to_be_bytes());
+    msg.extend_from_slice(&60u32.to_be_bytes());
+    msg.extend_from_slice(&4u16.to_be_bytes());
+    msg.extend_from_slice(&answer);
+    let mut wire = Vec::new();
+    wire.extend_from_slice(&(msg.len() as u16).to_be_bytes());
+    wire.extend_from_slice(&msg);
+    wire
 }
 
 fn serial_uptime_secs(serial: &str) -> u64 {

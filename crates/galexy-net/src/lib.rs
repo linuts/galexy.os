@@ -420,6 +420,20 @@ impl Engine {
         n
     }
 
+    /// Drop a connection that never finished, or FIN one that did.
+    /// The slot can be reused.
+    pub fn tcp_release(&mut self, id: u8) {
+        if self.tcp_established(id) {
+            self.tcp_close(id);
+            return;
+        }
+        if let Some(c) = self.conns.get_mut(id as usize) {
+            if c.state != TcpState::Free {
+                c.state = TcpState::Closed;
+            }
+        }
+    }
+
     /// Send FIN.
     pub fn tcp_close(&mut self, id: u8) {
         if self.tcp_established(id) {
@@ -473,6 +487,33 @@ impl Engine {
         let icmp = echo_message(8, id, seq, payload);
         self.egress
             .push(ipv4_frame(self.mac, mac, src, dst, 1, &icmp));
+    }
+
+    /// On-link addresses resolve themselves. Anything else uses the gateway
+    /// as the next hop. The IP destination stays the address the caller passed.
+    fn next_hop(&self, ip: [u8; 4]) -> [u8; 4] {
+        let Some(src) = self.addr else {
+            return ip;
+        };
+        let Some(gw) = self.gateway else {
+            return ip;
+        };
+        let bits = u32::from(self.prefix.min(32));
+        if bits == 0 {
+            return gw;
+        }
+        let mask = if bits >= 32 {
+            u32::MAX
+        } else {
+            u32::MAX << (32 - bits)
+        };
+        let local = u32::from_be_bytes(src) & mask;
+        let dest = u32::from_be_bytes(ip) & mask;
+        if local == dest {
+            ip
+        } else {
+            gw
+        }
     }
 
     fn lookup(&self, ip: [u8; 4]) -> Option<[u8; 6]> {
@@ -843,13 +884,12 @@ impl Engine {
         let Some(src_ip) = self.addr else {
             return;
         };
-        let c = &self.conns[id as usize];
-        let dst_mac = self.lookup(c.dst).unwrap_or([0xff; 6]);
-        let seq = c.snd_nxt;
-        let ack = c.rcv_nxt;
-        let src_port = c.local;
-        let dst_port = c.remote;
-        let dst = c.dst;
+        let (seq, ack, src_port, dst_port, dst) = {
+            let c = &self.conns[id as usize];
+            (c.snd_nxt, c.rcv_nxt, c.local, c.remote, c.dst)
+        };
+        let hop = self.next_hop(dst);
+        let dst_mac = self.lookup(hop).unwrap_or([0xff; 6]);
         let mut tcp = Vec::with_capacity(20 + payload.len());
         tcp.extend_from_slice(&src_port.to_be_bytes());
         tcp.extend_from_slice(&dst_port.to_be_bytes());

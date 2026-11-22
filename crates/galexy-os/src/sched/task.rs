@@ -867,9 +867,6 @@ pub(crate) fn task_net_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(
         return Err(SysError::BadValue);
     }
     let ctrl = NET_CTRL.load(Ordering::Acquire);
-    if ctrl == 0xFF {
-        return Err(SysError::Unsupported);
-    }
     let slot = current_slot();
     if slot == 0 {
         return Err(SysError::BadCap);
@@ -879,8 +876,13 @@ pub(crate) fn task_net_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(
         let (admin, tty, debug_id, session_gen, root, tokens) = {
             let owner = running_proc_index(&threads, slot)?;
             let thread = &threads[owner];
+            // A logged-out seat is denied before the service is consulted,
+            // including when `net` has not registered yet.
             if thread.fs_root == galfs::NO_OBJECT {
                 return Err(SysError::AccessDenied);
+            }
+            if ctrl == 0xFF {
+                return Err(SysError::Unsupported);
             }
             let admin = u8::from(galfs::is_admin_root(thread.fs_root));
             (
@@ -1263,7 +1265,7 @@ fn net_name(bytes: &[u8]) -> &[u8] {
         return b"";
     }
     match bytes[0] {
-        galexy_abi::NET_OP_DIAL => {
+        galexy_abi::NET_OP_DIAL | galexy_abi::NET_OP_RESOLVE | galexy_abi::NET_OP_BIND => {
             if bytes.len() < 2 {
                 return b"";
             }
@@ -1283,29 +1285,50 @@ fn net_name(bytes: &[u8]) -> &[u8] {
     }
 }
 
-/// `(held bits, needed bit, path)`. Needed bit 0 means this op is not a card.
-fn net_card(
-    tokens: &[galfs::Token; galfs::TOKEN_SLOTS],
-    root: u32,
-    bytes: &[u8],
-) -> (u8, u8, CardPath) {
-    if bytes.is_empty() {
-        return (0, 0, CardPath::empty());
+fn dotted_v4(text: &[u8]) -> bool {
+    let mut parts = 0usize;
+    let mut val = 0u16;
+    let mut digits = 0usize;
+    for b in text.iter().copied().chain(core::iter::once(b'.')) {
+        if b == b'.' {
+            if digits == 0 || val > 255 || parts == 4 {
+                return false;
+            }
+            parts += 1;
+            val = 0;
+            digits = 0;
+        } else {
+            let d = b.wrapping_sub(b'0');
+            if d > 9 {
+                return false;
+            }
+            val = val.saturating_mul(10).saturating_add(u16::from(d));
+            digits += 1;
+            if digits > 3 {
+                return false;
+            }
+        }
     }
-    let (path, need) = match bytes[0] {
-        galexy_abi::NET_OP_DIAL => (
-            card_path(b"/admin@card/", net_name(bytes)),
-            galfs::RIGHT_READ,
-        ),
-        galexy_abi::NET_OP_PING => (card_path(b"/admin@card/", b"ping"), galfs::RIGHT_READ),
-        galexy_abi::NET_OP_SERVE => (
-            card_path(b"/admin@card/", net_name(bytes)),
-            galfs::RIGHT_WRITE,
-        ),
-        _ => return (0, 0, CardPath::empty()),
-    };
+    parts == 4
+}
+
+/// `a.b.c.d:port` splits into the address text and the port text.
+fn split_v4_port(name: &[u8]) -> Option<(&[u8], &[u8])> {
+    let colon = name.iter().position(|b| *b == b':')?;
+    let host = &name[..colon];
+    let port = &name[colon + 1..];
+    if !dotted_v4(host) || port.is_empty() || !port.iter().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if port.len() > 1 && port[0] == b'0' {
+        return None;
+    }
+    Some((host, port))
+}
+
+fn held_bits(root: u32, tokens: &[galfs::Token; galfs::TOKEN_SLOTS], path: &CardPath) -> u8 {
     if path.len == 0 {
-        return (0, 0, path);
+        return 0;
     }
     let text = path.as_str();
     let mut held = 0u8;
@@ -1315,7 +1338,46 @@ fn net_card(
     if galfs::resolve_and_check(root, tokens, text, galfs::RIGHT_WRITE).is_ok() {
         held |= galfs::RIGHT_WRITE;
     }
-    (held, need, path)
+    held
+}
+
+/// `(held bits, needed bit, path)`. Needed bit 0 means this op is not a card.
+fn net_card(
+    tokens: &[galfs::Token; galfs::TOKEN_SLOTS],
+    root: u32,
+    bytes: &[u8],
+) -> (u8, u8, CardPath) {
+    if bytes.is_empty() {
+        return (0, 0, CardPath::empty());
+    }
+    let name = net_name(bytes);
+    let (path, need) = match bytes[0] {
+        galexy_abi::NET_OP_DIAL => {
+            if let Some((host, port)) = split_v4_port(name) {
+                let host_path = card_path(b"/admin@card/", host);
+                let port_path = card_path(b"/admin@card/", port);
+                let host_held = held_bits(root, tokens, &host_path);
+                if host_held & galfs::RIGHT_READ == 0 {
+                    return (0, galfs::RIGHT_READ, host_path);
+                }
+                let port_held = held_bits(root, tokens, &port_path);
+                if port_held & galfs::RIGHT_READ == 0 {
+                    return (0, galfs::RIGHT_READ, port_path);
+                }
+                return (galfs::RIGHT_READ, galfs::RIGHT_READ, host_path);
+            }
+            (card_path(b"/admin@card/", name), galfs::RIGHT_READ)
+        }
+        galexy_abi::NET_OP_RESOLVE => (card_path(b"/admin@card/", name), galfs::RIGHT_READ),
+        galexy_abi::NET_OP_BIND => (card_path(b"/admin@card/", name), galfs::RIGHT_WRITE),
+        galexy_abi::NET_OP_PING => (card_path(b"/admin@card/", b"ping"), galfs::RIGHT_READ),
+        galexy_abi::NET_OP_SERVE => (card_path(b"/admin@card/", name), galfs::RIGHT_WRITE),
+        _ => return (0, 0, CardPath::empty()),
+    };
+    if path.len == 0 {
+        return (0, 0, path);
+    }
+    (held_bits(root, tokens, &path), need, path)
 }
 
 fn net_card_denied(

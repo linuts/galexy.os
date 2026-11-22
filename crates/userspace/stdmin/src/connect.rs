@@ -1,13 +1,17 @@
 //! `connect` — `std::net::TcpStream::connect` on the login image.
 //!
 //! A granted name asks the seat, then dials through `net`. The value
-//! is a lane: this program reads it to EOF. An address, a bind, or a
-//! UDP socket is `unsupported` and does not open TCP.
+//! is a lane: this program reads it to EOF. `--bind <address>` binds
+//! the stored local address. UDP and a timeout stay `unsupported`.
 
 use std::io::{ErrorKind, Read};
 use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::process::ExitCode;
 use std::time::Duration;
+
+/// Public pin of the in-tree listener certificate. The program writes
+/// it to a file and does not print it.
+const PIN_HEX: &str = "a758b0f4e66caafe2efc3136f19126281107cd81384526e92e9cf153fda1e38f";
 
 fn main() -> ExitCode {
     let arg = std::env::args().nth(1).unwrap_or_default();
@@ -15,8 +19,39 @@ fn main() -> ExitCode {
         println!("connect: usage: connect <name>");
         return ExitCode::from(1);
     }
+    if arg == "--putkey" {
+        if std::fs::write("/k", PIN_HEX).is_err()
+            || std::fs::write("/bad", "11".repeat(32)).is_err()
+        {
+            println!("connect: write failed");
+            return ExitCode::from(1);
+        }
+        println!("wrote");
+        return ExitCode::SUCCESS;
+    }
+    if arg == "--resolve" {
+        let name = std::env::args().nth(2).unwrap_or_default();
+        match TcpStream::lookup(&name) {
+            Ok(text) => {
+                print!("{text}");
+                if !text.ends_with('\n') {
+                    println!();
+                }
+                return ExitCode::SUCCESS;
+            }
+            Err(err) => return report(Some(err)),
+        }
+    }
     if arg == "--bind" {
-        return report(TcpListener::bind("127.0.0.1:1").err());
+        let spec = std::env::args()
+            .nth(2)
+            .unwrap_or_else(|| "127.0.0.1:1".into());
+        let spec = if spec.contains(':') {
+            spec
+        } else {
+            format!("{spec}:0")
+        };
+        return report(TcpListener::bind(spec).err());
     }
     if arg == "--udp" {
         return report(UdpSocket::bind("127.0.0.1:1").err());
