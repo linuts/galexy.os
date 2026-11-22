@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-PATCH_VERSION = "2"
+PATCH_VERSION = "3"
 REPO = Path(__file__).resolve().parent.parent
 STD_PAL = REPO / "std-pal"
 ABI_SRC = REPO / "crates/galexy-abi/src/lib.rs"
@@ -373,6 +373,45 @@ mod common;
             // itself when the time comes.
             pub(crate) fn enable() {}
         }
+""",
+    )
+
+    # Milestone 108: `TcpStream::connect` dials a granted name. The
+    # other targets keep `ToSocketAddrs`. An IP or a port is not a name.
+    insert_before(
+        src / "sys/net/connection/mod.rs",
+        """    _ => {
+        mod unsupported;
+        pub use unsupported::*;
+    }
+}
+""",
+        """    target_os = "galexy" => {
+        mod galexy;
+        pub use galexy::*;
+    }
+""",
+    )
+    patch_text(
+        src / "net/tcp.rs",
+        """    #[stable(feature = "rust1", since = "1.0.0")]
+    pub fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
+        net_imp::TcpStream::connect(addr).map(TcpStream)
+    }
+""",
+        """    #[stable(feature = "rust1", since = "1.0.0")]
+    #[cfg(not(target_os = "galexy"))]
+    pub fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
+        net_imp::TcpStream::connect(addr).map(TcpStream)
+    }
+
+    /// Dial a granted name. The value is a lane. A string that is an
+    /// IP address, or that contains a port, is `unsupported`.
+    #[stable(feature = "rust1", since = "1.0.0")]
+    #[cfg(target_os = "galexy")]
+    pub fn connect(name: &str) -> io::Result<TcpStream> {
+        net_imp::TcpStream::connect(name).map(TcpStream)
+    }
 """,
     )
 

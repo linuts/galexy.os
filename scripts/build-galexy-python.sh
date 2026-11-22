@@ -41,11 +41,17 @@ git -C "$SRC" checkout --detach "$REV"
 if [[ ! -f "$SRC/crates/galexy-python/Cargo.toml" ]]; then
     patch -d "$SRC" -p1 < "$ROOT/scripts/galexy-rustpython.patch"
 fi
-# A checkout patched before Milestone 103 has the crate and not
-# `lane.read`. Reset to the pin and apply the current patch.
-if ! grep -q 'fn lane_read' "$SRC/crates/galexy-python/src/main.rs" 2>/dev/null; then
+# A checkout patched before this `lane.read` uses `PyStr::as_str`,
+# which this pin does not have. A short hunk also drops the last lines
+# of `main.rs`. Reset and apply the current patch.
+main="$SRC/crates/galexy-python/src/main.rs"
+if ! grep -q 'name.to_str()' "$main" 2>/dev/null \
+    || ! grep -q 'fn install_socket' "$main" 2>/dev/null \
+    || ! grep -q 'value == 2' "$main" 2>/dev/null \
+    || ! tail -n 1 "$main" | grep -q '^}'; then
     echo "build-galexy-python: re-applying scripts/galexy-rustpython.patch" >&2
-    git -C "$SRC" checkout --detach "$REV"
+    # checkout keeps edits to tracked files. The previous patch is those edits.
+    git -C "$SRC" reset --hard "$REV"
     git -C "$SRC" clean -fd
     patch -d "$SRC" -p1 < "$ROOT/scripts/galexy-rustpython.patch"
 fi
@@ -103,6 +109,9 @@ echo "build-galexy-python: $OUT/python"
 if [[ "${GALEXY_SKIP_PYTHON_CHECK:-}" != "1" ]]; then
 (
     cd "$ROOT"
+    # The Galexy link args above are for the target ELF. A host
+    # `cargo test` must not inherit `--image-base`.
+    unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_PROFILE_RELEASE_LTO
     cargo test -p xtask python_elf::pinned_python_elf_is_loadable -- --exact
 )
 fi

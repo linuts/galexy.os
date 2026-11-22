@@ -6265,9 +6265,103 @@ fn cards_and_asks_typing_e2e() {
     );
 }
 
-/// Milestone 103: `import lane` then `lane.read(name)` is the same dial
-/// `fetch` uses. `socket` stays off the allow-list. Skipped when the
-/// desk image was built without `target/galexy-python/python`.
+/// Milestone 108: `connect` is `TcpStream::connect`. A name asks, then
+/// dials. An address, `bind`, UDP, and a timeout stay `unsupported`
+/// and open no TCP. No leaves the program up. Yes reads the lane.
+#[test]
+fn connect_asks_then_dials() {
+    let (cert_der, key_der, pin) = host_echo_cert();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_bg = Arc::clone(&hits);
+    let server = std::thread::spawn(move || host_echo_serve(4586, cert_der, key_der, hits_bg));
+    let save_pin = format!("echo {pin} > k");
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line(save_pin.as_str(), "admin@galexy>"));
+    owned.extend(type_line("net allow echo 10.0.2.2:4586 k", "ok"));
+    owned.extend(type_line("useradd eve", "Password: "));
+    owned.extend([
+        ("e".to_string(), "*".to_string()),
+        ("v".to_string(), "*".to_string()),
+        ("e".to_string(), "*".to_string()),
+        ("ret".to_string(), "admin@galexy> ".to_string()),
+        ("f2".to_string(), "[tty] 2".to_string()),
+    ]);
+    owned.extend(type_line("eve", "Password: "));
+    owned.extend([
+        ("e".to_string(), "*".to_string()),
+        ("v".to_string(), "*".to_string()),
+        ("e".to_string(), "*".to_string()),
+        ("ret".to_string(), "eve@galexy> ".to_string()),
+    ]);
+    owned.extend(type_line("connect --bind", "unsupported"));
+    owned.extend(type_line("connect --udp", "unsupported"));
+    owned.extend(type_line("connect --timeout", "unsupported"));
+    owned.extend(type_line("connect 10.0.2.2:9", "unsupported"));
+    owned.extend(type_line("connect echo", "wants the network"));
+    owned.extend(type_line("no", "still up"));
+    owned.extend(type_line("connect echo", "wants the network"));
+    owned.extend(type_line("yes", "lane ok"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "lane ok",
+        Duration::from_millis(30),
+        Duration::from_secs(300),
+    );
+    drop(server);
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("nodelay"),
+        "setsockopt was accepted; serial:\n{serial}"
+    );
+    let eve = serial.find("eve@galexy>").expect("eve never logged in");
+    assert!(
+        !serial[..eve].contains("wants the network"),
+        "the seat was asked before eve ran connect; serial:\n{serial}"
+    );
+    assert_eq!(
+        serial.matches("wants the network").count(),
+        2,
+        "one prompt per connect run; serial:\n{serial}"
+    );
+    assert!(
+        serial.matches("unsupported").count() >= 4,
+        "address, bind, udp, and timeout should be refused; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("still up"),
+        "no must leave the program up; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("task 'connect' killed"),
+        "a no must not kill the program; serial:\n{serial}"
+    );
+    let yes_at = serial.rfind("wants the network").expect("yes prompt");
+    assert!(
+        serial[yes_at..].contains("lane ok"),
+        "yes did not read the lane; serial:\n{serial}"
+    );
+    assert_eq!(
+        hits.load(Ordering::Relaxed),
+        1,
+        "only the accepted dial opens TCP; serial:\n{serial}"
+    );
+}
+
+/// Milestone 103: `lane.read` dials a granted name and prints the body.
+/// Milestone 109: `socket.connect` on a seat without the card asks.
+/// No is `OSError` and opens no TCP. Yes prints the same body.
 #[test]
 fn python_lane_typing_e2e() {
     if env!("GALEXY_HAVE_PYTHON") != "1" || env!("GALEXY_HAVE_DESK") != "1" {
@@ -6279,37 +6373,93 @@ fn python_lane_typing_e2e() {
     let hits_bg = Arc::clone(&hits);
     let server = std::thread::spawn(move || host_echo_serve(4582, cert_der, key_der, hits_bg));
     let save_pin = format!("echo {pin} > k");
-    let serial = boot_typed(
-        "galexy-os-desk",
-        &[
-            (save_pin.as_str(), "admin@galexy>"),
-            ("net allow echo 10.0.2.2:4582 k", "ok"),
-            ("net grant echo admin", "ok"),
-            ("echo print(lane.read(\"echo\")) > lane.py", "admin@galexy>"),
-            ("python lane.py", "lane ok"),
-            ("echo import socket > sock.py", "admin@galexy>"),
-            ("python sock.py", "ImportError"),
-        ],
-        "ImportError",
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line(save_pin.as_str(), "admin@galexy>"));
+    owned.extend(type_line("net allow echo 10.0.2.2:4582 k", "ok"));
+    owned.extend(type_line("net grant echo admin", "ok"));
+    owned.extend(type_line(
+        "echo print(lane.read(\"echo\")) > lane.py",
+        "admin@galexy>",
+    ));
+    owned.extend(type_line("python lane.py", "lane ok"));
+    owned.extend(type_line("useradd eve", "Password: "));
+    owned.extend([
+        ("e".to_string(), "*".to_string()),
+        ("v".to_string(), "*".to_string()),
+        ("e".to_string(), "*".to_string()),
+        ("ret".to_string(), "admin@galexy> ".to_string()),
+        ("f2".to_string(), "[tty] 2".to_string()),
+    ]);
+    owned.extend(type_line("eve", "Password: "));
+    owned.extend([
+        ("e".to_string(), "*".to_string()),
+        ("v".to_string(), "*".to_string()),
+        ("e".to_string(), "*".to_string()),
+        ("ret".to_string(), "eve@galexy> ".to_string()),
+    ]);
+    owned.extend(type_line(
+        "echo import socket; print(socket.connect(\"echo\")) > sock.py",
+        "eve@galexy>",
+    ));
+    owned.extend(type_line("python sock.py", "wants the network"));
+    owned.extend(type_line("no", "OSError"));
+    owned.extend(type_line("python sock.py", "wants the network"));
+    owned.extend(type_line("yes", "lane ok"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type(
+        &image("galexy-os-desk"),
+        &keys,
+        "[boot] main loop ready",
+        "lane ok",
+        Duration::from_millis(30),
         Duration::from_secs(900),
     );
     drop(server);
     assert!(
-        serial.contains("lane ok"),
-        "lane.read did not print the body; serial:\n{serial}"
-    );
-    assert!(
-        serial.contains("ImportError"),
-        "import socket was not refused; serial:\n{serial}"
-    );
-    assert!(
         !serial.contains("[PANIC]") && !serial.contains("double fault"),
         "kernel panicked; serial:\n{serial}"
     );
+    assert!(
+        !serial.contains("module 'socket' is not allowed"),
+        "import socket was refused; serial:\n{serial}"
+    );
+    let eve = serial.find("eve@galexy>").expect("eve never logged in");
+    assert!(
+        serial[..eve].contains("lane ok"),
+        "admin's lane.read did not print the body; serial:\n{serial}"
+    );
+    assert!(
+        !serial[..eve].contains("wants the network"),
+        "admin's lane.read asked; serial:\n{serial}"
+    );
+    assert_eq!(
+        serial.matches("wants the network").count(),
+        2,
+        "one prompt per socket.connect; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("OSError"),
+        "a denied connect was not OSError; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("task 'python' killed"),
+        "a no must not kill the interpreter; serial:\n{serial}"
+    );
+    let yes_at = serial.rfind("wants the network").expect("yes prompt");
+    assert!(
+        serial[yes_at..].contains("lane ok"),
+        "yes did not read the lane; serial:\n{serial}"
+    );
     assert_eq!(
         hits.load(Ordering::Relaxed),
-        1,
-        "the granted dial should be the only connection; serial:\n{serial}"
+        2,
+        "admin's lane and eve's yes are the only connections; serial:\n{serial}"
     );
 }
 

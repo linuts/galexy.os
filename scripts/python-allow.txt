@@ -1,12 +1,13 @@
 # Modules a Galexy Python program may import.
 # The first four are the public surface. The rest are the VM's own
 # frozen and builtin modules at the pin in scripts/rustpython.rev.
-# socket, ssl, pip, venv, subprocess, ctypes, sqlite3, and os are absent.
-# `lane` is the dial in Milestone 103. It is not a frozen module.
+# ssl, asyncio, pip, venv, subprocess, ctypes, sqlite3, and os are absent.
+# `lane` is the dial in Milestone 103. `socket.connect` is Milestone 109.
 builtins
 sys
 io
 lane
+socket
 __hello__
 __hello_alias__
 __phello_alias__

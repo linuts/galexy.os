@@ -12,6 +12,10 @@ path = "src/main.rs"
 name = "stdline"
 path = "src/stdline.rs"
 
+[[bin]]
+name = "connect"
+path = "src/connect.rs"
+
 [dependencies]
 
 [build-dependencies]

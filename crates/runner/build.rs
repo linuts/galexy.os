@@ -1163,6 +1163,13 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
                 std::fs::read(&line).unwrap_or_else(|e| panic!("read {}: {e}", line.display()));
             assert!(line_bytes.starts_with(b"\x7fELF"), "stdline is not an ELF");
             bins.insert(ramdisk_entry_name("stdline"), strip_debug(line_bytes));
+            // `connect` is a command on the login image, not a sample
+            // under `testing/`.
+            let connect = elf.with_file_name("connect");
+            let connect_bytes = std::fs::read(&connect)
+                .unwrap_or_else(|e| panic!("read {}: {e}", connect.display()));
+            assert!(connect_bytes.starts_with(b"\x7fELF"), "connect is not an ELF");
+            bins.insert("connect".into(), strip_debug(connect_bytes));
         }
     }
     let (obj_a, obj_b) = gxld::sample_objects();

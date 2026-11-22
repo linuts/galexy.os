@@ -168,7 +168,7 @@ after a PAL change should `rm target/.rustc_info.json` too.
 | `thread` + `thread_local_key` | `ThreadSpawn` (new slot, same CR3, fresh user stack, kernel stack); per-thread pointer in the FS base via user-mode `wrfsbase` (CR4.FSGSBASE is already on; the kernel never touches FS in ring 3). Join is process-Cap `Wait` |
 | `sync` | `std`'s generic futex implementations over `Futex` |
 | `random` | `rdrand` in the PAL |
-| `net` | `unsupported`. Phase 10 does not grow `std::net`. A program holds a lane Cap (`docs/NET.md`). Phase 14's Python does not grow it either (`docs/PYTHON.md`) |
+| `net` | `TcpStream::connect` dials a granted name (Milestone 108). The value is a lane. `bind`, UDP, `setsockopt`, and any call that passes an IP or a port stay `unsupported`. The PAL does not parse TCP (`docs/NET.md`) |
 
 Key-based TLS stays. `has-thread-local` is still false, so compiled
 code does not emit `#[thread_local]`. `gxld` does link `.tdata`/`.tbss`
@@ -471,6 +471,6 @@ testable in reasonable time. Those stages have since landed (Milestones
 `cargo run` carries `python`, and the compiler, when those ELFs
 were built. Phase 10 (`docs/NET.md`, Milestones 78–85) and Phase 13
 (`docs/USB.md`, Milestones 86–88) have landed. The `v1.0` tag waits
-on a KVM pass. `std::net` stays unsupported;
-a lane is not a `TcpStream`, and RustPython does not add a socket
-module.
+on a KVM pass. `TcpStream::connect` and Python `socket.connect`
+are a granted name and the value is a lane. `bind`, UDP, and
+socket options stay unsupported until Milestones 112–116.

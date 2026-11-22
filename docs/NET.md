@@ -332,9 +332,8 @@ does not grow its own stack. The `v1.0` tag waits on a KVM pass.
 
 RustPython landed as Phase 14 (`docs/PYTHON.md`), Milestones
 **91–96**. Milestone **103** is the later one: `lane.read(name)`
-dials a granted name and reads the body. `socket` stays refused
-until Milestone 109, and that milestone is still open. There is no
-new syscall.
+dials a granted name and reads the body. `socket.connect` is
+Milestone 109: the same lane, by name. There is no new syscall.
 
 QUIC, 0-RTT, device checksum offload, and a CA bundle are later
 carriers and later rights. They attach to the lane. They do not add
@@ -343,10 +342,10 @@ this phase, and they do not exist yet.
 
 ## Phase 16 — A card is the firewall
 
-Milestones **105** and **107** landed. **108** and **109** are
-still the name layer. **110–116** are the real stack. **117** is
-SSH, and it is last. Checkboxes in `TODO.md`. This plan does not
-tag `v1.0` and does not check the KVM rows.
+Milestones **105**, **107**, **108**, and **109** landed. **108**
+and **109** are the name layer. **110–116** are the real stack.
+**117** is SSH, and it is last. Checkboxes in `TODO.md`. This plan
+does not tag `v1.0` and does not check the KVM rows.
 
 A network name is a galfs object under `/card` (the same object
 as `/admin@card/<name>`). `/card/ping` is the ping card. The
@@ -376,11 +375,13 @@ It is not an always that survives reboot.
 
 Milestone 108 keeps the name `std::net::TcpStream::connect`. The
 call asks (Milestone 107), then dials a granted name through
-`net`. The value is still a lane. Milestone 109 is the same layer
-for Python `socket.connect`. There is no socket syscall and no
-second stack. rustls stays in `net`. The PAL does not parse TCP.
-This is not a Berkeley socket. Those two milestones do not pass
-an IP or a port.
+`net`. The value is still a lane. Milestone 109 is that layer for
+Python `socket.connect`: the call asks, then dials, and a no is
+`OSError`. There is no socket syscall and no second stack. rustls
+stays in `net`. The PAL does not parse TCP. This is not a Berkeley
+socket. Those two milestones do not pass an IP or a port.
+`bind`, `listen`, UDP, and `setsockopt` stay refused until
+Milestones 112–116.
 
 Milestone 110 is the lookup: DNS-over-TLS to a pinned resolver,
 not UDP/53, and not `10.0.2.3`. Milestone 111 is the reach. A
