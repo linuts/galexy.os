@@ -8,6 +8,10 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#155](https://github.com/linuts/galexy.os/pull/155) — Net — ICMP echo.
+  A logged-in seat runs `ping <ip>`. The `net` service sends the request
+  on the wire it already holds and prints the reply. `ping 10.0.2.2`
+  reaches the QEMU gateway. There is no socket syscall.
 - [#154](https://github.com/linuts/galexy.os/pull/154) — Milestones 86–88 — Phase 13 lands.
   The kernel moves xHCI transfer rings. A ring-3 service named `usb`
   lists each device. The QEMU keyboard is printed and left unclaimed.
