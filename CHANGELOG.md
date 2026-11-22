@@ -8,6 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#168](https://github.com/linuts/galexy.os/pull/168) — Docs — the `/net` record is version 2, and the wire, net-control, and lane rows are experimental.
+  README and the plans name the card calls, the claimed keyboard, and datagram receive. SSH stays 117. No code change.
 - [#167](https://github.com/linuts/galexy.os/pull/167) — Net — `ping <name>` resolves over the pinned DNS-over-TLS resolver and prints the ICMP reply.
   A missing ping card and a bad pin send no query. Port 53 stays unused. No new syscall. SSH stays open.
 - [#166](https://github.com/linuts/galexy.os/pull/166) — Rust `std::net` and Python `socket` call the existing net cards: bind, listen, datagram send and receive, and an address or a port.
