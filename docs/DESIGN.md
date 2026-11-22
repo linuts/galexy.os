@@ -1487,7 +1487,7 @@ move sleep or a monotonic beat. CMOS (ports `0x70`/`0x71`, NMI held
 off) seeds the anchor at boot and is written on set. A halted clock,
 a stuck update-in-progress bit, or a year outside 2000..=2099 leaves
 boot unset. Admin set accepts 1970..=2099. No timezone, no leap
-second. `Syscall::Lane` is reserved at 35 so the table stays dense.
+second. `Syscall::Lane` is 35, and only `net` may call it, so the table stays dense.
 
 `svc date` and `svc at HH:MM` are init RPCs (opcodes 10–12). `at`
 fires once per civil day on a row with a compiled interval. The

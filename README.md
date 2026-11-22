@@ -44,10 +44,11 @@ The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md) → Where
 we stand. Known gap today: the KVM column is empty on this host. When
 `target/galexy-rustc/rustc` and
 `target/galexy-python/python` were built, a normal `cargo run` logs
-into a seat that has both. The network is a ring-3 `net` service, DHCP, ICMP echo (`ping`),
-and a granted TLS 1.3 lane, not a socket API. USB lists the devices
-on xHCI. The boot keyboard is claimed; a tablet is not. Python is upstream RustPython
-as a login-shell command, not CPython and not a socket module.
+into a seat that has both. The network is a ring-3 `net` service: DHCP, ICMP echo (`ping` of an
+address or a DNS name), and a granted TLS 1.3 lane. `std::net` and
+Python `socket` call those cards. There is no socket syscall. USB lists
+the devices on xHCI. The boot keyboard is claimed; a tablet is not.
+Python is upstream RustPython as a login-shell command, not CPython.
 `lane.read` dials a granted name when the interpreter was rebuilt.
 The inventory is
 [`docs/DEVICES.md`](docs/DEVICES.md). Legacy device paths

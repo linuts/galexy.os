@@ -245,8 +245,8 @@ to the pin and the current patch is applied.
 
 Milestone **107** landed for a foreground program: the shell
 prints `<name> wants the network` or `<name> wants storage`.
-Milestone **109** adds `socket` to the allow-list for
-`socket.connect` only.
+Milestone **109** adds `socket` to the allow-list, starting with
+`socket.connect`. Later cards add bind, listen, send, and recv.
 
 A compatibility layer keeps the name programs already call.
 `socket.connect` asks (Milestone 107), then dials a granted name

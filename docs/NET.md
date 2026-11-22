@@ -152,10 +152,10 @@ Names, grants, pinned keys, and the address mode survive a restart of `net`. The
 | | |
 | --- | --- |
 | Path | `/net` in the admin tree. One component, one file. |
-| Format | Versioned bytes, version 1, defined by `crates/galexy-netcfg`. Magic, version, mode, optional fixed locator, learned lease, then the name directory (name, locator, 32-byte key, actors who may dial). |
+| Format | Versioned bytes, version 2, defined by `crates/galexy-netcfg`. Version 1 is refused. Magic, version, mode, optional learned lease, the name directory (name, port, kind, address, 32-byte key, actors), then the optional pinned resolver. |
 | Who parses it | The crate. Host tests round-trip a record. `net` links the same crate. A version it does not know is refused: the service logs the version and will not dial until an admin rewrites the file. |
-| Who may read it | `net`, and admin. Init creates an empty version-1 record (mode `ask`, no names) when the file is absent, then spawns `net` with one token: `READ` and `WRITE` on that object and on nothing else. Init holds the admin credential, so it can mint that card. The service does not receive the admin root. |
-| Who writes it | `net`, from `allow`, `grant`, and `revoke`, and from a finished DHCP lease. The shell does not poke the file. |
+| Who may read it | `net`, and admin. Init creates an empty version-2 record (mode `ask`, no names, no resolver) when the file is absent, then spawns `net` with one token: `READ` and `WRITE` on that object and on nothing else. Init holds the admin credential, so it can mint that card. The service does not receive the admin root. |
+| Who writes it | `net`, from `allow`, `grant`, `revoke`, and `pin`, and from a finished DHCP lease. The shell does not poke the file. |
 | Disk version | Unchanged by this phase. The record is a file in the sealed table, not a new GALF layout. |
 
 There is no environment block and no `/etc`. Shell history is the other file a program already keeps (`shell.history` in the user's tree). The network record follows that idea and is typed, because a lease and a key are not a line of history.
