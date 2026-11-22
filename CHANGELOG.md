@@ -13,8 +13,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
   then dial that name. The value is a lane. No is `OSError` and
   the program stays up. Yes prints the body. `bind`, UDP,
   `setsockopt`, `ssl`, and `asyncio` stay refused. No new
-  syscall. Milestone 83, SSH/SFTP, and the KVM `v1.0` rows stay
-  open.
+  syscall. Milestones 110–117 stay open. SSH is 117.
+  Milestone 83 and the KVM `v1.0` rows stay open.
 - [#160](https://github.com/linuts/galexy.os/pull/160) — Milestones 104–107 — `test-cpus` boots at `-smp 4` and `-smp 8`
   (`online=4`, `online=8`; the suite stays at 2). A network name
   and a listed USB port are galfs cards. Dial, ping, and accept
