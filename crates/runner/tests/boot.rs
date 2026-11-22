@@ -5946,6 +5946,27 @@ fn net_udp_and_tcp_reach_the_host() {
     );
 }
 
+/// A logged-in seat pings the QEMU user-net gateway and prints the echo reply.
+#[test]
+fn ping_gateway_replies() {
+    let serial = net_lines(
+        &[
+            ("net link", "up 10.0.2.15/24"),
+            ("ping 10.0.2.2", "reply from 10.0.2.2"),
+        ],
+        "reply from 10.0.2.2",
+        Duration::from_secs(180),
+    );
+    assert!(
+        serial.contains("reply from 10.0.2.2"),
+        "the gateway did not answer ICMP echo; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("timeout"),
+        "ping timed out; serial:\n{serial}"
+    );
+}
+
 /// Milestone 84: `fetch` before a grant opens nothing. After the grant it
 /// prints the peer's body. A different key is rejected.
 #[test]

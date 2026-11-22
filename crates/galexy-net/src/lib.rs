@@ -1,4 +1,4 @@
-//! Ethernet, ARP, IPv4, UDP, DHCP, and a small TCP client/listener.
+//! Ethernet, ARP, IPv4, ICMP echo, UDP, DHCP, and a small TCP client/listener.
 //!
 //! The kernel moves frames. This crate is what the `net` service runs,
 //! and what the host tests drive without QEMU. Checksums are computed
@@ -106,6 +106,10 @@ pub struct Engine {
     conns: [Conn; CONNS],
     egress: Vec<Frame>,
     pending_udp: Option<PendingUdp>,
+    echo_seq: u16,
+    pending_icmp: Option<PendingIcmp>,
+    await_echo: Option<AwaitEcho>,
+    echo_from: Option<[u8; 4]>,
 }
 
 struct PendingUdp {
@@ -113,6 +117,19 @@ struct PendingUdp {
     dport: u16,
     sport: u16,
     payload: Vec<u8>,
+}
+
+struct PendingIcmp {
+    dst: [u8; 4],
+    id: u16,
+    seq: u16,
+    payload: Vec<u8>,
+}
+
+struct AwaitEcho {
+    dst: [u8; 4],
+    id: u16,
+    seq: u16,
 }
 
 impl Engine {
@@ -144,6 +161,10 @@ impl Engine {
             conns: core::array::from_fn(|_| Conn::blank()),
             egress: Vec::new(),
             pending_udp: None,
+            echo_seq: 0,
+            pending_icmp: None,
+            await_echo: None,
+            echo_from: None,
         }
     }
 
@@ -280,6 +301,39 @@ impl Engine {
         Ok(())
     }
 
+    /// Queue an ICMP echo request. `Err` when we have no address, or the
+    /// payload is longer than 64 bytes. A missing neighbor is ARP, and the
+    /// request leaves on the next poll. One request is outstanding.
+    #[allow(clippy::result_unit_err)]
+    pub fn icmp_echo(&mut self, dst: [u8; 4], payload: &[u8]) -> Result<(), ()> {
+        if self.addr.is_none() || payload.len() > 64 {
+            return Err(());
+        }
+        self.echo_seq = self.echo_seq.wrapping_add(1).max(1);
+        let id = 0x6761;
+        let seq = self.echo_seq;
+        self.await_echo = Some(AwaitEcho { dst, id, seq });
+        self.echo_from = None;
+        if self.lookup(dst).is_none() {
+            self.pending_icmp = Some(PendingIcmp {
+                dst,
+                id,
+                seq,
+                payload: payload.to_vec(),
+            });
+            self.send_arp(dst);
+            return Ok(());
+        }
+        self.pending_icmp = None;
+        self.emit_echo(dst, id, seq, payload);
+        Ok(())
+    }
+
+    /// The source of an echo reply that matched the outstanding request.
+    pub fn take_echo(&mut self) -> Option<[u8; 4]> {
+        self.echo_from.take()
+    }
+
     /// Active open. Returns a connection id.
     #[allow(clippy::result_unit_err)]
     pub fn tcp_connect(&mut self, dst: [u8; 4], dport: u16) -> Result<u8, ()> {
@@ -377,14 +431,38 @@ impl Engine {
     }
 
     fn flush_pending(&mut self) {
-        let Some(p) = self.pending_udp.as_ref() else {
+        if self
+            .pending_udp
+            .as_ref()
+            .is_some_and(|p| self.lookup(p.dst).is_some())
+        {
+            let p = self.pending_udp.take().unwrap();
+            let _ = self.udp_send(p.dst, p.dport, p.sport, &p.payload);
+        }
+        self.flush_icmp();
+    }
+
+    fn flush_icmp(&mut self) {
+        let Some(p) = self.pending_icmp.as_ref() else {
             return;
         };
         if self.lookup(p.dst).is_none() {
             return;
         }
-        let p = self.pending_udp.take().unwrap();
-        let _ = self.udp_send(p.dst, p.dport, p.sport, &p.payload);
+        let p = self.pending_icmp.take().unwrap();
+        self.emit_echo(p.dst, p.id, p.seq, &p.payload);
+    }
+
+    fn emit_echo(&mut self, dst: [u8; 4], id: u16, seq: u16, payload: &[u8]) {
+        let Some(src) = self.addr else {
+            return;
+        };
+        let Some(mac) = self.lookup(dst) else {
+            return;
+        };
+        let icmp = echo_message(8, id, seq, payload);
+        self.egress
+            .push(ipv4_frame(self.mac, mac, src, dst, 1, &icmp));
     }
 
     fn lookup(&self, ip: [u8; 4]) -> Option<[u8; 6]> {
@@ -508,6 +586,13 @@ impl Engine {
         }
         let src = [ip[12], ip[13], ip[14], ip[15]];
         let dst = [ip[16], ip[17], ip[18], ip[19]];
+        if src != [0, 0, 0, 0] && src != [255, 255, 255, 255] {
+            let mut smac = [0u8; 6];
+            smac.copy_from_slice(&frame[6..12]);
+            if smac != [0, 0, 0, 0, 0, 0] && smac != [0xff, 0xff, 0xff, 0xff, 0xff, 0xff] {
+                self.learn(src, smac);
+            }
+        }
         if let Some(ours) = self.addr {
             if dst != ours && dst != [255, 255, 255, 255] {
                 return;
@@ -515,11 +600,51 @@ impl Engine {
         }
         let proto = ip[9];
         let body = &ip[ihl..];
-        if proto == 17 {
+        if proto == 1 {
+            self.ingest_icmp(src, body);
+        } else if proto == 17 {
             self.ingest_udp(src, body);
         } else if proto == 6 {
             self.ingest_tcp(src, body);
         }
+    }
+
+    fn ingest_icmp(&mut self, src: [u8; 4], body: &[u8]) {
+        if body.len() < 8 || body.len() > 512 || checksum(body) != 0 || body[1] != 0 {
+            return;
+        }
+        if body[0] == 8 {
+            self.reply_echo(src, body);
+        } else if body[0] == 0 {
+            let id = u16::from_be_bytes([body[4], body[5]]);
+            let seq = u16::from_be_bytes([body[6], body[7]]);
+            let matched = self
+                .await_echo
+                .as_ref()
+                .is_some_and(|w| w.dst == src && w.id == id && w.seq == seq);
+            if matched {
+                self.await_echo = None;
+                self.echo_from = Some(src);
+            }
+        }
+    }
+
+    fn reply_echo(&mut self, dst: [u8; 4], request: &[u8]) {
+        let Some(src) = self.addr else {
+            return;
+        };
+        let Some(mac) = self.lookup(dst) else {
+            return;
+        };
+        let mut icmp = request.to_vec();
+        icmp[0] = 0;
+        icmp[2] = 0;
+        icmp[3] = 0;
+        let sum = checksum(&icmp);
+        icmp[2] = (sum >> 8) as u8;
+        icmp[3] = sum as u8;
+        self.egress
+            .push(ipv4_frame(self.mac, mac, src, dst, 1, &icmp));
     }
 
     fn ingest_udp(&mut self, src: [u8; 4], body: &[u8]) {
@@ -823,6 +948,18 @@ fn transport_sum(src: [u8; 4], dst: [u8; 4], proto: u8, seg: &[u8]) -> u16 {
     checksum(&pseudo)
 }
 
+fn echo_message(kind: u8, id: u16, seq: u16, payload: &[u8]) -> Vec<u8> {
+    let mut icmp = Vec::with_capacity(8 + payload.len());
+    icmp.extend_from_slice(&[kind, 0, 0, 0]);
+    icmp.extend_from_slice(&id.to_be_bytes());
+    icmp.extend_from_slice(&seq.to_be_bytes());
+    icmp.extend_from_slice(payload);
+    let sum = checksum(&icmp);
+    icmp[2] = (sum >> 8) as u8;
+    icmp[3] = sum as u8;
+    icmp
+}
+
 fn checksum(data: &[u8]) -> u16 {
     let mut sum = 0u32;
     let mut i = 0;
@@ -1019,6 +1156,50 @@ mod tests {
         let mut buf = [0u8; 8];
         let n = b.tcp_recv(acc, &mut buf);
         assert_eq!(&buf[..n], b"hi");
+    }
+
+    #[test]
+    fn icmp_echo_round_trip() {
+        let mut a = Engine::new([1; 6], false);
+        a.set_fixed([10, 0, 2, 15], 24, [10, 0, 2, 2]);
+        a.learn([10, 0, 2, 2], [2; 6]);
+        let mut b = Engine::new([2; 6], false);
+        b.set_fixed([10, 0, 2, 2], 24, [10, 0, 2, 15]);
+        a.icmp_echo([10, 0, 2, 2], b"galexy").unwrap();
+        let req = a.pop().unwrap();
+        assert_eq!(req[23], 1);
+        assert_eq!(req[34], 8);
+        assert!(req.ends_with(b"galexy"));
+        assert_eq!(checksum(&req[34..]), 0);
+        b.ingest(&req);
+        let rep = b.pop().unwrap();
+        assert_eq!(rep[34], 0);
+        assert!(rep.ends_with(b"galexy"));
+        a.ingest(&rep);
+        assert_eq!(a.take_echo(), Some([10, 0, 2, 2]));
+    }
+
+    #[test]
+    fn icmp_bad_reply_is_ignored() {
+        let mut a = Engine::new([1; 6], false);
+        a.set_fixed([10, 0, 2, 15], 24, [10, 0, 2, 2]);
+        a.learn([10, 0, 2, 2], [2; 6]);
+        a.icmp_echo([10, 0, 2, 2], b"galexy").unwrap();
+        let req = a.pop().unwrap();
+        let mut bad = req.clone();
+        bad[34] = 0;
+        bad[36] ^= 0xff;
+        a.ingest(&bad);
+        assert!(a.take_echo().is_none());
+        let mut short = req[..34 + 4].to_vec();
+        short[34] = 0;
+        a.ingest(&short);
+        assert!(a.take_echo().is_none());
+        a.icmp_echo([10, 0, 2, 2], b"nope").unwrap();
+        assert!(a.icmp_echo([10, 0, 2, 2], &[0; 65]).is_err());
+        assert!(Engine::new([1; 6], true)
+            .icmp_echo([10, 0, 2, 2], b"x")
+            .is_err());
     }
 
     #[test]
