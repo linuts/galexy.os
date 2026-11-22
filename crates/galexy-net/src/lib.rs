@@ -353,8 +353,10 @@ impl Engine {
     }
 
     /// Queue an ICMP echo request. `Err` when we have no address, or the
-    /// payload is longer than 64 bytes. A missing neighbor is ARP, and the
-    /// request leaves on the next poll. One request is outstanding.
+    /// payload is longer than 64 bytes. An off-subnet peer is reached
+    /// through the gateway. The IP destination stays `dst`. A missing
+    /// neighbor of that next hop is ARP, and the request leaves on the
+    /// next poll. One request is outstanding.
     #[allow(clippy::result_unit_err)]
     pub fn icmp_echo(&mut self, dst: [u8; 4], payload: &[u8]) -> Result<(), ()> {
         if self.addr.is_none() || payload.len() > 64 {
@@ -365,14 +367,15 @@ impl Engine {
         let seq = self.echo_seq;
         self.await_echo = Some(AwaitEcho { dst, id, seq });
         self.echo_from = None;
-        if self.lookup(dst).is_none() {
+        let hop = self.next_hop(dst);
+        if self.lookup(hop).is_none() {
             self.pending_icmp = Some(PendingIcmp {
                 dst,
                 id,
                 seq,
                 payload: payload.to_vec(),
             });
-            self.send_arp(dst);
+            self.send_arp(hop);
             return Ok(());
         }
         self.pending_icmp = None;
@@ -524,7 +527,7 @@ impl Engine {
         let Some(p) = self.pending_icmp.as_ref() else {
             return;
         };
-        if self.lookup(p.dst).is_none() {
+        if self.lookup(self.next_hop(p.dst)).is_none() {
             return;
         }
         let p = self.pending_icmp.take().unwrap();
@@ -535,7 +538,7 @@ impl Engine {
         let Some(src) = self.addr else {
             return;
         };
-        let Some(mac) = self.lookup(dst) else {
+        let Some(mac) = self.lookup(self.next_hop(dst)) else {
             return;
         };
         let icmp = echo_message(8, id, seq, payload);
@@ -1336,6 +1339,23 @@ mod tests {
         let mut buf = [0u8; 8];
         let n = b.tcp_recv(acc, &mut buf);
         assert_eq!(&buf[..n], b"hi");
+    }
+
+    #[test]
+    fn icmp_off_subnet_keeps_the_peer_address() {
+        let mut e = Engine::new([1; 6], false);
+        e.set_fixed([10, 0, 2, 15], 24, [10, 0, 2, 2]);
+        e.icmp_echo([172, 30, 0, 2], b"galexy").unwrap();
+        let arp = e.pop().unwrap();
+        assert_eq!(&arp[12..14], &[0x08, 0x06]);
+        assert_eq!(&arp[38..42], &[10, 0, 2, 2]);
+        e.learn([10, 0, 2, 2], [9; 6]);
+        e.poll(1);
+        let echo = e.pop().unwrap();
+        assert_eq!(&echo[..6], &[9; 6]);
+        assert_eq!(&echo[30..34], &[172, 30, 0, 2]);
+        assert_eq!(echo[23], 1);
+        assert!(echo.windows(6).any(|w| w == b"galexy"));
     }
 
     #[test]

@@ -101,9 +101,9 @@ Opcodes on `0x800A`, appended and then stable, same rule as init:
 | 4 `grant` | admin | let an actor dial a name |
 | 5 `revoke` | admin | drop that dial right |
 | 6 `serve` | admin | attach a gate for a name to the calling task |
-| 7 `ping` | any logged-in seat | ICMP echo to one IPv4 address. The reply is `reply from` that address, or `timeout`. No lane Cap |
+| 7 `ping` | a seat that holds the ping card | ICMP echo to one IPv4 address, or to a DNS name resolved over the pinned DNS-over-TLS resolver. The reply is `reply from` that address, or `timeout`. No lane Cap. No card, no query |
 
-`fetch` is a shell builtin on top of `dial`. `ping <ip>` is a shell builtin on top of opcode 7. Neither is a syscall.
+`fetch` is a shell builtin on top of `dial`. `ping <ip>` and `ping <name>` are shell builtins on top of opcode 7. Neither is a syscall.
 `svc status net` still means "is the process up," through init.
 `link` means "is the wire up."
 
@@ -138,7 +138,7 @@ The service has to have an address before it can talk to anyone. Milestone 80 is
 | Mode | The record below. `ask` runs DHCP. `fixed` uses the locator stored in the record and does not ask. |
 | Address, prefix, gateway | DHCP ack when the mode is `ask`. QEMU user networking offers `10.0.2.15/24` from `10.0.2.2`. A `fixed` record uses the bytes the admin stored. |
 | Gateway MAC | ARP for the gateway, before any unicast IP packet. The cache holds 8 entries. IPv6 neighbor solicitation is the same step, covered by host tests. The QEMU smoke is IPv4. |
-| ICMP echo | `ping <ip>` from a logged-in seat. The service sends one echo request and waits for the matching reply. QEMU user networking answers `10.0.2.2`. The seat does not hold the wire. |
+| ICMP echo | `ping <ip>` or `ping <name>` from a logged-in seat that holds the ping card. An address is four bytes. A name is resolved over DNS-over-TLS, then one echo goes to that answer. The gateway may be the next hop. QEMU user networking answers `10.0.2.2` directly. The seat does not hold the wire. A missing card sends no query. |
 | First packet a peer must answer | After the ack and the ARP reply, one UDP datagram to the gateway. The payload is `galexy`. The host test receives it. That is Milestone 80. It is not a TCP handshake and it is not a lane. |
 
 DHCP here is a client. Discover, offer, request, ack. The first offer wins. Galexy does not serve DHCP in this phase. A lease is learned state: address, prefix, gateway, expiry. On expiry the service asks again. A missing record means mode `ask` and an empty directory, so a fresh QEMU boot still gets an address.
@@ -187,7 +187,10 @@ and it does not ask QEMU's DNS at `10.0.2.3`. QUIC stays the later
 lane carrier, not this lookup. A name that needs DNS and has no
 pinned resolver fails closed. `milestones_110_through_114` is the
 run: one TLS query, an answer other than `10.0.2.2`, and a dial
-whose TCP destination is that answer.
+whose TCP destination is that answer. The same lookup answers a
+dotted name passed to `ping`. The ping card is the right. The name
+does not need its own card. A missing ping card, a missing pin, or
+a bad pin sends no query. `ping_name_resolves` is that run.
 
 ## Adversary this adds
 
@@ -354,7 +357,9 @@ locator and the pinned key stay in the service record. Who may
 use the name is a token. Read is dial. Write is accept. The
 kernel stamps the held bits into header byte 2 (`TOKEN_READ` is
 1, `TOKEN_WRITE` is 2). `net` refuses a dial or a ping without
-bit 1, and an accept without bit 2, before TCP or ICMP. Actor
+bit 1, and an accept without bit 2, before TCP, DNS, or ICMP. A
+ping of a dotted name uses that same bit, then the pinned
+DNS-over-TLS resolver. Actor
 strings stay in the record and are not consulted. `may_dial`
 remains for that record. Logged-out stays `AccessDenied`. There
 is no chain, no interface match, and no packet filter. The

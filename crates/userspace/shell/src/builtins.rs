@@ -1935,15 +1935,24 @@ fn usb_cmd(cwd: &Cwd, rest: &[u8]) {
 }
 
 fn ping_cmd(cwd: &Cwd, rest: &[u8]) {
-    let Some(ip) = parse_ip(trim(rest)) else {
-        write_console(b"ping <ip>\n");
-        prompt(cwd);
+    let text = trim(rest);
+    if let Some(ip) = parse_ip(text) {
+        let mut payload = [0u8; 5];
+        payload[0] = galexy_abi::NET_OP_PING;
+        payload[1..5].copy_from_slice(&ip);
+        finish_net(cwd, &payload, false);
         return;
-    };
-    let mut payload = [0u8; 5];
-    payload[0] = galexy_abi::NET_OP_PING;
-    payload[1..5].copy_from_slice(&ip);
-    finish_net(cwd, &payload, false);
+    }
+    if dns_name(text) {
+        let mut payload = [0u8; galexy_abi::INIT_RPC_MAX];
+        payload[0] = galexy_abi::NET_OP_PING;
+        payload[1] = text.len() as u8;
+        payload[2..2 + text.len()].copy_from_slice(text);
+        finish_net(cwd, &payload[..2 + text.len()], false);
+        return;
+    }
+    write_console(b"ping <ip or name>\n");
+    prompt(cwd);
 }
 
 fn net_cmd(cwd: &Cwd, rest: &[u8]) {
@@ -2415,6 +2424,35 @@ fn parse_locator(text: &[u8]) -> Option<([u8; 4], u16)> {
     let ip = parse_ip(&text[..colon])?;
     let port = parse_u16(&text[colon + 1..])?;
     Some((ip, port))
+}
+
+/// A dotted DNS name. Four payload bytes stay an IPv4 address, so a
+/// three-byte name is not a name on this opcode.
+fn dns_name(name: &[u8]) -> bool {
+    if name.is_empty() || name.len() == 3 || name.len() > 234 {
+        return false;
+    }
+    let mut label = 0usize;
+    let mut dot = false;
+    for b in name {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' => {
+                label += 1;
+                if label > 63 {
+                    return false;
+                }
+            }
+            b'.' => {
+                if label == 0 {
+                    return false;
+                }
+                dot = true;
+                label = 0;
+            }
+            _ => return false,
+        }
+    }
+    label != 0 && dot
 }
 
 fn parse_ip(text: &[u8]) -> Option<[u8; 4]> {

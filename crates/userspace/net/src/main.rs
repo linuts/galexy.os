@@ -198,7 +198,7 @@ fn handle(
         NET_OP_GRANT if admin => grant_op(rx, record, rest, true),
         NET_OP_REVOKE if admin => grant_op(rx, record, rest, false),
         NET_OP_SERVE if admin => serve(rx, engine, record, msg[2], actor_id, gates, rest),
-        NET_OP_PING => ping(rx, engine, msg[2], rest),
+        NET_OP_PING => ping(rx, engine, record, msg[2], rest, now),
         NET_OP_ALLOW | NET_OP_GRANT | NET_OP_REVOKE | NET_OP_SERVE | NET_OP_PIN => {
             reply(rx, b"access denied\n", 0);
         }
@@ -694,6 +694,43 @@ fn find_kind(
         .find(|entry| {
             entry.kind == kind && entry.ip[..4] == ip && port.is_none_or(|port| entry.port == port)
         })
+}
+
+/// A dotted DNS name. Four payload bytes stay an IPv4 address, so a
+/// three-byte name is not a name on this opcode.
+fn dns_name(name: &[u8]) -> bool {
+    if name.is_empty() || name.len() == 3 || name.len() > 234 {
+        return false;
+    }
+    let mut label = 0usize;
+    let mut dot = false;
+    for b in name {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' => {
+                label += 1;
+                if label > 63 {
+                    return false;
+                }
+            }
+            b'.' => {
+                if label == 0 {
+                    return false;
+                }
+                dot = true;
+                label = 0;
+            }
+            _ => return false,
+        }
+    }
+    label != 0 && dot
+}
+
+fn dns_rest(rest: &[u8]) -> Option<&[u8]> {
+    let name = one_name(rest)?;
+    if rest.len() != 1 + name.len() || !dns_name(name) {
+        return None;
+    }
+    Some(name)
 }
 
 fn one_name(rest: &[u8]) -> Option<&[u8]> {
@@ -1246,16 +1283,26 @@ fn name_and_body(rest: &[u8]) -> Option<(&[u8], &[u8])> {
     Some((name, &rest[at + 1..at + 1 + plen]))
 }
 
-fn ping(rx: Cap, engine: &mut Engine, held: u8, rest: &[u8]) {
+fn ping(rx: Cap, engine: &mut Engine, record: &Record, held: u8, rest: &[u8], now: u64) {
     if held & 1 == 0 {
         reply(rx, b"access denied\n", 0);
         return;
     }
-    if rest.len() < 4 {
-        reply(rx, b"bad\n", 0);
-        return;
-    }
-    let dst = [rest[0], rest[1], rest[2], rest[3]];
+    let dst = if rest.len() == 4 {
+        [rest[0], rest[1], rest[2], rest[3]]
+    } else {
+        let Some(name) = dns_rest(rest) else {
+            reply(rx, b"bad\n", 0);
+            return;
+        };
+        match lookup_dns(engine, record, name, now) {
+            Ok(ip) => ip,
+            Err(why) => {
+                reply_lookup(rx, why);
+                return;
+            }
+        }
+    };
     if engine.icmp_echo(dst, b"galexy").is_err() {
         reply(rx, b"down\n", 0);
         return;
