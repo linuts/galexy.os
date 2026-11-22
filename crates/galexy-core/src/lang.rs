@@ -157,6 +157,10 @@ pub struct Compl {
     pub bytes: [u8; COMPL_LEN],
     /// Significant length.
     pub len: usize,
+    /// 1-based line of a `fn` / `struct` / `enum` / `trait` / `const` /
+    /// `static` / `let` or a Python `def` / `class` in `doc`. Zero when
+    /// the word is only a keyword or an ordinary identifier.
+    pub line: u32,
 }
 
 /// Longest word the completer stores.
@@ -168,6 +172,7 @@ impl Compl {
         Self {
             bytes: [0; COMPL_LEN],
             len: 0,
+            line: 0,
         }
     }
 
@@ -219,7 +224,67 @@ pub fn complete(lang: Lang, doc: &[u8], prefix: &[u8], out: &mut [Compl]) -> usi
             i += 1;
         }
     }
+    for slot in out.iter_mut().take(n) {
+        let word = &slot.bytes[..slot.len];
+        slot.line = def_line(lang, doc, word);
+    }
     n
+}
+
+/// Line of a definition whose name is `word`, or 0 when `doc` does not
+/// define it. Keywords that are not defined in the buffer stay 0.
+fn def_line(lang: Lang, doc: &[u8], word: &[u8]) -> u32 {
+    let keys: &[&[u8]] = match lang {
+        Lang::Rust => &[
+            b"fn", b"struct", b"enum", b"trait", b"const", b"static", b"let",
+        ],
+        Lang::Python => &[b"def", b"class"],
+        _ => return 0,
+    };
+    let mut line = 1u32;
+    let mut i = 0usize;
+    while i < doc.len() {
+        if doc[i] == b'\n' {
+            line = line.saturating_add(1);
+            i += 1;
+            continue;
+        }
+        if !is_ident_start(doc[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        i += 1;
+        while i < doc.len() && is_ident_cont(doc[i]) {
+            i += 1;
+        }
+        let tok = &doc[start..i];
+        if !keys.contains(&tok) {
+            continue;
+        }
+        let mut j = i;
+        while j < doc.len() && doc[j] == b' ' {
+            j += 1;
+        }
+        if lang == Lang::Rust && j + 3 <= doc.len() && &doc[j..j + 3] == b"mut" {
+            let after = j + 3;
+            if after == doc.len() || !is_ident_cont(doc[after]) {
+                j = after;
+                while j < doc.len() && doc[j] == b' ' {
+                    j += 1;
+                }
+            }
+        }
+        if j + word.len() > doc.len() || &doc[j..j + word.len()] != word {
+            continue;
+        }
+        let after = j + word.len();
+        if after < doc.len() && is_ident_cont(doc[after]) {
+            continue;
+        }
+        return line;
+    }
+    0
 }
 
 fn push_unique(out: &mut [Compl], n: &mut usize, word: &[u8]) {

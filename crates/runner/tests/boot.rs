@@ -955,6 +955,14 @@ fn galfs_disk_persists_virtio_blk() {
         serial1.contains("msi-x"),
         "virtio-blk must take MSI-X; serial:\n{serial1}"
     );
+    assert!(
+        serial1.contains("[galfs] sync data_reqs=1 "),
+        "a dirty sync must be one virtio data request; serial:\n{serial1}"
+    );
+    assert!(
+        serial1.contains("[galfs] desk files 41 "),
+        "the login volume must record the desk-compile count; serial:\n{serial1}"
+    );
     assert_galfs_disk_persists((code1, serial1, img, code2, serial2), "virtio-pci");
 }
 
@@ -3760,6 +3768,72 @@ const EDIT_KEYS: &[(&str, &str)] = &[
     ("b", "b"),
     ("ret", "\t!\n"),
 ];
+
+/// `edit t.rs` typing `pri` lists `println` before Ctrl-T. `edit h.py`
+/// typing `pri` lists `print`. Ctrl-T still accepts the Rust word.
+#[test]
+fn shell_edit_complete_typing_e2e() {
+    let keys = with_login(&[
+        ("e", "e"),
+        ("d", "d"),
+        ("i", "i"),
+        ("t", "t"),
+        ("spc", " "),
+        ("t", "t"),
+        ("dot", "."),
+        ("r", "r"),
+        ("s", "s"),
+        ("ret", "@1,1@"),
+        ("p", "p"),
+        ("r", "r"),
+        ("i", "i"),
+        ("ctrl+t", "@1,8@"),
+        ("ctrl+x", "Unsaved"),
+        ("ctrl+x", "admin@galexy> "),
+        ("e", "e"),
+        ("d", "d"),
+        ("i", "i"),
+        ("t", "t"),
+        ("spc", " "),
+        ("h", "h"),
+        ("dot", "."),
+        ("p", "p"),
+        ("y", "y"),
+        ("ret", "@1,1@"),
+        ("p", "p"),
+        ("r", "r"),
+        ("i", "i"),
+        ("ctrl+x", "Unsaved"),
+        ("ctrl+x", "admin@galexy> "),
+    ]);
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "admin@galexy> ",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    let rust = serial
+        .find("println")
+        .expect("typing pri did not list println");
+    let python = serial[rust..]
+        .find("Python")
+        .map(|off| rust + off)
+        .expect("edit h.py did not name Python");
+    assert!(
+        serial[python..].contains("print"),
+        "typing pri in Python did not list print; serial:\n{serial}"
+    );
+    assert!(
+        !serial[python..].contains("println"),
+        "the Python list invented a Rust name; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[user task panicked]"),
+        "edit panicked; serial:\n{serial}"
+    );
+}
 
 /// `edit t.rs`: line numbers are on the gutter, Ctrl-T turns `pri` into
 /// `println`, and `{` is reported as an unclosed brace.

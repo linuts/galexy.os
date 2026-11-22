@@ -8,8 +8,9 @@
 //!
 //! Rust, Python, Lisp, JSON, CSV, TOML, and XML use the in-process
 //! language service: colors, one diagnostic on the status line, and
-//! Ctrl-T completion. The image does not carry rust-analyzer or a
-//! Python language server. Tab inserts a tab byte. The editor draws
+//! Ctrl-T completion. After a letter or `_`, the status line lists up
+//! to eight of those same words. The image does not carry rust-analyzer
+//! or a Python language server. Tab inserts a tab byte. The editor draws
 //! that byte out to the next column of 8.
 
 #![no_std]
@@ -275,10 +276,14 @@ fn push(doc: &mut [u8], len: &mut usize, bytes: &[u8]) -> bool {
 }
 
 fn on_key(doc: &mut [u8], cut: &mut [u8], path: &[u8], ed: &mut Editor, key: Key) -> Step {
-    if !matches!(key, Key::Other(0x14)) {
+    if !matches!(key, Key::Other(0x14) | Key::Char(_)) {
         ed.compl_on = false;
     }
     match key {
+        Key::Escape => {
+            ed.compl_on = false;
+            Step::Redraw
+        }
         Key::Left => {
             move_left(doc, ed);
             Step::Redraw
@@ -322,6 +327,11 @@ fn on_key(doc: &mut [u8], cut: &mut [u8], path: &[u8], ed: &mut Editor, key: Key
         }
         Key::Char(b) if b.is_ascii_graphic() || b == b' ' => {
             insert(doc, ed, b);
+            if b.is_ascii_alphabetic() || b == b'_' || (ed.compl_on && is_word(b)) {
+                arm_compl(doc, ed);
+            } else {
+                ed.compl_on = false;
+            }
             Step::Redraw
         }
         Key::Other(0x09) => {
@@ -590,17 +600,28 @@ fn place_on_line(doc: &[u8], len: usize, line: usize, goal: usize) -> usize {
     i
 }
 
+/// Opens the suggestion list for the word under the cursor. The word
+/// stays as typed until Ctrl-T accepts one.
+fn arm_compl(doc: &[u8], ed: &mut Editor) {
+    let start = word_start(doc, ed.cursor);
+    if start == ed.cursor {
+        ed.compl_on = false;
+        return;
+    }
+    let n = (ed.cursor - start).min(ed.prefix.len());
+    ed.prefix[..n].copy_from_slice(&doc[start..start + n]);
+    ed.prefix_len = n;
+    ed.compl_i = 0;
+    let mut slots = [Compl::new(); 8];
+    let found = complete(ed.lang, &doc[..ed.len], &ed.prefix[..n], &mut slots);
+    ed.compl_on = found > 0;
+}
+
 fn complete_word(doc: &mut [u8], ed: &mut Editor) -> Step {
     ed.quit_armed = false;
     let start = word_start(doc, ed.cursor);
     if !ed.compl_on {
-        let n = (ed.cursor - start).min(ed.prefix.len());
-        ed.prefix[..n].copy_from_slice(&doc[start..start + n]);
-        ed.prefix_len = n;
-        ed.compl_i = 0;
-        ed.compl_on = true;
-    } else {
-        ed.compl_i = ed.compl_i.saturating_add(1);
+        arm_compl(doc, ed);
     }
     let mut slots = [Compl::new(); 8];
     let n = complete(
@@ -614,11 +635,17 @@ fn complete_word(doc: &mut [u8], ed: &mut Editor) -> Step {
         ed.compl_on = false;
         return Step::Redraw;
     }
+    let typed = &doc[start..ed.cursor.min(ed.len)];
+    let shown = ed.compl_i % n;
+    if &slots[shown].bytes[..slots[shown].len] == typed {
+        ed.compl_i = ed.compl_i.saturating_add(1);
+    }
     let slot = slots[ed.compl_i % n];
     if !replace_word(doc, ed, start, &slot.bytes[..slot.len]) {
         ed.compl_on = false;
         return Step::Redraw;
     }
+    ed.compl_on = true;
     set_msg(ed, &slot.bytes[..slot.len]);
     Step::Redraw
 }
@@ -843,6 +870,10 @@ fn draw_status(doc: &[u8], ed: &Editor, line: usize, col: usize) {
         out.push_vis(ed.lang.name());
         out.push_vis(b"  ");
     }
+    if ed.compl_on && push_compl_list(&mut out, doc, ed) {
+        finish_status(&mut out, line, col);
+        return;
+    }
     match ed.note {
         Note::New => out.push_vis(b"New File"),
         Note::Wrote(n) => {
@@ -867,6 +898,10 @@ fn draw_status(doc: &[u8], ed: &Editor, line: usize, col: usize) {
     if ed.help {
         out.push_vis(b"  any key closes help");
     }
+    finish_status(&mut out, line, col);
+}
+
+fn finish_status(out: &mut Row, line: usize, col: usize) {
     out.push_vis(b"  @");
     out.push_dec(line + 1);
     out.push_vis(b",");
@@ -875,6 +910,54 @@ fn draw_status(doc: &[u8], ed: &Editor, line: usize, col: usize) {
     out.pad_to(WIDTH);
     out.push_sgr(b"\x1b[0m");
     out.flush();
+}
+
+/// Writes the open suggestion list. The current name carries its
+/// definition line. Returns false when nothing matches, so the
+/// diagnostic can use the row.
+fn push_compl_list(out: &mut Row, doc: &[u8], ed: &Editor) -> bool {
+    let mut slots = [Compl::new(); 8];
+    let n = complete(
+        ed.lang,
+        &doc[..ed.len],
+        &ed.prefix[..ed.prefix_len],
+        &mut slots,
+    );
+    if n == 0 {
+        return false;
+    }
+    let cur = ed.compl_i % n;
+    let budget = WIDTH.saturating_sub(12);
+    for i in 0..n {
+        let word = &slots[i].bytes[..slots[i].len];
+        let extra = if i == cur && slots[i].line != 0 {
+            1 + digits(slots[i].line as usize)
+        } else {
+            0
+        };
+        let gap = if i == 0 { 0 } else { 1 };
+        if out.cols + gap + word.len() + extra > budget {
+            break;
+        }
+        if gap == 1 {
+            out.push_vis(b" ");
+        }
+        out.push_vis(word);
+        if i == cur && slots[i].line != 0 {
+            out.push_vis(b":");
+            out.push_dec(slots[i].line as usize);
+        }
+    }
+    true
+}
+
+fn digits(mut n: usize) -> usize {
+    let mut d = 1;
+    while n >= 10 {
+        n /= 10;
+        d += 1;
+    }
+    d
 }
 
 fn draw_shortcuts() {

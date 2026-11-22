@@ -129,7 +129,7 @@ confused-deputy share rules.
 
 ## Table limits (today)
 
-The on-disk version is GALF **v16**. The sealed slot holds actors,
+The on-disk version is GALF **v17**. The sealed slot holds actors,
 shares, quotas, and geometry. Inodes live in the data pool, named by
 up to 128 map blocks. A directory is the sibling list hung off its
 inode (cards still walk the parent pointer). Empty files cost an
@@ -139,7 +139,7 @@ blocks a read or write is using; the rest stay on the device.
 | Resource | Cap |
 | --- | --- |
 | Actors | 32 |
-| Names (files + dirs + roots) | 1,048,576 format ceiling. A live disk uses at most a quarter of its pool for inode and map blocks, and never more than that ceiling |
+| Names (files + dirs + roots) | 1,048,576 format ceiling. One desk compile names 41 (`DESK_COMPILE_FILES`: 33 sysroot entries, 4 directories, admin root, Desktop, `hello.rs`, and `/hello`). A live disk uses at most a quarter of its pool for inode and map blocks, and never more than the ceiling. An 8 MiB image holds a few thousand names, which covers that 41 |
 | Durable home shares | 32 |
 | Block size | 4096 bytes |
 | Extents per file | 8. One sequential write in a commit is one extent |
@@ -155,8 +155,12 @@ blocks a read or write is using; the rest stay on the device.
 
 An 8 MiB test image holds a few thousand names and about 5 MiB of
 file data. A 32 GiB disk clears 1,000,000 names and a file over
-16 GiB. 1,048,576 is the format ceiling, not a counted desk-compile
-file count (Milestone 99 is still open).
+16 GiB. 1,048,576 is the format ceiling. One desk compile names
+**41** files and directories: the `rustc-sysroot: 33 entries` import,
+the four directories that import creates, the admin root, `Desktop`,
+`hello.rs`, and the `/hello` that `rustc hello.rs -o /hello` writes.
+The sealed geometry stores that count. `DISK_VERSION` is 17, so a v16
+image is refused and the operator deletes `galfs.img`.
 
 The IF=0 syscall path must not heap-allocate over this table. A file
 that needs a ninth extent is `NoResource`, which is what happens when
@@ -189,7 +193,7 @@ quarter of it. File bytes take the rest, up to 64 GiB.
 | Dual slot | Commit writes changed data blocks, then the **inactive** metadata slot, then flush |
 | Generation | Newer gen wins on load |
 | Crash | A torn slot leaves the previous metadata, which still names its own blocks |
-| Version | Layout bump **refuses** old images (no silent reinterpret). v16 refuses v12, v13, v14, and v15 |
+| Version | Layout bump **refuses** old images (no silent reinterpret). v17 refuses v12 through v16 |
 
 ### Commit ordering and flush
 
@@ -310,8 +314,9 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
 
 ### Today (through review readiness)
 
-- GALF **v16**: 32 actors / up to 1,048,576 names / 32 durable shares;
-  per-actor `kdf_iters`; 4 KiB extents (eight per file) in a pool sized
+- GALF **v17**: 32 actors / up to 1,048,576 names / 32 durable shares.
+  The geometry records that one desk compile names 41 objects. A v16
+  image is refused. Per-actor `kdf_iters`; 4 KiB extents (eight per file) in a pool sized
   to the disk. Inodes are pool blocks, not slot bytes. File length is
   a `u64`, capped at 64 GiB and at whatever the disk has left after
   inode and map blocks. Directory sibling lists; per-actor object and
@@ -325,8 +330,8 @@ cards (`USER_TOKENS`); `share` / `unshare` manage durable home shares.
   it fits in 80 MiB (`core`'s metadata is about 66 MiB, so the 8 MiB
   test image still promotes it). Promoted bytes are not sealed. Host
   **v13** (`galexy-galf::v13`) remains the 32-file extent-map checker.
-  `check_image` dispatches on the version word. The kernel speaks v16
-  and refuses every other version, including v13, v14, and v15. v13
+  `check_image` dispatches on the version word. The kernel speaks v17
+  and refuses every other version, including v13 through v16. v13
   names 32 files and does not carry actors, shares, or quotas, so it
   is not the login volume
 - Sealed dual-slot image (64 KiB per slot) on virtio-blk, else the IDE slave
@@ -442,9 +447,11 @@ Checkboxes: `TODO.md`. The bar is a commit that costs the changed
 bytes, one metadata seal, and one flush. None of the three bars is
 a gigabyte per second.
 
-- **97** — one virtio data request for the 288-sector v12 slot, then
-  one flush. `DISK_VERSION` stays 12. Still one command in flight.
-  `PERF.md` records the TCG and KVM sync times
+- **97** (landed) — one virtio data request for the 64 KiB metadata
+  slot (128 sectors), then one flush. `DISK_VERSION` does not move
+  for this bar. Still one command in flight. `PERF.md` records the
+  TCG sync time. The KVM cell stays empty on a host whose
+  `KVM_CREATE_VCPU` fails
 - **98** (landed) — the kernel formats and loads a large volume:
   changed 4 KiB blocks, one sealed 64 KiB metadata slot, one flush.
   Actors, shares, and quotas stay in that metadata. v16 also keeps
@@ -454,9 +461,11 @@ a gigabyte per second.
   are refused. A 1 MiB file survives reboot. On the 8 MiB test image
   `core`'s metadata (~66 MiB) stays in the RAM store because the live
   file cap is a few megabytes
-- **99** — count the files one desk compile needs and write that count
-  here. 1,048,576 is the v16 format ceiling, not that count. Dual-slot
-  order stays. A crash recovers the previous metadata slot. No journal
+- **99** (landed) — one desk compile names 41 objects, written above
+  and in the sealed geometry. 1,048,576 stays the format ceiling. The
+  version moves to 17 with `galexy-galf`, and a v16 image is refused.
+  Dual-slot order stays. A crash recovers the previous metadata slot.
+  No journal
 
 Left out of this phase: `async` / `await`, several virtio commands in
 flight, ATA PIO as the fast path, POSIX, mmap, sparse files, hard links.
@@ -501,9 +510,9 @@ and the legacy virtio I/O BAR (`disable-modern=on`, serial line
 | **63** ✅ | Per-actor KDF cost in the actor record (GALF v12) |
 | **64** ✅ | virtio-blk parks on `IO_BLOCK`; completion IRQ (INTx then, MSI-X in 65) |
 | **65** ✅ | virtio 1.x + MSI-X on `q35`; IDE (`-M pc`) and legacy virtio as fallbacks |
-| **97** | One virtio request for the 288-sector slot; `DISK_VERSION` stays 12; sync times in `PERF.md` |
-| **98** | Kernel large volume: changed 4 KiB blocks plus one 64 KiB metadata seal; login table kept; v12 refused |
-| **99** | Object table sized to one desk compile; crash recovers the previous metadata slot |
+| **97** ✅ | One virtio request for the 64 KiB slot, then one flush; sync time in `PERF.md` |
+| **98** ✅ | Kernel large volume: changed 4 KiB blocks plus one 64 KiB metadata seal; login table kept; v12 refused |
+| **99** ✅ | Object table covers one desk compile (41 names); v17 refuses v16; crash recovers the previous metadata slot |
 
 Demo limits above are the shipped contract (double-indirect and fsck
 repair-into-new-slot are follow-ons). New code must not invent a second

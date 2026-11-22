@@ -32,14 +32,14 @@ pub const DISK_SLOT_COUNT: usize = 2;
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
 /// Inodes live in the pool. A sealed slot holds actors, shares, and the
 /// inode map. Older images are refused.
-pub const DISK_VERSION: u16 = 16;
+pub const DISK_VERSION: u16 = 17;
 
 pub use volume::{
-    inode_address, map_address, map_ptr_offset, payload_len, read_actor, read_free, read_geometry_head,
-    read_inode, read_map_ptrs, read_share, volume_limits, write_actor, write_free, write_geometry,
-    write_inode, write_map_ptrs, write_share, ACTOR_ON_DISK, FILE_CAP, FREE_EXTENTS, GEOMETRY_ON_DISK,
-    INODE_ON_DISK, INODES_PER_BLOCK, MAP_PER_BLOCK, MAP_POINTERS, OBJECT_CAP, SHARE_ON_DISK, Geometry,
-    VolumeLimits,
+    inode_address, map_address, map_ptr_offset, payload_len, read_actor, read_free,
+    read_geometry_head, read_inode, read_map_ptrs, read_share, volume_limits, write_actor,
+    write_free, write_geometry, write_inode, write_map_ptrs, write_share, Geometry, VolumeLimits,
+    ACTOR_ON_DISK, DESK_COMPILE_FILES, FILE_CAP, FREE_EXTENTS, GEOMETRY_ON_DISK, INODES_PER_BLOCK,
+    INODE_ON_DISK, MAP_PER_BLOCK, MAP_POINTERS, OBJECT_CAP, SHARE_ON_DISK,
 };
 /// Format ceiling. A live volume's object table is [`VolumeLimits::inode_slots`].
 pub const OBJECT_SLOTS: usize = OBJECT_CAP as usize;
@@ -515,7 +515,14 @@ pub fn open_stored_block(image: &[u8], index: u32, volume_key: &[u8; KEY_LEN]) -
     tag.copy_from_slice(&image[tag_off + 4..tag_off + 4 + TAG_LEN]);
     let mut block = [0u8; BLOCK_SIZE];
     block.copy_from_slice(&image[data_off..data_off + BLOCK_SIZE]);
-    let ok = open_block(volume_key, DOMAIN_DATA, index as usize, gen, &mut block, &tag);
+    let ok = open_block(
+        volume_key,
+        DOMAIN_DATA,
+        index as usize,
+        gen,
+        &mut block,
+        &tag,
+    );
     wipe_bytes(&mut block);
     ok
 }
@@ -554,7 +561,10 @@ pub fn encode_slot(
     flat[14] = 1; // sealed
     flat[16..24].copy_from_slice(&generation.to_le_bytes());
 
-    write_geometry(&mut flat[DISK_HEADER..DISK_HEADER + GEOMETRY_ON_DISK], &table.geo);
+    write_geometry(
+        &mut flat[DISK_HEADER..DISK_HEADER + GEOMETRY_ON_DISK],
+        &table.geo,
+    );
     let mut off = DISK_HEADER + GEOMETRY_ON_DISK;
     for actor in &table.actors {
         write_actor(&mut flat[off..off + ACTOR_ON_DISK], actor);
@@ -614,7 +624,10 @@ pub fn decode_slot(flat: &mut [u8], passphrase: &[u8], table: &mut Table) -> Opt
     let version = u16::from_le_bytes([flat[4], flat[5]]);
     let actors = u16::from_le_bytes([flat[6], flat[7]]) as usize;
     let shares = u16::from_le_bytes([flat[8], flat[9]]) as usize;
-    if version != DISK_VERSION || actors != ACTOR_SLOTS || shares != SHARE_SLOTS || flat[14] & 1 == 0
+    if version != DISK_VERSION
+        || actors != ACTOR_SLOTS
+        || shares != SHARE_SLOTS
+        || flat[14] & 1 == 0
     {
         return None;
     }
@@ -1004,12 +1017,20 @@ mod tests {
         assert_eq!(OBJECT_ON_DISK, 192);
         assert_eq!(SHARE_ON_DISK, 8);
         assert_eq!(SHARE_SLOTS, 32);
-        assert!(FILE_BYTES > 16 * 1024 * 1024 * 1024);
-        assert_eq!(DISK_VERSION, 16);
+        assert_eq!(DISK_VERSION, 17);
+        assert_eq!(DESK_COMPILE_FILES, 41);
+        assert!(
+            volume_limits(MIN_DISK_BYTES as u64).inode_slots >= DESK_COMPILE_FILES,
+            "the 8 MiB login image must name a desk compile"
+        );
         assert!(pool_blocks_for(MIN_DISK_BYTES) > 256);
         let big = volume_limits(32 * 1024 * 1024 * 1024);
         assert!(big.inode_slots > 1_000_000, "slots {}", big.inode_slots);
-        assert!(big.file_max > 16 * 1024 * 1024 * 1024, "file {}", big.file_max);
+        assert!(
+            big.file_max > 16 * 1024 * 1024 * 1024,
+            "file {}",
+            big.file_max
+        );
         let mut wide = Object::empty();
         wide.kind = KIND_FILE;
         wide.len = 20 * 1024 * 1024 * 1024;

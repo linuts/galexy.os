@@ -90,7 +90,14 @@ fn seal_pool(image: &mut [u8], index: u32, gen: u32, domain: u8, plain: &[u8]) {
     let mut block = [0u8; BLOCK_SIZE];
     block[..plain.len().min(BLOCK_SIZE)].copy_from_slice(&plain[..plain.len().min(BLOCK_SIZE)]);
     let mut tag = [0u8; TAG_LEN];
-    assert!(seal_block(&VK, domain, index as usize, gen, &mut block, &mut tag));
+    assert!(seal_block(
+        &VK,
+        domain,
+        index as usize,
+        gen,
+        &mut block,
+        &mut tag
+    ));
     let tag_off = block_tag_offset(index);
     image[tag_off..tag_off + 4].copy_from_slice(&gen.to_le_bytes());
     image[tag_off + 4..tag_off + 4 + TAG_LEN].copy_from_slice(&tag);
@@ -120,7 +127,7 @@ fn check(image: &[u8]) -> Report {
     let report = check_image(image, PASS, &mut slot_buf, &mut best, &mut cand);
     if let Some(gen) = report.generation {
         // The table that came back is the one written at that generation.
-        assert_eq!(best.actors[0].max_bytes as u64, gen);
+        assert_eq!(best.actors[0].max_bytes, gen);
     }
     report
 }

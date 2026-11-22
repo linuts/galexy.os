@@ -32,6 +32,7 @@ can), and replace the KVM cells.
 | `pipe` | 4 KiB copied in 256-byte chunks through one pipe, in-kernel `pipe::write` / `read` (syscall cost is the yield row) | 3 525 | 2 000 000 |
 | `galfs` | 32 KiB append of a static buffer + `sync_explicit`. On a RAM volume sync returns immediately; the number is the append | 3 849 | 5 000 000 |
 | `repaint` | `repaint_shown` after the shown cells are filled with `M` (the fill is not timed) | 281 066 | 5 000 000 |
+| `sync` | one virtio data request for the 64 KiB metadata slot, then one flush. TCG debug, not the release bench profile. `galfs_disk_persists_virtio_blk` printed `data_reqs=1` | first seal 26 ms; later seals 4 ms and 2 ms | empty (this host cannot create a vCPU) |
 
 Yield on TCG is about 2.2 ms per call. A `dev` profile run on the same
 host landed within a few percent (21 423 122 µs), so the cost is the
@@ -52,7 +53,7 @@ so a working KVM host fails a regression that jumps into seconds.
 | --- | --- | --- | --- |
 | Syscall round trip, no I/O (`yield`) | TCG release ≈ 2.2 ms per call for 10 000; KVM ceiling 2 s for the whole loop | the IF=0 path allocates nothing and takes at most the `THREADS` lock | `bench_test_passes` |
 | galfs mutate (`create`, `write`, `remove`, `rename`) on the RAM table | **tens of microseconds** class on real hardware; TCG append of 32 KiB was 3.8 ms | fixed tables, no heap, no disk | `bench_test_passes` (`galfs`), `galfs_test_passes` |
-| galfs mutate with a disk | **milliseconds** class: one AEAD over the 288-sector slot plus a flush | every mutate publishes a sealed slot; the cost is the seal, not the data. virtio completion is INTx (`IO_BLOCK`), not a 10 M-spin | `galfs_disk_*`, `shell_query_typing_e2e` (`sync`) |
+| galfs mutate with a disk | **milliseconds** class: one virtio data request for the 64 KiB slot, then one flush | every mutate publishes a sealed slot; the cost is the seal, not the data. virtio completion is MSI-X (`IO_BLOCK`), not a 10 M-spin | `galfs_disk_persists_virtio_blk` (`sync data_reqs=1`) |
 | galfs mutate rate on QEMU (TCG, disk) | **≥ 10 / s** sustained; the suite's capacity smoke does hundreds per boot | slot seal dominates; ATA PIO remains the legacy fallback | `blocks_test_passes`, `quota_test_passes`, `indirect_test_passes` |
 | Console output | **512 bytes per task per tick**; excess returns success with `0` copied | one flooding task cannot starve a seat or hide audit lines | `pathological_test_passes` (3 000-call flood: admitted ≤ 512 × (ticks + 2), never an error), `shell_util_typing_e2e` (`linger`) |
 | Keyboard | ring of 64 keys per TTY; overflow drops the newest and counts | typing never blocks an IRQ | `audit_console_test_passes` |
@@ -76,7 +77,7 @@ ceiling is `NoResource`, never a panic.
 | Process caps per task | 16 | `galexy_abi::MAX_PROC_CAPS` |
 | Pipes system-wide / bytes per pipe | 8 / 256 | `sched::pipe` |
 | galfs tokens per task | 8 | `GALFS.md` → Table limits |
-| galfs actors / objects / shares | 32 / 384 / 32 | `GALFS.md` |
+| galfs actors / objects / shares | 32 / 1,048,576 ceiling, 41 for one desk compile / 32 | `GALFS.md` |
 | galfs block pool / max file | v16: 4 KiB extents, eight per file, pool sized to the disk. File bytes are what remains after inode and map blocks, capped at 64 GiB. A longer file promotes into a RAM store, 80 MiB per file, 128 MiB pool (Milestones 72–73) | `GALFS.md` |
 | Default actor quota | 16 objects, 16 KiB | `GALFS.md` |
 | Path | 8 components × 64 bytes; actor names 32 | `galexy_core::path` |
@@ -96,10 +97,12 @@ ceiling is `NoResource`, never a panic.
 - **Disk bandwidth.** ATA is PIO. virtio-blk completes on MSI-X (INTx
   if the function has no MSI-X table). Correctness under `cache=none` /
   `writeback` / `writethrough` is tested; throughput is not.
-  Milestone 97 records one v12 sync under TCG and under KVM. That
-  number is the cost of sealing the 288-sector slot, not a
-  gigabyte-per-second budget. Milestones 98–99 are the later
-  commits (`GALFS.md` → Scheduled commits).
+  Milestone 97 records one metadata-slot sync under TCG. That number
+  is the cost of one virtio data request for the 64 KiB slot plus one
+  flush, not a gigabyte-per-second budget. The KVM cell stays empty
+  on this host (`KVM_CREATE_VCPU` fails; same note as the bench table).
+  Milestone 99 sizes the object table around 41 desk-compile names
+  (`GALFS.md`). The format ceiling stays 1,048,576.
 - **Memory.** Free frames are reported by `stats`; a soft reserve
   refuses user spawns before the kernel heap is starved
   (`DESIGN.md` → Memory policy). There is no OOM killer because there
