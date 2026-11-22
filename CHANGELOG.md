@@ -8,6 +8,12 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#153](https://github.com/linuts/galexy.os/pull/153) — Milestones 78–85 — Phase 10 lands.
+  The kernel moves Ethernet frames on virtio-net. A ring-3 service named
+  `net` speaks DHCP, ARP, UDP, TCP, and TLS 1.3. `fetch <name>` dials a
+  granted name and prints the lane. Handshake floods stay inside the
+  deadline. Inbound `serve` attaches a listener and does not yet hand
+  the next lane back. There is no socket syscall.
 - [#151](https://github.com/linuts/galexy.os/pull/151) — Shell — A foreground program reads one
   cooked line from `std::io::stdin` (echo, backspace, arrows, Enter, Ctrl-D).
   The shell grants the keyboard and waits. A pipe stays raw.
