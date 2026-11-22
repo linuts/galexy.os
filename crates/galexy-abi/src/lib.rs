@@ -247,6 +247,32 @@ pub mod reserved {
     pub const fn init(rights: super::CapRights) -> Cap {
         Cap::new(INIT_INDEX, rights)
     }
+
+    /// The virtio-net wire. `read` copies one received Ethernet frame.
+    /// `write` queues one frame. Only the task named `net` may use it.
+    /// The kernel does not parse the frame.
+    ///
+    /// **Experimental** (Milestone 78).
+    pub const WIRE_INDEX: u64 = 0x8009;
+
+    /// The wire capability.
+    pub const fn wire(rights: super::CapRights) -> Cap {
+        Cap::new(WIRE_INDEX, rights)
+    }
+
+    /// The net service control capability. `send` parks for a reply the
+    /// same way [`INIT_INDEX`] does. The kernel stamps [`INIT_RPC_HDR`]
+    /// bytes. A logged-out task is `AccessDenied`.
+    ///
+    /// **Experimental** (Milestone 82). Opcodes are [`NET_OP_LINK`] and
+    /// the rest. A dial reply begins with 8 little-endian Cap bits (0
+    /// when the reply carries no lane) and then the text.
+    pub const NET_INDEX: u64 = 0x800A;
+
+    /// The net control capability. Rights must include [`super::CapRights::WRITE`].
+    pub const fn net(rights: super::CapRights) -> Cap {
+        Cap::new(NET_INDEX, rights)
+    }
 }
 
 /// `power` operand: turn the machine off (ACPI S5).
@@ -796,6 +822,19 @@ pub enum Syscall {
     ///
     /// **Stable** (Milestone 90).
     Date,
+    /// `lane(buf)` — mint a lane pair.
+    ///
+    /// Args: `RDI` = user address of 16 bytes. On success those bytes
+    /// are two little-endian Caps (the caller's end, then the end to
+    /// give away), each with `READ|WRITE`. Only the task named `net`
+    /// may call this. Any other caller is [`SysError::AccessDenied`].
+    /// Thirty-two live lanes. A full table is [`SysError::NoResource`].
+    /// `read` and `write` on a lane Cap move plaintext, up to 16 KiB
+    /// buffered in each direction. `0` from `read` is EOF (the other
+    /// end is closed and the buffer is empty).
+    ///
+    /// **Experimental** (Milestone 82).
+    Lane,
 }
 
 /// `date` op (`RDI`): read civil UTC seconds.
@@ -891,6 +930,28 @@ pub const INIT_OP_DATE_SET: u8 = 11;
 /// compiled interval. The armed time is forgotten on reboot.
 pub const INIT_OP_AT: u8 = 12;
 
+/// Net control: report `down`, `up`, or `up` plus our locator.
+/// Any logged-in seat. The name is ignored.
+pub const NET_OP_LINK: u8 = 1;
+/// Net control: dial a name this seat was granted. The reply's first
+/// 8 bytes are the lane Cap (little-endian bits), then a short text line.
+pub const NET_OP_DIAL: u8 = 2;
+/// Net control: install a name. Admin only. After the name come a
+/// locator (`port` u16 LE, `kind` u8, 16 address bytes) and a 32-byte key.
+pub const NET_OP_ALLOW: u8 = 3;
+/// Net control: let an actor dial a name. Admin only. After the name
+/// come `actor_len` and the actor bytes.
+pub const NET_OP_GRANT: u8 = 4;
+/// Net control: drop that dial right. Same payload shape as [`NET_OP_GRANT`].
+pub const NET_OP_REVOKE: u8 = 5;
+/// Net control: attach a gate for a name to the calling task. Admin only.
+pub const NET_OP_SERVE: u8 = 6;
+
+/// Live lanes the kernel will hold (Milestone 82).
+pub const LANE_SLOTS: usize = 32;
+/// Bytes buffered in one direction of a lane.
+pub const LANE_BYTES: usize = 16 * 1024;
+
 /// `recv` `R9` bit 0: an empty queue returns [`SysError::NoResource`]
 /// instead of parking. EOF (peer closed) is still `0`.
 pub const RECV_POLL: u64 = 1;
@@ -902,7 +963,7 @@ pub const WAIT_POLL: u64 = 1;
 
 /// The ABI's syscall list (index = number). Length is capped at 64 while
 /// there is no ABI versioning story (lifting the cap is version-1 work).
-pub const SYSCALLS: [Syscall; 35] = [
+pub const SYSCALLS: [Syscall; 36] = [
     Syscall::Exit,
     Syscall::Yield,
     Syscall::Write,
@@ -938,6 +999,7 @@ pub const SYSCALLS: [Syscall; 35] = [
     Syscall::ThreadExit,
     Syscall::Futex,
     Syscall::Date,
+    Syscall::Lane,
 ];
 
 /// Maximum `sleep(ms)` argument (one minute). Longer waits loop in userspace.

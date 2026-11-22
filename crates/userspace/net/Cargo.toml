@@ -1,0 +1,21 @@
+[package]
+name = "net"
+version = "0.1.0"
+edition = "2021"
+description = "The lane service: DHCP, TCP, and TLS 1.3 on the virtio-net wire."
+
+[[bin]]
+name = "net"
+path = "src/main.rs"
+
+[dependencies]
+galexy-rt = { path = "../galexy-rt", features = ["std"] }
+galexy-abi = { path = "../../galexy-abi" }
+galexy-net = { path = "../../galexy-net" }
+galexy-netcfg = { path = "../../galexy-netcfg" }
+rustls = { version = "0.23", default-features = false, features = ["std"] }
+rustls-pure = "0.15"
+getrandom = "0.4"
+
+[build-dependencies]
+galexy-abi = { path = "../../galexy-abi" }

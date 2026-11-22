@@ -1,8 +1,9 @@
 //! Ring-3 randomness for `std` (`HashMap` keys and the `rdrand` getrandom
 //! backend).
 //!
-//! There is no random syscall. `Syscall::Lane` stays reserved at 35, and
-//! a user task cannot touch the TPM. `RDRAND` is the hardware source.
+//! There is no random syscall. `Syscall::Lane` (35) mints a network lane
+//! for the task named `net`. A user task cannot touch the TPM. `RDRAND`
+//! is the hardware source.
 //! When it is absent or stuck, the monotonic clock is mixed in so the
 //! call returns. Kernel salts and volume keys use `arch::rand`, which
 //! prefers the TPM, then the firmware sample, then this same instruction,

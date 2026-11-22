@@ -7,7 +7,7 @@ use super::spawn::*;
 use super::task::*;
 use super::thread::*;
 
-use super::{channel, context, pipe};
+use super::{channel, context, lane, pipe};
 use crate::serial_println;
 use core::sync::atomic::{AtomicBool, Ordering};
 use galexy_abi::{Cap, SysError, SyscallResult, PROC_CAP_BASE};
@@ -136,6 +136,171 @@ pub fn current_is_init() -> bool {
             .get(slot - 1)
             .is_some_and(|thread| thread.is_init)
     })
+}
+
+/// True when the running task is the wire holder.
+///
+/// Its console writes are serial-only, same as init, so a link line
+/// cannot paint the login screen.
+pub fn current_is_net() -> bool {
+    let slot = current_slot();
+    if slot == 0 {
+        return false;
+    }
+    interrupts::without_interrupts(|| {
+        THREADS
+            .lock()
+            .get(slot - 1)
+            .is_some_and(|thread| thread.name() == "net")
+    })
+}
+
+/// Wakes `net` out of `sleep` when a frame or a control message arrives.
+pub fn wake_net() {
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        wake_net_for_control(&mut threads);
+    });
+}
+
+/// Caller holds [`THREADS`]. A sleeping `net` is `Interrupted` so it can
+/// read the wire or its control channel. A net that is parked on something
+/// else stays parked.
+pub(in crate::sched) fn wake_net_for_control(threads: &mut [Thread]) {
+    let Some(index) = threads.iter().position(|t| t.name() == "net") else {
+        return;
+    };
+    if threads[index].state.load(Ordering::Acquire) != STATE_WAITING {
+        return;
+    }
+    if threads[index].sleep_deadline.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    clear_wait_fields(&threads[index]);
+    stamp_waiter_frame(&threads[index], SyscallResult::err(SysError::Interrupted));
+    set_running(&threads[index]);
+}
+
+/// Completes lane readers and writers that can move bytes now.
+pub fn wake_lane_waiters(id: u8) {
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        for _ in 0..MAX_THREADS {
+            let mut readers = [0usize; MAX_THREADS];
+            let mut writers = [0usize; MAX_THREADS];
+            let mut nr = 0usize;
+            let mut nw = 0usize;
+            for (i, t) in threads.iter().enumerate().take(MAX_THREADS) {
+                if t.state.load(Ordering::Acquire) != STATE_WAITING {
+                    continue;
+                }
+                if t.io_pipe.load(Ordering::Acquire) != id {
+                    continue;
+                }
+                match t.io_kind.load(Ordering::Acquire) {
+                    IO_LANE_READ => {
+                        readers[nr] = i;
+                        nr += 1;
+                    }
+                    IO_LANE_WRITE => {
+                        writers[nw] = i;
+                        nw += 1;
+                    }
+                    _ => {}
+                }
+            }
+            let before = nr + nw;
+            if before == 0 {
+                break;
+            }
+            for &i in &readers[..nr] {
+                complete_lane_read(&mut threads, i);
+            }
+            for &i in &writers[..nw] {
+                complete_lane_write(&mut threads, i);
+            }
+            let mut still = 0usize;
+            for t in threads.iter() {
+                if t.state.load(Ordering::Acquire) != STATE_WAITING {
+                    continue;
+                }
+                if t.io_pipe.load(Ordering::Acquire) != id {
+                    continue;
+                }
+                let k = t.io_kind.load(Ordering::Acquire);
+                if k == IO_LANE_READ || k == IO_LANE_WRITE {
+                    still += 1;
+                }
+            }
+            if still >= before {
+                break;
+            }
+        }
+    });
+}
+
+fn complete_lane_read(threads: &mut [Thread], index: usize) {
+    let addr = threads[index].io_addr.load(Ordering::Acquire);
+    let len = threads[index].io_len.load(Ordering::Acquire) as usize;
+    let id = threads[index].io_pipe.load(Ordering::Acquire);
+    let cr3 = threads[index].cr3.load(Ordering::Acquire);
+    let end = threads[index].io_extra.load(Ordering::Acquire) as u8;
+    let mut staged = [0u8; 1024];
+    let max = len.min(staged.len());
+    let result = match lane::try_read(id, end, &mut staged[..max]) {
+        Ok(lane::ReadResult::Ready(n)) => {
+            let root = PhysFrame::from_start_address(PhysAddr::new(cr3)).expect("cr3");
+            // SAFETY: parked waiter's tree, not CR3-active. Phys-map copy.
+            let ok = unsafe {
+                crate::arch::mm::with_table(root, |mapper| {
+                    copy_to_user_via(mapper, addr, &staged[..n])
+                })
+            };
+            if ok {
+                SyscallResult::ok(n as u64)
+            } else {
+                SyscallResult::err(SysError::BadBuffer)
+            }
+        }
+        Ok(lane::ReadResult::Eof) => SyscallResult::ok(0),
+        Ok(lane::ReadResult::WouldBlock) => return,
+        Err(e) => SyscallResult::err(e),
+    };
+    clear_wait_fields(&threads[index]);
+    stamp_waiter_frame(&threads[index], result);
+    set_running(&threads[index]);
+}
+
+fn complete_lane_write(threads: &mut [Thread], index: usize) {
+    let addr = threads[index].io_addr.load(Ordering::Acquire);
+    let len = threads[index].io_len.load(Ordering::Acquire) as usize;
+    let id = threads[index].io_pipe.load(Ordering::Acquire);
+    let cr3 = threads[index].cr3.load(Ordering::Acquire);
+    let end = threads[index].io_extra.load(Ordering::Acquire) as u8;
+    let mut staged = [0u8; 1024];
+    let max = len.min(staged.len());
+    let root = PhysFrame::from_start_address(PhysAddr::new(cr3)).expect("cr3");
+    // SAFETY: parked waiter's tree, not CR3-active. Phys-map copy.
+    let ok = unsafe {
+        crate::arch::mm::with_table(root, |mapper| {
+            copy_from_user_via(mapper, addr, &mut staged[..max])
+        })
+    };
+    if !ok {
+        clear_wait_fields(&threads[index]);
+        stamp_waiter_frame(&threads[index], SyscallResult::err(SysError::BadBuffer));
+        set_running(&threads[index]);
+        return;
+    }
+    let result = match lane::try_write(id, end, &staged[..max]) {
+        Ok(lane::WriteResult::Ready(n)) => SyscallResult::ok(n as u64),
+        Ok(lane::WriteResult::WouldBlock) => return,
+        Ok(lane::WriteResult::Closed) => SyscallResult::err(SysError::Unsupported),
+        Err(e) => SyscallResult::err(e),
+    };
+    clear_wait_fields(&threads[index]);
+    stamp_waiter_frame(&threads[index], result);
+    set_running(&threads[index]);
 }
 
 /// Console the running task writes. The main loop is TTY 0.
@@ -581,6 +746,9 @@ pub(crate) fn task_sleep(ms: u64) -> Result<(), SysError> {
         if thread.is_init && init_ctrl_queued() {
             return Err(SysError::Interrupted);
         }
+        if thread.name() == "net" && (crate::drivers::virtio_net::has_rx() || net_ctrl_queued()) {
+            return Err(SysError::Interrupted);
+        }
         thread.wait_child_slot.store(0, Ordering::Relaxed);
         thread
             .wait_proc_index
@@ -598,6 +766,15 @@ pub(crate) fn task_sleep(ms: u64) -> Result<(), SysError> {
 /// Caller holds [`THREADS`]. Channel lock is taken second.
 pub(in crate::sched) fn init_ctrl_queued() -> bool {
     let id = INIT_CTRL.load(Ordering::Acquire);
+    if id == 0xFF {
+        return false;
+    }
+    channel::queued_for(id, 0)
+}
+
+/// True when `net`'s control channel already holds a message for end 0.
+fn net_ctrl_queued() -> bool {
+    let id = NET_CTRL.load(Ordering::Acquire);
     if id == 0xFF {
         return false;
     }
@@ -775,6 +952,12 @@ pub(in crate::sched) const IO_CHAN_RECV: u8 = 5;
 pub(in crate::sched) const IO_INIT_RPC: u8 = 6;
 /// Futex wait (Milestone 70): `io_addr` is the word, `cr3` the key space.
 pub(in crate::sched) const IO_FUTEX: u8 = 7;
+/// Net control `send` parked until `net` replies.
+pub(in crate::sched) const IO_NET_RPC: u8 = 8;
+/// Lane `read` parked on an empty direction.
+pub(in crate::sched) const IO_LANE_READ: u8 = 9;
+/// Lane `write` parked on a full direction.
+pub(in crate::sched) const IO_LANE_WRITE: u8 = 10;
 
 pub(in crate::sched) fn clear_wait_fields(thread: &Thread) {
     thread.wait_child_slot.store(0, Ordering::Relaxed);
@@ -1299,6 +1482,40 @@ pub fn wake_io_block() {
             }
         }
     });
+}
+
+/// Park on a lane end. The end number is stored in `io_extra` because
+/// `io_pipe` already holds the lane id.
+pub(crate) fn task_park_lane(
+    lane_id: u8,
+    read: bool,
+    cap: Cap,
+    addr: u64,
+    len: u32,
+) -> Result<(), SysError> {
+    let slot = current_slot();
+    if slot == 0 {
+        return Err(SysError::BadCap);
+    }
+    let index = file_slot(cap)?;
+    let kind = if read { IO_LANE_READ } else { IO_LANE_WRITE };
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let owner = running_proc_index(&threads, slot)?;
+        let end = match threads[owner].files[index].as_ref().map(|f| f.body) {
+            Some(FileBody::Lane { id, end }) if id == lane_id => end,
+            _ => return Err(SysError::BadCap),
+        };
+        let thread = threads.get_mut(slot - 1).ok_or(SysError::BadCap)?;
+        if !thread.is_user || thread.state.load(Ordering::Acquire) != STATE_RUNNING {
+            return Err(SysError::BadCap);
+        }
+        park_io(&mut threads, slot, kind, lane_id, addr, len, cap.bits());
+        threads[slot - 1]
+            .io_extra
+            .store(u64::from(end), Ordering::Relaxed);
+        Ok(())
+    })
 }
 
 /// Park on a pipe end. `read` selects reader vs writer wait.

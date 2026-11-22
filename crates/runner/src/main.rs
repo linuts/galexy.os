@@ -120,6 +120,10 @@ fn main() {
         cmd.arg("-device")
             .arg("virtio-blk-pci,drive=galfs,disable-legacy=off,queue-size=128");
         cmd.arg("-device").arg("virtio-keyboard-pci");
+        cmd.arg("-netdev")
+            .arg("user,id=net0")
+            .arg("-device")
+            .arg("virtio-net-pci,netdev=net0,disable-legacy=on,mac=52:54:00:12:34:56");
     }
     // SMP: 2 cores, exposed by the per-CPU substrate (gs:[8] syscall path,
     // per-CPU GDT/TSS). KVM + `-cpu host` when a vCPU can be created,

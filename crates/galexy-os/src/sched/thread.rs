@@ -93,6 +93,10 @@ pub const FOREGROUND_IDLE_MS: u64 = 15 * 60_000;
 
 /// Init's control channel. `0xFF` until init's first `channel` call.
 pub(in crate::sched) static INIT_CTRL: AtomicU8 = AtomicU8::new(0xFF);
+
+/// Channel id of the first channel the task named `net` created.
+/// `0xFF` until then. `send` on end 0 of this channel is a net reply.
+pub(in crate::sched) static NET_CTRL: AtomicU8 = AtomicU8::new(0xFF);
 /// `wait_proc_index` when the park is not a consuming Cap-wait.
 pub(in crate::sched) const WAIT_PROC_NONE: u8 = 0xFF;
 
@@ -125,6 +129,8 @@ pub(crate) enum FileBody {
     Pipe { id: u8, end: pipe::PipeEnd },
     /// Capability-channel endpoint (`0` or `1`).
     Channel { id: u8, end: u8 },
+    /// Lane end. End 0 is `net`. End 1 is the other task.
+    Lane { id: u8, end: u8 },
 }
 
 /// One open file. Archive bytes live in the bootloader's ramdisk; galfs
@@ -1192,7 +1198,9 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
 }
 
 /// User stack size in 4 KiB pages.
-pub(crate) const USER_STACK_PAGES: usize = 4;
+///
+/// `net` keeps a TLS connection on this stack. 16 KiB faulted under it.
+pub(crate) const USER_STACK_PAGES: usize = 64;
 
 /// Soft floor of free frames required before a user `spawn` / blob load.
 ///
@@ -1801,12 +1809,32 @@ pub(crate) fn task_self_inspect(dst: &mut [u8]) -> Result<usize, SysError> {
             STATE_EXITED => "exited",
             _ => "unknown",
         };
-        Ok(format_inspect_line(
-            dst,
-            thread.debug_id,
-            thread.name(),
-            state,
-        ))
+        let mut n = format_inspect_line(dst, thread.debug_id, thread.name(), state);
+        if n > 0 && dst[n - 1] == b'\n' && crate::drivers::virtio_net::present() {
+            n -= 1;
+            let mac = crate::drivers::virtio_net::mac();
+            let mut line = [0u8; 24];
+            line[0] = b' ';
+            line[1] = b'm';
+            line[2] = b'a';
+            line[3] = b'c';
+            line[4] = b'=';
+            for (i, byte) in mac.iter().enumerate() {
+                line[5 + i * 3] = hex_digit(byte >> 4);
+                line[6 + i * 3] = hex_digit(byte & 0xf);
+                if i != 5 {
+                    line[7 + i * 3] = b':';
+                }
+            }
+            let take = 22.min(dst.len().saturating_sub(n));
+            dst[n..n + take].copy_from_slice(&line[..take]);
+            n += take;
+            if n < dst.len() {
+                dst[n] = b'\n';
+                n += 1;
+            }
+        }
+        Ok(n)
     })
 }
 
@@ -1884,6 +1912,10 @@ pub(in crate::sched) fn format_inspect_line(
     push(state.as_bytes());
     push(b"\n");
     n
+}
+
+fn hex_digit(n: u8) -> u8 {
+    b"0123456789abcdef"[n as usize]
 }
 
 /// `(name, ticks)` for every RUNNING thread. The name is copied so the

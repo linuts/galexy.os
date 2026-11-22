@@ -276,6 +276,10 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             stamp(frame, syscall_date(frame.rdi, frame.rsi));
             Outcome::Resume
         }
+        n if n == Syscall::Lane as u64 => {
+            stamp(frame, syscall_lane(frame.rdi));
+            Outcome::Resume
+        }
         // Unknown numbers inside the table (none today) still answer.
         _ => {
             stamp(frame, SyscallResult::err(SysError::Unsupported));
@@ -380,10 +384,119 @@ enum IoResult {
 }
 
 fn syscall_write_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
+    if cap.index() == galexy_abi::reserved::WIRE_INDEX {
+        return IoResult::Done(syscall_wire_write(cap, addr, len));
+    }
     if cap.index() != galexy_abi::reserved::CONSOLE_INDEX {
         return syscall_write_file_ex(cap, addr, len);
     }
     IoResult::Done(syscall_write_console(cap, addr, len))
+}
+
+fn wire_holder(cap: Cap, write: bool) -> Result<(), SysError> {
+    let need = if write {
+        CapRights::WRITE
+    } else {
+        CapRights::READ
+    };
+    if !cap.rights().contains(need) {
+        return Err(SysError::AccessDenied);
+    }
+    if !crate::sched::current_is_net() {
+        return Err(SysError::AccessDenied);
+    }
+    Ok(())
+}
+
+fn syscall_wire_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+    if let Err(err) = wire_holder(cap, false) {
+        return SyscallResult::err(err);
+    }
+    let len = len.min(1600);
+    if len > 0 && user_buffer(addr, len, true).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut staged = [0u8; 1600];
+    match crate::drivers::virtio_net::recv(&mut staged[..len as usize]) {
+        Ok(0) => SyscallResult::ok(0),
+        Ok(n) => {
+            // SAFETY: `user_buffer` accepted `len` writable bytes and `n <= len`.
+            unsafe {
+                crate::arch::user_copy::copy_to_user(staged.as_ptr(), addr, n);
+            }
+            SyscallResult::ok(n as u64)
+        }
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_wire_write(cap: Cap, addr: u64, len: u64) -> SyscallResult {
+    if let Err(err) = wire_holder(cap, true) {
+        return SyscallResult::err(err);
+    }
+    if len == 0 || len > 1514 {
+        return SyscallResult::err(SysError::BadValue);
+    }
+    if user_buffer(addr, len, false).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    let mut staged = [0u8; 1514];
+    // SAFETY: `user_buffer` accepted every byte of the frame.
+    unsafe {
+        crate::arch::user_copy::copy_from_user(addr, staged.as_mut_ptr(), len as usize);
+    }
+    match crate::drivers::virtio_net::transmit(&staged[..len as usize]) {
+        Ok(()) => SyscallResult::ok(len),
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_lane(addr: u64) -> SyscallResult {
+    if user_buffer(addr, 16, true).is_err() {
+        return SyscallResult::err(SysError::BadBuffer);
+    }
+    match crate::sched::task_lane() {
+        Ok((end0, end1)) => {
+            let bits = [end0.bits(), end1.bits()];
+            // SAFETY: `user_buffer` accepted 16 writable user bytes.
+            unsafe {
+                crate::arch::user_copy::copy_to_user(bits.as_ptr() as *const u8, addr, 16);
+            }
+            SyscallResult::ok(0)
+        }
+        Err(err) => SyscallResult::err(err),
+    }
+}
+
+fn syscall_net_send(frame: &Context, cap: Cap) -> IoResult {
+    if !cap.rights().contains(CapRights::WRITE) {
+        return IoResult::Done(SyscallResult::err(SysError::AccessDenied));
+    }
+    let len = frame.rdx;
+    if len > galexy_abi::INIT_RPC_MAX as u64 {
+        return IoResult::Done(SyscallResult::err(SysError::BadValue));
+    }
+    if len > 0 && user_buffer(frame.rsi, len, false).is_err() {
+        return IoResult::Done(SyscallResult::err(SysError::BadBuffer));
+    }
+    let reply_len = frame.r9;
+    if reply_len > galexy_abi::CHAN_MSG_MAX as u64 || reply_len < 8 {
+        return IoResult::Done(SyscallResult::err(SysError::BadValue));
+    }
+    if user_buffer(frame.r8, reply_len, true).is_err() {
+        return IoResult::Done(SyscallResult::err(SysError::BadBuffer));
+    }
+    let mut bytes = [0u8; galexy_abi::INIT_RPC_MAX];
+    if len > 0 {
+        // SAFETY: `user_buffer` accepted every byte of the payload.
+        unsafe {
+            crate::arch::user_copy::copy_from_user(frame.rsi, bytes.as_mut_ptr(), len as usize);
+        }
+    }
+    match crate::sched::task_net_rpc(&bytes[..len as usize], frame.r8, reply_len as u32) {
+        Ok(()) => IoResult::Park,
+        Err(err) => IoResult::Done(SyscallResult::err(err)),
+    }
 }
 
 fn syscall_write_console(cap: Cap, addr: u64, len: u64) -> SyscallResult {
@@ -436,7 +549,7 @@ fn syscall_write_console(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     }
     // Init shares TTY 0 with F1. Its lines are serial-only, and the
     // console budget must not drop a backoff or shutdown marker.
-    if crate::sched::current_is_init() {
+    if crate::sched::current_is_init() || crate::sched::current_is_net() {
         let text = core::str::from_utf8(&staged[..len as usize]).unwrap_or("");
         for line in text.split('\n') {
             if !line.is_empty() {
@@ -490,7 +603,13 @@ fn syscall_write_file_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
                 Err(err) => IoResult::Done(SyscallResult::err(err)),
             }
         }
-        Ok(crate::sched::IoOp::ParkPipe { .. }) => {
+        Ok(crate::sched::IoOp::ParkLane { id, read: false }) => {
+            match crate::sched::task_park_lane(id, false, cap, addr, len as u32) {
+                Ok(()) => IoResult::Park,
+                Err(err) => IoResult::Done(SyscallResult::err(err)),
+            }
+        }
+        Ok(crate::sched::IoOp::ParkPipe { .. } | crate::sched::IoOp::ParkLane { .. }) => {
             IoResult::Done(SyscallResult::err(SysError::Unsupported))
         }
         Err(err) => IoResult::Done(SyscallResult::err(err)),
@@ -1057,6 +1176,9 @@ fn syscall_open(addr: u64, len: u64) -> SyscallResult {
 }
 
 fn syscall_read_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
+    if cap.index() == galexy_abi::reserved::WIRE_INDEX {
+        return IoResult::Done(syscall_wire_read(cap, addr, len));
+    }
     if cap.index() == galexy_abi::reserved::KEYBOARD_INDEX {
         return syscall_read_keyboard_ex(cap, addr, len);
     }
@@ -1093,7 +1215,13 @@ fn syscall_read_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
                 Err(err) => IoResult::Done(SyscallResult::err(err)),
             }
         }
-        Ok(crate::sched::IoOp::ParkPipe { .. }) => {
+        Ok(crate::sched::IoOp::ParkLane { id, read: true }) => {
+            match crate::sched::task_park_lane(id, true, cap, addr, len as u32) {
+                Ok(()) => IoResult::Park,
+                Err(err) => IoResult::Done(SyscallResult::err(err)),
+            }
+        }
+        Ok(crate::sched::IoOp::ParkPipe { .. } | crate::sched::IoOp::ParkLane { .. }) => {
             IoResult::Done(SyscallResult::err(SysError::Unsupported))
         }
         Err(err) => IoResult::Done(SyscallResult::err(err)),
@@ -1710,6 +1838,9 @@ fn syscall_send(frame: &Context) -> IoResult {
     let cap = Cap::from_bits(frame.rdi);
     if cap.index() == galexy_abi::reserved::INIT_INDEX {
         return syscall_init_send(frame, cap);
+    }
+    if cap.index() == galexy_abi::reserved::NET_INDEX {
+        return syscall_net_send(frame, cap);
     }
     let len = frame.rdx;
     if len > galexy_abi::CHAN_MSG_MAX as u64 {

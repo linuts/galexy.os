@@ -51,6 +51,7 @@ static IDT: LazyLock<Mutex<InterruptDescriptorTable>> = LazyLock::new(|| {
     // Virtio-blk completion (INTx or MSI-X) and virtio-input keys.
     idt[crate::drivers::virtio_blk::VIRTIO_VECTOR].set_handler_fn(virtio_blk_handler);
     idt[crate::drivers::virtio_input::VECTOR].set_handler_fn(virtio_input_handler);
+    idt[crate::drivers::virtio_net::VECTOR].set_handler_fn(virtio_net_handler);
     Mutex::new(idt)
 });
 
@@ -138,6 +139,15 @@ extern "x86-interrupt" fn virtio_input_handler(_stack_frame: InterruptStackFrame
     apic::eoi();
     if crate::drivers::virtio_input::intx_routed() {
         super::ioapic::eoi_level(crate::drivers::virtio_input::VECTOR);
+    }
+}
+
+/// Virtio-net. Counts and wakes `net`. Does not parse a frame.
+extern "x86-interrupt" fn virtio_net_handler(_stack_frame: InterruptStackFrame) {
+    crate::drivers::virtio_net::on_irq();
+    apic::eoi();
+    if crate::drivers::virtio_net::intx_routed() {
+        super::ioapic::eoi_level(crate::drivers::virtio_net::VECTOR);
     }
 }
 

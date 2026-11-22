@@ -25,7 +25,7 @@ no milestone is allowed to create the module until one is numbered.
 
 | Kind | ID | Linux index | Contract | Module | Milestone | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| pci | virtio-net, vendor `1af4` | `drivers/net/virtio_net.c` | virtio 1.x specification | `drivers/virtio_net.rs`, service `net` | 78–85 | planned |
+| pci | virtio-net, vendor `1af4` | `drivers/net/virtio_net.c` | virtio 1.x specification | `drivers/virtio_net.rs`, service `net` | 78–85 | landed |
 | pci | xHCI (QEMU `qemu-xhci`) | `drivers/usb/host/xhci.c` | eXtensible Host Controller Interface | `drivers/usb/xhci.rs` | 86 | planned |
 | usb | any device the controller enumerates | — | USB chapter 9 device and configuration descriptors | service `usb`, list opcode | 87 | planned |
 | usb | driver table, no IDs yet | — | `docs/USB.md` → Adding a driver | `userspace/usb/src/drivers/mod.rs` | 88 | planned |

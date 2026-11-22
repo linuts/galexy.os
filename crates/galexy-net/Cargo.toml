@@ -1,0 +1,7 @@
+[package]
+name = "galexy-net"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+galexy-crypto = { path = "../galexy-crypto" }

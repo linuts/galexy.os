@@ -8,10 +8,10 @@ use core::sync::atomic::Ordering;
 
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
-    close, dmesg_cap, grant, init_rpc, init_rpc_at, init_rpc_every, read, reboot, revoke, share,
-    shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, user, user_lock,
-    user_login, user_logout, user_name, user_name_pass, user_passwd, user_quota, user_setquota,
-    user_volpass, volume_query, wait, write_console,
+    close, dmesg_cap, grant, init_rpc, init_rpc_at, init_rpc_every, net_rpc, open, read, reboot,
+    revoke, share, shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap, unshare, user,
+    user_lock, user_login, user_logout, user_name, user_name_pass, user_passwd, user_quota,
+    user_setquota, user_volpass, volume_query, wait, write_console,
 };
 
 /// Sectioned help — short command column + one-line blurb.
@@ -71,6 +71,9 @@ pub(crate) fn show_help() {
 
     help_section(b"system");
     help_row(b"fetch", b"dashboard (alias: dashboard)");
+    help_row(b"fetch <name>", b"dial a granted name and print");
+    help_row(b"net link", b"address, or down");
+    help_row(b"net allow ...", b"name, locator, key file");
     help_row(b"stats", b"uptime / frames / heap / galfs");
     help_row(b"dmesg", b"recent kernel log lines");
     help_row(b"tasks", b"tty, state, cpu, parent");
@@ -211,6 +214,16 @@ pub(crate) fn dispatch(
     if line == b"help" {
         show_help();
         prompt(cwd);
+        return None;
+    }
+    if let Some(rest) = arg_of(line, b"fetch") {
+        if !rest.is_empty() {
+            fetch_name(cwd, rest);
+            return None;
+        }
+    }
+    if let Some(rest) = arg_of(line, b"net") {
+        net_cmd(cwd, rest);
         return None;
     }
     if line == b"fetch" || line == b"dashboard" {
@@ -1865,4 +1878,268 @@ pub(crate) fn show(cap: Cap, cwd: &Cwd) {
         }
     }
     prompt(cwd);
+}
+
+fn fetch_name(cwd: &Cwd, name: &[u8]) {
+    let mut who = [0u8; 32];
+    let got = user(&mut who, galexy_abi::USER_WHOAMI);
+    let who = if got.ok {
+        trim(&who[..(got.value as usize).min(who.len())])
+    } else {
+        b"admin"
+    };
+    let mut payload = [0u8; 96];
+    if name.len() + who.len() + 3 > payload.len() {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    }
+    payload[0] = galexy_abi::NET_OP_DIAL;
+    payload[1] = name.len() as u8;
+    payload[2..2 + name.len()].copy_from_slice(name);
+    let at = 2 + name.len();
+    payload[at] = who.len() as u8;
+    payload[at + 1..at + 1 + who.len()].copy_from_slice(who);
+    let n = at + 1 + who.len();
+    finish_net(cwd, &payload[..n], true);
+}
+
+fn net_cmd(cwd: &Cwd, rest: &[u8]) {
+    if rest.is_empty() || rest == b"link" {
+        finish_net(cwd, &[galexy_abi::NET_OP_LINK], false);
+        return;
+    }
+    if let Some(tail) = arg_of(rest, b"allow") {
+        net_allow(cwd, tail);
+        return;
+    }
+    if let Some(tail) = arg_of(rest, b"grant") {
+        net_actor(cwd, galexy_abi::NET_OP_GRANT, tail);
+        return;
+    }
+    if let Some(tail) = arg_of(rest, b"revoke") {
+        net_actor(cwd, galexy_abi::NET_OP_REVOKE, tail);
+        return;
+    }
+    if let Some(tail) = arg_of(rest, b"serve") {
+        let mut payload = [0u8; 80];
+        payload[0] = galexy_abi::NET_OP_SERVE;
+        let n = tail.len().min(payload.len() - 1);
+        payload[1..1 + n].copy_from_slice(&tail[..n]);
+        finish_net(cwd, &payload[..1 + n], false);
+        return;
+    }
+    write_console(b"net: link, allow, grant, revoke, serve\n");
+    prompt(cwd);
+}
+
+fn net_actor(cwd: &Cwd, op: u8, tail: &[u8]) {
+    let Some(sp) = tail.iter().position(|b| *b == b' ') else {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    };
+    let name = trim(&tail[..sp]);
+    let actor = trim(&tail[sp + 1..]);
+    let mut payload = [0u8; 160];
+    if name.is_empty() || actor.is_empty() || 3 + name.len() + actor.len() > payload.len() {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    }
+    payload[0] = op;
+    payload[1] = name.len() as u8;
+    payload[2..2 + name.len()].copy_from_slice(name);
+    let at = 2 + name.len();
+    payload[at] = actor.len() as u8;
+    payload[at + 1..at + 1 + actor.len()].copy_from_slice(actor);
+    finish_net(cwd, &payload[..at + 1 + actor.len()], false);
+}
+
+fn net_allow(cwd: &Cwd, tail: &[u8]) {
+    let mut parts = [b"".as_slice(); 3];
+    let mut nparts = 0usize;
+    let mut rest = tail;
+    while nparts < 3 {
+        rest = trim(rest);
+        if rest.is_empty() {
+            break;
+        }
+        if nparts == 2 {
+            parts[2] = rest;
+            nparts = 3;
+            break;
+        }
+        let sp = rest.iter().position(|b| *b == b' ').unwrap_or(rest.len());
+        parts[nparts] = &rest[..sp];
+        nparts += 1;
+        rest = if sp == rest.len() {
+            b""
+        } else {
+            &rest[sp + 1..]
+        };
+    }
+    if nparts != 3 {
+        write_console(b"net allow <name> <ip:port> <keyfile>\n");
+        prompt(cwd);
+        return;
+    }
+    let Some((ip, port)) = parse_locator(parts[1]) else {
+        write_console(b"bad locator\n");
+        prompt(cwd);
+        return;
+    };
+    let Some(key) = read_key(cwd, parts[2]) else {
+        write_console(b"bad key\n");
+        prompt(cwd);
+        return;
+    };
+    let name = parts[0];
+    if name.len() > 32 {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    }
+    let mut payload = [0u8; 128];
+    payload[0] = galexy_abi::NET_OP_ALLOW;
+    payload[1] = name.len() as u8;
+    payload[2..2 + name.len()].copy_from_slice(name);
+    let mut at = 2 + name.len();
+    payload[at..at + 2].copy_from_slice(&port.to_le_bytes());
+    at += 2;
+    payload[at] = 4;
+    at += 1;
+    payload[at..at + 4].copy_from_slice(&ip);
+    at += 16;
+    payload[at..at + 32].copy_from_slice(&key);
+    at += 32;
+    finish_net(cwd, &payload[..at], false);
+}
+
+fn finish_net(cwd: &Cwd, payload: &[u8], body: bool) {
+    let mut reply = [0u8; galexy_abi::CHAN_MSG_MAX];
+    let got = net_rpc(payload, &mut reply);
+    if !got.ok {
+        write_console(b"access denied\n");
+        prompt(cwd);
+        return;
+    }
+    let n = (got.value as usize).min(reply.len());
+    if n < 8 {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    }
+    let mut bits = [0u8; 8];
+    bits.copy_from_slice(&reply[..8]);
+    let lane = u64::from_le_bytes(bits);
+    if body && lane != 0 {
+        let cap = Cap::from_bits(lane);
+        loop {
+            let mut buf = [0u8; 256];
+            let got = read(cap, &mut buf);
+            if !got.ok || got.value == 0 {
+                break;
+            }
+            write_console(&buf[..got.value as usize]);
+        }
+        let _ = close(cap);
+        write_console(b"\n");
+    } else if n > 8 {
+        write_console(&reply[8..n]);
+    }
+    prompt(cwd);
+}
+
+fn parse_locator(text: &[u8]) -> Option<([u8; 4], u16)> {
+    let colon = text.iter().position(|b| *b == b':')?;
+    let ip = parse_ip(&text[..colon])?;
+    let port = parse_u16(&text[colon + 1..])?;
+    Some((ip, port))
+}
+
+fn parse_ip(text: &[u8]) -> Option<[u8; 4]> {
+    let mut ip = [0u8; 4];
+    let mut last = 0usize;
+    for (i, part) in text.split(|b| *b == b'.').enumerate() {
+        if i > 3 {
+            return None;
+        }
+        let n = parse_u16(part)?;
+        if n > 255 {
+            return None;
+        }
+        ip[i] = n as u8;
+        last = i;
+    }
+    if last != 3 {
+        return None;
+    }
+    Some(ip)
+}
+
+fn parse_u16(text: &[u8]) -> Option<u16> {
+    if text.is_empty() {
+        return None;
+    }
+    let mut n = 0u16;
+    for b in text {
+        let d = b.wrapping_sub(b'0');
+        if d > 9 {
+            return None;
+        }
+        n = n.checked_mul(10)?.checked_add(u16::from(d))?;
+    }
+    Some(n)
+}
+
+fn read_key(cwd: &Cwd, path: &[u8]) -> Option<[u8; 32]> {
+    let mut full = [0u8; PATH_MAX];
+    let n = compose(cwd, path, false, &mut full)?;
+    let got = open(&full[..n]);
+    if !got.ok {
+        return None;
+    }
+    let cap = Cap::from_bits(got.value);
+    let mut buf = [0u8; 80];
+    let got = read(cap, &mut buf);
+    let _ = close(cap);
+    if !got.ok {
+        return None;
+    }
+    decode_key(&buf[..got.value as usize])
+}
+
+fn decode_key(raw: &[u8]) -> Option<[u8; 32]> {
+    let mut hex = [0u8; 64];
+    let mut n = 0usize;
+    for b in raw {
+        if *b == b' ' || *b == b'\n' || *b == b'\r' {
+            continue;
+        }
+        if n == 64 {
+            return None;
+        }
+        hex[n] = *b;
+        n += 1;
+    }
+    if n != 64 {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    for i in 0..32 {
+        let hi = hex_val(hex[i * 2])?;
+        let lo = hex_val(hex[i * 2 + 1])?;
+        key[i] = (hi << 4) | lo;
+    }
+    Some(key)
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }

@@ -23,23 +23,27 @@ Milestones 72–77 run a Cranelift `rustc` on Galexy and put it on the
 login image: `rustc hello.rs -o /hello`, then `/hello`.
 Milestones 91–96 put RustPython on that same boot: `python hello.py`,
 and `python` with no file is the REPL.
-The QEMU suite is 127 runner tests plus host tests (`test-big` boots
+The QEMU suite is 150 runner tests plus host tests (`test-big` boots
 only under KVM; the rustc and python boots run when those ELFs were
-present at image build). The Milestone 52 review checklist is complete except
+present at image build). Phase 10 adds `wire_test_passes`,
+`lane_test_passes`, `net_udp_and_tcp_reach_the_host`,
+`fetch_grant_typing_e2e`, and `net_flood_deadline_leaves_the_seat`.
+The Milestone 52 review checklist is complete except
 the `review-rc1` tag, which is the owner's call. The `v1.0` tag waits
-on Phase 10 (Milestones 78–85, an address, a datagram, and a lane
-you can `fetch`; [`docs/NET.md`](docs/NET.md)), on Phase 13
+on Phase 13
 (Milestones 86–88, a listed USB device and the driver table;
 [`docs/USB.md`](docs/USB.md)),
 and on a KVM pass (BIOS+UEFI, TCG+KVM, q35+pc, `PERF.md`).
+Phase 10 has landed ([`docs/NET.md`](docs/NET.md)): an address, a
+datagram, and a lane you can `fetch`.
 Phase 15 (Milestones 97–99, [`docs/GALFS.md`](docs/GALFS.md)) is the
 sealed-commit plan: one virtio request, then a commit of the changed
 bytes plus one metadata seal. It does not gate `v1.0`.
 The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md) → Where
-we stand. Known gap today: there is no network device and no USB
-controller. When `target/galexy-rustc/rustc` and
+we stand. Known gap today: there is no USB controller. When
+`target/galexy-rustc/rustc` and
 `target/galexy-python/python` were built, a normal `cargo run` logs
-into a seat that has both. The network plan is a ring-3 `net` service, DHCP,
+into a seat that has both. The network is a ring-3 `net` service, DHCP,
 and a granted TLS 1.3 lane, not a socket API. The USB plan sees
 devices and stops there. Python is upstream RustPython
 as a login-shell command, not CPython and not a socket module.
@@ -346,11 +350,12 @@ crates/
   (bench, KVM, LTO, IRQ completion), modern (q35, ECAM, virtio 1.x,
   MSI-X, TSC-deadline), full userland (heap, argv, clock, channels,
   jobs), init-owned shutdown. The `v1.0` tag is not this phase; it
-  waits on Phase 10, Phase 13, and the KVM cells
-- **Phase 10** — network, before `v1.0`. virtio-net in the kernel, DHCP
+  waits on Phase 13 and the KVM cells
+- **Phase 10** ✅ — network. virtio-net in the kernel, DHCP
   and one datagram, then a ring-3 `net` service and TLS 1.3 lanes
   granted by name. The record is a file in the admin tree. No sockets.
-  Milestones 78–85. Plan: [`docs/NET.md`](docs/NET.md)
+  Milestones 78–85. `serve` attaches a gate and does not yet hand the
+  next lane to that listener. Plan: [`docs/NET.md`](docs/NET.md)
 - **Phase 13** — USB, after Phase 10 and before `v1.0`. xHCI, a list
   of devices, and one driver table. No vendor drivers. Milestones
   86–88. Plan: [`docs/USB.md`](docs/USB.md). Inventory:
@@ -363,7 +368,7 @@ crates/
 - **Phase 15** — sealed commits. A dirty sync becomes one virtio
   request, then a commit of the changed bytes plus one metadata
   seal. The login table stays. Milestones 97–99. It can land beside
-  Phase 10 and Phase 13, and it does not gate `v1.0`. Plan:
+  Phase 13, and it does not gate `v1.0`. Plan:
   [`docs/GALFS.md`](docs/GALFS.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
   static linker (LINKER.md, ✅ Milestone 69), `std` PAL (✅ Milestone

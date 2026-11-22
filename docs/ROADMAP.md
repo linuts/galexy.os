@@ -12,9 +12,9 @@ milestone closes the gap.
 | --- | --- | --- |
 | **Secure** | Capabilities everywhere (26 syscalls, no ambient PID / fd); PBKDF2 passwords, lockout, idle logout, must-change; sealed dual-slot GALF (ChaCha20 + HMAC); W^X user maps, NX, guard pages, kstack canary, stack/secret wipe; TOCTOU-safe copies; lock-order table; audit lines without secrets; zero `static mut`; SMEP / SMAP / UMIP when CPUID reports them; kernel KASLR in P4 indexes 1..=24; Spectre v1 mask on dispatch; per-actor KDF cost (GALF v12) | KPTI / IBRS / MDS / CET waived for v1.0 (single-tenant guest, kernel half stays mapped; `THREAT.md`) |
 | **Fast** | Deadline one-shot LAPIC, tickless idle, idle steal, park/wake for sleep / keyboard / pipe / virtio-blk; IF=0 syscall path never allocates; console budget; release profile (`opt-level = 3`, fat LTO); KVM when `KVM_CREATE_VCPU` succeeds; `test-bench` numbers in `PERF.md`; pipe ends move at spawn | GALF v15 writes the changed 4 KiB blocks plus one 64 KiB metadata slot. Milestone **97** (one virtio request for that slot) and **99** (a counted desk-compile object table) are still open (`GALFS.md`). PCID and a new heap allocator stay waived (`PERF.md`: yield does not switch CR3 and does not allocate). ATA PIO stays the legacy disk fallback. Desktop-class throughput stays a non-goal. The landing host's KVM column is empty: a snapshot restore dropped VMXON while `CR4.VMXE` stayed set |
-| **Modern only** | `-M q35` default; PCIe ECAM when `MCFG` is present; virtio 1.x + MSI-X; virtio-input keyboard; HPET (else PIT) calibration with a CPUID 0x15/0x16 cross-check; x2APIC and TSC-deadline when CPUID reports them; 8259 mask-only when the FADT says the pair is absent | Named fallbacks stay: PS/2, PIO IDE on `-M pc`, legacy virtio I/O BAR, port PCI config. QEMU TCG through 8.2 does not enumerate x2APIC; TCG still does not enumerate TSC-deadline. 5-level paging, huge user pages, and a GPU beyond GOP stay out. The network is Phase 10 (Milestones 78–85) and USB is Phase 13 (Milestones 86–88). Both are designed and not built |
-| **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, pipelines, background jobs, tab completion; utilities including `edit`, `head`, `tail`, `wc`, `grep`, `uptime`; per-task heap, argv, `Clock`, capability channels; galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; init owns shutdown, `svc`, and the service table; on-OS Cranelift `rustc` at the login shell (`rustc hello.rs -o /hello`, then `/hello`); RustPython as `python` on that same `cargo run` image (`python hello.py`, and `python` with no file is the REPL) | Network → **Phase 10**, Milestones **78–85**, before the `v1.0` tag (`docs/NET.md`). USB see-and-structure → **Phase 13**, Milestones **86–88**, after Phase 10 and before the tag (`docs/USB.md`). Vendor drivers stay unwritten |
-| **Ready** | 89 QEMU test kernels, 127 runner tests (BIOS + UEFI, `q35` + `pc`, including `edit`, `test-userheap`, `test-channel`, `test-bench`, `test-lockgrow`, `test-dmasplit`, legacy virtio, PS/2 typing, `svc status`, shutdown-through-init, a sealed-disk `passwd` reboot, `rustc_hello_typing_e2e`, `python_hello_runs`, `python_repl_typing_e2e`, and `python_hello_typing_e2e`), host suites green; CI workflow (`host` + `qemu` jobs, release images); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 and 63–77 are closed. The `review-rc1` tag and the `v1.0` tag are the owner's call. `v1.0` waits on Phase 10 (an address, a datagram, a lane you can `fetch`), Phase 13 (a listed USB device and the driver table), and a KVM pass (`KVM_CREATE_VCPU` fails on the landing host; `PERF.md` KVM cells) |
+| **Modern only** | `-M q35` default; PCIe ECAM when `MCFG` is present; virtio 1.x + MSI-X; virtio-input keyboard; HPET (else PIT) calibration with a CPUID 0x15/0x16 cross-check; x2APIC and TSC-deadline when CPUID reports them; 8259 mask-only when the FADT says the pair is absent | Named fallbacks stay: PS/2, PIO IDE on `-M pc`, legacy virtio I/O BAR, port PCI config. QEMU TCG through 8.2 does not enumerate x2APIC; TCG still does not enumerate TSC-deadline. 5-level paging, huge user pages, and a GPU beyond GOP stay out. The network is Phase 10 (Milestones 78–85, landed) and USB is Phase 13 (Milestones 86–88, designed, not built) |
+| **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, pipelines, background jobs, tab completion; utilities including `edit`, `head`, `tail`, `wc`, `grep`, `uptime`; per-task heap, argv, `Clock`, capability channels; galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; init owns shutdown, `svc`, and the service table; on-OS Cranelift `rustc` at the login shell (`rustc hello.rs -o /hello`, then `/hello`); RustPython as `python` on that same `cargo run` image (`python hello.py`, and `python` with no file is the REPL) | Network landed as **Phase 10**, Milestones **78–85** (`docs/NET.md`): a lane, not a socket. USB see-and-structure → **Phase 13**, Milestones **86–88**, before the tag (`docs/USB.md`). Vendor drivers stay unwritten |
+| **Ready** | 92 QEMU test kernels, 150 runner tests (BIOS + UEFI, `q35` + `pc`, including `edit`, `test-userheap`, `test-channel`, `test-bench`, `test-lockgrow`, `test-dmasplit`, `test-wire`, `test-lane`, legacy virtio, PS/2 typing, `svc status`, shutdown-through-init, a sealed-disk `passwd` reboot, `rustc_hello_typing_e2e`, `python_hello_runs`, `python_repl_typing_e2e`, `python_hello_typing_e2e`, `fetch_grant_typing_e2e`, and `net_flood_deadline_leaves_the_seat`), host suites green; CI workflow (`host` + `qemu` jobs, release images); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 and 63–77 are closed. Phase 10 (78–85) has landed. The `review-rc1` tag and the `v1.0` tag are the owner's call. `v1.0` waits on Phase 13 (a listed USB device and the driver table) and a KVM pass (`KVM_CREATE_VCPU` fails on the landing host; `PERF.md` KVM cells) |
 
 Order of work: **51 → 52** (`review-rc1`), then **63 → 64 → 65 → 66 →
 67**. Security first because every later change should land
@@ -23,16 +23,15 @@ on a kernel that already has SMAP on and a loader that returns errors.
 baseline. **68 → 77** have landed (Phase 11 and Phase 12).
 **89** has landed: notices and monotonic beats (`docs/PROCESS.md`),
 beside the service table, with no bus. **90** has landed: civil UTC
-is `Date` and `svc at`, and `Clock` stays monotonic. **78 → 85**
-are the network (`docs/NET.md`): an address and a datagram before
-the lane. **86 → 88** are USB (`docs/USB.md`): see devices, then
+is `Date` and `svc at`, and `Clock` stays monotonic. **78 → 85** have landed (`docs/NET.md`): a lane, not a socket.
+**86 → 88** are USB (`docs/USB.md`): see devices, then
 the driver table. **91 → 96** have landed (`docs/PYTHON.md`): `python hello.py`
 at a login seat, with no new syscall, and `python` with no file
 is the REPL. **97 → 99** are the sealed volume (`docs/GALFS.md`):
 one virtio request for the current slot, then a commit that
 writes the changed blocks plus one metadata seal. That phase
-can land beside the network and USB. It does not move the
-`v1.0` tag. The `v1.0` tag waits on Phase 10, Phase 13, and
+can land beside USB. It does not move the
+`v1.0` tag. The `v1.0` tag waits on Phase 13 and
 the KVM cells.
 Vendor USB and NIC drivers stay unwritten. Python's `socket`
 module stays refused.
@@ -418,9 +417,9 @@ the machine.
 Non-goals for `v1.0`: GPU beyond the GOP framebuffer,
 5-level paging, huge user pages, POSIX compatibility, SMT / MDS
 mitigations beyond the written waiver, and vendor USB or NIC
-drivers. Network is Phase 10. Seeing a USB device and locking the
+drivers. Network landed as Phase 10. Seeing a USB device and locking the
 driver table are Phase 13. RustPython at the login shell landed
-as Phase 14. The tag waits for the network, USB, and a KVM pass.
+as Phase 14. The tag waits for USB and a KVM pass.
 
 ## Phase 10 — Network (before `v1.0`)
 
@@ -430,8 +429,10 @@ A ring-3 service named `net` speaks IP, TCP, and TLS. Names are
 granted. Ports and addresses stay inside that service. There is no
 `socket`.
 
-Plan: `docs/NET.md`. Record format: `crates/galexy-netcfg`. Inventory
-row: `docs/DEVICES.md`. Checkboxes: `TODO.md` Milestones **78–85**.
+Landed. Plan: `docs/NET.md`. Record format: `crates/galexy-netcfg`.
+Inventory row: `docs/DEVICES.md` (virtio-net is `landed`). Checkboxes:
+`TODO.md` Milestones **78–85**. Inbound `serve` attaches a gate and
+does not yet hand the next lane to that listener; that box stays open.
 
 1. **78 Wire** — virtio-net 1.x + MSI-X; reserved Cap `0x8009`; the
    MAC comes from the device; only its holder can touch frames; DMA
@@ -447,8 +448,8 @@ row: `docs/DEVICES.md`. Checkboxes: `TODO.md` Milestones **78–85**.
    crate. `Syscall::Lane` (35) is callable only by `net`. `read` /
    `write` are the plaintext. A test task reads `lane ok`
 6. **83 Names and gates** — the directory lives in the record and
-   survives a restart. `dial` works after `grant`. A gate delivers
-   the next lane to one listener
+   survives a restart. `dial` works after `grant`. `serve` attaches
+   a gate; handing the next lane to that listener is still open
 7. **84 Fetch** — `fetch <name>` at a login seat prints a body from
    the host peer. A seat without the grant is refused, and the host
    sees no handshake

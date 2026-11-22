@@ -194,7 +194,19 @@ fn qemu_command_opts(
     if kernel_log {
         runner::enable_kernel_log(&mut cmd);
     }
+    if machine == "q35" {
+        attach_user_net(&mut cmd);
+    }
     cmd
+}
+
+/// Virtio-net 1.x on QEMU user networking. Guest `10.0.2.15`, gateway
+/// `10.0.2.2`. The MAC is fixed so the wire test can check it.
+pub fn attach_user_net(cmd: &mut Command) {
+    cmd.arg("-netdev")
+        .arg("user,id=net0")
+        .arg("-device")
+        .arg("virtio-net-pci,netdev=net0,disable-legacy=on,mac=52:54:00:12:34:56");
 }
 
 /// QEMU `-drive` `cache=` mode for the galfs data disk.
@@ -276,6 +288,7 @@ fn qemu_command_with_galfs(
             };
             cmd.arg("-device").arg(device);
             cmd.arg("-device").arg("virtio-keyboard-pci");
+            attach_user_net(&mut cmd);
         }
     }
     cmd.arg("-smp").arg("2");

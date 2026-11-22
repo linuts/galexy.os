@@ -21,11 +21,12 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
-use galexy_abi::{Cap, SysError};
+use galexy_abi::{Cap, SysError, TOKEN_READ, TOKEN_WRITE};
 use galexy_core::{format_utc, parse_utc, utc_to_civil};
 use galexy_rt::{
-    chan_recv_poll, chan_send, channel, clock_ms, date, date_set, entry, files_cap, kill, read,
-    reboot, shutdown, sleep_ms, spawn_with, sync, wait, wait_poll, write_console,
+    chan_recv_poll, chan_send, channel, clock_ms, close, create, date, date_set, entry, files_cap,
+    grant, kill, open, read, reboot, shutdown, sleep_ms, spawn_with, sync, wait, wait_poll, write,
+    write_console,
 };
 
 entry!(main);
@@ -102,11 +103,11 @@ const BEAT_MIN_MS: u64 = 250;
 const BEAT_MAX_MS: u64 = 86_400_000;
 
 /// Twelve seats, one once-service, the backoff fixture, one ignore
-/// service, one notice target, and one beat target. Seventeen names.
-/// A boot holds twelve seat Caps; stamp exits and frees its Cap. `bell`
-/// and `chime` are not started at boot. That stays under the sixteen-Cap
-/// ceiling.
-const SERVICES: [Svc; 17] = [
+/// service, one notice target, one beat target, and `net`. Eighteen names.
+/// A boot holds twelve seat Caps plus `net`; stamp exits and frees its
+/// Cap. `bell` and `chime` are not started at boot. That stays under the
+/// sixteen-Cap ceiling.
+const SERVICES: [Svc; 18] = [
     row(b"shell", 1, RESTART, true),
     row(b"shell2", 2, RESTART, true),
     row(b"shell3", 3, RESTART, true),
@@ -138,6 +139,7 @@ const SERVICES: [Svc; 17] = [
         notice: b"",
         every_ms: 1_000,
     },
+    row(b"net", 0, RESTART, true),
 ];
 
 /// Notice names a row may name. A raise of anything else is `unknown`.
@@ -181,7 +183,7 @@ const fn notices_declared() -> bool {
 
 const _: () = assert!(notices_declared());
 
-static LIVE: [Live; 17] = [const { live() }; 17];
+static LIVE: [Live; 18] = [const { live() }; 18];
 static NOTICE_UP: [AtomicBool; NOTICE_NAMES.len()] =
     [const { AtomicBool::new(false) }; NOTICE_NAMES.len()];
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
@@ -193,7 +195,7 @@ static RX: AtomicU64 = AtomicU64::new(0);
 static DATE_UNSET_LOGGED: AtomicBool = AtomicBool::new(false);
 /// A row whose ELF is not in this ramdisk. The release image omits the
 /// fixture programs; the test image packs them.
-static OMIT: [AtomicBool; 17] = [const { AtomicBool::new(false) }; 17];
+static OMIT: [AtomicBool; 18] = [const { AtomicBool::new(false) }; 18];
 
 fn main() -> i32 {
     let mut ends = [0u64; 2];
@@ -208,10 +210,14 @@ fn main() -> i32 {
     let _peer = ends[1];
 
     note_omissions();
+    ensure_net_record();
     for (i, svc) in SERVICES.iter().enumerate() {
         if svc.autostart && !OMIT[i].load(Ordering::Acquire) {
             let _ = spawn_svc(i);
         }
+    }
+    if find(b"net").is_some() {
+        let _ = grant(b"/net", TOKEN_READ | TOKEN_WRITE, b"net");
     }
     // Autostart used the single pending-spawn slot. Say so only after
     // those spawns have returned, so a later spawn is not `NoResource`
@@ -477,6 +483,27 @@ fn line_eq(snap: &[u8], name: &[u8]) -> bool {
 
 /// Marks rows whose program is absent. A failed or empty snapshot keeps
 /// every row, so a query glitch does not drop the seats.
+/// Creates `/net` once. A record that is already there keeps its lease
+/// and directory across a restart of this task.
+fn ensure_net_record() {
+    let existing = open(b"/net");
+    if existing.ok {
+        let _ = close(Cap::from_bits(existing.value));
+        return;
+    }
+    let made = create(b"/net");
+    if !made.ok {
+        return;
+    }
+    let cap = Cap::from_bits(made.value);
+    let record = galexy_netcfg::Record::empty_ask();
+    let mut buf = [0u8; 64];
+    if let Ok(n) = galexy_netcfg::encode(&record, &mut buf) {
+        let _ = write(cap, &buf[..n]);
+    }
+    let _ = close(cap);
+}
+
 fn note_omissions() {
     static mut SNAP: [u8; galexy_abi::FILES_SNAPSHOT_MAX] = [0; galexy_abi::FILES_SNAPSHOT_MAX];
     // SAFETY: init is one thread and does not re-enter this buffer.

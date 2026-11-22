@@ -1059,7 +1059,7 @@ const NOSTD_PACKAGES: [&str; 6] = ["hello", "init", "shell", "util", "threadtest
 /// `std` programs built with `-Zbuild-std=std,panic_abort` on the Galexy
 /// PAL overlay. They share one target dir (one std build), separate from
 /// the `no_std` one.
-const STD_PACKAGES: [&str; 3] = ["stdmin", "stdtest", "bigtest"];
+const STD_PACKAGES: [&str; 4] = ["stdmin", "stdtest", "bigtest", "net"];
 
 /// [`NOSTD_PACKAGES`] plus [`STD_PACKAGES`], as ramdisk entries.
 fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
@@ -1116,6 +1116,23 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
             repo_root().join("scripts/galexy-rustc-wrapper.py"),
         );
         cmd.env("GALEXY_SYSROOT", &sysroot);
+        if pkg == "net" {
+            // getrandom has no galexy backend. The service supplies rdrand.
+            let mut flags = std::env::var("RUSTFLAGS").unwrap_or_default();
+            // Soft crypto. The galexy target is soft-float and has no SSE,
+            // and the SIMD backends do not lower.
+            flags.push_str(
+                " --cfg getrandom_backend=\"custom\" \
+                 --cfg curve25519_dalek_backend=\"serial\" \
+                 --cfg sha2_backend=\"soft\" \
+                 --cfg polyval_backend=\"soft\" \
+                 --cfg poly1305_backend=\"soft\" \
+                 --cfg chacha20_backend=\"soft\" \
+                 --cfg keccak_backend=\"soft\" \
+                 --cfg aes_backend=\"soft\"",
+            );
+            cmd.env("RUSTFLAGS", flags);
+        }
         guest_debug_off(&mut cmd);
         let status = cmd
             .status()
