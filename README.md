@@ -367,21 +367,22 @@ crates/
 - **Phase 14** ✅ — RustPython at the login shell. `cargo run` carries
   `python` and, when the compiler ELF was built, `rustc` with its
   sysroot. `python hello.py`, a file copy, and a REPL (`>>>`).
-  No new syscall, no `pip`, no sockets. Milestone 103 adds
-  `import lane`. Milestones 91–96 and 103. Plan:
-  [`docs/PYTHON.md`](docs/PYTHON.md)
+  No new syscall and no `pip`. Milestone 103 adds `import lane`.
+  Milestone 109 adds `socket.connect`. Milestones 91–96, 103, and
+  109. Plan: [`docs/PYTHON.md`](docs/PYTHON.md)
 - **Phase 15** — sealed commits. A dirty sync becomes one virtio
   request, then a commit of the changed bytes plus one metadata
   seal. The login table stays. Milestones 97–99. It can land beside
   Phase 13, and it does not gate `v1.0`. Plan:
   [`docs/GALFS.md`](docs/GALFS.md)
-- **Phase 16** — Milestones 104–107 landed. One kernel boots at
+- **Phase 16** — Milestones 104–109 landed. One kernel boots at
   `-smp 4` and `-smp 8` (the suite stays at 2, and the cap stays 8).
   A network name and a listed USB port are galfs cards. A foreground
-  program without the card asks the shell. Milestones 108 and 109
-  connect by name and do not pass an address. That stays name-only
-  until 112. Then an address, a port, bind, listen, and a datagram
-  are cards (112–116). SSH is last (117). Those boxes stay open.
+  program without the card asks the shell. `TcpStream::connect` and
+  Python `socket.connect` are that ask, then a lane. They connect by
+  name and do not pass an address. That stays name-only until 112.
+  Then an address, a port, bind, listen, and a datagram are cards
+  (112–116). SSH is last (117). Those boxes stay open.
   The `v1.0` tag still waits on the KVM cells as well. Plan:
   [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`

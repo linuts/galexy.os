@@ -1162,11 +1162,12 @@ TCP, and rustls stays in `net`.
 
 This is not a Berkeley socket. `bind`, `listen`, UDP,
 `setsockopt`, and any call that passes an IP or a port are not
-part of these two milestones. They do not exist yet. The boxes
-in `TODO.md` stay open until a run shows the ask and the dial.
-Milestone 103's `ImportError` assertion is not edited before
-that box is checked. Reaching a host past `10.0.2.2` is
-Milestone 111.
+part of these two milestones. They do not exist yet. They stay
+refused until Milestones 112–116 grant that exact card.
+`connect` on the login image is the Rust proof.
+`python_lane_typing_e2e` is the Python proof: `lane.read` prints
+the body, a denied `socket.connect` is `OSError`, and yes prints
+the body. Reaching a host past `10.0.2.2` is Milestone 111.
 
 ### A real network (Milestones 110–117)
 

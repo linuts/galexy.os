@@ -2347,7 +2347,7 @@ unset.
       and UDP stay refused until the milestone that grants that card.
       SSH is last: a host client reads one file over SFTP, and a
       legacy algorithm is refused. Milestone 83's `serve` box,
-      Milestone 103's lane boxes, and the KVM rows stay open until
+      Milestones 110–117, and the KVM rows stay open until
       their own runs
 - [ ] Tag `v1.0` with the changelog. The tag needs the KVM cells and
       Phase 16, including Milestone 117. This plan does not apply it
@@ -3071,34 +3071,29 @@ and not claimed.
 same call. `socket` stays off the allow-list. There is no new
 syscall.
 
-- [ ] **`import lane`**: `lane.read(name)` is dial opcode 2 on Cap
+- [x] **`import lane`**: `lane.read(name)` is dial opcode 2 on Cap
       `0x800A`. The reply's first eight bytes are the lane. The
       function reads that lane to EOF and closes it. The actor is
       `whoami`. A missing grant is `OSError`
-- [ ] **Allow-list**: `lane` is a line in `scripts/python-allow.txt`.
-      `socket` is still absent. The host test
+- [x] **Allow-list**: `lane` is a line in `scripts/python-allow.txt`.
+      `socket` was absent for this proof. The host test
       `python_allow::allow_list_covers_frozen_and_blocks_the_rest`
-      checks both
-- [ ] **Proof**: `python_lane_typing_e2e` grants `echo`, runs
-      `print(lane.read("echo"))`, and expects `lane ok`. A second
-      program `import socket` exits with `ImportError`. The test
-      skips when `target/galexy-python/python` was not built.
-      This host has no `galexy` toolchain, so the box stays open
-      until that boot is run
+      checked both. Milestone 109 adds `socket` after this run
+- [x] **Proof**: `python_lane_typing_e2e` grants `echo`, runs
+      `print(lane.read("echo"))`, and expects `lane ok`. That boot
+      printed `lane ok` and `ImportError` for `import socket`, with
+      one handshake. The `ImportError` line moves to Milestone 109
 
 ## Phase 16 — Cards, then a reachable machine
 
-Milestones 104–107 landed. Milestones 108 and 109 stay open:
-a granted name, then a lane. They do not pass an address.
-Milestones 110–116 are the real stack. Milestone 117 is SSH, and
-it is last. SSH does not start until a program can reach a host
-past the QEMU gateway `10.0.2.2`. `docs/ROADMAP.md` is the phase.
-Do not check Milestone 83, Milestone 103, or the KVM rows under
-the `v1.0` gate. Do not tag `v1.0`. 109 does not land until 103's
-boxes are checked by a run, and it does not edit the `import
-socket` assertion until then. `bind`, `listen`, UDP, and a passed
-IP or port do not exist yet. Each stays refused until the
-milestone below that grants that exact card.
+Milestones 103–109 landed. Milestones 110–116 are the real stack.
+Milestone 117 is SSH, and it is last. SSH does not start until a
+program can reach a host past the QEMU gateway `10.0.2.2`.
+`docs/ROADMAP.md` is the phase. Do not check Milestone 83,
+Milestones 110–117, or the KVM rows under the `v1.0` gate. Do not
+tag `v1.0`. `bind`, `listen`, UDP, and a passed IP or port do not
+exist yet. Each stays refused until the milestone below that
+grants that exact card.
 
 ## Milestone 104 — Prove four and eight CPUs
 
@@ -3192,26 +3187,27 @@ This is not a Berkeley socket: the call does not take an address,
 a port, or a socket option. Reaching a host past `10.0.2.2` is
 Milestone 111, not this one.
 
-- [ ] **`TcpStream::connect`**: the name stays. It asks, then dials
+- [x] **`TcpStream::connect`**: the name stays. It asks, then dials
       a granted name. The value is a lane
-- [ ] **Still refused here**: `bind`, `listen`, UDP, `setsockopt`, and
+- [x] **Still refused here**: `bind`, `listen`, UDP, `setsockopt`, and
       any call that passes an IP or a port. This milestone does not
       grant them. They stay refused until the milestone that names
       that card (112 address, 113 port, 114 bind, 115 listen, 116
       UDP). They do not exist yet, and they are not a quieter
       spelling of `connect`
-- [ ] **Proof**: a program on the login image connects to a granted
+- [x] **Proof**: a program on the login image connects to a granted
       name after the seat answers yes, and is denied before that
       answer. The peer sees no handshake on the denial
-- [ ] **Out of this milestone**: a socket syscall, a second stack,
+- [x] **Out of this milestone**: a socket syscall, a second stack,
       a C shim, and enabling `std::net` for the host target
 
 ## Milestone 109 — Python connects
 
-Milestone 103's boxes are open: `import lane` is specified, and
-`import socket` is `ImportError`. This milestone does not edit
-that assertion, and it does not land, until those boxes are
-checked by a run.
+Milestone 103's boxes were checked by a run of
+`python_lane_typing_e2e` (`lane ok`, and `ImportError` for
+`import socket`). This milestone then moved that assertion.
+The same test, rebuilt with `socket` on the allow-list, printed
+`OSError: access denied` on no and `lane ok` on yes.
 
 A compatibility layer keeps the name programs already call.
 `socket.connect` asks (Milestone 107), then dials a granted name
@@ -3220,22 +3216,23 @@ syscall and no second stack. This is not a Berkeley socket: the
 call does not take an address, a port, or a socket option.
 Reaching a host past `10.0.2.2` is Milestone 111, not this one.
 
-- [ ] **After 103**: `import socket` succeeds so the name exists.
+- [x] **After 103**: `import socket` succeeds so the name exists.
       `socket.connect` without a card is `OSError`. After the seat
       says yes, `socket.connect` dials a granted name and the
       value is a lane, the same body `lane.read` returns
-- [ ] **The allow-list**: `socket` is a line in
+- [x] **The allow-list**: `socket` is a line in
       `scripts/python-allow.txt` in the same change, for that
       `connect` only. `bind`, `listen`, UDP, `setsockopt`, and any
       call that passes an IP or a port stay refused until the
       milestone that names that card (112–116). They do not exist
       yet. `ssl` and `asyncio` networks stay refused. The host
       allow-list test matches the file
-- [ ] **Proof**: `python_lane_typing_e2e`'s `ImportError` line moves
+- [x] **Proof**: `python_lane_typing_e2e`'s `ImportError` line moved
       here, to a `socket.connect` that is denied, plus one
-      `socket.connect` that prints the body after yes. The test
-      still skips when `target/galexy-python/python` was not built
-- [ ] **Out of this milestone**: a Berkeley socket, a socket
+      `socket.connect` that prints the body after yes. The boot
+      showed both. The test still skips when
+      `target/galexy-python/python` was not built
+- [x] **Out of this milestone**: a Berkeley socket, a socket
       syscall, a second stack, CPython, and `pip`
 
 ## Milestone 110 — Resolve a name

@@ -146,16 +146,17 @@ new file mode 100644
 index 0000000..bf65652
 --- /dev/null
 +++ b/crates/galexy-python/allow.txt
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,49 @@
 +# Modules a Galexy Python program may import.
 +# The first four are the public surface. The rest are the VM's own
 +# frozen and builtin modules at the pin in scripts/rustpython.rev.
-+# socket, ssl, pip, venv, subprocess, ctypes, sqlite3, and os are absent.
-+# `lane` is the dial in Milestone 103. It is not a frozen module.
++# ssl, asyncio, pip, venv, subprocess, ctypes, sqlite3, and os are absent.
++# `lane` is the dial in Milestone 103. `socket.connect` is Milestone 109.
 +builtins
 +sys
 +io
 +lane
++socket
 +__hello__
 +__hello_alias__
 +__phello_alias__
@@ -200,7 +201,7 @@ new file mode 100644
 index 0000000..7cc717f
 --- /dev/null
 +++ b/crates/galexy-python/src/main.rs
-@@ -0,0 +1,403 @@
+@@ -0,0 +1,498 @@
 +//! Run one Python file on the Galexy RustPython VM.
 +//!
 +//! `python PATH` reads the file and executes it with builtins and `sys`.
@@ -297,6 +298,7 @@ index 0000000..7cc717f
 +    let mut status = 0;
 +    interp.enter(|vm| {
 +        install_lane(vm);
++        install_socket(vm);
 +        let scope = vm.new_scope_with_builtins();
 +        let prelude = allow_prelude();
 +        if let Err(exc) = run(vm, &prelude, scope.clone(), "<galexy>") {
@@ -323,6 +325,7 @@ index 0000000..7cc717f
 +    let mut status = 0;
 +    interp.enter(|vm| {
 +        install_lane(vm);
++        install_socket(vm);
 +        let scope = vm.new_scope_with_builtins();
 +        let prelude = allow_prelude();
 +        if let Err(exc) = run(vm, &prelude, scope.clone(), "<galexy>") {
@@ -457,13 +460,14 @@ index 0000000..7cc717f
 +         \t\t\traise ImportError('module %r is not allowed' % (fullname,))\n\
 +         \t\treturn None\n\
 +         _sys.meta_path.insert(0, _Allow())\n\
++         import lane\n\
 +         import _io as io\n\
 +         _sys.modules['io'] = io\n"
 +    )
 +}
 +
 +/// `import lane` then `lane.read(name)`. The name is the same directory
-+/// entry `fetch` dials. The body is the lane's bytes. There is no socket.
++/// entry `fetch` dials. The body is the lane's bytes.
 +fn install_lane(vm: &VirtualMachine) {
 +    let module = vm.new_module("lane", vm.ctx.new_dict(), None);
 +    let func = vm.new_function("read", lane_read);
@@ -474,6 +478,79 @@ index 0000000..7cc717f
 +        return;
 +    };
 +    let _ = modules.set_item("lane", module.into(), vm);
++}
++
++/// `import socket` then `socket.connect(name)`. The dial is `lane.read`.
++/// `bind`, `listen`, `setsockopt`, and `socket()` (UDP included) are
++/// `OSError`. An address-shaped name is `OSError` before any syscall.
++fn install_socket(vm: &VirtualMachine) {
++    let module = vm.new_module("socket", vm.ctx.new_dict(), None);
++    let connect = vm.new_function("connect", socket_connect);
++    if module.set_attr("connect", connect, vm).is_err() {
++        return;
++    }
++    for name in ["bind", "listen", "setsockopt", "socket"] {
++        let func = vm.new_function(name, socket_refused);
++        if module.set_attr(name, func, vm).is_err() {
++            return;
++        }
++    }
++    let Ok(modules) = vm.sys_module.get_attr("modules", vm) else {
++        return;
++    };
++    let _ = modules.set_item("socket", module.into(), vm);
++}
++
++fn socket_connect(
++    name: rustpython_vm::builtins::PyStrRef,
++    vm: &VirtualMachine,
++) -> rustpython_vm::PyResult<rustpython_vm::builtins::PyStrRef> {
++    #[cfg(not(target_os = "galexy"))]
++    {
++        let _ = name;
++        return Err(vm.new_os_error("socket is only available on galexy"));
++    }
++    #[cfg(target_os = "galexy")]
++    {
++        let Some(text) = name.to_str() else {
++            return Err(vm.new_os_error("bad name"));
++        };
++        if is_address(text) {
++            return Err(vm.new_os_error("unsupported"));
++        }
++        match lane_body(text) {
++            Ok(body) => Ok(vm.ctx.new_str(body)),
++            Err(msg) => Err(vm.new_os_error(msg.to_string())),
++        }
++    }
++}
++
++fn socket_refused(
++    args: rustpython_vm::function::FuncArgs,
++    vm: &VirtualMachine,
++) -> rustpython_vm::PyResult<()> {
++    let _ = args;
++    Err(vm.new_os_error("unsupported"))
++}
++
++/// A colon, a slash, all digits, or four numeric dotted parts is an
++/// address. `socket.connect` refuses it. `lane.read` still dials a name.
++#[cfg(target_os = "galexy")]
++fn is_address(name: &str) -> bool {
++    if name.contains(':') || name.contains('/') {
++        return true;
++    }
++    if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
++        return true;
++    }
++    let mut parts = 0usize;
++    for part in name.split('.') {
++        if part.is_empty() || part.len() > 3 || !part.bytes().all(|b| b.is_ascii_digit()) {
++            return false;
++        }
++        parts += 1;
++    }
++    parts == 4
 +}
 +
 +fn lane_read(
@@ -487,8 +564,11 @@ index 0000000..7cc717f
 +    }
 +    #[cfg(target_os = "galexy")]
 +    {
-+        match lane_body(name.as_str()) {
-+            Ok(text) => Ok(vm.ctx.new_str(text)),
++        let Some(text) = name.to_str() else {
++            return Err(vm.new_os_error("bad name"));
++        };
++        match lane_body(text) {
++            Ok(body) => Ok(vm.ctx.new_str(body)),
 +            Err(msg) => Err(vm.new_os_error(msg.to_string())),
 +        }
 +    }
@@ -573,7 +653,15 @@ index 0000000..7cc717f
 +            options(nostack),
 +        );
 +    }
-+    if ok != 0 { Ok(value) } else { Err("syscall") }
++    if ok != 0 {
++        Ok(value)
++    } else if value == 2 {
++        Err("access denied")
++    } else if value == 10 {
++        Err("timed out")
++    } else {
++        Err("syscall")
++    }
 +}
 +
 +#[cfg(target_os = "galexy")]
@@ -602,7 +690,15 @@ index 0000000..7cc717f
 +            options(nostack),
 +        );
 +    }
-+    if ok != 0 { Ok(value) } else { Err("syscall") }
++    if ok != 0 {
++        Ok(value)
++    } else if value == 2 {
++        Err("access denied")
++    } else if value == 10 {
++        Err("timed out")
++    } else {
++        Err("syscall")
++    }
 +}
 diff --git a/crates/host_env/Cargo.toml b/crates/host_env/Cargo.toml
 index 7f96342..0106bb1 100644

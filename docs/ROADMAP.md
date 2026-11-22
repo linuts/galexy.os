@@ -33,18 +33,18 @@ writes the changed blocks plus one metadata seal. That phase
 can land beside the USB work that has already landed. It does not move the
 `v1.0` tag. The `v1.0` tag waits on
 the KVM cells.
-Vendor USB and NIC drivers stay unwritten. Python's `socket`
-module stays refused until Milestone 109, which is still open.
+Vendor USB and NIC drivers stay unwritten. Python `socket.connect`
+is a lane. `bind`, UDP, and `ssl` stay refused until 112–116.
 
-Milestones **97–102** have since landed. Milestone **103**'s boxes
-are still open (the lane boot was not run here). Milestone **83**'s
-`serve` handoff is still open. Milestones **104–107** landed:
+Milestones **97–109** have since landed, except Milestone **83**'s
+`serve` handoff, which is still open. Milestones **104–107** are
 four and eight CPUs, a card on each network name and each listed
-USB port, and a foreground ask the shell answers. Milestones
-**108** and **109** stay open: connect by name, no address in the
-call. Milestones **110–116** are the real stack, and **117** is
-SSH, last. The `v1.0` tag still waits on the KVM cells and on
-that sequence. This plan does not apply it.
+USB port, and a foreground ask the shell answers. Milestone
+**108** is `TcpStream::connect`. Milestone **109** is
+`socket.connect`. Both are name-only. Milestones **110–116** are
+the real stack, and **117** is SSH, last. The `v1.0` tag still
+waits on the KVM cells and on that sequence. This plan does not
+apply it.
 
 ## Phase 0 — Boot & TTY ✅
 
@@ -672,11 +672,11 @@ hard links.
 
 ## Phase 16 — Cards, then a reachable machine
 
-Milestones **104–107** landed. Milestones **108** and **109** are
-still the plan: a program connects by a granted name, and the
-value is a lane. Milestones **110–116** are the real stack.
-Milestone **117** is SSH, and it is last. Nothing here tags
-`v1.0`. The KVM rows stay open. Checkboxes live in `TODO.md`.
+Milestones **104–109** landed. **108** and **109** connect by a
+granted name, and the value is a lane. Milestones **110–116** are
+the real stack. Milestone **117** is SSH, and it is last. Nothing
+here tags `v1.0`. The KVM rows stay open. Checkboxes live in
+`TODO.md`.
 The reading copies are `DESIGN.md` (CPUs), `NET.md` (firewall,
 the stack, SSH), `USB.md` (device cards), `GALFS.md` (the card
 those two reuse), and `PYTHON.md` (the ask).
@@ -701,14 +701,13 @@ installs a token for that run, not an always that survives
 reboot. No is `AccessDenied`. Milestones 108 and 109 keep the
 names `std::net::TcpStream::connect` and Python `socket.connect`.
 Each asks, then dials a granted name through `net`. The value is
-still a lane. There is no socket syscall and no second stack.
-The PAL does not parse TCP. A passed IP, a passed port, `bind`,
-`listen`, and UDP do not exist yet. They stay refused until the
-milestone that grants that exact card: 112 address, 113 port,
-114 bind, 115 listen, 116 UDP. `setsockopt` stays refused.
-That is not a Berkeley socket. Milestone 83's inbound handoff
-and Milestone 103's lane boot stay open until their own runs;
-109 does not edit 103's `ImportError` assertion before that.
+still a lane. The lane boot was run. There is no socket syscall
+and no second stack. The PAL does not parse TCP. A passed IP, a
+passed port, `bind`, `listen`, and UDP do not exist yet. They
+stay refused until the milestone that grants that exact card:
+112 address, 113 port, 114 bind, 115 listen, 116 UDP.
+`setsockopt` stays refused. That is not a Berkeley socket.
+Milestone 83's inbound handoff stays open until its own run.
 
 Real outside access is 110 and 111. `net` resolves a name over
 TLS to a pinned resolver (not UDP/53, not `10.0.2.3`) and dials
@@ -738,7 +737,7 @@ What this phase does not add:
 - Telnet, FTP, rsh, SSHv1, `ssh-rsa`, CBC, SHA-1, or TLS before 1.3
 - OpenSSH, libssh, a crates.io SSH library, CPython, or a TCP stack inside `rustc` or Python
 - A second grant language beside the galfs token, or a reboot-persistent always
-- Checking Milestone 83, Milestone 103, or the KVM `v1.0` boxes
+- Checking Milestone 83, Milestones 110–117, or the KVM `v1.0` boxes
 - The `v1.0` tag
 
 ## Standing principles

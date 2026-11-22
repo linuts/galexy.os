@@ -20,8 +20,10 @@
 //! | `thread_local!`       | a per-thread table behind the FS base         |
 //! | `fs::*`               | `Open`/`Create`/`Read`/`Write`/`Seek`/`Stat`… |
 //! | `process::Command`    | `Spawn` + `Pipe` + `Wait`                     |
+//! | `net::TcpStream::connect` | dial a granted name; the value is a lane |
 //!
-//! There is no environment, no timezone, no network, and no symlinks.
+//! There is no environment, no timezone, and no symlinks. `connect`
+//! does not parse TCP. `bind`, UDP, and socket options stay unsupported.
 //! Civil UTC is `Date`. `Clock` stays monotonic.
 
 #![allow(missing_debug_implementations)]

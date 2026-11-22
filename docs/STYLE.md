@@ -219,8 +219,9 @@ machines: ACPI, x2APIC, PCIe, virtio 1.x, UEFI + GOP.
 
 Rules for Phase 10 (`docs/NET.md`; Milestones **78–85**). Binding
 once the first of those milestones lands; the plan is binding now.
-Phase 16 (Milestones **108–117**) is the later plan. Its boxes stay
-open. This text does not check them.
+Phase 16 (Milestones **108–117**) is the later plan. 108 and 109
+landed as name-only connect. 110–117 stay open. This text does
+not check those later boxes.
 
 - **A lane is the application object.** One TLS 1.3 session, one peer,
   `READ` and `WRITE`. Phase 10 has no `socket`, `bind`, `listen`,
@@ -294,14 +295,14 @@ not wait on Phase 10, and Phase 10 does not wait on it.
   `MAX_PROC_CAPS` stays 16. `DISK_VERSION` stays 12. The target
   JSON stays as it is.
 - **The allow-list is `scripts/python-allow.txt`.** A module that
-  is not listed raises `ImportError`. `pip`, `subprocess`, `ctypes`,
-  and `os.fork` stay off that list. `socket` stays off until
-  Milestone 109, which is `socket.connect` by name only. `ssl`
-  stays off.
+  is not listed raises `ImportError`. `ssl`, `asyncio`, `pip`,
+  `subprocess`, `ctypes`, and `os.fork` stay off that list.
+  `socket` is the Milestone 109 name: `socket.connect` by name only.
 - **Name-only until 112.** Milestone 109 does not pass an address,
   a port, `bind`, `listen`, or UDP. Those stay refused until
   112–116 grant that card. `ssl` stays refused. TLS stays inside
-  `net`.
+  `net`. `std::net::TcpStream::connect` is the same lane
+  (Milestone 108).
 - **Two clocks stay two clocks.** `time.monotonic` is `Clock`.
   `time.time` is `Date`, and it raises when the date is unset.
 - **Budgets are the ones in `PYTHON.md`.** 2 GiB until a boot shows

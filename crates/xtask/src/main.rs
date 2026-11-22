@@ -752,7 +752,7 @@ mod python_allow {
     fn allow_list_covers_frozen_and_blocks_the_rest() {
         let allow = names(&root().join("scripts/python-allow.txt"));
         let frozen = names(&root().join("scripts/python-frozen.txt"));
-        for name in ["builtins", "sys", "io", "lane"] {
+        for name in ["builtins", "sys", "io", "lane", "socket"] {
             assert!(allow.contains(name), "{name} starts the allow-list");
         }
         let extra: Vec<_> = frozen.difference(&allow).cloned().collect();
@@ -761,8 +761,8 @@ mod python_allow {
             "frozen modules missing from the allow-list: {extra:?}"
         );
         for name in [
-            "socket",
             "ssl",
+            "asyncio",
             "pip",
             "venv",
             "subprocess",
