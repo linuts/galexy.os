@@ -8,6 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#169](https://github.com/linuts/galexy.os/pull/169) — Docs — Milestones 118 and 119 plan one program's outbound card.
+  `/card/out/<program>` read dials any name, and an address the program passes. It does not accept. Inbound stays write on the port. Milestone 119 stores that card as a share, so the named program dials after reboot with no ask. Per-name cards stay for a program without it. Logged-out stays denied. No new syscall. The boxes stay open. This does not tag `v1.0`. SSH stays 117.
 - [#168](https://github.com/linuts/galexy.os/pull/168) — Docs and USB cards — the `/net` record is version 2, and the wire, net-control, and lane rows are experimental.
   Opcodes 8–13 are in `NET.md`. A stored address or port is a card on `0x800A`. Dial is the read token. A string that is not an address is that name's card, not the cards of a looser parse. Init creates `/usb/1` through `/usb/16` and does not grant them, so a USB list is that card. `DISK_VERSION` is 17. `std::net` is the lane, and Python `socket` is on the allow-list. README and the plans name the card calls, the claimed keyboard, and datagram receive. SSH stays 117.
 - [#167](https://github.com/linuts/galexy.os/pull/167) — Net — `ping <name>` resolves over the pinned DNS-over-TLS resolver and prints the ICMP reply.
