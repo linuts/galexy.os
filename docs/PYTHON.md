@@ -143,7 +143,11 @@ The pin is `85d5956dbbc17b359b103f9988276589b126a08a` (RustPython
 applies `scripts/galexy-rustpython.patch`, and links with the
 `galexy` sysroot. Codegen is Cranelift, the same backend as the
 sysroot: LLVM 23 cannot legalize an f16 operation in `half` for
-this soft-float target. The host build does not pass `--sysroot`
+this soft-float target. That `cargo +galexy` invocation also passes
+`-Zembed-metadata=yes` and `CARGO_INCREMENTAL=0`, the same host-build
+settings as `docs/RUSTC.md`. Without them this nightly leaves a
+metadata stub in the rlib, and a dependent reports `can't find
+crate`. The host build does not pass `--sysroot`
 of this repository, and `targets/x86_64-unknown-galexy.json` is
 unchanged. There is no C library and no `std::net`. The Rust
 `libc` crate inside the sysroot is the same empty one every
