@@ -2705,8 +2705,9 @@ virtio-net on the modern PCI path. No IP in the kernel.
 
 ## Milestone 80 — Address
 
-- [x] `crates/galexy-netcfg`: version-1 record. Host tests round-trip
-      it. A different version is an error. `DISK_VERSION` stays 12
+- [x] `crates/galexy-netcfg`: the record is version 2. Version 1 is
+      refused. Host tests round-trip it. A different version is an
+      error. `DISK_VERSION` is 17
 - [x] Init creates `/net` in the admin tree when missing (mode `ask`,
       no names) and gives `net` one token, `READ|WRITE` on that file
       only
@@ -2745,9 +2746,10 @@ TCP on the address from Milestone 80.
 
 ## Milestone 83 — Names and gates
 
-- [x] Directory: name → locator + pinned key + who may dial. Name
-      charset matches a galfs component, ≤ 64 bytes. `allow`, `grant`,
-      and `revoke` rewrite `/net`, and a restart of `net` keeps them
+- [x] Directory: name → locator + pinned key + the token that may
+      dial. The actor list is not that right. Name charset matches a
+      galfs component, ≤ 64 bytes. `allow`, `grant`, and `revoke`
+      rewrite `/net`, and a restart of `net` keeps them
 - [x] Opcodes on `0x800A`: `link`, `dial`, `allow`, `grant`, `revoke`,
       `serve`. Header matches the init stamp. Logged-out is
       `AccessDenied`. Admin bit is the kernel's
