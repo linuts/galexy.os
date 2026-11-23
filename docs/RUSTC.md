@@ -380,7 +380,15 @@ the stack at image+1GiB).
   (`scripts/build-galexy-rustc.sh`, including a clone of
   `1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6` into `$HOME/galexy-rust`
   when that checkout is absent) and then boots `galexy-os-desk`.
-  The same run builds `python` when that ELF is missing. Later
+  The same run builds `python` when that ELF is missing.
+  `scripts/build-galexy-python.sh` compiles with `cargo +galexy`,
+  the host sysroot `cargo xtask sysroot` links at
+  `target/galexy-toolchain`. `rustup toolchain list` still prints
+  `galexy` after that directory is removed, and `cargo +galexy`
+  then reports `toolchain 'galexy' is not installed`. The runner
+  asks `rustup which` for `bin/rustc`. A complete directory is
+  relinked. A missing one is `cargo xtask sysroot` again. Either
+  way `target/galexy-rustc/rustc` is left as it is. Later
   runs reuse the ELFs. `GALEXY_SKIP_COMPILERS=1` skips both and
   boots the small image. That image's shell prints
   `rustc: not in this image` and `scripts/build-galexy-rustc.sh`.

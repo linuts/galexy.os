@@ -8,6 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#175](https://github.com/linuts/galexy.os/pull/175) — Host build — `cargo run` relinks a dangling `galexy` rustup toolchain before Python.
+  `rustup toolchain list` still prints that name after `target/galexy-toolchain` is gone, and `cargo +galexy` then says the toolchain is not installed. A complete directory is relinked. A missing one is `cargo xtask sysroot`. `target/galexy-rustc/rustc` is reused. No `cargo clean`. The nightly pin stays. DNS, cards, net, and the rustc metadata workaround are unchanged.
 - [#173](https://github.com/linuts/galexy.os/pull/173) — Milestone 125 — The DNS resolver trusts the Mozilla roots in the image.
   `net pin <ip>` is enough. A key file is optional, and when it is passed that pin wins and the bundle is not consulted. A certificate that chains to neither is refused and no query is sent. `10.0.2.2` and `10.0.2.3` stay refused. DNS stays DNS-over-TLS on port 853. Lanes, SSH host keys, and `net allow` do not use the bundle. No C, no OpenSSL, no new opcode. The `v1.0` tag stays unapplied.
 - [#171](https://github.com/linuts/galexy.os/pull/171) — Docs — Milestones 120–124 plan one address type for v4 and v6.
