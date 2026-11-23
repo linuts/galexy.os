@@ -485,6 +485,8 @@ QUIC as a second API, iptables, a second NIC. QUIC may later ride the
 same lane Cap. USB is Phase 13, not a carrier for this phase. Phase 16
 grants a card for a passed address, a port, `bind`, `listen`, and one
 datagram. Phase 10 does not. Those calls landed in Milestones 112–116.
+The DNS resolver trusts the Mozilla bundle in the image. That trust
+is the resolver only. It is not a lane, and it is not a Phase 10 right.
 
 ## Phase 13 — USB (before `v1.0`) ✅
 

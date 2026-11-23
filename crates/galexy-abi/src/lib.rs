@@ -994,7 +994,9 @@ pub const NET_OP_PING: u8 = 7;
 /// zero. The resolver key is not in the reply.
 pub const NET_OP_RESOLVE: u8 = 8;
 /// Net control: pin the DNS-over-TLS resolver. Admin only. Four address
-/// bytes, then the 32-byte key. `10.0.2.2` and `10.0.2.3` are refused.
+/// bytes trust the bundle in the image. A following 32-byte key is that
+/// pin, and the bundle is not consulted. `10.0.2.2` and `10.0.2.3` are
+/// refused.
 pub const NET_OP_PIN: u8 = 9;
 /// Net control: bind the stored local address. Write on that address
 /// card. The payload is the address text. The reply is `ok` or

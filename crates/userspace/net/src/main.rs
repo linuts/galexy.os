@@ -2,7 +2,12 @@
 //!
 //! Frames go through [`galexy_net`]. TLS 1.3 is rustls with the pure-Rust
 //! provider. A handshake that is not finished in five seconds is dropped.
-//! Session keys are not written to the console.
+//! Session keys are not written to the console. DNS-over-TLS checks the
+//! resolver against the Mozilla roots in this image, unless a key file
+//! was passed. That key is the pin, and the roots are not consulted.
+//! A lane does not use those roots.
+
+mod trust;
 
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
@@ -633,30 +638,7 @@ fn drive_tls(
 }
 
 fn client_config(key: &[u8; 32]) -> Result<Arc<ClientConfig>, Error> {
-    let provider = filtered_provider();
-    let verifier = Arc::new(PinVerifier {
-        key: *key,
-        provider: provider.clone(),
-    });
-    let config = ClientConfig::builder_with_provider(provider)
-        .with_protocol_versions(&[&rustls::version::TLS13])?
-        .dangerous()
-        .with_custom_certificate_verifier(verifier)
-        .with_no_client_auth();
-    Ok(Arc::new(config))
-}
-
-fn filtered_provider() -> Arc<CryptoProvider> {
-    let mut provider = rustls_pure::provider();
-    provider.cipher_suites.retain(|suite| {
-        let name = suite.suite();
-        name == rustls::CipherSuite::TLS13_AES_128_GCM_SHA256
-            || name == rustls::CipherSuite::TLS13_CHACHA20_POLY1305_SHA256
-    });
-    provider
-        .kx_groups
-        .retain(|group| group.name() == rustls::NamedGroup::X25519);
-    Arc::new(provider)
+    trust::pinned_client(*key, trust::provider())
 }
 
 #[derive(Debug)]
@@ -675,7 +657,7 @@ impl ServerCertVerifier for LearnVerifier {
         _ocsp: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, Error> {
-        let Some(got) = ed25519_key(end_entity.as_ref()) else {
+        let Some(got) = trust::ed25519_key(end_entity.as_ref()) else {
             return Err(Error::General("pin-miss".into()));
         };
         if let Ok(mut slot) = self.key.lock() {
@@ -720,74 +702,6 @@ impl ServerCertVerifier for LearnVerifier {
     }
 }
 
-#[derive(Debug)]
-struct PinVerifier {
-    key: [u8; 32],
-    provider: Arc<CryptoProvider>,
-}
-
-impl ServerCertVerifier for PinVerifier {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, Error> {
-        let Some(got) = ed25519_key(end_entity.as_ref()) else {
-            return Err(Error::General("pin-miss".into()));
-        };
-        if got != self.key {
-            return Err(Error::General("pin-mismatch".into()));
-        }
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, Error> {
-        Err(Error::PeerIncompatible(
-            rustls::PeerIncompatible::ServerDoesNotSupportTls12Or13,
-        ))
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, Error> {
-        verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )?;
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![SignatureScheme::ED25519]
-    }
-}
-
-fn ed25519_key(der: &[u8]) -> Option<[u8; 32]> {
-    const OID: &[u8] = &[0x06, 0x03, 0x2b, 0x65, 0x70];
-    let at = der.windows(OID.len()).position(|w| w == OID)?;
-    let rest = &der[at + OID.len()..];
-    let bit = rest.windows(3).position(|w| w == [0x03, 0x21, 0x00])?;
-    if rest.len() < bit + 35 {
-        return None;
-    }
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&rest[bit + 3..bit + 35]);
-    Some(key)
-}
-
 fn resolve(
     rx: Cap,
     engine: &mut Engine,
@@ -815,13 +729,17 @@ fn resolve(
 }
 
 fn pin(rx: Cap, record: &mut Record, rest: &[u8]) {
-    if rest.len() < 4 + 32 {
+    let key = if rest.len() == 4 {
+        None
+    } else if rest.len() >= 4 + 32 {
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&rest[4..36]);
+        Some(key)
+    } else {
         reply(rx, b"bad\n", 0);
         return;
-    }
+    };
     let addr = [rest[0], rest[1], rest[2], rest[3]];
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&rest[4..36]);
     if record.pin(addr, key).is_err() {
         reply(rx, b"access denied\n", 0);
         return;
@@ -879,7 +797,7 @@ fn lookup_dns(
         engine.tcp_release(id);
         return Err("deadline");
     }
-    let result = match tls_exchange(engine, id, "echo", &resolver.key, now, &query) {
+    let result = match tls_exchange(engine, id, resolver.addr, resolver.key, now, &query) {
         Ok(body) => dot_answer(&body).ok_or("denied"),
         Err(why) => Err(why),
     };
@@ -920,13 +838,13 @@ fn wait_established(engine: &mut Engine, id: u8, start: u64) -> bool {
 fn tls_exchange(
     engine: &mut Engine,
     id: u8,
-    name: &str,
-    key: &[u8; 32],
+    addr: [u8; 4],
+    key: Option<[u8; 32]>,
     start: u64,
     send: &[u8],
 ) -> Result<Vec<u8>, &'static str> {
-    let server = ServerName::try_from(name.to_string()).map_err(|_| "bad")?;
-    let config = client_config(key).map_err(|_| "bad")?;
+    let (config, server) =
+        trust::resolver_client(addr, key, trust::provider()).map_err(|_| "bad")?;
     let mut conn = Connection::Client(ClientConnection::new(config, server).map_err(|_| "bad")?);
     let mut body = Vec::new();
     let mut sent = false;
@@ -1431,7 +1349,7 @@ fn server_config() -> Result<Arc<ServerConfig>, Error> {
     let cert = CertificateDer::from(LISTENER_CERT.to_vec());
     let key = PrivateKeyDer::try_from(LISTENER_KEY.to_vec())
         .map_err(|_| Error::General("listener key".into()))?;
-    let config = ServerConfig::builder_with_provider(filtered_provider())
+    let config = ServerConfig::builder_with_provider(trust::provider())
         .with_protocol_versions(&[&rustls::version::TLS13])?
         .with_no_client_auth()
         .with_single_cert(vec![cert], key)?;
@@ -1946,7 +1864,7 @@ fn learn_pin(
     let learned = Arc::new(LearnVerifier {
         key: Mutex::new([0; 32]),
         saw: Mutex::new(false),
-        provider: filtered_provider(),
+        provider: trust::provider(),
     });
     let result = learn_handshake(engine, id, Arc::clone(&learned), clock_ms());
     engine.tcp_close(id);

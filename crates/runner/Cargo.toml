@@ -9,6 +9,8 @@ galexy-galf = { path = "../galexy-galf" }
 galexy-ssh = { path = "../galexy-ssh" }
 rcgen = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+rustls-pure = "0.15"
+webpki-roots = "1"
 
 [build-dependencies]
 bootloader = "0.11"

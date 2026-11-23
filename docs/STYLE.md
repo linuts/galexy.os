@@ -250,10 +250,15 @@ Phase 16 (Milestones **108–119**) is the later plan. 108 through
 - **Names, not ports, through 111.** Locators stay inside `net`.
   They are not a syscall argument. A program may pass one exact
   address or port only with the card from 112 or 113.
-- **Pinned keys, TLS 1.3 only.** No WebPKI default, no TLS 1.2, no
-  compression, no renegotiation, no 0-RTT in this phase. The handshake
-  is a maintained Rust crate, not a private implementation. Session
-  keys and private keys stay off serial, `dmesg`, and the console.
+- **Pinned keys, TLS 1.3 only.** A lane has no WebPKI default. The
+  DNS resolver is the exception: the image carries the Mozilla
+  roots, and `net pin <ip>` trusts a certificate that chains to
+  them and is valid for that address. A key file replaces that
+  check. SSH host keys and `net allow` do not use the bundle. No
+  TLS 1.2, no compression, no renegotiation, no 0-RTT in this phase.
+  The handshake is a maintained Rust crate, not a private
+  implementation. Session keys and private keys stay off serial,
+  `dmesg`, and the console.
 - **Budgets are the ones in `NET.md`.** 32 lanes, 16 KiB each way, 8
   gates, a fixed frame pool. A flood must not stop a seat from
   answering `svc status`.

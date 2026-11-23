@@ -74,6 +74,7 @@ pub(crate) fn show_help() {
     help_row(b"fetch <name>", b"dial a granted name and print");
     help_row(b"net link", b"address, or down");
     help_row(b"net allow ...", b"name, locator, optional key file");
+    help_row(b"net pin <ip> [keyfile]", b"resolver; key file optional");
     help_row(b"stats", b"uptime / frames / heap / galfs");
     help_row(b"dmesg", b"recent kernel log lines");
     help_row(b"tasks", b"tty, state, cpu, parent");
@@ -2179,12 +2180,17 @@ fn net_allow(cwd: &Cwd, tail: &[u8]) {
 }
 
 fn net_pin(cwd: &Cwd, tail: &[u8]) {
-    let Some(sp) = tail.iter().position(|b| *b == b' ') else {
-        write_console(b"net pin <ip> <keyfile>\n");
+    let tail = trim(tail);
+    if tail.is_empty() {
+        write_console(b"net pin <ip> [keyfile]\n");
         prompt(cwd);
         return;
+    }
+    let (ip_text, key_path) = match tail.iter().position(|b| *b == b' ') {
+        Some(sp) => (trim(&tail[..sp]), Some(trim(&tail[sp + 1..]))),
+        None => (tail, None),
     };
-    let Some(ip) = parse_ip(trim(&tail[..sp])) else {
+    let Some(ip) = parse_ip(ip_text) else {
         write_console(b"bad\n");
         prompt(cwd);
         return;
@@ -2194,16 +2200,31 @@ fn net_pin(cwd: &Cwd, tail: &[u8]) {
         prompt(cwd);
         return;
     }
-    let Some(key) = read_key(cwd, trim(&tail[sp + 1..])) else {
-        write_console(b"bad key\n");
-        prompt(cwd);
-        return;
+    let key = if let Some(path) = key_path {
+        if path.is_empty() {
+            write_console(b"net pin <ip> [keyfile]\n");
+            prompt(cwd);
+            return;
+        }
+        let Some(key) = read_key(cwd, path) else {
+            write_console(b"bad key\n");
+            prompt(cwd);
+            return;
+        };
+        Some(key)
+    } else {
+        None
     };
     let mut payload = [0u8; 40];
     payload[0] = galexy_abi::NET_OP_PIN;
     payload[1..5].copy_from_slice(&ip);
-    payload[5..37].copy_from_slice(&key);
-    finish_net(cwd, &payload[..37], false);
+    let n = if let Some(key) = key {
+        payload[5..37].copy_from_slice(&key);
+        37
+    } else {
+        5
+    };
+    finish_net(cwd, &payload[..n], false);
 }
 
 fn net_resolve(cwd: &Cwd, tail: &[u8]) {

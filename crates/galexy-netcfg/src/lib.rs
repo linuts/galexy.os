@@ -1,8 +1,11 @@
 //! Version 2 bytes for the `/net` record.
 //!
 //! Magic, version, mode, an optional learned lease, the directory, then
-//! the pinned resolver. A version this crate does not know is an error.
-//! Callers do not guess. Version 1 is refused.
+//! the pinned resolver. Tag 0 is absent. Tag 1 is the address and a
+//! 32-byte key. Tag 2 is the address, and the resolver trusts the
+//! bundle in the image. An unknown tag is refused. A version this
+//! crate does not know is an error. Callers do not guess. Version 1
+//! is refused.
 
 #![cfg_attr(not(test), no_std)]
 
@@ -111,8 +114,10 @@ impl Name {
 pub struct Resolver {
     /// Resolver address. Not the QEMU gateway and not `10.0.2.3`.
     pub addr: [u8; 4],
-    /// Pinned key. Callers do not write these bytes to the console.
-    pub key: [u8; 32],
+    /// Raw key. `None` trusts the bundle in the image. `Some` is that
+    /// key, and the bundle is not consulted. Callers do not write these
+    /// bytes to the console.
+    pub key: Option<[u8; 32]>,
 }
 
 /// The whole file.
@@ -143,7 +148,10 @@ impl Record {
     }
 
     /// Stores the resolver. `10.0.2.2` and `10.0.2.3` are refused.
-    pub fn pin(&mut self, addr: [u8; 4], key: [u8; 32]) -> Result<(), CfgError> {
+    ///
+    /// `key` absent trusts the bundle in the image. `key` present is
+    /// that raw key, and the bundle is not consulted.
+    pub fn pin(&mut self, addr: [u8; 4], key: Option<[u8; 32]>) -> Result<(), CfgError> {
         if addr == [10, 0, 2, 2] || addr == [10, 0, 2, 3] {
             return Err(CfgError::BadRecord);
         }
@@ -296,11 +304,17 @@ pub fn encode(record: &Record, out: &mut [u8]) -> Result<usize, CfgError> {
     }
     match &record.resolver {
         None => w.u8(0)?,
-        Some(resolver) => {
-            w.u8(1)?;
-            w.bytes(&resolver.addr)?;
-            w.bytes(&resolver.key)?;
-        }
+        Some(resolver) => match resolver.key {
+            Some(key) => {
+                w.u8(1)?;
+                w.bytes(&resolver.addr)?;
+                w.bytes(&key)?;
+            }
+            None => {
+                w.u8(2)?;
+                w.bytes(&resolver.addr)?;
+            }
+        },
     }
     Ok(w.at)
 }
@@ -385,7 +399,18 @@ pub fn decode(bytes: &[u8]) -> Result<Record, CfgError> {
             if addr == [10, 0, 2, 2] || addr == [10, 0, 2, 3] {
                 return Err(CfgError::BadRecord);
             }
-            Some(Resolver { addr, key })
+            Some(Resolver {
+                addr,
+                key: Some(key),
+            })
+        }
+        2 => {
+            let mut addr = [0u8; 4];
+            r.bytes(&mut addr)?;
+            if addr == [10, 0, 2, 2] || addr == [10, 0, 2, 3] {
+                return Err(CfgError::BadRecord);
+            }
+            Some(Resolver { addr, key: None })
         }
         _ => return Err(CfgError::BadRecord),
     };
@@ -476,9 +501,15 @@ mod tests {
         rec.allow(b"docs", 4594, KIND_DNS, [0; 16], [0xCD; 32])
             .unwrap();
         rec.allow(b"peer", 4597, KIND_DGRAM, ip, [0; 32]).unwrap();
-        rec.pin([172, 30, 0, 2], [0x11; 32]).unwrap();
-        assert!(rec.pin([10, 0, 2, 2], [0x11; 32]).is_err());
-        assert!(rec.pin([10, 0, 2, 3], [0x11; 32]).is_err());
+        rec.pin([172, 30, 0, 2], Some([0x11; 32])).unwrap();
+        assert!(rec.pin([10, 0, 2, 2], Some([0x11; 32])).is_err());
+        assert!(rec.pin([10, 0, 2, 3], None).is_err());
+        assert_eq!(rec.resolver.unwrap().key, Some([0x11; 32]));
+        let mut keyed = [0u8; 1024];
+        let kn = encode(&rec, &mut keyed).unwrap();
+        assert_eq!(decode(&keyed[..kn]).unwrap(), rec);
+        rec.pin([172, 30, 0, 9], None).unwrap();
+        assert!(rec.resolver.unwrap().key.is_none());
         rec.grant(b"echo", b"admin").unwrap();
         assert!(rec.may_dial(b"echo", b"admin"));
         assert!(!rec.may_dial(b"echo", b"other"));

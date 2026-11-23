@@ -6231,6 +6231,80 @@ fn ping_name_resolves() {
     );
 }
 
+/// Milestone 125. No key file trusts the bundle. The listener certificate
+/// chains to neither that bundle nor a wrong pin, so no query is sent.
+/// The key file accepts only that key. `10.0.2.2` and `10.0.2.3` stay refused.
+#[test]
+fn resolver_pin_still_wins() {
+    let (cert_der, key_der) = listener_identity();
+    let dot_hits = Arc::new(AtomicUsize::new(0));
+    let query = Arc::new(Mutex::new(Vec::new()));
+    let dot_bg = Arc::clone(&dot_hits);
+    let query_bg = Arc::clone(&query);
+    let dot = std::thread::spawn(move || host_dot_serve(cert_der, key_der, dot_bg, Some(query_bg)));
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line("net link", "up 10.0.2.15/24"));
+    owned.extend(type_line("net pin 10.0.2.2", "access denied"));
+    owned.extend(type_line("net pin 10.0.2.3", "access denied"));
+    owned.extend(type_line("connect --putkey", "wrote"));
+    owned.extend(type_line("net pin 10.0.2.2 /k", "access denied"));
+    owned.extend(type_line("net pin 10.0.2.3 /k", "access denied"));
+    owned.extend(type_line("net pin 172.30.0.2", "ok"));
+    owned.extend(type_line("ping google.com", "access denied"));
+    owned.extend(type_line("net pin 172.30.0.2 /bad", "ok"));
+    owned.extend(type_line("ping google.com", "access denied"));
+    owned.extend(type_line("net pin 172.30.0.2 /k", "ok"));
+    owned.extend(type_line("ping google.com", "reply from 172.30.0.2"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "reply from 172.30.0.2",
+        Duration::from_millis(30),
+        Duration::from_secs(240),
+    );
+    drop(dot);
+    let pin = listener_pin();
+    let mut hex = String::new();
+    for byte in pin {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    let asked = query.lock().map(|q| q.clone()).unwrap_or_default();
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains(&hex),
+        "serial carried the resolver key; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("udp/53") && !serial.contains("port 53"),
+        "plaintext DNS showed up; serial:\n{serial}"
+    );
+    assert_eq!(
+        dot_hits.load(Ordering::Relaxed),
+        1,
+        "a certificate that does not chain sent a query; serial:\n{serial}"
+    );
+    assert!(
+        asked.windows(6).any(|w| w == b"google") && asked.windows(3).any(|w| w == b"com"),
+        "the query was not for google.com: {asked:?}"
+    );
+    assert_eq!(
+        serial.matches("access denied").count(),
+        6,
+        "a refused resolver or a bad pin was accepted; serial:\n{serial}"
+    );
+}
+
 /// Milestone 84, after 105: admin's root card covers a name once `net
 /// allow` creates it, so `fetch` connects. A different key still
 /// handshakes and is refused. A seat with no card is

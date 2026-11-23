@@ -1205,8 +1205,9 @@ the existing DNS-over-TLS path, port 853. Milestone 124 covers a
 v6 reply with read on `/card/out/<program>`. The reply is read on
 that connection. Listening stays write on the port card.
 Milestones 118 and 119 have landed. Plaintext DNS, raw sockets,
-and general browser TLS stay out. The boxes for 120–124 stay
-open. The reading copy is `NET.md`.
+and general browser TLS stay out. The DNS resolver trusts the
+CA bundle in the image. That bundle is not a lane trust. The
+boxes for 120–124 stay open. The reading copy is `NET.md`.
 
 ### Memory policy (Milestone 48)
 
