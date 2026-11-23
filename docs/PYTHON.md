@@ -121,7 +121,7 @@ the runner.
 | Source file | One galfs file inside the existing file cap. |
 | Stdlib | Frozen in the ELF. No `Lib/` directory on the disk. |
 | Children | None. The interpreter does not spawn. |
-| Syscalls | No new number. `Lane` stays 35. `MAX_PROC_CAPS` stays 16. `DISK_VERSION` stays 12. |
+| Syscalls | No new number. `Lane` stays 35. `MAX_PROC_CAPS` stays 16. Phase 14 did not bump `DISK_VERSION`. The live version is 17 after Milestone 99. |
 
 ## Milestones
 
@@ -245,8 +245,8 @@ to the pin and the current patch is applied.
 
 Milestone **107** landed for a foreground program: the shell
 prints `<name> wants the network` or `<name> wants storage`.
-Milestone **109** adds `socket` to the allow-list for
-`socket.connect` only.
+Milestone **109** adds `socket` to the allow-list, starting with
+`socket.connect`. Later cards add bind, listen, send, and recv.
 
 A compatibility layer keeps the name programs already call.
 `socket.connect` asks (Milestone 107), then dials a granted name

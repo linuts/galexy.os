@@ -57,17 +57,17 @@ fixed in a milestone PR with a changelog line.
   `THREAT.md` → CPU features). SMEP, SMAP, UMIP, and kernel KASLR are
   on. Actor password cost is stored per actor; the volume KEK stays
   at 10 000 iterations.
-- Remote attacks: there is no network stack in this tree. Phase 10
-  (`docs/NET.md`) is the plan, and it is required before `v1.0`.
-  Until it lands, a packet has nowhere to arrive.
-- USB devices: there is no xHCI driver. Phase 13 (`docs/USB.md`)
-  lists devices and locks the driver table before `v1.0`. Until it
-  lands, a plugged-in device is invisible. Vendor drivers are not
-  part of that phase.
+- Remote attacks: Phase 10 has landed (`docs/NET.md`). The kernel
+  moves frames and does not parse IP. A lane, a ping, and a datagram
+  need the card. Remote login is Milestone 117 and is not in the tree.
+- USB devices: Phase 13 has landed (`docs/USB.md`). xHCI lists a
+  device, and Milestone 102 claims the QEMU boot keyboard. Other
+  vendor drivers stay unwritten.
 - Python: `cargo run` carries RustPython as `python` when
   `target/galexy-python/python` was built (`docs/PYTHON.md`).
   A `.py` file runs with the seat's tokens. The interpreter adds
-  no syscall and no socket module. `pip` and `subprocess` stay out.
+  no syscall. `socket` calls the net cards. `pip` and `subprocess`
+  stay out.
 - Denial of service by the operator at the keyboard (the console budget
   and quotas are fairness, not security, mechanisms).
 

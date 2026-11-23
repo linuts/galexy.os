@@ -8,10 +8,10 @@ listener. `serve_hands_the_lane_to_its_listener` is the run: the
 attaching seat prints the TLS body, and a second admin seat that
 holds the write bit receives `held`.
 
-Galexy has no network today, and that is why nothing in the tree is
-reachable remotely (`THREAT.md`). The tag should not ship that way.
-A machine you can log into and compile on, and cannot deliberately
-reach, is missing a fundamental object. The object is not a socket.
+The network is the lane and the card. DHCP, ping, a granted TLS 1.3
+lane, listen, and one datagram are in the tree. Remote login is still
+Milestone 117, so a seat cannot log in over the network yet
+(`THREAT.md`). The object is not a socket.
 
 ## What a program holds
 
@@ -29,7 +29,7 @@ The words this phase uses:
 | **Lane** | The application object. TLS 1.3 to one peer. Bytes in, bytes out. |
 | **Gate** | The right to receive new lanes for one **name**. Held by one listener. |
 | **Name** | A label in the net service's directory (`echo`, `docs`). The same charset as a galfs path component, at most 64 bytes. |
-| **Locator** | An IPv4 or IPv6 address and a transport port, stored inside the directory. A locator is how the service finds a peer. It is not an argument a normal program can pass. |
+| **Locator** | An IPv4 or IPv6 address and a transport port, stored inside the directory. A locator is how the service finds a peer. A program may pass that stored address or port only when it holds the card. |
 | **Dial** | Ask the service for a lane to a name this seat was granted. |
 | **Fetch** | The shell command that dials, reads the lane to EOF, and prints the bytes. The phase gate. |
 
@@ -68,7 +68,7 @@ kernel wire Cap 0x8009          only the task named net
     ▼
 net  (ring 3, init child, restart)
     │  IPv6 and IPv4, neighbor discovery, ICMP echo, UDP, TCP, TLS 1.3
-    │  directory: name → locator + pinned key + who may dial
+    │  directory: name → locator + pinned key + the token that may dial
     │
     ├── lane Cap ──read/write── the program that dialed
     └── gate ──new lane Caps── the one listener for that name
@@ -86,7 +86,7 @@ service keeps the other end and writes plaintext into it after it
 decrypts. The application never sees records, headers, or keys.
 
 Creating that pair is the one new syscall. `Syscall::Lane` is number
-**35** (the table today is `0..=34`; `Date` is 34). Only the task named `net` may
+**35**. The table is `0..=35`, and `Date` is 34. Only the task named `net` may
 call it. Any other caller is `AccessDenied`. `read` and `write` on a
 lane Cap are the existing syscalls, dispatched on the Cap type. There
 is no `connect` to forget to check.
@@ -96,12 +96,18 @@ Opcodes on `0x800A`, appended and then stable, same rule as init:
 | Op | Who | Effect |
 | --- | --- | --- |
 | 1 `link` | any logged-in seat | `down`, `up`, or `up` plus our locator once Milestone 80 has one |
-| 2 `dial` | a seat granted that name | reply carries the app end of a new lane |
+| 2 `dial` | read on the card | reply carries the app end of a new lane. The actor list is not the check |
 | 3 `allow` | admin | install a name: locator, pinned key, no grants yet |
-| 4 `grant` | admin | let an actor dial a name |
-| 5 `revoke` | admin | drop that dial right |
-| 6 `serve` | admin | attach a gate for a name to the calling task |
+| 4 `grant` | admin | write an actor on the record. That list is not the dial right. The shell writes the read token on `/card/<name>` |
+| 5 `revoke` | admin | drop that actor-list entry. The shell drops the card token. The list is not the dial right |
+| 6 `serve` | admin, and write on the card | attach a gate for a name to the calling task |
 | 7 `ping` | a seat that holds the ping card | ICMP echo to one IPv4 address, or to a DNS name resolved over the pinned DNS-over-TLS resolver. The reply is `reply from` that address, or `timeout`. No lane Cap. No card, no query |
+| 8 `resolve` | read on a DNS card | DNS-over-TLS lookup. The reply is the address. No lane Cap. The resolver key stays in the record |
+| 9 `pin` | admin | Pin the DNS-over-TLS resolver: four address bytes, then the 32-byte key. `10.0.2.2` and `10.0.2.3` are refused |
+| 10 `bind` | write on the address card | Bind the stored local address. The payload is that address. This opcode does not listen |
+| 11 `listen` | write on the port card | Listen on the stored port. The next reply carries the inbound lane |
+| 12 `datagram` | read on the datagram card | Send one datagram to the stored peer. Port 53 is refused. Write does not send |
+| 13 `recv` | read on that same card | Receive one datagram from that peer. Port 53 is refused. A packet from any other peer is ignored |
 
 `fetch` is a shell builtin on top of `dial`. `ping <ip>` and `ping <name>` are shell builtins on top of opcode 7. Neither is a syscall.
 `svc status net` still means "is the process up," through init.
@@ -143,7 +149,7 @@ The service has to have an address before it can talk to anyone. Milestone 80 is
 
 DHCP here is a client. Discover, offer, request, ack. The first offer wins. Galexy does not serve DHCP in this phase. A lease is learned state: address, prefix, gateway, expiry. On expiry the service asks again. A missing record means mode `ask` and an empty directory, so a fresh QEMU boot still gets an address.
 
-`link` reports the result. Any logged-in seat may read it. The locator in that reply is our address, not a dial argument. Programs still cannot pass an address or a port into a syscall.
+`link` reports the result. Any logged-in seat may read it. The locator in that reply is our address, not a dial argument. A program does not pass an address or a port to a new syscall. It passes one stored address or port on net cap `0x800A`, and only with that card.
 
 ## The record
 
@@ -152,10 +158,10 @@ Names, grants, pinned keys, and the address mode survive a restart of `net`. The
 | | |
 | --- | --- |
 | Path | `/net` in the admin tree. One component, one file. |
-| Format | Versioned bytes, version 1, defined by `crates/galexy-netcfg`. Magic, version, mode, optional fixed locator, learned lease, then the name directory (name, locator, 32-byte key, actors who may dial). |
+| Format | Versioned bytes, version 2, defined by `crates/galexy-netcfg`. Version 1 is refused. Magic, version, mode, optional learned lease, the name directory (name, port, kind, address, 32-byte key, actors), then the optional pinned resolver. |
 | Who parses it | The crate. Host tests round-trip a record. `net` links the same crate. A version it does not know is refused: the service logs the version and will not dial until an admin rewrites the file. |
-| Who may read it | `net`, and admin. Init creates an empty version-1 record (mode `ask`, no names) when the file is absent, then spawns `net` with one token: `READ` and `WRITE` on that object and on nothing else. Init holds the admin credential, so it can mint that card. The service does not receive the admin root. |
-| Who writes it | `net`, from `allow`, `grant`, and `revoke`, and from a finished DHCP lease. The shell does not poke the file. |
+| Who may read it | `net`, and admin. Init creates an empty version-2 record (mode `ask`, no names, no resolver) when the file is absent, then spawns `net` with one token: `READ` and `WRITE` on that object and on nothing else. Init holds the admin credential, so it can mint that card. The service does not receive the admin root. |
+| Who writes it | `net`, from `allow`, `grant`, `revoke`, and `pin`, and from a finished DHCP lease. The shell does not poke the file. |
 | Disk version | Unchanged by this phase. The record is a file in the sealed table, not a new GALF layout. |
 
 There is no environment block and no `/etc`. Shell history is the other file a program already keeps (`shell.history` in the user's tree). The network record follows that idea and is typed, because a lease and a key are not a line of history.
@@ -237,8 +243,8 @@ Milestone 80.
 The machine acquires an address and exchanges one datagram with
 another device.
 
-- `crates/galexy-netcfg` defines the version-1 record. Host tests
-  round-trip one. A wrong version is an error.
+- `crates/galexy-netcfg` defines the version-2 record. Version 1 is
+  refused. Host tests round-trip one. A wrong version is an error.
 - Init creates `/net` in the admin tree when it is missing (mode
   `ask`, no names) and passes `net` a token for that file only.
 - Mode `ask`: DHCP discover, offer, request, ack. On QEMU user
@@ -293,7 +299,8 @@ missing pin still fails closed.
 Shell builtin `fetch <name>`. Typed on a login seat that holds the
 grant: the command prints a small body served by the host peer, then
 the prompt returns. A seat without the grant sees `access denied`
-and the host sees no handshake. `std::net` is still unsupported.
+and the host sees no handshake. `std::net` is the lane.
+`TcpStream::connect` asks, then dials.
 
 ### 85 Solid — Phase 10 gate
 

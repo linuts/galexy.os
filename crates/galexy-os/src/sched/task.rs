@@ -1307,6 +1307,10 @@ fn dotted_v4(text: &[u8]) -> bool {
             if d > 9 {
                 return false;
             }
+            // A leading zero is not an octet. `net` refuses it too.
+            if digits > 0 && val == 0 {
+                return false;
+            }
             val = val.saturating_mul(10).saturating_add(u16::from(d));
             digits += 1;
             if digits > 3 {
@@ -1318,17 +1322,36 @@ fn dotted_v4(text: &[u8]) -> bool {
 }
 
 /// `a.b.c.d:port` splits into the address text and the port text.
+///
+/// The same rules as `net`'s parser: no leading zero, and a port in
+/// `1..=65535`. Anything else is a directory name, and that name's
+/// card is the check.
 fn split_v4_port(name: &[u8]) -> Option<(&[u8], &[u8])> {
     let colon = name.iter().position(|b| *b == b':')?;
     let host = &name[..colon];
     let port = &name[colon + 1..];
-    if !dotted_v4(host) || port.is_empty() || !port.iter().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    if port.len() > 1 && port[0] == b'0' {
+    if !dotted_v4(host) || !port_in_range(port) {
         return None;
     }
     Some((host, port))
+}
+
+fn port_in_range(text: &[u8]) -> bool {
+    if text.is_empty() || (text.len() > 1 && text[0] == b'0') {
+        return false;
+    }
+    let mut n = 0u32;
+    for b in text {
+        let d = u32::from(b.wrapping_sub(b'0'));
+        if d > 9 {
+            return false;
+        }
+        n = n.saturating_mul(10).saturating_add(d);
+        if n > 65535 {
+            return false;
+        }
+    }
+    n != 0
 }
 
 fn held_bits(root: u32, tokens: &[galfs::Token; galfs::TOKEN_SLOTS], path: &CardPath) -> u8 {

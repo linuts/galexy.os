@@ -2328,8 +2328,8 @@ unset.
 - [x] Phase 14 — Milestones 91–96 (`docs/PYTHON.md`). A typed login
       on the image `cargo run` boots runs `python hello.py` and a
       program that reads and writes a galfs file. No new syscall.
-      `socket` stays off the allow-list. `python` with no file is
-      the REPL
+      `socket` is on the allow-list and calls the cards. `setsockopt`
+      stays off. `python` with no file is the REPL
 - [ ] Suite green on BIOS + UEFI, TCG + KVM, `q35` + the `pc` legacy
       case (BIOS + UEFI, TCG, `q35` + `pc` are green at 124 tests. The
       KVM pass needs a host where `KVM_CREATE_VCPU` succeeds. On the
@@ -2344,11 +2344,10 @@ unset.
       card are denied. Rust and Python connect by name only after the
       seat allows it. A name resolves over TLS and a program reaches a
       host that is not `10.0.2.2`. A raw IP, a port, `bind`, `listen`,
-      and UDP stay refused until the milestone that grants that card.
-      SSH is last: a host client reads one file over SFTP, and a
-      legacy algorithm is refused. Milestone 83's `serve` box,
-      Milestones 110–117, and the KVM rows stay open until
-      their own runs
+      and one datagram are cards (Milestones 112–116). SSH is last:
+      a host client reads one file over SFTP, and a legacy algorithm
+      is refused. Milestone 83 and Milestones 110–116 are checked.
+      Milestone 117 and the KVM rows stay open until their own runs
 - [ ] Tag `v1.0` with the changelog. The tag needs the KVM cells and
       Phase 16, including Milestone 117. This plan does not apply it
 
@@ -2706,8 +2705,9 @@ virtio-net on the modern PCI path. No IP in the kernel.
 
 ## Milestone 80 — Address
 
-- [x] `crates/galexy-netcfg`: version-1 record. Host tests round-trip
-      it. A different version is an error. `DISK_VERSION` stays 12
+- [x] `crates/galexy-netcfg`: the record is version 2. Version 1 is
+      refused. Host tests round-trip it. A different version is an
+      error. `DISK_VERSION` is 17
 - [x] Init creates `/net` in the admin tree when missing (mode `ask`,
       no names) and gives `net` one token, `READ|WRITE` on that file
       only
@@ -2746,9 +2746,10 @@ TCP on the address from Milestone 80.
 
 ## Milestone 83 — Names and gates
 
-- [x] Directory: name → locator + pinned key + who may dial. Name
-      charset matches a galfs component, ≤ 64 bytes. `allow`, `grant`,
-      and `revoke` rewrite `/net`, and a restart of `net` keeps them
+- [x] Directory: name → locator + pinned key + the token that may
+      dial. The actor list is not that right. Name charset matches a
+      galfs component, ≤ 64 bytes. `allow`, `grant`, and `revoke`
+      rewrite `/net`, and a restart of `net` keeps them
 - [x] Opcodes on `0x800A`: `link`, `dial`, `allow`, `grant`, `revoke`,
       `serve`. Header matches the init stamp. Logged-out is
       `AccessDenied`. Admin bit is the kernel's
@@ -3086,14 +3087,11 @@ syscall.
 
 ## Phase 16 — Cards, then a reachable machine
 
-Milestones 103–109 landed. Milestones 110–116 are the real stack.
-Milestone 117 is SSH, and it is last. SSH does not start until a
-program can reach a host past the QEMU gateway `10.0.2.2`.
-`docs/ROADMAP.md` is the phase. Do not check Milestone 83,
-Milestones 110–117, or the KVM rows under the `v1.0` gate. Do not
-tag `v1.0`. `bind`, `listen`, UDP, and a passed IP or port do not
-exist yet. Each stays refused until the milestone below that
-grants that exact card.
+Milestones 103–116 have landed. Milestone 83 and Milestones 110–116
+are checked. A passed address, a port, bind, listen, and one
+datagram are cards. Milestone 117 is SSH, and it stays open. The
+KVM rows under the `v1.0` gate stay open. Do not tag `v1.0`.
+`docs/ROADMAP.md` is the phase.
 
 ## Milestone 104 — Prove four and eight CPUs
 
@@ -3193,8 +3191,7 @@ Milestone 111, not this one.
       any call that passes an IP or a port. This milestone does not
       grant them. They stay refused until the milestone that names
       that card (112 address, 113 port, 114 bind, 115 listen, 116
-      UDP). They do not exist yet, and they are not a quieter
-      spelling of `connect`
+      UDP). Those later cards are not a quieter spelling of `connect`
 - [x] **Proof**: a program on the login image connects to a granted
       name after the seat answers yes, and is denied before that
       answer. The peer sees no handshake on the denial
@@ -3224,8 +3221,9 @@ Reaching a host past `10.0.2.2` is Milestone 111, not this one.
       `scripts/python-allow.txt` in the same change, for that
       `connect` only. `bind`, `listen`, UDP, `setsockopt`, and any
       call that passes an IP or a port stay refused until the
-      milestone that names that card (112–116). They do not exist
-      yet. `ssl` and `asyncio` networks stay refused. The host
+      milestone that names that card (112–116). Milestones 112–116
+      have since granted them. `ssl` and `asyncio` networks stay
+      refused. The host
       allow-list test matches the file
 - [x] **Proof**: `python_lane_typing_e2e`'s `ImportError` line moved
       here, to a `socket.connect` that is denied, plus one
@@ -3524,14 +3522,15 @@ items stay here with rationale.
 - [x] ~~No network stack~~ — **Phase 10**, Milestones 78–85, landed
       (`docs/NET.md`). The `v1.0` tag waits on a KVM pass
 - [x] ~~No USB stack~~ — **Phase 13**, Milestones 86–88, landed
-      (`docs/USB.md`). The bus lists a device and the driver table
-      ships empty. Vendor drivers stay unnumbered. The `v1.0` tag
-      waits on a KVM pass
+      (`docs/USB.md`). The bus lists a device. Milestone 102 claims
+      the QEMU keyboard. Other vendor drivers stay unwritten. The
+      `v1.0` tag waits on a KVM pass
 - [x] ~~No Python interpreter~~ — **Phase 14**, Milestones 91–96.
       `cargo run` boots `python` and, when the compiler ELF was
       built, `rustc` with its sysroot. `python hello.py` and a file
       copy are `python_hello_typing_e2e`. No new syscall. `socket`
-      stays off the allow-list. `python` with no file is the REPL
+      is on the allow-list and calls the cards. `setsockopt` stays
+      off. `python` with no file is the REPL
 - [x] ~~`passwd` on a sealed-disk boot hung the machine
       (galexy.os#86)~~ — CLOSED by PR #88. Two IF=0 deadlocks: a lock
       holder's heap growth waited on a shootdown ack from a CPU spinning

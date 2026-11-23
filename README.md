@@ -44,10 +44,11 @@ The honest scorecard is in [`docs/ROADMAP.md`](docs/ROADMAP.md) → Where
 we stand. Known gap today: the KVM column is empty on this host. When
 `target/galexy-rustc/rustc` and
 `target/galexy-python/python` were built, a normal `cargo run` logs
-into a seat that has both. The network is a ring-3 `net` service, DHCP, ICMP echo (`ping`),
-and a granted TLS 1.3 lane, not a socket API. USB lists the devices
-on xHCI. The boot keyboard is claimed; a tablet is not. Python is upstream RustPython
-as a login-shell command, not CPython and not a socket module.
+into a seat that has both. The network is a ring-3 `net` service: DHCP, ICMP echo (`ping` of an
+address or a DNS name), and a granted TLS 1.3 lane. `std::net` and
+Python `socket` call those cards. There is no socket syscall. USB lists
+the devices on xHCI. The boot keyboard is claimed; a tablet is not.
+Python is upstream RustPython as a login-shell command, not CPython.
 `lane.read` dials a granted name when the interpreter was rebuilt.
 The inventory is
 [`docs/DEVICES.md`](docs/DEVICES.md). Legacy device paths
@@ -356,8 +357,8 @@ crates/
 - **Phase 10** ✅ — network. virtio-net in the kernel, DHCP
   and one datagram, then a ring-3 `net` service and TLS 1.3 lanes
   granted by name. The record is a file in the admin tree. No sockets
-  in this phase. Milestones 78–85. `serve` attaches a gate and does
-  not yet hand the next lane to that listener. Plan:
+  syscall in this phase. Milestones 78–85. `serve` attaches a gate
+  and hands the next inbound lane to that listener. Plan:
   [`docs/NET.md`](docs/NET.md)
 - **Phase 13** ✅ — USB. xHCI on q35, a list of devices, and one
   driver table. Milestone 102 is the boot keyboard. The example NIC
@@ -375,14 +376,13 @@ crates/
   seal. The login table stays. Milestones 97–99. It can land beside
   Phase 13, and it does not gate `v1.0`. Plan:
   [`docs/GALFS.md`](docs/GALFS.md)
-- **Phase 16** — Milestones 104–109 landed. One kernel boots at
+- **Phase 16** — Milestones 104–116 landed. One kernel boots at
   `-smp 4` and `-smp 8` (the suite stays at 2, and the cap stays 8).
   A network name and a listed USB port are galfs cards. A foreground
   program without the card asks the shell. `TcpStream::connect` and
-  Python `socket.connect` are that ask, then a lane. They connect by
-  name and do not pass an address. That stays name-only until 112.
-  Then an address, a port, bind, listen, and a datagram are cards
-  (112–116). SSH is last (117). Those boxes stay open.
+  Python `socket.connect` are that ask, then a lane. An address, a
+  port, bind, listen, and a datagram are cards (112–116). SSH is
+  last (117), and that box stays open.
   The `v1.0` tag still waits on the KVM cells as well. Plan:
   [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`

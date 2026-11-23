@@ -112,9 +112,9 @@ Unknown codes decode to `Unsupported`. New codes append.
 | `map` | `1..=USER_HEAP_PAGES (262_144)` pages, starting 512 MiB above the task image base | stable (ceiling raised to 1 GiB in Milestone 71) |
 | `channel` message | `CHAN_MSG_MAX = 256` bytes, up to two file Caps; 8 channels | stable |
 | init RPC header | 20 bytes: admin u8, tty u8, then two bytes, then debug id u64, session gen u64, then the user payload. On a net RPC byte 2 is card rights (`TOKEN_READ` dial, `TOKEN_WRITE` accept) and byte 3 is zero. On a usb RPC bytes 2 and 3 are a little-endian mask of ports 1..=16 (bit 0 is port 1). User payload max 236. Ops: status 1, start 2, stop 3, restart 4, shutdown 5, reboot 6, raise 7, drop 8, every 9, date 10, date set 11, at 12. No new syscall number | stable |
-| Wire Cap | index `0x8009`. Frame read/write. Only the task named `net` | **reserved** — Milestone 78. Not implemented |
-| Net control Cap | index `0x800A`. `send` parks for a reply. Same 20-byte stamped header as init. Ops, when they exist: link 1, dial 2, allow 3, grant 4, revoke 5, serve 6, ping 7. `link` may include our locator after Milestone 80 | **reserved** — Milestone 83. Not implemented |
-| `lane` | syscall **35**. Mints a pair of lane Caps. Only `net` may call it. `read` / `write` are the plaintext of one TLS 1.3 session | **reserved** — Milestone 82. Not implemented. No `socket`, `bind`, or `connect` syscall is added. Milestones 112–116 grant those calls with a card on the existing net cap. They are not rows here until that milestone lands. Milestone 117 (SSH) adds no syscall. `date` took 34; the table stays dense |
+| Wire Cap | index `0x8009`. Frame read/write. Only the task named `net`. The kernel moves frames and does not parse IP | **experimental** — Milestone 78 |
+| Net control Cap | index `0x800A`. `send` parks for a reply. Same 20-byte stamped header as init. Opcodes 1–13 are the reserved-indexes row: link, dial, allow, grant, revoke, serve, ping, resolve, pin, bind, listen, datagram, and datagram receive. Ping is four address bytes or a length-prefixed DNS name. Logged-out is `AccessDenied` | **experimental** — Milestones 82, 83, and 110–116. No new syscall |
+| `lane` | syscall **35**. Mints a pair of lane Caps. Only `net` may call it. `read` / `write` are the plaintext of one TLS 1.3 session | **experimental** — Milestone 82. No `socket`, `bind`, or `connect` syscall. Milestones 112–116 grant those calls with a card on this net cap. Milestone 117 (SSH) adds no syscall. `date` took 34; the table stays dense |
 | USB controller Cap | index `0x800B`. `read` copies one device record (port, address, flags, 18 device bytes, configuration, raw string descriptor). A `write` of exactly one byte, the port, arms the boot keyboard on that port (Milestone 102). The stored configuration must contain an interface of class 3, subclass 1, protocol 1; anything else is `BadValue`. Only the task named `usb`, and the write needs READ and WRITE | **experimental** — Milestone 86. A record larger than the caller's buffer is `BadValue` and is not consumed |
 | USB control Cap | index `0x800C`. `send` parks for a reply. Same 20-byte stamped header as init. Op 1 is `list`. The reply is plain text, one device per line | **experimental** — Milestone 87. Logged-out is `AccessDenied`. The reply does not begin with a lane Cap |
 | Python | no syscall and no reserved index. RustPython is a ring-3 program (`docs/PYTHON.md`). `lane.read` and `socket.connect` are dial opcode 2 on net Cap `0x800A` and then `read` of that lane. `socket.bind` is opcode 10, `socket.listen` is opcode 11, `socket.send` is opcode 12, and `socket.recv` is opcode 13. An address or a port is the address card and the port card. `setsockopt`, `ssl`, and `asyncio` are not those calls | landed — Milestones 91–96, 103, and 109. The card calls use opcodes 10–13 |
@@ -134,7 +134,6 @@ Unknown codes decode to `Unsupported`. New codes append.
 - The ramdisk tar layout and the GALF on-disk format (`GALFS.md` owns
   that version number; the kernel refuses mismatches).
 - Locators and transport ports. They live in the `net` service
-  directory (`NET.md`). A program dials a name. A passed address
-  or port is refused until Milestones 112 and 113 grant that exact
-  card. Those calls are not in this table today. SSH (Milestone
+  directory (`NET.md`). A program passes one stored address or port
+  on net cap `0x800A`, and only with that card. SSH (Milestone
   117) adds no syscall.
