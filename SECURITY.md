@@ -59,7 +59,8 @@ fixed in a milestone PR with a changelog line.
   at 10 000 iterations.
 - Remote attacks: Phase 10 has landed (`docs/NET.md`). The kernel
   moves frames and does not parse IP. A lane, a ping, and a datagram
-  need the card. Remote login is Milestone 117 and is not in the tree.
+  need the card. Remote login is Milestone 117: one SSH service,
+  `/card/ssh`, and no second stack.
 - USB devices: Phase 13 has landed (`docs/USB.md`). xHCI lists a
   device, and Milestone 102 claims the QEMU boot keyboard. Other
   vendor drivers stay unwritten.

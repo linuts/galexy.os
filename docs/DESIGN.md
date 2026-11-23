@@ -1184,7 +1184,7 @@ are the cards from Milestones 112–116. Rust `std::net` and Python
 53 stays refused. `setsockopt` stays refused.
 Inbound from outside is Milestone 115: write on the port card,
 then Milestone 83 hands the lane to that one listener. SSH is
-Milestone 117, after that stack: one ring-3 Rust service,
+Milestone 117, on that stack: one ring-3 Rust service,
 `/card/ssh`, no new syscall. The `v1.0` tag is not applied here.
 
 ### Memory policy (Milestone 48)

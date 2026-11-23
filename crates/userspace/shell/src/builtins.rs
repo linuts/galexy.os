@@ -460,6 +460,13 @@ pub(crate) fn dispatch(
         spawn_and_prompt(cwd, b"python", b"", grants, true);
         return None;
     }
+    // The SSH client prompts for a password and waits. Read on
+    // `/card/ssh` is what lets it dial. The name is not an address.
+    if line == b"ssh-open" {
+        let grants = galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_KEYBOARD;
+        spawn_and_prompt(cwd, b"ssh-open", b"", grants, true);
+        return None;
+    }
     if !line.contains(&b' ') {
         launch(cwd, line);
         return None;

@@ -1007,6 +1007,15 @@ pub const NET_OP_DGRAM: u8 = 12;
 /// datagram bytes and the lane Cap is zero. Write does not capture.
 /// Port 53 is refused. A packet from any other peer is ignored.
 pub const NET_OP_RECV: u8 = 13;
+/// Net control: a live TLS 1.3 lane for the named card.
+///
+/// **Experimental** (Milestone 117). The payload is one direction byte
+/// (`TOKEN_READ` dials, `TOKEN_WRITE` accepts) and then the name. The
+/// program passes no address. `read` on the card dials the stored
+/// locator. `write` accepts one inbound connection on the stored port.
+/// The reply's lane stays open and `net` copies the TLS plaintext both
+/// ways. A second acceptor is `held`. This is not a new syscall.
+pub const NET_OP_STREAM: u8 = 14;
 
 /// USB control: list enumerated devices, one per line. The reply is
 /// plain text. It does not begin with a lane capability.

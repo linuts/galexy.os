@@ -8,6 +8,12 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- Milestone 117 — SSH and SFTP, client and server, in one ring-3 Rust service.
+  `/card/ssh` write accepts. Read opens a session. The program passes no address. `net` keeps the TCP bytes.
+  Strict key exchange, Curve25519, an Ed25519 host key, and ChaCha20-Poly1305. The MAC is that AEAD.
+  SFTP is a subsystem. The file read uses the seat's existing password hash and galfs tokens.
+  A `diffie-hellman-group14-sha1` client gets no session. No new syscall. Opcode 14 on net cap `0x800A` is experimental, and so is `read`/`write` `r8` bit 0.
+  The `v1.0` tag stays unapplied. The KVM rows stay empty.
 - [#168](https://github.com/linuts/galexy.os/pull/168) — Docs and USB cards — the `/net` record is version 2, and the wire, net-control, and lane rows are experimental.
   Opcodes 8–13 are in `NET.md`. A stored address or port is a card on `0x800A`. Dial is the read token. A string that is not an address is that name's card, not the cards of a looser parse. Init creates `/usb/1` through `/usb/16` and does not grant them, so a USB list is that card. `DISK_VERSION` is 17. `std::net` is the lane, and Python `socket` is on the allow-list. README and the plans name the card calls, the claimed keyboard, and datagram receive. SSH stays 117.
 - [#167](https://github.com/linuts/galexy.os/pull/167) — Net — `ping <name>` resolves over the pinned DNS-over-TLS resolver and prints the ICMP reply.

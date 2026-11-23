@@ -4,13 +4,13 @@
 mod common;
 
 use common::{
-    boot, boot_and_type, boot_and_type_fwd, boot_and_type_ps2, boot_and_type_uefi,
-    boot_and_type_usb, boot_for, boot_galfs_once, boot_galfs_once_virtio, boot_liveness_until,
-    boot_quiet_until, boot_status_terminal, boot_uefi, boot_uefi_rng, boot_uefi_until,
-    boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache, boot_with_galfs_crash,
-    boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn, boot_with_galfs_virtio,
-    boot_with_galfs_virtio_legacy, boot_with_tpm, boot_xhci, image, uart_login_serial, use_kvm,
-    GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
+    boot, boot_and_type, boot_and_type_fwd, boot_and_type_ps2, boot_and_type_ssh,
+    boot_and_type_uefi, boot_and_type_usb, boot_for, boot_galfs_once, boot_galfs_once_virtio,
+    boot_liveness_until, boot_quiet_until, boot_status_terminal, boot_uefi, boot_uefi_rng,
+    boot_uefi_until, boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache,
+    boot_with_galfs_crash, boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn,
+    boot_with_galfs_virtio, boot_with_galfs_virtio_legacy, boot_with_tpm, boot_xhci, image,
+    uart_login_serial, use_kvm, GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
 };
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -7832,6 +7832,262 @@ fn dns_a_response(query: &[u8], answer: [u8; 4]) -> Vec<u8> {
     wire.extend_from_slice(&(msg.len() as u16).to_be_bytes());
     wire.extend_from_slice(&msg);
     wire
+}
+
+/// Milestone 117: one session from the host reads a file, a local
+/// program with read on `/card/ssh` opens a session, a refused
+/// algorithm fails, and nothing is accepted before the card is granted.
+#[test]
+fn milestone_117_ssh_reads_a_file() {
+    let guest_port = 4598u16;
+    let host_port = 14598u16;
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_bg = Arc::clone(&stop);
+    let file = Arc::new(Mutex::new(Vec::new()));
+    let file_bg = Arc::clone(&file);
+    let bad = Arc::new(AtomicBool::new(false));
+    let bad_bg = Arc::clone(&bad);
+    let note = Arc::new(Mutex::new(String::new()));
+    let note_bg = Arc::clone(&note);
+    let server = std::thread::spawn(move || host_ssh_server(guest_port, stop_bg));
+    let client = std::thread::spawn(move || host_ssh_exchange(host_port, file_bg, bad_bg, note_bg));
+    let pin = listener_pin();
+    let mut pin_hex = String::new();
+    for byte in pin {
+        pin_hex.push_str(&format!("{byte:02x}"));
+    }
+    let save_pin = format!("echo {pin_hex} > k");
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line("echo hi > note", "admin@galexy> "));
+    owned.extend(type_line(&save_pin, "admin@galexy> "));
+    owned.extend(type_line("net allow ssh 10.0.2.2:4598 k", "ok"));
+    owned.extend(type_line("grant w /card/ssh ssh", "ssh: attached"));
+    owned.extend(type_line("echo hold", "ssh: file"));
+    owned.extend(type_line("ssh-open", "Password: "));
+    owned.extend(masked_word("testpass"));
+    owned.push(("ret".into(), "ssh: session".into()));
+    owned.extend(type_line("echo done", "ssh: refused"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type_ssh(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "ssh: refused",
+        Duration::from_millis(30),
+        Duration::from_secs(360),
+        host_port,
+        guest_port,
+    );
+    stop.store(true, Ordering::Relaxed);
+    let _ = client.join();
+    let _ = server.join();
+    let secret = galexy_ssh::HOST_SECRET;
+    let mut secret_hex = String::new();
+    for byte in secret {
+        secret_hex.push_str(&format!("{byte:02x}"));
+    }
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("ssh: denied") && serial.find("ssh: denied") < serial.find("ssh: attached"),
+        "the card was not required; serial:\n{serial}"
+    );
+    let got = file.lock().unwrap().clone();
+    assert_eq!(
+        got,
+        b"hi\n",
+        "sftp read; note={}; serial:\n{serial}",
+        note.lock().unwrap()
+    );
+    assert!(
+        serial.contains("ssh: session"),
+        "the local client did not open a session; serial:\n{serial}"
+    );
+    assert!(
+        bad.load(Ordering::Relaxed),
+        "a refused algorithm was accepted; note={}; serial:\n{serial}",
+        note.lock().unwrap()
+    );
+    assert!(
+        !serial.contains("testpass") && !serial.contains(&secret_hex),
+        "serial carried a secret; serial:\n{serial}"
+    );
+}
+
+fn serial_ssh_contains(needle: &str) -> bool {
+    let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) else {
+        return false;
+    };
+    let prefix = format!("galexy-serial-typing_ssh-{}", std::process::id());
+    for ent in rd.flatten() {
+        let name = ent.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(&prefix) || !name.ends_with(".log") {
+            continue;
+        }
+        if std::fs::read_to_string(ent.path())
+            .map(|text| text.contains(needle))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn serial_ssh_count(needle: &str) -> usize {
+    let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) else {
+        return 0;
+    };
+    let prefix = format!("galexy-serial-typing_ssh-{}", std::process::id());
+    let mut best = 0usize;
+    for ent in rd.flatten() {
+        let name = ent.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(&prefix) || !name.ends_with(".log") {
+            continue;
+        }
+        if let Ok(text) = std::fs::read_to_string(ent.path()) {
+            best = best.max(text.matches(needle).count());
+        }
+    }
+    best
+}
+
+fn host_ssh_server(port: u16, stop: Arc<AtomicBool>) {
+    let (cert_der, key_der) = listener_identity();
+    let config = tls_server(cert_der, key_der);
+    let listener = std::net::TcpListener::bind(("0.0.0.0", port)).expect("ssh peer");
+    listener.set_nonblocking(true).expect("ssh peer");
+    let host = galexy_ssh::HostKey::shipped();
+    while !stop.load(Ordering::Relaxed) {
+        let Ok((mut sock, _)) = listener.accept() else {
+            std::thread::sleep(Duration::from_millis(40));
+            continue;
+        };
+        let _ = sock.set_nonblocking(false);
+        let _ = sock.set_read_timeout(Some(Duration::from_secs(60)));
+        let _ = sock.set_write_timeout(Some(Duration::from_secs(60)));
+        let mut conn = rustls::ServerConnection::new(Arc::clone(&config)).expect("tls");
+        {
+            let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+            let mut session = match galexy_ssh::Session::server(&mut tls, &host) {
+                Ok(session) => session,
+                Err(_) => continue,
+            };
+            let pass = [b't', b'e', b's', b't', b'p', b'a', b's', b's'];
+            let _ = session.accept_password(|user, password| user == "admin" && password == pass);
+        }
+        while conn.wants_write() {
+            let _ = conn.write_tls(&mut sock);
+        }
+    }
+}
+
+fn host_ssh_exchange(
+    host_port: u16,
+    file: Arc<Mutex<Vec<u8>>>,
+    bad: Arc<AtomicBool>,
+    note: Arc<Mutex<String>>,
+) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(340);
+    while std::time::Instant::now() < deadline && !serial_ssh_contains("\nhold\n") {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    match host_sftp_read(host_port) {
+        Ok(bytes) => *file.lock().unwrap() = bytes,
+        Err(err) => *note.lock().unwrap() = err,
+    }
+    while std::time::Instant::now() < deadline && serial_ssh_count("ssh: wait") < 2 {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if host_refused_kex(host_port) {
+        bad.store(true, Ordering::Relaxed);
+    } else {
+        let mut slot = note.lock().unwrap();
+        if slot.is_empty() {
+            *slot = "refused kex was accepted".into();
+        }
+    }
+}
+
+fn masked_word(word: &str) -> Vec<(String, String)> {
+    word.chars()
+        .map(|ch| {
+            let (code, _) = keystroke(ch);
+            (code, "*".to_string())
+        })
+        .collect()
+}
+
+fn host_sftp_read(port: u16) -> Result<Vec<u8>, String> {
+    let mut sock = ssh_connect(port)?;
+    let mut conn = ssh_tls_conn()?;
+    let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+    let mut session =
+        galexy_ssh::Session::client(&mut tls).map_err(|err| format!("handshake {err:?}"))?;
+    let mut password = b"testpass".to_vec();
+    session
+        .login("admin", &mut password)
+        .map_err(|err| format!("login {err:?}"))?;
+    session
+        .sftp_read("note")
+        .map_err(|err| format!("sftp {err:?}"))
+}
+
+fn host_refused_kex(port: u16) -> bool {
+    let Ok(mut sock) = ssh_connect(port) else {
+        return false;
+    };
+    let Ok(mut conn) = ssh_tls_conn() else {
+        return false;
+    };
+    let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+    galexy_ssh::Session::client_offering(&mut tls, "diffie-hellman-group14-sha1").is_err()
+}
+
+fn ssh_connect(port: u16) -> Result<std::net::TcpStream, String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if std::time::Instant::now() > deadline {
+            return Err("connect".into());
+        }
+        match std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            Duration::from_secs(2),
+        ) {
+            Ok(sock) => {
+                let _ = sock.set_read_timeout(Some(Duration::from_secs(60)));
+                let _ = sock.set_write_timeout(Some(Duration::from_secs(60)));
+                return Ok(sock);
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
+}
+
+fn ssh_tls_conn() -> Result<rustls::ClientConnection, String> {
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = std::sync::Arc::new(HostPin {
+        pin: listener_pin(),
+        provider: provider.clone(),
+    });
+    let config = std::sync::Arc::new(
+        rustls::ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .map_err(|_| "tls".to_string())?
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth(),
+    );
+    let name = rustls::pki_types::ServerName::try_from("echo").map_err(|_| "name".to_string())?;
+    rustls::ClientConnection::new(config, name).map_err(|_| "client".to_string())
 }
 
 fn serial_uptime_secs(serial: &str) -> u64 {

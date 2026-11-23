@@ -103,11 +103,11 @@ const BEAT_MIN_MS: u64 = 250;
 const BEAT_MAX_MS: u64 = 86_400_000;
 
 /// Twelve seats, one once-service, the backoff fixture, one ignore
-/// service, one notice target, one beat target, `net`, and `usb`.
-/// Nineteen names. A boot holds twelve seat Caps plus `net` and `usb`;
-/// stamp exits and frees its Cap. `bell` and `chime` are not started at
-/// boot. That stays under the sixteen-Cap ceiling.
-const SERVICES: [Svc; 19] = [
+/// service, one notice target, one beat target, `net`, `usb`, and `ssh`.
+/// Twenty names. A boot holds twelve seat Caps plus `net`, `usb`, and
+/// `ssh`. Stamp exits and frees its Cap. `bell` and `chime` are not
+/// started at boot. That stays within the sixteen-Cap ceiling.
+const SERVICES: [Svc; 20] = [
     row(b"shell", 1, RESTART, true),
     row(b"shell2", 2, RESTART, true),
     row(b"shell3", 3, RESTART, true),
@@ -141,6 +141,7 @@ const SERVICES: [Svc; 19] = [
     },
     row(b"net", 0, RESTART, true),
     row(b"usb", 0, RESTART, true),
+    row(b"ssh", 0, RESTART, true),
 ];
 
 /// Notice names a row may name. A raise of anything else is `unknown`.
@@ -184,7 +185,7 @@ const fn notices_declared() -> bool {
 
 const _: () = assert!(notices_declared());
 
-static LIVE: [Live; 19] = [const { live() }; 19];
+static LIVE: [Live; 20] = [const { live() }; 20];
 static NOTICE_UP: [AtomicBool; NOTICE_NAMES.len()] =
     [const { AtomicBool::new(false) }; NOTICE_NAMES.len()];
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
@@ -196,7 +197,7 @@ static RX: AtomicU64 = AtomicU64::new(0);
 static DATE_UNSET_LOGGED: AtomicBool = AtomicBool::new(false);
 /// A row whose ELF is not in this ramdisk. The release image omits the
 /// fixture programs; the test image packs them.
-static OMIT: [AtomicBool; 19] = [const { AtomicBool::new(false) }; 19];
+static OMIT: [AtomicBool; 20] = [const { AtomicBool::new(false) }; 20];
 
 fn main() -> i32 {
     let mut ends = [0u64; 2];
@@ -221,6 +222,18 @@ fn main() -> i32 {
     if find(b"net").is_some() {
         let _ = grant(b"/net", TOKEN_READ | TOKEN_WRITE, b"net");
     }
+    // `stamp` still holds a process Cap, so the sixteenth autostart
+    // (`ssh`) did not fit. Wait it out, then start what missed.
+    if let Some(i) = find(b"stamp") {
+        if LIVE[i].running.load(Ordering::Acquire) {
+            let cap = LIVE[i].cap.load(Ordering::Acquire);
+            let got = wait(Cap::from_bits(cap));
+            if got.ok {
+                on_exit(i);
+            }
+        }
+    }
+    spawn_missed();
     // Autostart used the single pending-spawn slot. Say so only after
     // those spawns have returned, so a later spawn is not `NoResource`
     // because stamp is still being loaded.
@@ -319,11 +332,40 @@ fn next_running(start: usize) -> Option<usize> {
     None
 }
 
+/// Starts an autostart row that never got a process Cap.
+///
+/// The first pass can fill init's sixteen Caps while `stamp` is still
+/// alive. `ssh` is the one that misses. After `stamp` exits, this
+/// starts it. A row that is running, held, or omitted stays as it is.
+fn spawn_missed() {
+    if SHUTTING_DOWN.load(Ordering::Acquire) {
+        return;
+    }
+    for (i, svc) in SERVICES.iter().enumerate() {
+        if !svc.autostart || svc.policy != RESTART {
+            continue;
+        }
+        if OMIT[i].load(Ordering::Acquire) || LIVE[i].hold.load(Ordering::Acquire) {
+            continue;
+        }
+        if LIVE[i].running.load(Ordering::Acquire) {
+            continue;
+        }
+        let _ = spawn_svc(i);
+    }
+}
+
 fn spawn_svc(i: usize) -> bool {
     let svc = &SERVICES[i];
     let arg = [svc.arg];
     let args: &[u8] = if svc.arg == 0 { &[] } else { &arg };
-    let got = spawn_with(svc.name, args, 0);
+    // `ssh` starts a helper for one file read. The helper is not root.
+    let grants = if svc.name == b"ssh" {
+        galexy_abi::SPAWN_GRANT_LOADER
+    } else {
+        0
+    };
+    let got = spawn_with(svc.name, args, grants);
     if !got.ok {
         return false;
     }
@@ -494,6 +536,11 @@ fn ensure_cards() {
     let ping = create(b"/card/ping");
     if ping.ok {
         let _ = close(Cap::from_bits(ping.value));
+    }
+    // Write accepts a session. Read opens one. Init does not grant it.
+    let ssh = create(b"/card/ssh");
+    if ssh.ok {
+        let _ = close(Cap::from_bits(ssh.value));
     }
     let _ = create(b"/usb/");
     // Ports 1..=16 are the bits in the usb list header. The objects

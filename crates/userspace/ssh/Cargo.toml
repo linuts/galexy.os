@@ -1,0 +1,14 @@
+[package]
+name = "ssh"
+version = "0.1.0"
+edition = "2021"
+description = "SSH and SFTP. One service, client and server, on the net lane."
+
+[build-dependencies]
+galexy-abi = { path = "../../galexy-abi" }
+
+[dependencies]
+galexy-rt = { path = "../galexy-rt", features = ["std"] }
+galexy-abi = { path = "../../galexy-abi" }
+galexy-ssh = { path = "../../galexy-ssh" }
+getrandom = "0.4"
