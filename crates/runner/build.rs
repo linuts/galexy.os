@@ -1067,7 +1067,7 @@ const NOSTD_PACKAGES: [&str; 7] = [
 /// `std` programs built with `-Zbuild-std=std,panic_abort` on the Galexy
 /// PAL overlay. They share one target dir (one std build), separate from
 /// the `no_std` one.
-const STD_PACKAGES: [&str; 4] = ["stdmin", "stdtest", "bigtest", "net"];
+const STD_PACKAGES: [&str; 5] = ["stdmin", "stdtest", "bigtest", "net", "ssh"];
 
 /// [`NOSTD_PACKAGES`] plus [`STD_PACKAGES`], as ramdisk entries.
 fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
@@ -1124,7 +1124,7 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
             repo_root().join("scripts/galexy-rustc-wrapper.py"),
         );
         cmd.env("GALEXY_SYSROOT", &sysroot);
-        if pkg == "net" {
+        if pkg == "net" || pkg == "ssh" {
             // getrandom has no galexy backend. The service supplies rdrand.
             let mut flags = std::env::var("RUSTFLAGS").unwrap_or_default();
             // Soft crypto. The galexy target is soft-float and has no SSE,
@@ -1155,6 +1155,18 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
         let bytes = std::fs::read(&elf).unwrap_or_else(|e| panic!("read {}: {e}", elf.display()));
         assert!(bytes.starts_with(b"\x7fELF"), "{pkg} is not an ELF");
         bins.insert(ramdisk_entry_name(pkg), strip_debug(bytes));
+        if pkg == "ssh" {
+            for extra in ["ssh-open", "ssh-read"] {
+                let path = elf.with_file_name(extra);
+                let extra_bytes = std::fs::read(&path)
+                    .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+                assert!(
+                    extra_bytes.starts_with(b"\x7fELF"),
+                    "{extra} is not an ELF"
+                );
+                bins.insert(extra.into(), strip_debug(extra_bytes));
+            }
+        }
         // `stdline` is a second bin of the `stdmin` package, so one
         // `cargo build -p stdmin` produces both ELFs.
         if pkg == "stdmin" {

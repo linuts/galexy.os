@@ -376,14 +376,14 @@ crates/
   seal. The login table stays. Milestones 97–99. It can land beside
   Phase 13, and it does not gate `v1.0`. Plan:
   [`docs/GALFS.md`](docs/GALFS.md)
-- **Phase 16** — Milestones 104–116 landed. One kernel boots at
+- **Phase 16** — Milestones 104–117 landed. One kernel boots at
   `-smp 4` and `-smp 8` (the suite stays at 2, and the cap stays 8).
   A network name and a listed USB port are galfs cards. A foreground
   program without the card asks the shell. `TcpStream::connect` and
   Python `socket.connect` are that ask, then a lane. An address, a
-  port, bind, listen, and a datagram are cards (112–116). SSH is
-  last (117), and that box stays open.
-  The `v1.0` tag still waits on the KVM cells as well. Plan:
+  port, bind, listen, and a datagram are cards (112–116). SSH and
+  SFTP are `/card/ssh` (117).
+  The `v1.0` tag still waits on the KVM cells. Plan:
   [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
   static linker (LINKER.md, ✅ Milestone 69), `std` PAL (✅ Milestone

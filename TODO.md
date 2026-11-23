@@ -2339,17 +2339,17 @@ unset.
       `-accel kvm` there instead of waiting on an empty serial log)
 - [ ] `PERF.md` numbers within budget under KVM (TCG release cells
       recorded; KVM cells empty for the same host reason)
-- [ ] Phase 16 — Milestones 104–117 (`docs/ROADMAP.md`). A boot shows
+- [x] Phase 16 — Milestones 104–117 (`docs/ROADMAP.md`). A boot shows
       4 and 8 CPUs online. A dial, a ping, and a USB list without a
       card are denied. Rust and Python connect by name only after the
       seat allows it. A name resolves over TLS and a program reaches a
       host that is not `10.0.2.2`. A raw IP, a port, `bind`, `listen`,
       and one datagram are cards (Milestones 112–116). SSH is last:
       a host client reads one file over SFTP, and a legacy algorithm
-      is refused. Milestone 83 and Milestones 110–116 are checked.
-      Milestone 117 and the KVM rows stay open until their own runs
-- [ ] Tag `v1.0` with the changelog. The tag needs the KVM cells and
-      Phase 16, including Milestone 117. This plan does not apply it
+      is refused. Milestone 83 and Milestones 110–117 are checked.
+      The KVM rows stay open
+- [ ] Tag `v1.0` with the changelog. Phase 16 has landed. The tag
+      still needs the KVM cells. This plan does not apply it
 
 ---
 
@@ -3087,10 +3087,10 @@ syscall.
 
 ## Phase 16 — Cards, then a reachable machine
 
-Milestones 103–116 have landed. Milestone 83 and Milestones 110–116
+Milestones 103–117 have landed. Milestone 83 and Milestones 110–117
 are checked. A passed address, a port, bind, listen, and one
-datagram are cards. Milestone 117 is SSH, and it stays open. The
-KVM rows under the `v1.0` gate stay open. Do not tag `v1.0`.
+datagram are cards. Milestone 117 is SSH. The KVM rows under the
+`v1.0` gate stay open. Do not tag `v1.0`.
 `docs/ROADMAP.md` is the phase.
 
 ## Milestone 104 — Prove four and eight CPUs
@@ -3390,33 +3390,33 @@ The last milestone. It waits until Milestone 111 has reached a
 host past `10.0.2.2`, and until Milestone 115 has shown
 Milestone 83's handoff. One ring-3 Rust service. No new syscall.
 
-- [ ] **One service**: an init row, the same shape as `net`. The
+- [x] **One service**: an init row, the same shape as `net`. The
       SSH protocol is in-tree Rust. No OpenSSH, no libssh, no C,
       and no crates.io SSH library. It does not hold the wire
-- [ ] **The card**: `/card/ssh`. Init creates it the way it
+- [x] **The card**: `/card/ssh`. Init creates it the way it
       creates `/card/ping`, and does not grant it. Write accepts
       an inbound session. Read lets a local program open a
       session. The program passes no address. Both use `net`. A
       missing card asks (Milestone 107), for that run only
-- [ ] **What it speaks**: strict key exchange, then
+- [x] **What it speaks**: strict key exchange, then
       `curve25519-sha256`. Host keys are Ed25519. The cipher is
       `chacha20-poly1305` or `aes256-gcm`. The MAC is the AEAD
-- [ ] **What it refuses**: SHA-1, CBC, `ssh-rsa`, SSHv1, FTP,
+- [x] **What it refuses**: SHA-1, CBC, `ssh-rsa`, SSHv1, FTP,
       telnet, rsh, `ssh-dss`, `hmac-sha1`,
       `diffie-hellman-group1-sha1`,
       `diffie-hellman-group14-sha1`, and a cleartext transfer. A
       client that offers only a refused algorithm gets no
       session. There is no fallback to a legacy group
-- [ ] **Auth and files**: the existing PBKDF2 password hash. SFTP
+- [x] **Auth and files**: the existing PBKDF2 password hash. SFTP
       is a subsystem of that session, not a second port and not a
       second daemon. The files it can touch are the galfs tokens
       the seat already holds
-- [ ] **Proof**: the host opens one session and reads one file.
+- [x] **Proof**: the host opens one session and reads one file.
       A local program with read on `/card/ssh` opens one session.
       Serial does not contain the host-key private bytes or the
       password. A refused algorithm fails the handshake. A seat
       without the card accepts nothing
-- [ ] **Out of this milestone**: a new syscall, a root shell that
+- [x] **Out of this milestone**: a new syscall, a root shell that
       bypasses cards, a second stack, raw sockets, old
       algorithms, plaintext DNS, the `v1.0` tag, and the KVM rows
 

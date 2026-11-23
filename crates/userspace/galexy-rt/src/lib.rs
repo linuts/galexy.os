@@ -398,6 +398,23 @@ pub fn write(cap: Cap, bytes: &[u8]) -> SyscallResult {
     )
 }
 
+/// Like [`write`], and a full lane or pipe returns
+/// [`galexy_abi::SysError::NoResource`] instead of parking.
+///
+/// `r8` bit 0 is [`galexy_abi::RECV_POLL`]. Experimental with the live
+/// SSH lane (Milestone 117). A short write still returns how many bytes
+/// fit. Other callers keep [`write`].
+pub fn write_poll(cap: Cap, bytes: &[u8]) -> SyscallResult {
+    syscall_r8r9(
+        Syscall::Write as u64,
+        cap.bits(),
+        bytes.as_ptr() as u64,
+        bytes.len() as u64,
+        galexy_abi::RECV_POLL,
+        0,
+    )
+}
+
 /// Opens a ramdisk file by exact name (`banner.txt`, `hello`).
 ///
 /// On success, `value` is the new capability's bits (READ right).
@@ -419,6 +436,22 @@ pub fn read(cap: Cap, buf: &mut [u8]) -> SyscallResult {
         cap.bits(),
         buf.as_mut_ptr() as u64,
         buf.len() as u64,
+    )
+}
+
+/// Like [`read`], and a lane or pipe with nothing waiting returns
+/// [`galexy_abi::SysError::NoResource`] instead of parking.
+///
+/// `r8` bit 0 is [`galexy_abi::RECV_POLL`]. Experimental with the live
+/// SSH lane (Milestone 117). Other callers keep [`read`].
+pub fn read_poll(cap: Cap, buf: &mut [u8]) -> SyscallResult {
+    syscall_r8r9(
+        Syscall::Read as u64,
+        cap.bits(),
+        buf.as_mut_ptr() as u64,
+        buf.len() as u64,
+        galexy_abi::RECV_POLL,
+        0,
     )
 }
 

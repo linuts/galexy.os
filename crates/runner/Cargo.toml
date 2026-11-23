@@ -6,6 +6,7 @@ edition = "2021"
 [dev-dependencies]
 bootloader = "0.11"
 galexy-galf = { path = "../galexy-galf" }
+galexy-ssh = { path = "../galexy-ssh" }
 rcgen = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 

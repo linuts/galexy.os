@@ -73,7 +73,8 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             Outcome::Handoff
         }
         n if n == Syscall::Write as u64 => {
-            match syscall_write_ex(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx) {
+            let poll = frame.r8 & galexy_abi::RECV_POLL != 0;
+            match syscall_write_ex(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx, poll) {
                 IoResult::Done(r) => {
                     stamp(frame, r);
                     Outcome::Resume
@@ -99,7 +100,8 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             IoResult::Park => Outcome::Handoff,
         },
         n if n == Syscall::Read as u64 => {
-            match syscall_read_ex(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx) {
+            let poll = frame.r8 & galexy_abi::RECV_POLL != 0;
+            match syscall_read_ex(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx, poll) {
                 IoResult::Done(r) => {
                     stamp(frame, r);
                     Outcome::Resume
@@ -389,7 +391,7 @@ enum IoResult {
     Park,
 }
 
-fn syscall_write_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
+fn syscall_write_ex(cap: Cap, addr: u64, len: u64, poll: bool) -> IoResult {
     if cap.index() == galexy_abi::reserved::WIRE_INDEX {
         return IoResult::Done(syscall_wire_write(cap, addr, len));
     }
@@ -397,7 +399,7 @@ fn syscall_write_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
         return IoResult::Done(syscall_usb_arm(cap, addr, len));
     }
     if cap.index() != galexy_abi::reserved::CONSOLE_INDEX {
-        return syscall_write_file_ex(cap, addr, len);
+        return syscall_write_file_ex(cap, addr, len, poll);
     }
     IoResult::Done(syscall_write_console(cap, addr, len))
 }
@@ -661,7 +663,7 @@ fn syscall_write_console(cap: Cap, addr: u64, len: u64) -> SyscallResult {
 }
 
 /// Copies `src` onto a file/pipe cap. Pipes may park when full (M57).
-fn syscall_write_file_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
+fn syscall_write_file_ex(cap: Cap, addr: u64, len: u64, poll: bool) -> IoResult {
     if len > MAX_WRITE {
         return IoResult::Done(SyscallResult::err(SysError::BadValue));
     }
@@ -678,12 +680,18 @@ fn syscall_write_file_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
     match crate::sched::task_write_ex(cap, &staged[..len as usize]) {
         Ok(crate::sched::IoOp::Ready(n)) => IoResult::Done(SyscallResult::ok(n as u64)),
         Ok(crate::sched::IoOp::ParkPipe { id, read: false }) => {
+            if poll {
+                return IoResult::Done(SyscallResult::err(SysError::NoResource));
+            }
             match crate::sched::task_park_pipe(id, false, cap.bits(), addr, len as u32) {
                 Ok(()) => IoResult::Park,
                 Err(err) => IoResult::Done(SyscallResult::err(err)),
             }
         }
         Ok(crate::sched::IoOp::ParkLane { id, read: false }) => {
+            if poll {
+                return IoResult::Done(SyscallResult::err(SysError::NoResource));
+            }
             match crate::sched::task_park_lane(id, false, cap, addr, len as u32) {
                 Ok(()) => IoResult::Park,
                 Err(err) => IoResult::Done(SyscallResult::err(err)),
@@ -1279,7 +1287,7 @@ fn syscall_open(addr: u64, len: u64) -> SyscallResult {
     }
 }
 
-fn syscall_read_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
+fn syscall_read_ex(cap: Cap, addr: u64, len: u64, poll: bool) -> IoResult {
     if cap.index() == galexy_abi::reserved::WIRE_INDEX {
         return IoResult::Done(syscall_wire_read(cap, addr, len));
     }
@@ -1317,12 +1325,18 @@ fn syscall_read_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
             IoResult::Done(SyscallResult::ok(n as u64))
         }
         Ok(crate::sched::IoOp::ParkPipe { id, read: true }) => {
+            if poll {
+                return IoResult::Done(SyscallResult::err(SysError::NoResource));
+            }
             match crate::sched::task_park_pipe(id, true, cap.bits(), addr, len as u32) {
                 Ok(()) => IoResult::Park,
                 Err(err) => IoResult::Done(SyscallResult::err(err)),
             }
         }
         Ok(crate::sched::IoOp::ParkLane { id, read: true }) => {
+            if poll {
+                return IoResult::Done(SyscallResult::err(SysError::NoResource));
+            }
             match crate::sched::task_park_lane(id, true, cap, addr, len as u32) {
                 Ok(()) => IoResult::Park,
                 Err(err) => IoResult::Done(SyscallResult::err(err)),

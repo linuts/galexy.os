@@ -220,8 +220,7 @@ machines: ACPI, x2APIC, PCIe, virtio 1.x, UEFI + GOP.
 Rules for Phase 10 (`docs/NET.md`; Milestones **78–85**). Binding
 once the first of those milestones lands; the plan is binding now.
 Phase 16 (Milestones **108–117**) is the later plan. 108 through
-116 have landed. 117 stays open. This text does not check that
-last box.
+117 have landed. This text does not check the KVM rows.
 
 - **A lane is the application object.** One TLS 1.3 session, one peer,
   `READ` and `WRITE`. Phase 10 has no `socket`, `bind`, `listen`,
@@ -233,8 +232,9 @@ last box.
   one card. Read dials and sends the stored datagram. Write accepts
   and binds. `std::net` and Python `socket` call those cards:
   bind, listen, datagram send and receive, and an address or a
-  port. `setsockopt` stays refused. No new syscall. SSH is 117,
-  and it is last.
+  port. `setsockopt` stays refused. No new syscall. SSH is 117:
+  one service, `/card/ssh`, current algorithms, SFTP on that
+  session.
 - **The kernel moves frames.** virtio-net DMA follows the virtio-blk
   rule: one descriptor per physically contiguous run. The interrupt
   handler does not parse IP. TCP, UDP, and TLS live in the ring-3

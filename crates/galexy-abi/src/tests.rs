@@ -113,6 +113,7 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(NET_OP_LISTEN, 11);
     assert_eq!(NET_OP_DGRAM, 12);
     assert_eq!(NET_OP_RECV, 13);
+    assert_eq!(NET_OP_STREAM, 14);
     assert_eq!(USB_OP_LIST, 1);
     assert_eq!(LANE_SLOTS, 32);
     assert_eq!(LANE_BYTES, 16 * 1024);

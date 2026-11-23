@@ -5,12 +5,12 @@
 //! Session keys are not written to the console.
 
 use std::io::{Read, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use galexy_abi::{
     Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DGRAM, NET_OP_DIAL,
     NET_OP_GRANT, NET_OP_LINK, NET_OP_LISTEN, NET_OP_PIN, NET_OP_PING, NET_OP_RECV, NET_OP_RESOLVE,
-    NET_OP_REVOKE, NET_OP_SERVE,
+    NET_OP_REVOKE, NET_OP_SERVE, NET_OP_STREAM,
 };
 use galexy_net::Engine;
 use galexy_netcfg::{
@@ -18,8 +18,8 @@ use galexy_netcfg::{
     NAME_MAX,
 };
 use galexy_rt::{
-    chan_recv_poll, chan_send, channel, clock_ms, close, lane_pair, open, read, seek, sleep_ms,
-    truncate, wire_read, wire_write, write, write_console,
+    chan_recv_poll, chan_send, channel, clock_ms, close, lane_pair, open, read, read_poll, seek,
+    sleep_ms, truncate, wire_read, wire_write, write, write_console, write_poll,
 };
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{verify_tls13_signature, CryptoProvider};
@@ -72,6 +72,8 @@ fn main() {
     let mut flood_at: Option<u64> = None;
     let mut flood_ids: Vec<u8> = Vec::new();
     let mut flood_logged = false;
+    let mut lives: Vec<Live> = Vec::new();
+    let mut seen: Option<Seen> = None;
     loop {
         pump(&mut engine);
         let now = clock_ms();
@@ -102,6 +104,7 @@ fn main() {
             logged_tcp = true;
         }
         enqueue_accepted(&mut engine, &mut gates);
+        pump_lives(&mut engine, &mut lives);
         if let Some(start) = flood_at {
             if flood_ids.len() < 4 {
                 if let Some(gw) = engine.locator().map(|(_, _, gw)| gw) {
@@ -127,6 +130,8 @@ fn main() {
                 &mut gates,
                 now,
                 &mut flood_at,
+                &mut lives,
+                &mut seen,
             );
         }
         if sleep_ms(20).ok {
@@ -135,6 +140,13 @@ fn main() {
         let err = SysError::from_code(0);
         let _ = err;
     }
+}
+
+/// A peer key learned on a dial that had no pin yet. It is not stored
+/// until the seat says yes.
+struct Seen {
+    name: Vec<u8>,
+    key: [u8; 32],
 }
 
 struct Gate {
@@ -156,6 +168,8 @@ fn handle(
     gates: &mut Vec<Gate>,
     now: u64,
     flood_at: &mut Option<u64>,
+    lives: &mut Vec<Live>,
+    seen: &mut Option<Seen>,
 ) {
     if msg.len() < INIT_RPC_HDR + 1 {
         reply(rx, b"bad\n", 0);
@@ -199,6 +213,9 @@ fn handle(
         NET_OP_REVOKE if admin => grant_op(rx, record, rest, false),
         NET_OP_SERVE if admin => serve(rx, engine, record, msg[2], actor_id, gates, rest),
         NET_OP_PING => ping(rx, engine, record, msg[2], rest, now),
+        NET_OP_STREAM => stream(
+            rx, engine, record, msg[2], actor_id, gates, rest, lives, seen,
+        ),
         NET_OP_ALLOW | NET_OP_GRANT | NET_OP_REVOKE | NET_OP_SERVE | NET_OP_PIN => {
             reply(rx, b"access denied\n", 0);
         }
@@ -414,8 +431,13 @@ fn drive_tls(
     if n > 0 {
         conn.read_tls(&mut &buf[..n]).map_err(|_| "bad")?;
         let _io = conn.process_new_packets().map_err(|err| {
-            log(&format!("[net] tls {err}"));
-            "denied"
+            let text = format!("{err}");
+            log(&format!("[net] tls {text}"));
+            if text.contains("pin-mismatch") {
+                "changed"
+            } else {
+                "denied"
+            }
         })?;
         let mut plain = [0u8; 2048];
         let got = conn.reader().read(&mut plain).unwrap_or(0);
@@ -449,6 +471,67 @@ fn filtered_provider() -> Arc<CryptoProvider> {
         .kx_groups
         .retain(|group| group.name() == rustls::NamedGroup::X25519);
     Arc::new(provider)
+}
+
+#[derive(Debug)]
+struct LearnVerifier {
+    key: Mutex<[u8; 32]>,
+    saw: Mutex<bool>,
+    provider: Arc<CryptoProvider>,
+}
+
+impl ServerCertVerifier for LearnVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, Error> {
+        let Some(got) = ed25519_key(end_entity.as_ref()) else {
+            return Err(Error::General("pin-miss".into()));
+        };
+        if let Ok(mut slot) = self.key.lock() {
+            *slot = got;
+        }
+        if let Ok(mut slot) = self.saw.lock() {
+            *slot = true;
+        }
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        Err(Error::PeerIncompatible(
+            rustls::PeerIncompatible::ServerDoesNotSupportTls12Or13,
+        ))
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )?;
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
 }
 
 #[derive(Debug)]
@@ -1449,6 +1532,420 @@ fn log(line: &str) {
 }
 
 fn fill_random_once() {}
+
+/// One TLS session whose plaintext is a lane. `net` copies bytes. The
+/// SSH service never sees TCP.
+struct Live {
+    tcp: u8,
+    lane: Cap,
+    conn: Connection,
+    to_lane: Vec<u8>,
+    to_tls: Vec<u8>,
+    wire: Vec<u8>,
+}
+
+fn stream(
+    rx: Cap,
+    engine: &mut Engine,
+    record: &mut Record,
+    held: u8,
+    actor_id: u64,
+    gates: &mut Vec<Gate>,
+    rest: &[u8],
+    lives: &mut Vec<Live>,
+    seen: &mut Option<Seen>,
+) {
+    if rest.is_empty() {
+        reply(rx, b"bad\n", 0);
+        return;
+    }
+    let dir = rest[0];
+    let name = &rest[1..];
+    if name.is_empty() || parse_passed(name).is_some() {
+        reply(rx, b"bad\n", 0);
+        return;
+    }
+    if dir == 3 || dir == 4 {
+        if held & 1 == 0 {
+            reply(rx, b"access denied\n", 0);
+            return;
+        }
+        if dir == 4 {
+            *seen = None;
+            reply(rx, b"ok\n", 0);
+            return;
+        }
+        let Some(got) = seen.take() else {
+            reply(rx, b"bad\n", 0);
+            return;
+        };
+        if got.name.as_slice() != name || record.remember_key(name, got.key).is_err() {
+            reply(rx, b"bad\n", 0);
+            return;
+        }
+        save_record(record);
+        audit(actor_id, name, &got.key, "remembered");
+        reply(rx, b"ok\n", 0);
+        return;
+    }
+    let Some(entry) = record.find(name) else {
+        reply(rx, b"missing\n", 0);
+        return;
+    };
+    if dir == 2 {
+        if held & 2 == 0 {
+            reply(rx, b"access denied\n", 0);
+            return;
+        }
+        live_accept(
+            rx, engine, actor_id, gates, name, entry.port, entry.key, lives,
+        );
+    } else if dir == 1 {
+        if held & 1 == 0 {
+            reply(rx, b"access denied\n", 0);
+            return;
+        }
+        if entry.kind != KIND_IPV4 {
+            reply(rx, b"unsupported\n", 0);
+            return;
+        }
+        let ip = [entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]];
+        live_dial(
+            rx, engine, actor_id, name, ip, entry.port, entry.key, lives, seen,
+        );
+    } else {
+        reply(rx, b"bad\n", 0);
+    }
+}
+
+fn live_accept(
+    rx: Cap,
+    engine: &mut Engine,
+    actor_id: u64,
+    gates: &mut Vec<Gate>,
+    name: &[u8],
+    port: u16,
+    key: [u8; 32],
+    lives: &mut Vec<Live>,
+) {
+    if lives
+        .iter()
+        .any(|live| engine.tcp_local(live.tcp) == Some(port))
+    {
+        reply(rx, b"held\n", 0);
+        return;
+    }
+    if let Some(gate) = gates.iter().find(|g| g.port == port) {
+        if gate.listener != actor_id {
+            reply(rx, b"held\n", 0);
+            return;
+        }
+    } else if gates.len() >= MAX_GATES {
+        reply(rx, b"full\n", 0);
+        return;
+    } else {
+        let Ok(id) = engine.tcp_listen(port) else {
+            reply(rx, b"unavailable\n", 0);
+            return;
+        };
+        gates.push(Gate {
+            port,
+            id,
+            listener: actor_id,
+            pending: Vec::new(),
+        });
+        log(&format!("[net] listen {port}"));
+        reply(rx, b"attached\n", 0);
+        return;
+    }
+    let start = clock_ms();
+    let id = match next_inbound(engine, gates, port, start) {
+        Ok(id) => id,
+        Err(why) => {
+            audit(actor_id, name, &key, why);
+            reply(rx, b"timed out\n", 0);
+            return;
+        }
+    };
+    match tls_ready(engine, id, true, &key, clock_ms()) {
+        Ok((conn, early)) => {
+            if !hand_live(rx, engine, actor_id, name, &key, id, conn, early, lives) {
+                return;
+            }
+        }
+        Err(why) => {
+            engine.tcp_close(id);
+            audit(actor_id, name, &key, why);
+            reply(rx, b"timed out\n", 0);
+        }
+    }
+}
+
+fn live_dial(
+    rx: Cap,
+    engine: &mut Engine,
+    actor_id: u64,
+    name: &[u8],
+    ip: [u8; 4],
+    port: u16,
+    key: [u8; 32],
+    lives: &mut Vec<Live>,
+    seen: &mut Option<Seen>,
+) {
+    if port == 0 || ip == [0, 0, 0, 0] {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    if key == [0; 32] {
+        learn_pin(rx, engine, actor_id, name, ip, port, seen);
+        return;
+    }
+    log(&format!(
+        "[net] dial {}.{}.{}.{}",
+        ip[0], ip[1], ip[2], ip[3]
+    ));
+    let Ok(id) = engine.tcp_connect(ip, port) else {
+        reply(rx, b"unavailable\n", 0);
+        return;
+    };
+    let now = clock_ms();
+    if !wait_established(engine, id, now) {
+        engine.tcp_release(id);
+        reply(rx, b"timed out\n", 0);
+        return;
+    }
+    match tls_ready(engine, id, false, &key, clock_ms()) {
+        Ok((conn, early)) => {
+            if !hand_live(rx, engine, actor_id, name, &key, id, conn, early, lives) {
+                return;
+            }
+        }
+        Err(why) => {
+            engine.tcp_release(id);
+            audit(actor_id, name, &key, why);
+            if why == "changed" {
+                reply(rx, b"changed\n", 0);
+            } else {
+                reply(rx, b"timed out\n", 0);
+            }
+        }
+    }
+}
+
+/// Finishes TLS far enough to read the peer key, then closes. The lane
+/// stays closed until the seat accepts the key and dials again.
+fn learn_pin(
+    rx: Cap,
+    engine: &mut Engine,
+    actor_id: u64,
+    name: &[u8],
+    ip: [u8; 4],
+    port: u16,
+    seen: &mut Option<Seen>,
+) {
+    log(&format!(
+        "[net] dial {}.{}.{}.{}",
+        ip[0], ip[1], ip[2], ip[3]
+    ));
+    let Ok(id) = engine.tcp_connect(ip, port) else {
+        reply(rx, b"unavailable\n", 0);
+        return;
+    };
+    let now = clock_ms();
+    if !wait_established(engine, id, now) {
+        engine.tcp_release(id);
+        reply(rx, b"timed out\n", 0);
+        return;
+    }
+    let learned = Arc::new(LearnVerifier {
+        key: Mutex::new([0; 32]),
+        saw: Mutex::new(false),
+        provider: filtered_provider(),
+    });
+    let result = learn_handshake(engine, id, Arc::clone(&learned), clock_ms());
+    engine.tcp_close(id);
+    let Ok(()) = result else {
+        reply(rx, b"timed out\n", 0);
+        return;
+    };
+    let saw = learned.saw.lock().map(|g| *g).unwrap_or(false);
+    let key = learned.key.lock().map(|g| *g).unwrap_or([0; 32]);
+    if !saw || key == [0; 32] {
+        reply(rx, b"timed out\n", 0);
+        return;
+    }
+    *seen = Some(Seen {
+        name: name.to_vec(),
+        key,
+    });
+    audit(actor_id, name, &key, "unseen");
+    let mut text = [0u8; 7 + 64 + 1];
+    text[..7].copy_from_slice(b"unseen ");
+    const HEX: &[u8] = b"0123456789abcdef";
+    for (i, byte) in key.iter().enumerate() {
+        text[7 + i * 2] = HEX[(byte >> 4) as usize];
+        text[8 + i * 2] = HEX[(byte & 0xf) as usize];
+    }
+    text[71] = b'\n';
+    reply(rx, &text, 0);
+}
+
+fn learn_handshake(
+    engine: &mut Engine,
+    id: u8,
+    learned: Arc<LearnVerifier>,
+    start: u64,
+) -> Result<(), &'static str> {
+    let server = ServerName::try_from("echo".to_string()).map_err(|_| "bad")?;
+    let config = learn_config(learned).map_err(|_| "bad")?;
+    let mut conn = Connection::Client(ClientConnection::new(config, server).map_err(|_| "bad")?);
+    let mut early = Vec::new();
+    let limit = start.saturating_add(HANDSHAKE_MS);
+    while clock_ms() < limit {
+        drive_tls(engine, id, &mut conn, &mut early)?;
+        if !conn.is_handshaking() {
+            return Ok(());
+        }
+        pump(engine);
+        let _ = sleep_ms(20);
+    }
+    Err("deadline")
+}
+
+fn learn_config(learned: Arc<LearnVerifier>) -> Result<Arc<ClientConfig>, Error> {
+    let provider = Arc::clone(&learned.provider);
+    let config = ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13])?
+        .dangerous()
+        .with_custom_certificate_verifier(learned)
+        .with_no_client_auth();
+    Ok(Arc::new(config))
+}
+
+fn hand_live(
+    rx: Cap,
+    engine: &mut Engine,
+    actor_id: u64,
+    name: &[u8],
+    key: &[u8; 32],
+    tcp: u8,
+    conn: Connection,
+    early: Vec<u8>,
+    lives: &mut Vec<Live>,
+) -> bool {
+    let mut pair = [0u64; 2];
+    if !lane_pair(&mut pair).ok {
+        engine.tcp_close(tcp);
+        reply(rx, b"unavailable\n", 0);
+        return false;
+    }
+    lives.push(Live {
+        tcp,
+        lane: Cap::from_bits(pair[0]),
+        conn,
+        to_lane: early,
+        to_tls: Vec::new(),
+        wire: Vec::new(),
+    });
+    audit(actor_id, name, key, "stream");
+    reply(rx, b"ok\n", pair[1]);
+    true
+}
+
+fn tls_ready(
+    engine: &mut Engine,
+    id: u8,
+    server: bool,
+    key: &[u8; 32],
+    start: u64,
+) -> Result<(Connection, Vec<u8>), &'static str> {
+    let mut conn = if server {
+        let config = server_config().map_err(|_| "bad")?;
+        Connection::Server(ServerConnection::new(config).map_err(|_| "bad")?)
+    } else {
+        let server = ServerName::try_from("echo".to_string()).map_err(|_| "bad")?;
+        let config = client_config(key).map_err(|_| "bad")?;
+        Connection::Client(ClientConnection::new(config, server).map_err(|_| "bad")?)
+    };
+    let mut early = Vec::new();
+    let limit = start.saturating_add(HANDSHAKE_MS);
+    while clock_ms() < limit {
+        drive_tls(engine, id, &mut conn, &mut early)?;
+        if !conn.is_handshaking() {
+            return Ok((conn, early));
+        }
+        pump(engine);
+        let _ = sleep_ms(20);
+    }
+    Err("deadline")
+}
+
+fn pump_lives(engine: &mut Engine, lives: &mut Vec<Live>) {
+    let mut i = 0;
+    while i < lives.len() {
+        if step_live(engine, &mut lives[i]) {
+            i += 1;
+        } else {
+            let live = lives.swap_remove(i);
+            engine.tcp_close(live.tcp);
+            let _ = close(live.lane);
+        }
+    }
+}
+
+fn step_live(engine: &mut Engine, live: &mut Live) -> bool {
+    if !engine.tcp_established(live.tcp) && live.to_lane.is_empty() {
+        return false;
+    }
+    let mut pulled = Vec::new();
+    if drive_tls(engine, live.tcp, &mut live.conn, &mut pulled).is_err() {
+        return false;
+    }
+    live.to_lane.append(&mut pulled);
+    if !live.to_lane.is_empty() {
+        let got = write_poll(live.lane, &live.to_lane);
+        if got.ok {
+            let n = (got.value as usize).min(live.to_lane.len());
+            live.to_lane.drain(..n);
+        } else if SysError::from_code(got.value) != SysError::NoResource {
+            return false;
+        }
+    }
+    let mut buf = [0u8; 1024];
+    let got = read_poll(live.lane, &mut buf);
+    if got.ok {
+        if got.value == 0 {
+            return false;
+        }
+        live.to_tls.extend_from_slice(&buf[..got.value as usize]);
+    } else if SysError::from_code(got.value) != SysError::NoResource {
+        return false;
+    }
+    if !live.to_tls.is_empty() {
+        let n = live.conn.writer().write(&live.to_tls).unwrap_or(0);
+        live.to_tls.drain(..n);
+    }
+    while live.conn.wants_write() {
+        let mut out = Vec::new();
+        if live.conn.write_tls(&mut out).is_err() {
+            return false;
+        }
+        live.wire.append(&mut out);
+    }
+    let mut at = 0;
+    while at < live.wire.len() {
+        match engine.tcp_send(live.tcp, &live.wire[at..]) {
+            Ok(0) => break,
+            Err(()) => return false,
+            Ok(n) => at += n,
+        }
+    }
+    if at > 0 {
+        live.wire.drain(..at);
+        engine.poll(clock_ms());
+    }
+    true
+}
 
 /// `getrandom` custom backend. `rdrand` via inline asm because the target
 /// does not enable the `rdrand` feature (the CPU still has it under QEMU).

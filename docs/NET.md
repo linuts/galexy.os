@@ -9,9 +9,9 @@ attaching seat prints the TLS body, and a second admin seat that
 holds the write bit receives `held`.
 
 The network is the lane and the card. DHCP, ping, a granted TLS 1.3
-lane, listen, and one datagram are in the tree. Remote login is still
-Milestone 117, so a seat cannot log in over the network yet
-(`THREAT.md`). The object is not a socket.
+lane, listen, one datagram, and SSH are in the tree. A seat logs in
+over that one service when it holds `/card/ssh` (`THREAT.md`). The
+object is not a socket.
 
 ## What a program holds
 
@@ -49,7 +49,7 @@ checked.
 | In-kernel TCP/IP | A parse bug on a packet would be ring 0. The kernel moves frames. The `net` service speaks the protocols. A second stack, a C stack, raw sockets, and promiscuous mode stay out. |
 | IP addresses and port numbers in the syscall ABI | Ports stay an internal demux. A program does not pass them to a syscall. Milestones 112 and 113 let a program pass one exact address or port on the existing net cap, and only with that card. An app still cannot bind `0.0.0.0`, spoof a source, or race a port it does not hold. |
 | Cleartext as an application right | The bytes an app reads on a lane are the plaintext of a finished TLS 1.3 session. There is no raw TCP Cap. Milestone 116 grants one exact datagram peer, and only with that card. Write on the card does not capture. |
-| The public WebPKI as the default trust | A name is pinned to a key the admin installed. Trust-on-first-use is not silent. A system CA bundle is not in the image. |
+| The public WebPKI as the default trust | A name is pinned to a key. An empty pin on a dial asks the seat, shows the fingerprint, and stores the key only on yes. A different key later is refused. The DNS resolver pin stays one the admin installed. Trust-on-first-use is that question, not a silent accept. A system CA bundle is not in the image. |
 | TLS before 1.3, renegotiation, compression, 0-RTT | Replay and oracle bugs we do not have to accept. 0-RTT can be a later right. It is off in this phase. |
 | A hand-rolled handshake | The service links a maintained Rust TLS 1.3 implementation (rustls-class) with a pure-Rust crypto provider. No C. If that crate will not link on `x86_64-unknown-galexy`, Milestone 82 fixes the link. It does not replace the handshake. |
 | QUIC as a second API | QUIC is the intended next carrier. It shows up behind the same lane Cap. This phase's carrier is TLS 1.3 over TCP, inside the service. |
@@ -170,11 +170,16 @@ There is no environment block and no `/etc`. Shell history is the other file a p
 
 A directory entry pins a 32-byte public key (a raw key, the RFC 7250
 shape, not a chain). The verifier accepts that key and rejects every
-other. The audit line for a dial carries the actor, the name, the
+other. `net allow` may omit the key file. The first dial of that name
+learns the peer key, shows `fp=` (the first eight bytes of SHA-256),
+and asks `yes` or `no`. Yes stores the key on the name and writes one
+line to `ssh.known` in the seat's tree. No stores nothing. A later
+dial that sees a different key replies `changed` and does not ask
+again. The audit line for a dial carries the actor, the name, the
 first eight bytes of the fingerprint in hex, and the result. It does
-not carry the key, the session secrets, or the plaintext. Serial,
-`dmesg`, and the console follow the same rule as passwords
-(`STYLE.md`).
+not carry the key, the session secrets, or the plaintext. Serial and
+`dmesg` follow the same rule as passwords (`STYLE.md`). The question
+itself is the one place the fingerprint is shown.
 
 Cipher suites for this phase: `TLS_AES_128_GCM_SHA256` and
 `TLS_CHACHA20_POLY1305_SHA256`, X25519, TLS 1.3 only. The password KDF
@@ -349,13 +354,13 @@ Milestone 109: the same lane, by name. There is no new syscall.
 QUIC, 0-RTT, device checksum offload, and a CA bundle are later
 carriers and later rights. They attach to the lane. They do not add
 an ambient socket. Phase 16's extra calls are cards. Milestones
-110–116 have landed. SSH is still Milestone 117.
+110–117 have landed. SSH is the same lane.
 
 ## Phase 16 — A card is the firewall
 
 Milestones **105**, **107**, **108**, and **109** landed. **108**
 and **109** are the name layer. **110–116** are the real stack.
-**117** is SSH, and it is last. Checkboxes in `TODO.md`. This plan
+**117** is SSH, and it has landed. Checkboxes in `TODO.md`. This plan
 does not tag `v1.0` and does not check the KVM rows.
 
 A network name is a galfs object under `/card` (the same object
@@ -435,18 +440,21 @@ asks for each card that is missing. No is `AccessDenied` in Rust and `OSError`
 in Python. The value is still a lane or the card reply. `setsockopt`
 stays refused. There is no second stack.
 
-Milestone 117 is the server a person connects to, and it is last.
-It waits on 111. One init row, in-tree Rust,
-no OpenSSH, no libssh, no C, and no crates.io SSH library.
-`/card/ssh` write accepts. Read lets a local program open a
-session. Strict key exchange, then `curve25519-sha256`. Host keys
-are Ed25519. Cipher `chacha20-poly1305` or `aes256-gcm`. The MAC
-is the AEAD. SFTP is a subsystem of that session, and the files
-it can touch are the galfs tokens the seat already holds (the
-existing PBKDF2 path, not a new user table). A client that offers
-only a refused algorithm gets no session. Serial does not carry
-the host-key private bytes or the password. There is no fallback
-to a legacy group, and no new syscall.
+Milestone 117 is that server. `milestone_117_ssh_reads_a_file` is
+the run. One init row, in-tree Rust, no OpenSSH, no libssh, no C,
+and no crates.io SSH library. `/card/ssh` write accepts. Read lets
+a local program open a session. The program passes no address.
+`net` keeps the TCP bytes. Strict key exchange, then
+`curve25519-sha256`. Host keys are Ed25519. The cipher is
+`chacha20-poly1305@openssh.com`. The MAC is that AEAD. SFTP is a
+subsystem of that session, and the files it can touch are the
+galfs tokens the seat already holds (the existing PBKDF2 path, not
+a new user table). A client that offers only a refused algorithm
+gets no session. Serial does not carry the host-key private bytes
+or the password. There is no fallback to a legacy group, and no
+new syscall. Opcode 14 on net cap `0x800A` is the live lane.
+`read` and `write` with `r8` bit 0 set return `NoResource` instead
+of parking, so `net` can relay. Both are experimental in `ABI.md`.
 
 Still refused after these milestones: the BSD option surface,
 `setsockopt`, a port or an address in the syscall ABI, cleartext
