@@ -4,7 +4,8 @@ Direction-level plan. Concrete check-off items live in `TODO.md`.
 
 ## Where we stand (October 2026)
 
-Through Milestone 119. The bar is a **secure, fast, modern-only,
+Through Milestone 119. Milestones 120–124 (one address type) are open.
+The bar is a **secure, fast, modern-only,
 full-feature, ready** OS. Each row says what is true today and which
 milestone closes the gap.
 
@@ -49,7 +50,10 @@ USB port, and a foreground ask the shell answers. Milestone
 DNS-over-TLS, dial that address past `10.0.2.2`, and grant one
 address, one port, and one local bind. Milestone **115** listens
 with write on the port card. Milestone **116** sends one datagram
-to the stored peer and receives one from that peer. **117** is SSH, and it has landed. **118** is one outbound card. **119** stores that card. The `v1.0` tag still
+to the stored peer and receives one from that peer. **117** is
+SSH, and it has landed. **118** is one outbound card. **119**
+stores that card. **120** through **124** are one address type.
+The `v1.0` tag still
 waits on the KVM cells. This plan does not
 apply it.
 
@@ -683,7 +687,8 @@ Milestones **104–109** landed. **108** and **109** connect by a
 granted name, and the value is a lane. Milestones **110–119** are
 the real stack. Milestone **117** is SSH, and it has landed.
 Milestone **118** is read on `/card/out/<program>`. Milestone
-**119** stores that read with `share`. Nothing
+**119** stores that read with `share`. Milestones **120–124** are
+one address type, and they stay open. Nothing
 here tags `v1.0`. The KVM rows stay open. Checkboxes live in
 `TODO.md`.
 The reading copies are `DESIGN.md` (CPUs), `NET.md` (firewall,
@@ -755,6 +760,15 @@ installs the read on the named task. Login does not.
 `share_disk_persists_across_reboot` are the runs. The `v1.0`
 tag still waits on the KVM cells. This plan does not apply it.
 
+Milestones 120–124 are one address type for v4 and v6. The card,
+the dial, the reply, bind, listen, the datagram, and the route
+use that type. There is no second stack and no v6 opcode.
+Parsing that refuses an ambiguous form, a neighbor past the QEMU
+path, a DNS-over-TLS answer that can be v6, and the same outbound
+card for a v6 reply come before any other v6 traffic. Listening
+stays write on the port card. General browser TLS stays out.
+Those boxes stay open. This plan does not tag `v1.0`.
+
 What this phase does not add:
 
 - A `MAX_CPUS` above 8, an x2APIC id, or a shell that leaves the BSP
@@ -767,6 +781,7 @@ What this phase does not add:
 - OpenSSH, libssh, a crates.io SSH library, CPython, or a TCP stack inside `rustc` or Python
 - A second grant language beside the galfs token, or a reboot-persistent always
 - Checking the KVM `v1.0` boxes
+- A v6-only opcode, a second card tree, or general browser TLS
 - The `v1.0` tag
 
 ## Standing principles

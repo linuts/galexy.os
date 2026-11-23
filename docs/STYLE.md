@@ -262,6 +262,13 @@ Phase 16 (Milestones **108–119**) is the later plan. 108 through
   file and for nothing else. `DISK_VERSION` does not move because a
   file was added. A record version the service does not know is
   refused.
+- **One address type.** Milestones 120–124. A v4 value and a v6
+  value are that type. The card, dial, the reply, bind, listen,
+  the datagram, and the route use it. Opcodes stay 1–14. There is
+  no second stack, no v6 opcode, and no second card tree. The
+  parse refuses an ambiguous form before any v6 packet. Listening
+  stays write on the port card. Plaintext DNS and general browser
+  TLS stay out. The boxes stay open.
 
 ## USB (see, then a table)
 

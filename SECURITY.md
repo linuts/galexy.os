@@ -63,6 +63,9 @@ fixed in a milestone PR with a changelog line.
   program and does not listen (Milestones 118 and 119). Remote
   login is Milestone 117: one SSH service, `/card/ssh`, and no
   second stack.
+- IPv6: Milestones 120–124 plan one address type. They are not in
+  the tree. No second stack, no raw socket, no plaintext DNS, and
+  no general browser TLS.
 - USB devices: Phase 13 has landed (`docs/USB.md`). xHCI lists a
   device, and Milestone 102 claims the QEMU boot keyboard. Other
   vendor drivers stay unwritten.

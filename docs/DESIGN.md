@@ -1193,6 +1193,21 @@ Milestone 119 stores it with `share r`, and spawn reloads it
 after reboot. Login does not put the object on the shell. The
 `v1.0` tag is not applied here.
 
+### One address type (Milestones 120–124)
+
+v4 and v6 are one address type. The address card, dial, the reply,
+bind, listen, the datagram, and the route use it. Opcodes stay
+1–14. There is no second stack, no second card tree, and no v6
+opcode. Milestone 121 is the parse that refuses an ambiguous form.
+Milestone 122 reaches a v6 neighbor or gateway that is not the
+QEMU path `10.0.2.2`. Milestone 123 can return a v6 address over
+the existing DNS-over-TLS path, port 853. Milestone 124 covers a
+v6 reply with read on `/card/out/<program>`. The reply is read on
+that connection. Listening stays write on the port card.
+Milestones 118 and 119 have landed. Plaintext DNS, raw sockets,
+and general browser TLS stay out. The boxes for 120–124 stay
+open. The reading copy is `NET.md`.
+
 ### Memory policy (Milestone 48)
 
 **PCID / GLOBAL.** Every CR3 swap is a full TLB flush. No suite test is
