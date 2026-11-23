@@ -378,6 +378,7 @@ fn build_guest_gxld(out_dir: &Path) -> Vec<u8> {
         cmd.arg("--release");
     }
     let _ = std::fs::remove_file(std_target.join(".rustc_info.json"));
+    drop_incremental(&std_target);
     cmd.env(
         "RUSTC_WRAPPER",
         repo_root().join("scripts/galexy-rustc-wrapper.py"),
@@ -388,7 +389,7 @@ fn build_guest_gxld(out_dir: &Path) -> Vec<u8> {
         .status()
         .unwrap_or_else(|e| panic!("spawn cargo for guest gxld: {e}"));
     if !status.success() {
-        panic!("guest gxld build failed");
+        panic_guest_cargo("guest gxld", status);
     }
     let profile = if release { "release" } else { "debug" };
     let elf = std_target
@@ -909,12 +910,61 @@ fn watch_userspace() {
 
 /// `-Zbuild-std` for the galexy JSON target. `core,alloc` for `no_std`
 /// programs; `std,panic_abort` for `stdmin`.
+///
+/// Nightly cargo's default is `-Zembed-metadata=no`: the rlib is a stub
+/// and the real metadata is a sibling `.rmeta`. `core`'s is about 66 MiB,
+/// and cargo pipelines on that file. `webpki-roots` is `no_std`, so the
+/// `net` graph starts it as soon as `core`'s metadata exists, while `core`
+/// is still codegening. On nightly-2026-10-08 (`1d81eb4ad`) that
+/// `resolve_crate` SIGSEGVs. The next run ICEs in
+/// `rustc_span::hygiene::HygieneData::outer_expn` (`hygiene.rs:450`,
+/// index 8192, table length 1) while parsing `core`, from the incremental
+/// session the crash left. Embedding metadata makes dependents wait for
+/// the finished rlib. Incremental is off so that session is not resumed.
+/// The guest `rustc` bootstrap still splits metadata; this is only the
+/// host build of galexy crates.
 fn galexy_cargo_args(cmd: &mut Command, build_std: &str) {
     cmd.arg("--target")
         .arg(galexy_target())
         .arg(format!("-Zbuild-std={build_std}"))
         .arg("-Zbuild-std-features=compiler-builtins-mem")
-        .arg("-Zjson-target-spec");
+        .arg("-Zjson-target-spec")
+        .arg("-Zembed-metadata=yes");
+    cmd.env("CARGO_INCREMENTAL", "0");
+}
+
+/// Drop a previous galexy incremental session. A SIGSEGV while `core`'s
+/// `.rmeta` was in flight leaves spans whose syntax context is a raw id
+/// (8192) and whose hygiene table is still the root context.
+fn drop_incremental(target_dir: &Path) {
+    for profile in ["debug", "release"] {
+        let _ = std::fs::remove_dir_all(
+            target_dir
+                .join(galexy_target_dir_name())
+                .join(profile)
+                .join("incremental"),
+        );
+        let _ = std::fs::remove_dir_all(target_dir.join(profile).join("incremental"));
+    }
+}
+
+fn panic_guest_cargo(what: &str, status: std::process::ExitStatus) -> ! {
+    let rustc = Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .and_then(|text| text.lines().next().map(str::to_string))
+        .unwrap_or_else(|| "nightly-2026-10-08".to_string());
+    panic!(
+        "{what} build failed ({status}) with {rustc}. \
+         Cargo's default -Zembed-metadata=no puts core's metadata in a \
+         sibling .rmeta and pipelines it. webpki-roots is no_std, so it \
+         starts while core is still compiling; resolve_crate SIGSEGVs, and \
+         the next run ICEs at rustc_span hygiene.rs:450 (index 8192, len 1) \
+         while parsing core. This invocation passes -Zembed-metadata=yes and \
+         CARGO_INCREMENTAL=0. The compiler output above is the failure."
+    );
 }
 
 fn galexy_std_sysroot(out_dir: &Path) -> PathBuf {
@@ -1103,6 +1153,7 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
 
     let sysroot = galexy_std_sysroot(out_dir);
     let std_target = out_dir.join("std-target");
+    drop_incremental(&std_target);
     for pkg in STD_PACKAGES {
         let manifest = repo_root().join(format!("crates/userspace/{pkg}/Cargo.toml"));
         let mut cmd = nested_cargo();
@@ -1146,7 +1197,7 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
             .status()
             .unwrap_or_else(|e| panic!("spawn cargo for {pkg}: {e}"));
         if !status.success() {
-            panic!("{pkg} build failed");
+            panic_guest_cargo(pkg, status);
         }
         let elf = std_target
             .join(galexy_target_dir_name())

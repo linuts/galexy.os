@@ -297,6 +297,18 @@ sibling `.rmeta`. A `no_std` hello needs only `libcore` and
 why one file may be 80 MiB. The shared pool is 128 MiB so a `std`
 sysroot fits beside that metadata. The on-disk v13 file cap stays 64 MiB.
 
+The host build of galexy crates does not use that split.
+`crates/runner/build.rs` passes `-Zembed-metadata=yes` and
+`CARGO_INCREMENTAL=0`. Nightly cargo would otherwise pipeline the
+66 MiB `core` `.rmeta`. `webpki-roots` is `no_std`, so the `net`
+build starts it while `core` is still compiling. On
+nightly-2026-10-08 (`1d81eb4ad`) that `resolve_crate` SIGSEGVs, and
+the next `cargo run` ICEs in `rustc_span` `hygiene.rs:450`
+(`index out of bounds: the len is 1 but the index is 8192`) while
+parsing `core`. The std-target build drops its incremental
+directory first, so a session left by that crash is not resumed.
+The guest bootstrap above still passes `-Zembed-metadata=no`.
+
 Cranelift's codegen for this OS uses SSE. The kernel enables
 `CR4.OSFXSR` on every CPU (an AP's trampoline otherwise reloads CR4
 with only PAE) and new threads restore a masked `MXCSR`. The feature
