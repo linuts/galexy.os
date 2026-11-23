@@ -45,7 +45,9 @@ we stand. Known gap today: the KVM column is empty on this host. When
 `target/galexy-rustc/rustc` and
 `target/galexy-python/python` were built, a normal `cargo run` logs
 into a seat that has both. The network is a ring-3 `net` service: DHCP, ICMP echo (`ping` of an
-address or a DNS name), and a granted TLS 1.3 lane. `std::net` and
+address or a DNS name), and a granted TLS 1.3 lane. `net pin <ip>`
+trusts the Mozilla roots in the image. A key file is optional, and
+that bundle is the resolver only. `std::net` and
 Python `socket` call those cards. There is no socket syscall. One
 address type for v4 and v6 is Milestones 120–124 and has not landed. USB lists
 the devices on xHCI. The boot keyboard is claimed; a tablet is not.
