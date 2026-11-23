@@ -99,9 +99,20 @@ export PATH="$LLVM_BIN:$PATH"
 # also have no LLVM bitcode, so LTO stays off.
 export RUSTFLAGS="-Z codegen-backend=cranelift --cfg getrandom_backend=\"rdrand\" -C link-arg=--image-base=0xc8000000000 -C link-arg=--no-pie"
 export CARGO_PROFILE_RELEASE_LTO=off
+# This nightly's cargo default is `-Zembed-metadata=no`: the rlib is a
+# metadata stub and the full metadata is a sibling `.rmeta`. A
+# dependent that starts before that file is ready reports
+# `can't find crate` (`parking_lot`, `ascii`, and the rest of this
+# graph). Embed metadata so the rlib is loadable on its own and
+# dependents wait for it. The flag changes the unit fingerprint, so
+# a target directory left by that failure rebuilds. Incremental stays
+# off so a session from the failure is not resumed. The guest rustc
+# bootstrap still splits metadata; this is only the host build of python.
+export CARGO_INCREMENTAL=0
 unset CARGO_ENCODED_RUSTFLAGS
 
 cargo +galexy build --release \
+    -Zembed-metadata=yes \
     --target x86_64-unknown-galexy \
     --manifest-path "$SRC/Cargo.toml" \
     -p galexy-python --bin python
@@ -116,7 +127,7 @@ if [[ "${GALEXY_SKIP_PYTHON_CHECK:-}" != "1" ]]; then
     cd "$ROOT"
     # The Galexy link args above are for the target ELF. A host
     # `cargo test` must not inherit `--image-base`.
-    unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_PROFILE_RELEASE_LTO
+    unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_PROFILE_RELEASE_LTO CARGO_INCREMENTAL
     cargo test -p xtask python_elf::pinned_python_elf_is_loadable -- --exact
 )
 fi

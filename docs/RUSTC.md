@@ -308,6 +308,16 @@ the next `cargo run` ICEs in `rustc_span` `hygiene.rs:450`
 parsing `core`. The std-target build drops its incremental
 directory first, so a session left by that crash is not resumed.
 The guest bootstrap above still passes `-Zembed-metadata=no`.
+The login Python build (`scripts/build-galexy-python.sh`) passes the
+same `-Zembed-metadata=yes` and `CARGO_INCREMENTAL=0`. Without them
+this nightly writes a metadata stub into the rlib and the full
+metadata into a sibling `.rmeta`. A dependent that starts before
+that `.rmeta` is ready reports `can't find crate` (`parking_lot`,
+`ascii`, and the rest of the RustPython graph). Embedding metadata
+makes the rlib loadable on its own, so those dependents wait for
+the finished crate. The flag is part of the unit fingerprint, so
+a target directory left by the failed build rebuilds those crates.
+No `cargo clean`.
 
 Cranelift's codegen for this OS uses SSE. The kernel enables
 `CR4.OSFXSR` on every CPU (an AP's trampoline otherwise reloads CR4
