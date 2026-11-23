@@ -37,6 +37,7 @@ pub use iowait::current_is_usb;
 pub use iowait::current_slot;
 pub use iowait::current_tty;
 pub use iowait::fault_task_name;
+pub(crate) use iowait::halt_for_device;
 pub use iowait::io_block_waiting;
 pub use iowait::on_timer_tick;
 pub use iowait::park_io_block;

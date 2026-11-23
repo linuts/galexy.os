@@ -1548,6 +1548,139 @@ const SHUTDOWN_KEYS: &[(&str, &str)] = &[
     ("ret", "asking init"),
 ];
 
+/// Fresh virtio-blk volume, the `cargo run` shape. A sealed rewrite, `sync`,
+/// `svc date`, and `shutdown` all used to stop the uptime counter: the
+/// disk wait turned interrupts on while this CPU still held `THREADS` or
+/// a galfs lock the other CPU takes under `THREADS`.
+#[test]
+fn disk_wait_keeps_the_seat_scheduled() {
+    let disk = common::fresh_galfs_image("disk-wait");
+    let mut owned: Vec<(String, String)> = Vec::new();
+    for pairs in [CREATE_VOLUME_KEYS, LOGIN_ADMIN_TESTPASS_KEYS] {
+        for (code, echo) in pairs {
+            owned.push(((*code).to_string(), (*echo).to_string()));
+        }
+    }
+    owned.extend(type_line("cd Desktop", "admin@galexy:/Desktop> "));
+    owned.extend(type_line("echo hello > note", "admin@galexy:/Desktop> "));
+    owned.extend(type_line("sync", "admin@galexy:/Desktop> "));
+    owned.extend(type_line("echo world > note", "admin@galexy:/Desktop> "));
+    owned.extend(type_line("cat note", "world"));
+    owned.extend(type_line("cd /", "admin@galexy> "));
+    owned.extend(type_line("svc date", " utc"));
+    owned.extend(type_line("svc status shell", "shell running"));
+    owned.extend(type_line("shutdown", "[init] power"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &keys,
+        "New passphrase: ",
+        "[init] power",
+        Duration::from_millis(30),
+        Duration::from_secs(240),
+    );
+    let _ = std::fs::remove_file(&disk);
+    assert!(
+        !serial.contains("[PANIC]"),
+        "guest panicked; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("device wait while THREADS or a galfs lock is held"),
+        "disk wait still held a lock the timer needs; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("galfs volume lock taken while THREADS is held"),
+        "VOL was taken under THREADS; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("sync: failed"),
+        "sync did not commit; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("world"),
+        "sealed rewrite was not readable; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains(" utc"),
+        "svc date did not return; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("shell running"),
+        "seat was not scheduled after svc date; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[init] shutdown"),
+        "shutdown never reached init; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[init] power"),
+        "init did not power off; serial:\n{serial}"
+    );
+    let samples = uptime_tenths(&serial);
+    assert!(
+        samples.len() >= 2 && samples.iter().copied().max() > samples.iter().copied().min(),
+        "uptime counter did not advance ({samples:?}); serial:\n{serial}"
+    );
+}
+
+/// Tenths of a second from status-bar lines `up <sec>.<tenth>s`.
+fn uptime_tenths(serial: &str) -> Vec<u32> {
+    let bytes = serial.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 6 < bytes.len() {
+        if bytes[i..].starts_with(b"up ") {
+            let rest = &bytes[i + 3..];
+            let mut n = 0usize;
+            let mut secs: u32 = 0;
+            let mut saw = false;
+            while n < rest.len() && rest[n].is_ascii_digit() {
+                saw = true;
+                secs = secs
+                    .saturating_mul(10)
+                    .saturating_add(u32::from(rest[n] - b'0'));
+                n += 1;
+            }
+            if saw && n + 1 < rest.len() && rest[n] == b'.' && rest[n + 1].is_ascii_digit() {
+                let tenth = u32::from(rest[n + 1] - b'0');
+                out.push(secs.saturating_mul(10).saturating_add(tenth));
+                i += 3 + n + 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    // The status row reaches COM1 only after the host answers a size
+    // query. The log prefix `8s:` is the same counter, and it is always
+    // on the serial line.
+    i = 0;
+    while i < bytes.len() {
+        if i == 0 || bytes[i - 1] == b'\n' {
+            let mut n = 0usize;
+            let mut secs = 0u32;
+            let mut saw = false;
+            while i + n < bytes.len() && bytes[i + n].is_ascii_digit() {
+                saw = true;
+                secs = secs
+                    .saturating_mul(10)
+                    .saturating_add(u32::from(bytes[i + n] - b'0'));
+                n += 1;
+            }
+            if saw && i + n + 2 <= bytes.len() && &bytes[i + n..i + n + 2] == b"s:" {
+                out.push(secs.saturating_mul(10));
+                i += n + 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
 #[test]
 fn shell_shutdown_reaches_init() {
     let keys = with_login(SHUTDOWN_KEYS);

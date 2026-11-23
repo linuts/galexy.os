@@ -791,7 +791,6 @@ fn wait_used(want: u16) -> bool {
         WANT_ARMED.store(false, Ordering::Release);
         return true;
     }
-    let parked = crate::sched::current_slot() != 0 && crate::sched::park_io_block().is_ok();
     let start = crate::arch::timer_ticks();
     let mut ok = false;
     loop {
@@ -802,10 +801,9 @@ fn wait_used(want: u16) -> bool {
         if crate::arch::timer_ticks().saturating_sub(start) > 2000 {
             break;
         }
-        x86_64::instructions::interrupts::enable_and_hlt();
-    }
-    if parked {
-        crate::sched::clear_io_block();
+        // The galfs caller has dropped THREADS and the block locks. This
+        // halt is the one place interrupts turn on during the transfer.
+        crate::sched::halt_for_device();
     }
     WANT_ARMED.store(false, Ordering::Release);
     ok
