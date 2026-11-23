@@ -376,8 +376,26 @@ strings stay in the record and are not consulted. `may_dial`
 remains for that record. Logged-out stays `AccessDenied`. There
 is no chain, no interface match, and no packet filter. The
 firewall is the card, not a packet-filter language, and it lives
-in `net`. Admin's root token covers the cards. A seat without one
-does not open TCP. A path or an address is not authority.
+in `net`. Admin's root token covers the per-name cards. A seat
+without one does not open TCP. A path or an address is not
+authority.
+
+Read on the exact object `/card/out/<program>` is that
+program's outbound card (Milestone 118). Header byte 2 also
+carries `NET_HELD_OUT` (`0x20`), which is not a galfs right.
+The program dials any stored name, including a subdomain, and
+any address it passes, with no per-host ask. The reply comes
+back on the same lane. An empty pin is a plaintext lane, so an
+HTTP client can write the request and read the response. A
+stored pin stays the one-shot TLS fetch. The card does not
+bind, listen, or accept. Write on the port card is still the
+accept. A program without the object keeps the per-name ask.
+Logged-out stays denied. DNS-over-TLS on port 853 is unchanged.
+`share r` stores that read in the metadata slot (Milestone
+119). Init creates `/card/out/` and does not grant it. Login
+does not put the object on the shell. Spawn installs it when
+the actor's share names that task. The token dies with the
+task. `unshare` drops the row. `DISK_VERSION` stays 17.
 
 A foreground program that does not hold the token parks. The
 shell, which is Cap-waiting, prints `<name> wants the network`
@@ -389,7 +407,10 @@ and the program stays up. A second ask for the same right in
 the same run does not print. A task that already holds the
 token does not ask. The kernel does not draw a dialog. There
 is no new syscall number. The token dies when the task exits.
-It is not an always that survives reboot.
+A per-name grant is not an always that survives reboot. The
+outbound card is: `share r /card/out/<program> <actor>` is
+read in the metadata slot, and the next boot installs it on
+that named task.
 
 Milestone 108 keeps the name `std::net::TcpStream::connect`. The
 call asks (Milestone 107), then dials a granted name through
@@ -456,9 +477,12 @@ new syscall. Opcode 14 on net cap `0x800A` is the live lane.
 `read` and `write` with `r8` bit 0 set return `NoResource` instead
 of parking, so `net` can relay. Both are experimental in `ABI.md`.
 
-Still refused after these milestones: the BSD option surface,
-`setsockopt`, a port or an address in the syscall ABI, cleartext
-as an application right, plaintext DNS, TLS before 1.3, iptables,
+An empty pin on the outbound card is a plaintext lane. A stored
+pin stays TLS, and a dial without that card stays the one-shot
+TLS fetch even when the pin is empty. Still refused after these
+milestones: the BSD option surface, `setsockopt`, a port or an
+address in the syscall ABI, a program-chosen cleartext mode when
+a pin is stored, plaintext DNS, TLS before 1.3, iptables,
 raw frames, raw sockets, promiscuous mode, a second stack, telnet,
 FTP, rsh, SSHv1, `ssh-rsa`, CBC, and SHA-1. The `v1.0` tag stays
 unapplied.

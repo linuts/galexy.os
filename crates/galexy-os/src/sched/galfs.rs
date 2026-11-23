@@ -2793,10 +2793,140 @@ pub fn apply_shares(root: u32, tokens: &mut [Token; TOKEN_SLOTS]) -> Result<(), 
         {
             continue;
         }
+        // `/card/out/<program>` is installed on that task at spawn.
+        // Login does not put it on the shell.
+        if outbound_task(&table, share.object).is_some() {
+            continue;
+        }
         // Ignore NoResource — login still succeeds with ALL on home.
         let _ = push_token(tokens, share.object, share.rights);
     }
     Ok(())
+}
+
+/// The program name when `object` is the file `/card/out/<program>`.
+fn outbound_task(table: &Table, object: u32) -> Option<&str> {
+    let obj = table.objects.get(object as usize)?;
+    if obj.kind != KIND_FILE {
+        return None;
+    }
+    let parent = table.objects.get(obj.parent as usize)?;
+    if parent.kind != KIND_DIR || !parent.name_is("out") {
+        return None;
+    }
+    let card = table.objects.get(parent.parent as usize)?;
+    if card.kind != KIND_DIR || !card.name_is("card") {
+        return None;
+    }
+    let n = obj.name_len as usize;
+    core::str::from_utf8(&obj.name[..n]).ok()
+}
+
+/// True when `tokens` holds read on the exact object `/card/out/<task>`.
+///
+/// An ancestor token, including admin's root, does not count.
+pub fn holds_outbound(tokens: &[Token; TOKEN_SLOTS], task: &str) -> bool {
+    if task.is_empty() || task.contains('/') {
+        return false;
+    }
+    let table = TABLE.lock();
+    tokens.iter().any(|token| {
+        token.is_live()
+            && token.rights & RIGHT_READ != 0
+            && outbound_task(&table, token.object) == Some(task)
+    })
+}
+
+/// Drops inherited outbound cards, then installs read on
+/// `/card/out/<task>` when the actor that owns `root` has that share.
+///
+/// A child does not keep a card it did not match. A second program of
+/// the same actor does not receive this one.
+pub fn install_outbound_card(root: u32, tokens: &mut [Token; TOKEN_SLOTS], task: &str) {
+    let object = {
+        let table = TABLE.lock();
+        for token in tokens.iter_mut() {
+            if token.is_live() && outbound_task(&table, token.object).is_some() {
+                *token = Token::empty();
+            }
+        }
+        if root == NO_OBJECT
+            || task.is_empty()
+            || task.contains('/')
+            || root as usize >= table.objects.len()
+        {
+            return;
+        }
+        let ai = table.objects[root as usize].actor;
+        let mut found = None;
+        for share in &table.shares {
+            if !share.used || share.grantee != ai || share.rights & RIGHT_READ == 0 {
+                continue;
+            }
+            if outbound_task(&table, share.object) == Some(task) {
+                found = Some(share.object);
+                break;
+            }
+        }
+        found
+    };
+    if let Some(object) = object {
+        let _ = push_token(tokens, object, RIGHT_READ);
+    }
+}
+
+/// Creates `/card/out/<program>` under the admin root when it is missing.
+///
+/// The file starts with no grant. `DISK_VERSION` stays put.
+pub fn ensure_outbound(program: &str) -> Result<u32, SysError> {
+    if !component_ok(program) {
+        return Err(SysError::BadValue);
+    }
+    let mut table = TABLE.lock();
+    let root = admin_root();
+    if root == NO_OBJECT || (root as usize) >= table.objects.len() {
+        return Err(SysError::NotFound);
+    }
+    let mut created = false;
+    let card = ensure_dir(&mut table, root, "card", &mut created)?;
+    let out = ensure_dir(&mut table, card, "out", &mut created)?;
+    let file = match find_child(&table, out, program) {
+        Some(i) => {
+            if table.objects[i].kind != KIND_FILE {
+                return Err(SysError::Unsupported);
+            }
+            i as u32
+        }
+        None => {
+            created = true;
+            make_child(&mut table, out, program, KIND_FILE)?
+        }
+    };
+    drop(table);
+    if created {
+        mark_dirty();
+    }
+    Ok(file)
+}
+
+fn ensure_dir(
+    table: &mut Table,
+    parent: u32,
+    name: &str,
+    created: &mut bool,
+) -> Result<u32, SysError> {
+    match find_child(table, parent, name) {
+        Some(i) => {
+            if table.objects[i].kind != KIND_DIR {
+                return Err(SysError::Unsupported);
+            }
+            Ok(i as u32)
+        }
+        None => {
+            *created = true;
+            make_child(table, parent, name, KIND_DIR)
+        }
+    }
 }
 
 /// True when `cred` holds every right on `object` (exact or ancestor token).

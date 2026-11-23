@@ -3087,10 +3087,11 @@ syscall.
 
 ## Phase 16 — Cards, then a reachable machine
 
-Milestones 103–117 have landed. Milestone 83 and Milestones 110–117
+Milestones 103–119 have landed. Milestone 83 and Milestones 110–119
 are checked. A passed address, a port, bind, listen, and one
-datagram are cards. Milestone 117 is SSH. The KVM rows under the
-`v1.0` gate stay open. Do not tag `v1.0`.
+datagram are cards. Milestone 117 is SSH. Milestone 118 is one
+outbound card. Milestone 119 stores that card in the share slot.
+The KVM rows under the `v1.0` gate stay open. Do not tag `v1.0`.
 `docs/ROADMAP.md` is the phase.
 
 ## Milestone 104 — Prove four and eight CPUs
@@ -3386,9 +3387,10 @@ peer with a card. It is not DNS, and it is not a raw socket.
 
 ## Milestone 117 — SSH and SFTP
 
-The last milestone. It waits until Milestone 111 has reached a
-host past `10.0.2.2`, and until Milestone 115 has shown
-Milestone 83's handoff. One ring-3 Rust service. No new syscall.
+It waits until Milestone 111 has reached a host past `10.0.2.2`,
+and until Milestone 115 has shown Milestone 83's handoff. One
+ring-3 Rust service. No new syscall. Milestones 118 and 119
+follow it. The `v1.0` tag is still not applied.
 
 - [x] **One service**: an init row, the same shape as `net`. The
       SSH protocol is in-tree Rust. No OpenSSH, no libssh, no C,
@@ -3419,6 +3421,71 @@ Milestone 83's handoff. One ring-3 Rust service. No new syscall.
 - [x] **Out of this milestone**: a new syscall, a root shell that
       bypasses cards, a second stack, raw sockets, old
       algorithms, plaintext DNS, the `v1.0` tag, and the KVM rows
+
+## Milestone 118 — One outbound card
+
+Read on the exact object `/card/out/<program>` lets that program
+dial. Init creates `/card/out/` and does not grant it. The
+program object starts ungranted. Admin's root does not satisfy
+it. An ancestor token does not. The check is an exact read
+token, and the task name is the last component.
+
+- [x] **What it dials**: any stored name, including a subdomain.
+      A script host, an image host, and an API host are that one
+      card. An address the program passes is that same card. The
+      lookup inside a dial by name does not ask for the resolved
+      address. `outbound_card_dials_two_names` reads a body from
+      two names, from `img.alpha`, and from one passed address,
+      and the seat is not asked
+- [x] **What it does not dial**: it does not bind, listen, or
+      accept. Inbound stays write on the port card. The same test
+      refuses `connect --listen` and does not print `attached`.
+      Datagram stays that peer's card. Ping stays `/card/ping`
+- [x] **The seat**: a program with the card dials the next host
+      with no line. A program without it, and without that name's
+      card, still prints `<task> wants the network`. Yes is that
+      name for this run. No is `AccessDenied` and the program
+      stays up. Yes on a name does not install
+      `/card/out/<program>`. Logged-out is `AccessDenied` and
+      does not ask
+- [x] **This run**: `grant r /card/out/<program> <task>` is the
+      existing grant syscall. The token dies when the task exits.
+      Another program asks for its own names. Per-name cards stay
+      for a program that was not given this one
+- [x] **The lane**: the reply on a connection that program opened
+      comes back on the same lane. No second card. An empty pin
+      on this card is plaintext, so an HTTP client writes the
+      request and reads the response. A stored pin stays the
+      one-shot TLS fetch. A dial without this card keeps that
+      TLS fetch, including an empty pin
+- [x] **Out of this milestone**: a suffix rule, a packet filter,
+      a second stack, a raw socket, `setsockopt`, plaintext DNS,
+      a new syscall, HTTPS, a general TLS stack, the `v1.0` tag,
+      and the KVM rows. DNS-over-TLS on port 853 stays
+
+## Milestone 119 — The outbound card survives reboot
+
+`share r /card/out/<program> <actor>` records the grant. The row
+is the existing 6-byte share: actor, object, read. `DISK_VERSION`
+stays 17. The `/net` record stays version 2. No new syscall.
+
+- [x] **Who receives it**: spawn installs read on that task when
+      the share's actor is the one starting it. Init starts its
+      rows as admin, so an admin share is on that row at boot,
+      before a seat logs in, and the row dials with no ask. A
+      seat-started program takes the logged-in actor's share.
+      Login does not put this object on the shell. A child does
+      not inherit it. A second program of the same actor does not
+      hold it
+- [x] **What it does not store**: the listen card is write on the
+      port. This share does not store that write. A yes for that
+      write still dies with the task. `unshare` drops the row
+- [x] **Proof**: `test-share-disk` shares `/card/out/dial` to eve,
+      reboots on the suite's sealed-slot path, and the named
+      program holds the read. Login's token table does not. A
+      second program does not. The host decode of the sealed slot
+      shows the share, the file `dial`, and the `out` directory
+      under `card`
 
 ---
 

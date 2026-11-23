@@ -210,6 +210,11 @@ pub(crate) fn task_spawn(
                 tokens: [galfs::Token::empty(); galfs::TOKEN_SLOTS],
             }
         };
+        // The outbound card is this program's share, not the parent's
+        // token and not a card the shell holds after login.
+        if !seat {
+            galfs::install_outbound_card(pending.fs.root, &mut pending.fs.tokens, name);
+        }
         pending.armed = true;
         // 0 = waiting for load; drain installs Cap then either wakes or
         // sets wait_child_slot to the new child for exit wait.

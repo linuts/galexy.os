@@ -1160,6 +1160,32 @@ fn share_disk_persists_across_reboot() {
         best.shares.iter().any(|s| s.used),
         "host decode must see a used share slot"
     );
+    let dial = best.objects.iter().position(|obj| {
+        obj.kind == galexy_galf::KIND_FILE && &obj.name[..obj.name_len as usize] == b"dial"
+    });
+    let Some(dial) = dial else {
+        panic!("sealed slot has no /card/out/dial object");
+    };
+    let out = best.objects[dial].parent as usize;
+    assert!(
+        out < best.objects.len()
+            && best.objects[out].kind == galexy_galf::KIND_DIR
+            && &best.objects[out].name[..best.objects[out].name_len as usize] == b"out",
+        "dial's parent is the out directory"
+    );
+    let card = best.objects[out].parent as usize;
+    assert!(
+        card < best.objects.len()
+            && best.objects[card].kind == galexy_galf::KIND_DIR
+            && &best.objects[card].name[..best.objects[card].name_len as usize] == b"card",
+        "out's parent is the card directory"
+    );
+    assert!(
+        best.shares
+            .iter()
+            .any(|share| { share.used && share.object == dial as u32 && share.rights & 1 != 0 }),
+        "host decode must see the outbound share"
+    );
 }
 
 #[test]
@@ -7659,6 +7685,91 @@ fn host_echo_cert() -> (Vec<u8>, Vec<u8>, String) {
     (der, key_der, pin)
 }
 
+/// Milestone 118: read on `/card/out/connect` dials two names and reads
+/// each HTTP body with no seat prompt. A program without that card
+/// still asks. Listen stays refused.
+///
+/// Milestone 119 is [`share_disk_persists_across_reboot`]: the same
+/// share is in the sealed slot after the reboot path.
+#[test]
+fn outbound_card_dials_two_names() {
+    let alpha = std::thread::spawn(|| host_http_serve(4610, b"alpha-body"));
+    let beta = std::thread::spawn(|| host_http_serve(4611, b"beta-body"));
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line("net allow alpha 10.0.2.2:4610", "ok"));
+    owned.extend(type_line("net allow img.alpha 10.0.2.2:4610", "ok"));
+    owned.extend(type_line("net allow beta 10.0.2.2:4611", "ok"));
+    owned.extend(type_line("net allow echo 10.0.2.2:4612", "ok"));
+    owned.extend(type_line("touch /card/out/connect", "admin@galexy>"));
+    owned.extend(type_line("useradd eve", "Password: "));
+    owned.extend([
+        ("e".to_string(), "*".to_string()),
+        ("v".to_string(), "*".to_string()),
+        ("e".to_string(), "*".to_string()),
+        ("ret".to_string(), "admin@galexy> ".to_string()),
+    ]);
+    owned.extend(type_line("share r /card/out/connect eve", "admin@galexy>"));
+    owned.extend([("f2".to_string(), "[tty] 2".to_string())]);
+    owned.extend(type_line("eve", "Password: "));
+    owned.extend([
+        ("e".to_string(), "*".to_string()),
+        ("v".to_string(), "*".to_string()),
+        ("e".to_string(), "*".to_string()),
+        ("ret".to_string(), "eve@galexy> ".to_string()),
+    ]);
+    owned.extend(type_line("connect --http alpha", "alpha-body"));
+    owned.extend(type_line("connect --http img.alpha", "alpha-body"));
+    owned.extend(type_line("connect --http beta", "beta-body"));
+    owned.extend(type_line("connect --http 10.0.2.2:4610", "alpha-body"));
+    owned.extend(type_line("connect --listen 4613", "access denied"));
+    owned.extend(type_line("dial echo", "wants the network"));
+    owned.extend(type_line("no", "still up"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "still up",
+        Duration::from_millis(30),
+        Duration::from_secs(300),
+    );
+    drop(alpha);
+    drop(beta);
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+    let eve = serial.find("eve@galexy>").expect("eve never logged in");
+    let after = &serial[eve..];
+    assert!(
+        !serial[..eve].contains("wants the network"),
+        "the seat was asked before eve dialed; serial:\n{serial}"
+    );
+    assert_eq!(
+        after.matches("wants the network").count(),
+        1,
+        "only the program without the card asks; serial:\n{serial}"
+    );
+    assert!(
+        after.matches("alpha-body").count() >= 3 && after.contains("beta-body"),
+        "both names, the subdomain, and the address must return a body; serial:\n{serial}"
+    );
+    assert!(
+        !after.contains("attached"),
+        "the outbound card accepted a listen; serial:\n{serial}"
+    );
+    assert!(
+        after.contains("still up"),
+        "a refused listen and a no must leave the program up; serial:\n{serial}"
+    );
+}
+
 fn ed25519_pin(der: &[u8]) -> String {
     let oid = [0x06, 0x03, 0x2b, 0x65, 0x70];
     let pos = der
@@ -7674,6 +7785,35 @@ fn ed25519_pin(der: &[u8]) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+fn host_http_serve(port: u16, marker: &'static [u8]) {
+    let listener = std::net::TcpListener::bind(("0.0.0.0", port)).expect("bind http");
+    listener.set_nonblocking(true).expect("http nonblocking");
+    let deadline = std::time::Instant::now() + Duration::from_secs(400);
+    let mut response = b"HTTP/1.0 200 OK\r\nContent-Length: ".to_vec();
+    response.extend_from_slice(marker.len().to_string().as_bytes());
+    response.extend_from_slice(b"\r\n\r\n");
+    response.extend_from_slice(marker);
+    while std::time::Instant::now() < deadline {
+        let Ok((mut sock, _)) = listener.accept() else {
+            std::thread::sleep(Duration::from_millis(50));
+            continue;
+        };
+        let _ = sock.set_nonblocking(false);
+        let _ = sock.set_read_timeout(Some(Duration::from_secs(8)));
+        let _ = sock.set_write_timeout(Some(Duration::from_secs(8)));
+        let mut got = Vec::new();
+        let mut buf = [0u8; 256];
+        while !got.windows(4).any(|w| w == b"\r\n\r\n") && got.len() < 1024 {
+            match sock.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => got.extend_from_slice(&buf[..n]),
+            }
+        }
+        let _ = sock.write_all(&response);
+        let _ = sock.shutdown(std::net::Shutdown::Both);
+    }
 }
 
 fn host_echo_serve(port: u16, cert_der: Vec<u8>, key_der: Vec<u8>, hits: Arc<AtomicUsize>) {

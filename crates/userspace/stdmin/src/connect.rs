@@ -5,10 +5,11 @@
 //! the stored local address. `--listen <port>` accepts on the stored
 //! port. `--accept <address:port>` binds, then accepts. `--send <name>`
 //! sends one datagram to the stored peer. `--recv <name>` receives one
-//! datagram from that peer. A timeout and a socket option stay
+//! datagram from that peer. `--http <name>` writes one request and
+//! reads the response on that lane. A timeout and a socket option stay
 //! `unsupported`.
 
-use std::io::{ErrorKind, Read};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -143,6 +144,48 @@ fn main() -> ExitCode {
         };
         return report(TcpStream::connect_timeout(&addr, Duration::from_secs(1)).err());
     }
+    if arg == "--http" {
+        let name = std::env::args().nth(2).unwrap_or_default();
+        let mut stream = match TcpStream::connect(&name) {
+            Ok(stream) => stream,
+            Err(err) => return report(Some(err)),
+        };
+        let req = b"GET / HTTP/1.0\r\n\r\n";
+        let mut off = 0usize;
+        while off < req.len() {
+            match stream.write(&req[off..]) {
+                Ok(0) | Err(_) => {
+                    println!("connect: write failed");
+                    return ExitCode::from(1);
+                }
+                Ok(n) => off += n,
+            }
+        }
+        let mut body = Vec::new();
+        loop {
+            let mut buf = [0u8; 256];
+            match stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    body.extend_from_slice(&buf[..n]);
+                    if http_complete(&body) {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    println!("connect: read failed");
+                    return ExitCode::from(1);
+                }
+            }
+        }
+        let text = String::from_utf8_lossy(&body);
+        if text.ends_with('\n') {
+            print!("{text}");
+        } else {
+            println!("{text}");
+        }
+        return ExitCode::SUCCESS;
+    }
     let mut stream = match TcpStream::connect(&arg) {
         Ok(stream) => stream,
         Err(err) => return report(Some(err)),
@@ -163,6 +206,36 @@ fn main() -> ExitCode {
         println!("{text}");
     }
     ExitCode::SUCCESS
+}
+
+/// Headers plus a `Content-Length` body. The lane stays open, so the
+/// read stops when that body is here.
+fn http_complete(buf: &[u8]) -> bool {
+    let Some(at) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
+        return false;
+    };
+    let header = &buf[..at];
+    let body = &buf[at + 4..];
+    let key = b"Content-Length:";
+    let Some(pos) = header
+        .windows(key.len())
+        .position(|w| w.eq_ignore_ascii_case(key))
+    else {
+        return false;
+    };
+    let rest = header[pos + key.len()..].trim_ascii_start();
+    let digits = rest
+        .iter()
+        .take_while(|b| b.is_ascii_digit())
+        .copied()
+        .collect::<Vec<_>>();
+    let Ok(text) = std::str::from_utf8(&digits) else {
+        return false;
+    };
+    let Ok(len) = text.parse::<usize>() else {
+        return false;
+    };
+    body.len() >= len
 }
 
 fn report(err: Option<std::io::Error>) -> ExitCode {

@@ -219,8 +219,8 @@ machines: ACPI, x2APIC, PCIe, virtio 1.x, UEFI + GOP.
 
 Rules for Phase 10 (`docs/NET.md`; Milestones **78–85**). Binding
 once the first of those milestones lands; the plan is binding now.
-Phase 16 (Milestones **108–117**) is the later plan. 108 through
-117 have landed. This text does not check the KVM rows.
+Phase 16 (Milestones **108–119**) is the later plan. 108 through
+119 have landed. This text does not check the KVM rows.
 
 - **A lane is the application object.** One TLS 1.3 session, one peer,
   `READ` and `WRITE`. Phase 10 has no `socket`, `bind`, `listen`,
@@ -234,7 +234,11 @@ Phase 16 (Milestones **108–117**) is the later plan. 108 through
   bind, listen, datagram send and receive, and an address or a
   port. `setsockopt` stays refused. No new syscall. SSH is 117:
   one service, `/card/ssh`, current algorithms, SFTP on that
-  session.
+  session. 118 is read on `/card/out/<program>`: that program
+  dials any stored name and any address, and the reply is the
+  same lane. 119 stores that read with `share`. Listen stays
+  write on the port. An empty pin on 118 is plaintext HTTP. A
+  stored pin stays TLS. DNS-over-TLS stays on port 853.
 - **The kernel moves frames.** virtio-net DMA follows the virtio-blk
   rule: one descriptor per physically contiguous run. The interrupt
   handler does not parse IP. TCP, UDP, and TLS live in the ring-3
