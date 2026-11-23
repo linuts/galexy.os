@@ -101,7 +101,7 @@ Opcodes on `0x800A`, appended and then stable, same rule as init:
 | 4 `grant` | admin | write an actor on the record. That list is not the dial right. The shell writes the read token on `/card/<name>` |
 | 5 `revoke` | admin | drop that actor-list entry. The shell drops the card token. The list is not the dial right |
 | 6 `serve` | admin, and write on the card | attach a gate for a name to the calling task |
-| 7 `ping` | a seat that holds the ping card | ICMP echo to one address, or to a DNS name resolved over the pinned DNS-over-TLS resolver. The reply is `reply from` that address, or `timeout`. No lane Cap. No card, no query. Today the address is four bytes. Milestones 120–124 make it the one address type, on this opcode |
+| 7 `ping` | a seat that holds the ping card | Three ICMP echoes to one address, or to a DNS name resolved once over the pinned DNS-over-TLS resolver. The reply lists each round-trip time, then sent, received, and those times. A payload whose first byte is 0, then a length-prefixed name, resolves and does not echo; the reply is one address per line. No lane Cap. No card, no query. Today the address is four bytes. Milestones 120–124 make it the one address type, on this opcode |
 | 8 `resolve` | read on a DNS card | DNS-over-TLS lookup. The reply is one address of the one type. No lane Cap. A key file stays in the record. No key file stores the address and the domain from the certificate, and trusts the bundle for that domain. Milestone 123 may return a v6 value. Until that box is checked, the answer is v4 |
 | 9 `pin` | admin | Pin the DNS-over-TLS resolver. Four address bytes connect, read the domain off the certificate, and trust the bundle for that domain. The reply is `ok` and that domain. A 32-byte key, when one is passed, is that pin and the bundle is not consulted. `10.0.2.2` and `10.0.2.3` are refused. Today the address is four bytes. Milestone 120 makes it the one type. The port stays 853 |
 | 10 `bind` | write on the address card | Bind the stored local address. The payload is that address. This opcode does not listen |
@@ -109,7 +109,7 @@ Opcodes on `0x800A`, appended and then stable, same rule as init:
 | 12 `datagram` | read on the datagram card | Send one datagram to the stored peer. Port 53 is refused. Write does not send |
 | 13 `recv` | read on that same card | Receive one datagram from that peer. Port 53 is refused. A packet from any other peer is ignored |
 
-`fetch` is a shell builtin on top of `dial`. `ping <ip>` and `ping <name>` are shell builtins on top of opcode 7. Neither is a syscall.
+`fetch` is a shell builtin on top of `dial`. `ping <ip>`, `ping <name>`, and `nslookup <name>` are shell builtins on top of opcode 7. None of them is a syscall.
 `svc status net` still means "is the process up," through init.
 `link` means "is the wire up."
 

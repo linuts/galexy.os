@@ -10,7 +10,8 @@ use common::{
     boot_uefi_until, boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache,
     boot_with_galfs_crash, boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn,
     boot_with_galfs_virtio, boot_with_galfs_virtio_legacy, boot_with_tpm, boot_xhci, image,
-    uart_login_serial, use_kvm, GalfsDiskCache, GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
+    strip_host_chrome, uart_login_serial, use_kvm, GalfsDiskCache, GALFS_PART_BYTE_OFF,
+    QEMU_EXIT_SUCCESS,
 };
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -6271,8 +6272,8 @@ fn ping_gateway_replies() {
 }
 
 /// A logged-in seat pings a DNS name. The name is resolved over the
-/// pinned DNS-over-TLS resolver, then one ICMP echo goes to that
-/// answer. A bad pin and a seat without the ping card send no query.
+/// pinned DNS-over-TLS resolver once, then three ICMP echoes go to
+/// that answer. A bad pin and a seat without the ping card send no query.
 #[test]
 fn ping_name_resolves() {
     let (cert_der, key_der) = listener_identity();
@@ -6364,6 +6365,115 @@ fn ping_name_resolves() {
     );
 }
 
+/// One `ping` looks the name up once, records three timed echoes, and
+/// prints sent, received, and those times. `nslookup` prints the name
+/// and the address from that same resolver.
+#[test]
+fn ping_three_echoes_and_nslookup() {
+    let (cert_der, key_der) = listener_identity();
+    let dot_hits = Arc::new(AtomicUsize::new(0));
+    let query = Arc::new(Mutex::new(Vec::new()));
+    let dot_bg = Arc::clone(&dot_hits);
+    let query_bg = Arc::clone(&query);
+    let dot = std::thread::spawn(move || host_dot_serve(cert_der, key_der, dot_bg, Some(query_bg)));
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line("net link", "up 10.0.2.15/24"));
+    owned.extend(type_line("connect --putkey", "wrote"));
+    owned.extend(type_line("net pin 172.30.0.2 /k", "ok"));
+    owned.extend(type_line("ping google.com", "sent 3"));
+    owned.extend(type_line("nslookup google.com", "google.com 172.30.0.2"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "google.com 172.30.0.2",
+        Duration::from_millis(30),
+        Duration::from_secs(240),
+    );
+    drop(dot);
+    let pin = listener_pin();
+    let mut hex = String::new();
+    for byte in pin {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    let asked = query.lock().map(|q| q.clone()).unwrap_or_default();
+    let visible = strip_host_chrome(&serial);
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains(&hex),
+        "serial carried the resolver key; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("udp/53") && !serial.contains("port 53"),
+        "plaintext DNS showed up; serial:\n{serial}"
+    );
+    assert!(
+        !visible.contains("timeout"),
+        "an echo was lost; serial:\n{visible}"
+    );
+    assert_eq!(
+        visible
+            .lines()
+            .filter(|line| timed_echo_line(line, "172.30.0.2"))
+            .count(),
+        3,
+        "one ping did not record three timed echoes; serial:\n{visible}"
+    );
+    assert!(
+        visible.lines().any(ping_summary_line),
+        "the summary did not list three times; serial:\n{visible}"
+    );
+    assert!(
+        visible.contains("google.com 172.30.0.2"),
+        "nslookup did not print the address; serial:\n{visible}"
+    );
+    assert_eq!(
+        serial.matches("[net] dot ").count(),
+        2,
+        "ping and nslookup should each look the name up once; serial:\n{serial}"
+    );
+    assert_eq!(
+        dot_hits.load(Ordering::Relaxed),
+        2,
+        "a ping echo sent its own query; hits"
+    );
+    assert!(
+        asked.windows(6).any(|w| w == b"google") && asked.windows(3).any(|w| w == b"com"),
+        "the query was not for google.com: {asked:?}"
+    );
+}
+
+fn timed_echo_line(line: &str, ip: &str) -> bool {
+    let Some(rest) = line.strip_prefix(&format!("reply from {ip} time ")) else {
+        return false;
+    };
+    let Some(num) = rest.strip_suffix(" ms") else {
+        return false;
+    };
+    !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn ping_summary_line(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("sent 3 received 3 time ") else {
+        return false;
+    };
+    let Some(nums) = rest.strip_suffix(" ms") else {
+        return false;
+    };
+    let parts: Vec<&str> = nums.split(' ').filter(|s| !s.is_empty()).collect();
+    parts.len() == 3 && parts.iter().all(|s| s.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// Milestone 125. No key file reads the certificate. The listener
 /// certificate chains to neither the bundle nor a wrong pin, so the pin
 /// is refused and no query is sent. The key file accepts only that key.
@@ -6434,7 +6544,7 @@ fn resolver_pin_still_wins() {
     );
     assert_eq!(
         serial.matches("access denied").count(),
-        6,
+        7,
         "a refused resolver or a bad pin was accepted; serial:\n{serial}"
     );
 }

@@ -985,10 +985,18 @@ pub const NET_OP_SERVE: u8 = 6;
 /// Net control: ICMP echo. Any logged-in seat that holds the ping
 /// card. Four payload bytes are an IPv4 address. A longer payload is
 /// a length-prefixed DNS name. `net` resolves that name over the
-/// pinned DNS-over-TLS resolver and echoes the answer. The reply is
-/// text (`reply from` or `timeout`). It is not a lane and not a
-/// socket. A missing card sends no query.
+/// pinned DNS-over-TLS resolver and then sends three ICMP echoes.
+/// The reply lists each round-trip time, then how many were sent,
+/// how many came back, and those times. A payload longer than four
+/// bytes whose first byte is [`PING_LOOKUP`], then a length-prefixed
+/// name, resolves and does not echo. That reply is one address per
+/// line. It is not a lane and not a socket. A missing card sends no
+/// query.
 pub const NET_OP_PING: u8 = 7;
+/// First byte of a [`NET_OP_PING`] payload that resolves a name and
+/// does not echo. The following bytes are a length-prefixed DNS name.
+/// Four address bytes are still an echo, even when the first is zero.
+pub const PING_LOOKUP: u8 = 0;
 /// Net control: resolve a name over DNS-over-TLS. The payload is the
 /// name, then `whoami`. The reply text is the address. The lane Cap is
 /// zero. The resolver key is not in the reply.
