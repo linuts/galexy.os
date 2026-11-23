@@ -3094,6 +3094,10 @@ outbound card. Milestone 119 stores that card in the share slot.
 The KVM rows under the `v1.0` gate stay open. Do not tag `v1.0`.
 `docs/ROADMAP.md` is the phase.
 
+Milestones 120–124 are one address type for v4 and v6. Those
+boxes stay open. This plan does not check them and does not tag
+`v1.0`.
+
 ## Milestone 104 — Prove four and eight CPUs
 
 `boot_aps` (`arch/cpu.rs`) already starts every enabled MADT
@@ -3486,6 +3490,135 @@ stays 17. The `/net` record stays version 2. No new syscall.
       second program does not. The host decode of the sealed slot
       shows the share, the file `dial`, and the `out` directory
       under `card`
+
+## Milestone 120 — One address type
+
+The lease, the resolver, and a ping are four bytes. The record
+keeps two locator kinds. This row makes one address type. A v4
+value and a v6 value are that type. The address card, dial, the
+reply, bind, listen, the datagram, and the route all take it.
+Opcodes stay 1–14. There is no second card tree and no v6
+opcode. Listening stays write on the port card. This row does
+not send a v6 packet.
+
+- [ ] **One type**: the stored address, the dial, the reply, bind,
+      listen, the datagram, and the next hop are one type. v4 and
+      v6 are values of it. The two locator kinds do not stay two
+      paths. The address card stays one card
+- [ ] **The same calls**: a v4 dial, bind, listen, and datagram
+      keep opcodes 2, 10, 11, 12, and 13. Opcode 14 stays the SSH
+      stream. Ping stays opcode 7, and it carries this type. The
+      reply is still read on that connection. Logged-out stays
+      denied. The outbound card from Milestone 118 takes this
+      type. This row does not define that card
+- [ ] **The record**: a layout change bumps `galexy-netcfg`. The
+      old version is refused, not guessed. `DISK_VERSION` stays
+      17. No new syscall and no new opcode
+- [ ] **Proof**: a v4 body still comes back through that type. A
+      stored v6 value is the same type and the same opcode, and
+      this row sends no v6 packet
+- [ ] **Out of this milestone**: the parse (121), a neighbor past
+      the QEMU path (122), a v6 answer from DNS (123), a v6 reply
+      on the outbound card (124), a second stack, a raw socket,
+      plaintext DNS, general browser TLS, a new syscall, the
+      `v1.0` tag, and the KVM rows
+
+## Milestone 121 — The parse rejects an ambiguous form
+
+One parser for that type. The shell and `net` call it. A form
+that can be read two ways is refused. The card stores the value,
+not the text. A refused form matches no card and opens nothing.
+This row sends no packet.
+
+- [ ] **Refused**: a v4 octet with a leading zero. A zone id. A
+      second `::`. An IPv4-mapped form (`::ffff:192.0.2.1`). A
+      dotted tail inside v6 text (`::192.0.2.1`). `0.0.0.0` and
+      `::`. A string that is both a name and an address
+- [ ] **One value**: two spellings of one unambiguous address are
+      the same value. The parser does not guess a name into an
+      address, or an address into a name. A payload that can be
+      either is refused. Ping stays opcode 7. Four payload bytes
+      stay the v4 value. A v6 literal is text this parser accepts,
+      on that same opcode
+- [ ] **Proof**: host tests refuse each form above and accept one
+      v4 value and one v6 value. A refused form opens no
+      connection
+- [ ] **Out of this milestone**: a v6 packet, a second parser, a
+      second stack, a raw socket, plaintext DNS, general browser
+      TLS, a new opcode, the `v1.0` tag, and the KVM rows
+
+## Milestone 122 — A neighbor past the QEMU path
+
+QEMU user networking is `10.0.2.2`. ARP finds that gateway.
+Neighbor solicitation is a host test. Before a program sends v6,
+the service reaches one v6 neighbor or one v6 gateway that is
+not that path. The next hop is the one address type. The cache
+stays 8 entries. The kernel still only moves frames.
+
+- [ ] **The reach**: neighbor discovery for that next hop, the
+      way ARP is for v4. One echo to that neighbor or gateway.
+      The peer is not `10.0.2.2`. No lane
+- [ ] **The same call**: opcode 7 and `/card/ping`. No new opcode.
+      No card, no packet. Logged-out is denied
+- [ ] **Proof**: the peer answers, and the address is not
+      `10.0.2.2`. A missing card sends nothing. The QEMU user
+      path does not check this box. The host test of a
+      solicitation does not check it either
+- [ ] **Out of this milestone**: a name lookup (123), an
+      application lane, listen, a second stack, a raw socket,
+      plaintext DNS, general browser TLS, a new syscall, the
+      `v1.0` tag, and the KVM rows
+
+## Milestone 123 — A name can return a v6 address
+
+Milestone 110 resolves over DNS-over-TLS. The answer today is
+v4. This row lets that same lookup return a v6 value of the one
+type. The program passes the name. The reply is the address.
+No lane.
+
+- [ ] **The same path**: opcode 8, port 853, the pinned resolver.
+      Not UDP/53. Not `10.0.2.3`. No second resolver and no v6
+      opcode. A v4 answer still works. One reply is one address.
+      The lookup does not open a second connection to try the
+      other version
+- [ ] **The card**: no read card, no query. Logged-out is denied.
+      A missing pin sends nothing
+- [ ] **Proof**: one TLS query whose answer is a v6 address.
+      Serial does not carry the resolver key. A UDP datagram to
+      port 53 is absent. This row does not dial
+- [ ] **Out of this milestone**: the dial (124), a
+      program-supplied resolver, happy eyeballs, raw sockets, a
+      second stack, plaintext DNS, general browser TLS, a new
+      syscall, the `v1.0` tag, and the KVM rows
+
+## Milestone 124 — The outbound card covers a v6 reply
+
+Read dials and receives the reply on that connection. Milestone
+118's card is `/card/out/<program>`. When the answer is v6, that
+same card is the right. There is no second outbound card.
+Listening stays write on the port card. This card does not
+accept.
+
+- [ ] **The same card**: read on `/card/out/<program>` dials a
+      name whose answer is v6, and a v6 address the program
+      passes. The reply is read on that connection. A dial by
+      name does not also need the address card. The lane is
+      the one Milestone 118 already uses
+- [ ] **What it does not do**: it does not bind, listen, or
+      accept. Inbound stays write on the port. A datagram stays
+      that peer's card. Ping stays `/card/ping`. A program
+      without the outbound card still asks per name. No leaves
+      it up. Logged-out is denied
+- [ ] **Proof**: the program with the card reads a body from a
+      v6 answer. The seat prints no ask. Without the card, no
+      handshake. Without write on the port card, the program
+      accepts nothing
+- [ ] **Out of this milestone**: a second card tree, a second
+      stack, a raw socket, plaintext DNS, general browser TLS,
+      a public CA bundle, TLS before 1.3, a new opcode, a new
+      syscall, the `v1.0` tag, and the KVM rows. Milestones 118
+      and 119 are not this row
+
 
 ---
 

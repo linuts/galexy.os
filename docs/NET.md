@@ -29,7 +29,7 @@ The words this phase uses:
 | **Lane** | The application object. TLS 1.3 to one peer. Bytes in, bytes out. |
 | **Gate** | The right to receive new lanes for one **name**. Held by one listener. |
 | **Name** | A label in the net service's directory (`echo`, `docs`). The same charset as a galfs path component, at most 64 bytes. |
-| **Locator** | An IPv4 or IPv6 address and a transport port, stored inside the directory. A locator is how the service finds a peer. A program may pass that stored address or port only when it holds the card. |
+| **Locator** | One address and a transport port, stored inside the directory. The address is one type. A v4 value and a v6 value are that type. A locator is how the service finds a peer. A program may pass that stored address or port only when it holds the card. |
 | **Dial** | Ask the service for a lane to a name this seat was granted. |
 | **Fetch** | The shell command that dials, reads the lane to EOF, and prints the bytes. The phase gate. |
 
@@ -46,7 +46,7 @@ checked.
 | --- | --- |
 | BSD sockets and Winsock (`socket`, `bind`, `listen`, `accept`, `connect`, `sendto`, `recvfrom`, `setsockopt`) | That API is an ambient port namespace. Galexy does not grow one. Milestones 112–116 honor one address, one port, one local bind, one listen, and one datagram peer, each with its card. `setsockopt` stays refused. |
 | `std::net::TcpStream` and a POSIX shim in the PAL | Milestone 108 keeps the name `TcpStream::connect`. It asks, then dials a granted name, one stored address, or one stored `address:port`. The value is still a lane. `TcpListener::bind` binds the stored local address when the seat holds write on that card. `accept` on that listener, and `listen_port`, accept on the stored port with write on that card. The value is a lane. `UdpSocket::send_card` sends to the stored peer. `UdpSocket::recv_card` receives one datagram from that same peer. Port 53 stays refused. `setsockopt` stays refused. There is no socket syscall and no POSIX shim. |
-| In-kernel TCP/IP | A parse bug on a packet would be ring 0. The kernel moves frames. The `net` service speaks the protocols. A second stack, a C stack, raw sockets, and promiscuous mode stay out. |
+| In-kernel TCP/IP | A parse bug on a packet would be ring 0. The kernel moves frames. The `net` service speaks the protocols. A second stack, a C stack, raw sockets, promiscuous mode, and a v6-only opcode stay out. IPv4 and IPv6 are one address type (Milestones 120–124). |
 | IP addresses and port numbers in the syscall ABI | Ports stay an internal demux. A program does not pass them to a syscall. Milestones 112 and 113 let a program pass one exact address or port on the existing net cap, and only with that card. An app still cannot bind `0.0.0.0`, spoof a source, or race a port it does not hold. |
 | Cleartext as an application right | The bytes an app reads on a lane are the plaintext of a finished TLS 1.3 session. There is no raw TCP Cap. Milestone 116 grants one exact datagram peer, and only with that card. Write on the card does not capture. |
 | The public WebPKI as the default trust | A name is pinned to a key. An empty pin on a dial asks the seat, shows the fingerprint, and stores the key only on yes. A different key later is refused. The DNS resolver pin stays one the admin installed. Trust-on-first-use is that question, not a silent accept. A system CA bundle is not in the image. |
@@ -67,7 +67,7 @@ kernel wire Cap 0x8009          only the task named net
     │
     ▼
 net  (ring 3, init child, restart)
-    │  IPv6 and IPv4, neighbor discovery, ICMP echo, UDP, TCP, TLS 1.3
+    │  one address type (v4 and v6), neighbor discovery, ICMP echo, UDP, TCP, TLS 1.3
     │  directory: name → locator + pinned key + the token that may dial
     │
     ├── lane Cap ──read/write── the program that dialed
@@ -101,9 +101,9 @@ Opcodes on `0x800A`, appended and then stable, same rule as init:
 | 4 `grant` | admin | write an actor on the record. That list is not the dial right. The shell writes the read token on `/card/<name>` |
 | 5 `revoke` | admin | drop that actor-list entry. The shell drops the card token. The list is not the dial right |
 | 6 `serve` | admin, and write on the card | attach a gate for a name to the calling task |
-| 7 `ping` | a seat that holds the ping card | ICMP echo to one IPv4 address, or to a DNS name resolved over the pinned DNS-over-TLS resolver. The reply is `reply from` that address, or `timeout`. No lane Cap. No card, no query |
-| 8 `resolve` | read on a DNS card | DNS-over-TLS lookup. The reply is the address. No lane Cap. The resolver key stays in the record |
-| 9 `pin` | admin | Pin the DNS-over-TLS resolver: four address bytes, then the 32-byte key. `10.0.2.2` and `10.0.2.3` are refused |
+| 7 `ping` | a seat that holds the ping card | ICMP echo to one address, or to a DNS name resolved over the pinned DNS-over-TLS resolver. The reply is `reply from` that address, or `timeout`. No lane Cap. No card, no query. Today the address is four bytes. Milestones 120–124 make it the one address type, on this opcode |
+| 8 `resolve` | read on a DNS card | DNS-over-TLS lookup. The reply is one address of the one type. No lane Cap. The resolver key stays in the record. Milestone 123 may return a v6 value. Until that box is checked, the answer is v4 |
+| 9 `pin` | admin | Pin the DNS-over-TLS resolver: the resolver address, then the 32-byte key. `10.0.2.2` and `10.0.2.3` are refused. Today the address is four bytes. Milestone 120 makes it the one type. The port stays 853 |
 | 10 `bind` | write on the address card | Bind the stored local address. The payload is that address. This opcode does not listen |
 | 11 `listen` | write on the port card | Listen on the stored port. The next reply carries the inbound lane |
 | 12 `datagram` | read on the datagram card | Send one datagram to the stored peer. Port 53 is refused. Write does not send |
@@ -143,8 +143,8 @@ The service has to have an address before it can talk to anyone. Milestone 80 is
 | MAC | virtio-net device config, read in Milestone 78. The service does not invent one. |
 | Mode | The record below. `ask` runs DHCP. `fixed` uses the locator stored in the record and does not ask. |
 | Address, prefix, gateway | DHCP ack when the mode is `ask`. QEMU user networking offers `10.0.2.15/24` from `10.0.2.2`. A `fixed` record uses the bytes the admin stored. |
-| Gateway MAC | ARP for the gateway, before any unicast IP packet. The cache holds 8 entries. IPv6 neighbor solicitation is the same step, covered by host tests. The QEMU smoke is IPv4. |
-| ICMP echo | `ping <ip>` or `ping <name>` from a logged-in seat that holds the ping card. An address is four bytes. A name is resolved over DNS-over-TLS, then one echo goes to that answer. The gateway may be the next hop. QEMU user networking answers `10.0.2.2` directly. The seat does not hold the wire. A missing card sends no query. |
+| Gateway MAC | ARP for the gateway, before any unicast IP packet. The cache holds 8 entries. IPv6 neighbor solicitation is the same step, covered by host tests. The QEMU smoke is IPv4. Milestone 122 is the reach past that path, on the one address type. |
+| ICMP echo | `ping <ip>` or `ping <name>` from a logged-in seat that holds the ping card. An address is four bytes until Milestone 120. A name is resolved over DNS-over-TLS, then one echo goes to that answer. The gateway may be the next hop. QEMU user networking answers `10.0.2.2` directly. The seat does not hold the wire. A missing card sends no query. Milestone 122 is one echo to a v6 neighbor or gateway that is not `10.0.2.2`, on this same card. |
 | First packet a peer must answer | After the ack and the ARP reply, one UDP datagram to the gateway. The payload is `galexy`. The host test receives it. That is Milestone 80. It is not a TCP handshake and it is not a lane. |
 
 DHCP here is a client. Discover, offer, request, ack. The first offer wins. Galexy does not serve DHCP in this phase. A lease is learned state: address, prefix, gateway, expiry. On expiry the service asks again. A missing record means mode `ask` and an empty directory, so a fresh QEMU boot still gets an address.
@@ -186,10 +186,15 @@ Cipher suites for this phase: `TLS_AES_128_GCM_SHA256` and
 stays PBKDF2. Poly1305 here is the lane AEAD, not a replacement for
 the volume MAC (`THREAT.md` still refuses to swap that primitive).
 
-IPv4 and IPv6 are two locator forms inside `net`. Programs do not
-branch. The QEMU smoke uses user networking (slirp), which is IPv4.
-IPv6 packet build and parse are host tests. Happy eyeballs is not a
-second API and is not this phase.
+The address is one type. A v4 value and a v6 value are that type.
+Cards, dial, the reply, bind, listen, datagrams, and the route use
+it. Programs do not branch, and `net` does not grow a second path.
+Today the lease, the resolver, and ping are four bytes, and the
+record still has two locator kinds. Milestones 120–124 close that
+gap. Until those boxes are checked, the QEMU smoke is IPv4, and
+IPv6 packet build and neighbor solicitation stay host tests.
+Happy eyeballs is a second path and stays out. There is no second
+stack, no raw socket, no plaintext DNS, and no general browser TLS.
 
 DNS, when a name is not a literal locator, is resolved by `net` over
 TLS to a resolver the admin pinned. That is DNS-over-TLS (port 853).
@@ -354,7 +359,8 @@ Milestone 109: the same lane, by name. There is no new syscall.
 QUIC, 0-RTT, device checksum offload, and a CA bundle are later
 carriers and later rights. They attach to the lane. They do not add
 an ambient socket. Phase 16's extra calls are cards. Milestones
-110–117 have landed. SSH is the same lane.
+110–117 have landed. SSH is the same lane. Milestones 120–124
+are one address type, and they stay open.
 
 ## Phase 16 — A card is the firewall
 
@@ -486,6 +492,50 @@ a pin is stored, plaintext DNS, TLS before 1.3, iptables,
 raw frames, raw sockets, promiscuous mode, a second stack, telnet,
 FTP, rsh, SSHv1, `ssh-rsa`, CBC, and SHA-1. The `v1.0` tag stays
 unapplied.
+
+## One address (Milestones 120–124)
+
+v4 and v6 are one address type. The address card, dial, the reply,
+bind, listen, the datagram, and the route take that type. Opcodes
+stay 1–14. There is no `/card6`, no v6 opcode, and no second stack.
+Milestones 118 and 119 have landed. Listening stays write on the
+port card. The boxes for 120–124 stay open. This plan does not
+tag `v1.0`.
+
+Milestone 120 is the type. A v4 value and a v6 value are it.
+Today's four-byte lease, resolver, and ping become that type when
+the layout changes, and `galexy-netcfg` bumps. The old version is
+refused. `DISK_VERSION` stays 17. A v4 dial, bind, listen, and
+datagram keep their opcodes. This row sends no v6 packet.
+
+Milestone 121 is one parser. The shell and `net` call it. It
+refuses a form that can be two addresses, or a name and an
+address: a v4 octet with a leading zero, a zone id, a second
+`::`, `::ffff:192.0.2.1`, `::192.0.2.1`, `0.0.0.0`, and `::`. Two
+spellings of one unambiguous value are the same value. A refused
+form opens nothing. No packet.
+
+Milestone 122 is the reach. Neighbor discovery finds one v6
+neighbor or one v6 gateway that is not the QEMU user path
+`10.0.2.2`. One echo goes there, on opcode 7 and `/card/ping`.
+The cache stays 8. No lane. The host test of a solicitation does
+not check this box.
+
+Milestone 123 is the lookup. Opcode 8, DNS-over-TLS on port 853,
+the pinned resolver. The reply may be a v6 value of the one type.
+The program passes the name. One reply is one address. There is
+no second connection and no UDP/53. This row does not dial.
+
+Milestone 124 is the reply. Read on `/card/out/<program>` dials,
+and the reply is read on that connection, when the answer is v6.
+The same card covers a v6 address the program passes. A dial by
+name does not also need the address card. The card does not bind,
+listen, or accept. Inbound stays write on the port. The lane is
+the one Milestone 118 already uses.
+
+Still out: a second stack, a raw socket, plaintext DNS, general
+browser TLS, a public CA bundle, happy eyeballs, a v6 opcode, and
+the `v1.0` tag.
 
 ## Files this phase touches
 

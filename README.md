@@ -46,7 +46,8 @@ we stand. Known gap today: the KVM column is empty on this host. When
 `target/galexy-python/python` were built, a normal `cargo run` logs
 into a seat that has both. The network is a ring-3 `net` service: DHCP, ICMP echo (`ping` of an
 address or a DNS name), and a granted TLS 1.3 lane. `std::net` and
-Python `socket` call those cards. There is no socket syscall. USB lists
+Python `socket` call those cards. There is no socket syscall. One
+address type for v4 and v6 is Milestones 120–124 and has not landed. USB lists
 the devices on xHCI. The boot keyboard is claimed; a tablet is not.
 Python is upstream RustPython as a login-shell command, not CPython.
 `lane.read` dials a granted name when the interpreter was rebuilt.
@@ -384,7 +385,8 @@ crates/
   port, bind, listen, and a datagram are cards (112–116). SSH and
   SFTP are `/card/ssh` (117). Read on `/card/out/<program>` dials
   any stored name and any address (118). `share r` keeps that read
-  across reboot (119). Listen stays the port card.
+  across reboot (119). Listen stays the port card. One address
+  type is 120–124, and those boxes stay open.
   The `v1.0` tag still waits on the KVM cells. Plan:
   [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`

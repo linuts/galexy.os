@@ -8,6 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#171](https://github.com/linuts/galexy.os/pull/171) — Docs — Milestones 120–124 plan one address type for v4 and v6.
+  Cards, dial, the reply, bind, listen, datagrams, and routing use that type. The parse refuses an ambiguous form. A neighbor past the QEMU path, a DNS-over-TLS answer that can be v6, and the same outbound card for a v6 reply come before any other v6 traffic. Listening stays write on the port card. No second stack, no v6 opcode, no raw socket, no plaintext DNS, and no general browser TLS. The boxes stay open. This does not tag `v1.0`. SSH stays 117. Milestones 118 and 119 stay checked.
 - [#172](https://github.com/linuts/galexy.os/pull/172) — Milestones 118 and 119 — Read on `/card/out/<program>` lets that program dial any stored name, including a subdomain, and any address. The reply comes back on the same lane. An empty pin on that card is a plaintext HTTP lane. A stored pin, and every dial without the card, stays the one-shot TLS fetch. Listen stays write on the port card. A program without the card still asks. `share r` stores the read in the metadata slot and spawn reloads it after reboot. Login does not install it. `DISK_VERSION` stays 17. No new syscall. DNS-over-TLS stays on port 853. The `v1.0` tag stays unapplied.
 - [#170](https://github.com/linuts/galexy.os/pull/170) — Milestone 117 — SSH and SFTP, client and server, in one ring-3 Rust service.
   `/card/ssh` write accepts. Read opens a session. The program passes no address. `net` keeps the TCP bytes.

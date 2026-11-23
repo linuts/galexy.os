@@ -262,7 +262,9 @@ card in `net` (`NET.md`). Python calls those cards:
 `socket.connect` with an address or a port. A missing card asks.
 No is `OSError`. `setsockopt` stays refused. `ssl` and `asyncio`
 stay refused. TLS stays inside `net`. Reaching a host past
-`10.0.2.2` is Milestone 111, not this section.
+`10.0.2.2` is Milestone 111, not this section. An address is one
+type for v4 and v6 (Milestones 120–124). There is no second stack
+and no general browser TLS.
 
 ## Changing this subsystem
 
