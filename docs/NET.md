@@ -8,10 +8,10 @@ listener. `serve_hands_the_lane_to_its_listener` is the run: the
 attaching seat prints the TLS body, and a second admin seat that
 holds the write bit receives `held`.
 
-Galexy has no network today, and that is why nothing in the tree is
-reachable remotely (`THREAT.md`). The tag should not ship that way.
-A machine you can log into and compile on, and cannot deliberately
-reach, is missing a fundamental object. The object is not a socket.
+The network is the lane and the card. DHCP, ping, a granted TLS 1.3
+lane, listen, and one datagram are in the tree. Remote login is still
+Milestone 117, so a seat cannot log in over the network yet
+(`THREAT.md`). The object is not a socket.
 
 ## What a program holds
 
@@ -29,7 +29,7 @@ The words this phase uses:
 | **Lane** | The application object. TLS 1.3 to one peer. Bytes in, bytes out. |
 | **Gate** | The right to receive new lanes for one **name**. Held by one listener. |
 | **Name** | A label in the net service's directory (`echo`, `docs`). The same charset as a galfs path component, at most 64 bytes. |
-| **Locator** | An IPv4 or IPv6 address and a transport port, stored inside the directory. A locator is how the service finds a peer. It is not an argument a normal program can pass. |
+| **Locator** | An IPv4 or IPv6 address and a transport port, stored inside the directory. A locator is how the service finds a peer. A program may pass that stored address or port only when it holds the card. |
 | **Dial** | Ask the service for a lane to a name this seat was granted. |
 | **Fetch** | The shell command that dials, reads the lane to EOF, and prints the bytes. The phase gate. |
 
@@ -86,7 +86,7 @@ service keeps the other end and writes plaintext into it after it
 decrypts. The application never sees records, headers, or keys.
 
 Creating that pair is the one new syscall. `Syscall::Lane` is number
-**35** (the table today is `0..=34`; `Date` is 34). Only the task named `net` may
+**35**. The table is `0..=35`, and `Date` is 34. Only the task named `net` may
 call it. Any other caller is `AccessDenied`. `read` and `write` on a
 lane Cap are the existing syscalls, dispatched on the Cap type. There
 is no `connect` to forget to check.
@@ -102,6 +102,12 @@ Opcodes on `0x800A`, appended and then stable, same rule as init:
 | 5 `revoke` | admin | drop that dial right |
 | 6 `serve` | admin | attach a gate for a name to the calling task |
 | 7 `ping` | a seat that holds the ping card | ICMP echo to one IPv4 address, or to a DNS name resolved over the pinned DNS-over-TLS resolver. The reply is `reply from` that address, or `timeout`. No lane Cap. No card, no query |
+| 8 `resolve` | read on a DNS card | DNS-over-TLS lookup. The reply is the address. No lane Cap. The resolver key stays in the record |
+| 9 `pin` | admin | Pin the DNS-over-TLS resolver: four address bytes, then the 32-byte key. `10.0.2.2` and `10.0.2.3` are refused |
+| 10 `bind` | write on the address card | Bind the stored local address. The payload is that address. This opcode does not listen |
+| 11 `listen` | write on the port card | Listen on the stored port. The next reply carries the inbound lane |
+| 12 `datagram` | read on the datagram card | Send one datagram to the stored peer. Port 53 is refused. Write does not send |
+| 13 `recv` | read on that same card | Receive one datagram from that peer. Port 53 is refused. A packet from any other peer is ignored |
 
 `fetch` is a shell builtin on top of `dial`. `ping <ip>` and `ping <name>` are shell builtins on top of opcode 7. Neither is a syscall.
 `svc status net` still means "is the process up," through init.

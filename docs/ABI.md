@@ -134,7 +134,6 @@ Unknown codes decode to `Unsupported`. New codes append.
 - The ramdisk tar layout and the GALF on-disk format (`GALFS.md` owns
   that version number; the kernel refuses mismatches).
 - Locators and transport ports. They live in the `net` service
-  directory (`NET.md`). A program dials a name. A passed address
-  or port is refused until Milestones 112 and 113 grant that exact
-  card. Those calls are not in this table today. SSH (Milestone
+  directory (`NET.md`). A program passes one stored address or port
+  on net cap `0x800A`, and only with that card. SSH (Milestone
   117) adds no syscall.

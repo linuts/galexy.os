@@ -24,8 +24,9 @@ baseline. **68 → 77** have landed (Phase 11 and Phase 12).
 **89** has landed: notices and monotonic beats (`docs/PROCESS.md`),
 beside the service table, with no bus. **90** has landed: civil UTC
 is `Date` and `svc at`, and `Clock` stays monotonic. **78 → 85** have landed (`docs/NET.md`): a lane, not a socket.
-**86 → 88** have landed (`docs/USB.md`): xHCI lists a device, and
-the driver table ships empty. **91 → 96** have landed (`docs/PYTHON.md`): `python hello.py`
+**86 → 88** have landed (`docs/USB.md`): xHCI lists a device.
+Milestone 102 claims the QEMU keyboard. Other vendor drivers stay
+unwritten. **91 → 96** have landed (`docs/PYTHON.md`): `python hello.py`
 at a login seat, with no new syscall, and `python` with no file
 is the REPL. **97 → 99** are the sealed volume (`docs/GALFS.md`):
 one virtio request for the current slot, then a commit that
@@ -434,8 +435,8 @@ the machine.
 Non-goals for `v1.0`: GPU beyond the GOP framebuffer,
 5-level paging, huge user pages, POSIX compatibility, SMT / MDS
 mitigations beyond the written waiver, and vendor USB or NIC
-drivers. Network landed as Phase 10. USB lists a device and the
-driver table ships empty (Phase 13). RustPython at the login shell landed
+drivers. Network landed as Phase 10. USB lists a device, and
+Milestone 102 claims the QEMU keyboard (Phase 13). RustPython at the login shell landed
 as Phase 14. The tag waits on a KVM pass.
 
 ## Phase 10 — Network (before `v1.0`)
