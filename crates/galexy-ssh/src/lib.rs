@@ -73,6 +73,45 @@ pub fn wipe(buf: &mut [u8]) {
     buf.zeroize();
 }
 
+/// First eight bytes of SHA-256(`key`). This is the fingerprint a
+/// person can compare. It is not the key.
+pub fn fingerprint(key: &[u8; 32]) -> [u8; 8] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(key);
+    let dig = hasher.finalize();
+    let mut out = [0u8; 8];
+    out.copy_from_slice(&dig[..8]);
+    out
+}
+
+/// The peer key from an `unseen` reply. `None` when the text is not
+/// that reply. The caller shows [`fingerprint`], not these bytes.
+pub fn unseen_key(text: &[u8]) -> Option<[u8; 32]> {
+    let rest = text.strip_prefix(b"unseen ")?;
+    let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());
+    let hex = &rest[..end];
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    for i in 0..32 {
+        let hi = hex_val(hex[i * 2])?;
+        let lo = hex_val(hex[i * 2 + 1])?;
+        key[i] = (hi << 4) | lo;
+    }
+    Some(key)
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// One SSH session on an already-connected byte pipe.
 ///
 /// The pipe is the TLS plaintext `net` handed over. This code does not
@@ -410,5 +449,22 @@ mod tests {
         assert!(session.login("ada", &mut password).is_err());
         assert!(password.iter().all(|b| *b == 0));
         let _ = server.join();
+    }
+
+    #[test]
+    fn an_unseen_reply_is_the_key_and_the_fingerprint_is_not() {
+        let key = [0xab; 32];
+        let mut text = b"unseen ".to_vec();
+        const HEX: &[u8] = b"0123456789abcdef";
+        for byte in key {
+            text.push(HEX[(byte >> 4) as usize]);
+            text.push(HEX[(byte & 0xf) as usize]);
+        }
+        text.push(b'\n');
+        assert_eq!(unseen_key(&text), Some(key));
+        assert!(unseen_key(b"changed\n").is_none());
+        let fp = fingerprint(&key);
+        assert_ne!(fp, key[..8]);
+        assert_eq!(fingerprint(&key), fp);
     }
 }

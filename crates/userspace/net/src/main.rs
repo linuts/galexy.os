@@ -5,7 +5,7 @@
 //! Session keys are not written to the console.
 
 use std::io::{Read, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use galexy_abi::{
     Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DGRAM, NET_OP_DIAL,
@@ -73,6 +73,7 @@ fn main() {
     let mut flood_ids: Vec<u8> = Vec::new();
     let mut flood_logged = false;
     let mut lives: Vec<Live> = Vec::new();
+    let mut seen: Option<Seen> = None;
     loop {
         pump(&mut engine);
         let now = clock_ms();
@@ -130,6 +131,7 @@ fn main() {
                 now,
                 &mut flood_at,
                 &mut lives,
+                &mut seen,
             );
         }
         if sleep_ms(20).ok {
@@ -138,6 +140,13 @@ fn main() {
         let err = SysError::from_code(0);
         let _ = err;
     }
+}
+
+/// A peer key learned on a dial that had no pin yet. It is not stored
+/// until the seat says yes.
+struct Seen {
+    name: Vec<u8>,
+    key: [u8; 32],
 }
 
 struct Gate {
@@ -160,6 +169,7 @@ fn handle(
     now: u64,
     flood_at: &mut Option<u64>,
     lives: &mut Vec<Live>,
+    seen: &mut Option<Seen>,
 ) {
     if msg.len() < INIT_RPC_HDR + 1 {
         reply(rx, b"bad\n", 0);
@@ -203,7 +213,9 @@ fn handle(
         NET_OP_REVOKE if admin => grant_op(rx, record, rest, false),
         NET_OP_SERVE if admin => serve(rx, engine, record, msg[2], actor_id, gates, rest),
         NET_OP_PING => ping(rx, engine, record, msg[2], rest, now),
-        NET_OP_STREAM => stream(rx, engine, record, msg[2], actor_id, gates, rest, lives),
+        NET_OP_STREAM => stream(
+            rx, engine, record, msg[2], actor_id, gates, rest, lives, seen,
+        ),
         NET_OP_ALLOW | NET_OP_GRANT | NET_OP_REVOKE | NET_OP_SERVE | NET_OP_PIN => {
             reply(rx, b"access denied\n", 0);
         }
@@ -419,8 +431,13 @@ fn drive_tls(
     if n > 0 {
         conn.read_tls(&mut &buf[..n]).map_err(|_| "bad")?;
         let _io = conn.process_new_packets().map_err(|err| {
-            log(&format!("[net] tls {err}"));
-            "denied"
+            let text = format!("{err}");
+            log(&format!("[net] tls {text}"));
+            if text.contains("pin-mismatch") {
+                "changed"
+            } else {
+                "denied"
+            }
         })?;
         let mut plain = [0u8; 2048];
         let got = conn.reader().read(&mut plain).unwrap_or(0);
@@ -454,6 +471,67 @@ fn filtered_provider() -> Arc<CryptoProvider> {
         .kx_groups
         .retain(|group| group.name() == rustls::NamedGroup::X25519);
     Arc::new(provider)
+}
+
+#[derive(Debug)]
+struct LearnVerifier {
+    key: Mutex<[u8; 32]>,
+    saw: Mutex<bool>,
+    provider: Arc<CryptoProvider>,
+}
+
+impl ServerCertVerifier for LearnVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, Error> {
+        let Some(got) = ed25519_key(end_entity.as_ref()) else {
+            return Err(Error::General("pin-miss".into()));
+        };
+        if let Ok(mut slot) = self.key.lock() {
+            *slot = got;
+        }
+        if let Ok(mut slot) = self.saw.lock() {
+            *slot = true;
+        }
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        Err(Error::PeerIncompatible(
+            rustls::PeerIncompatible::ServerDoesNotSupportTls12Or13,
+        ))
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )?;
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
 }
 
 #[derive(Debug)]
@@ -1469,12 +1547,13 @@ struct Live {
 fn stream(
     rx: Cap,
     engine: &mut Engine,
-    record: &Record,
+    record: &mut Record,
     held: u8,
     actor_id: u64,
     gates: &mut Vec<Gate>,
     rest: &[u8],
     lives: &mut Vec<Live>,
+    seen: &mut Option<Seen>,
 ) {
     if rest.is_empty() {
         reply(rx, b"bad\n", 0);
@@ -1484,6 +1563,29 @@ fn stream(
     let name = &rest[1..];
     if name.is_empty() || parse_passed(name).is_some() {
         reply(rx, b"bad\n", 0);
+        return;
+    }
+    if dir == 3 || dir == 4 {
+        if held & 1 == 0 {
+            reply(rx, b"access denied\n", 0);
+            return;
+        }
+        if dir == 4 {
+            *seen = None;
+            reply(rx, b"ok\n", 0);
+            return;
+        }
+        let Some(got) = seen.take() else {
+            reply(rx, b"bad\n", 0);
+            return;
+        };
+        if got.name.as_slice() != name || record.remember_key(name, got.key).is_err() {
+            reply(rx, b"bad\n", 0);
+            return;
+        }
+        save_record(record);
+        audit(actor_id, name, &got.key, "remembered");
+        reply(rx, b"ok\n", 0);
         return;
     }
     let Some(entry) = record.find(name) else {
@@ -1508,7 +1610,9 @@ fn stream(
             return;
         }
         let ip = [entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]];
-        live_dial(rx, engine, actor_id, name, ip, entry.port, entry.key, lives);
+        live_dial(
+            rx, engine, actor_id, name, ip, entry.port, entry.key, lives, seen,
+        );
     } else {
         reply(rx, b"bad\n", 0);
     }
@@ -1586,9 +1690,14 @@ fn live_dial(
     port: u16,
     key: [u8; 32],
     lives: &mut Vec<Live>,
+    seen: &mut Option<Seen>,
 ) {
     if port == 0 || ip == [0, 0, 0, 0] {
         reply(rx, b"access denied\n", 0);
+        return;
+    }
+    if key == [0; 32] {
+        learn_pin(rx, engine, actor_id, name, ip, port, seen);
         return;
     }
     log(&format!(
@@ -1614,9 +1723,103 @@ fn live_dial(
         Err(why) => {
             engine.tcp_release(id);
             audit(actor_id, name, &key, why);
-            reply(rx, b"timed out\n", 0);
+            if why == "changed" {
+                reply(rx, b"changed\n", 0);
+            } else {
+                reply(rx, b"timed out\n", 0);
+            }
         }
     }
+}
+
+/// Finishes TLS far enough to read the peer key, then closes. The lane
+/// stays closed until the seat accepts the key and dials again.
+fn learn_pin(
+    rx: Cap,
+    engine: &mut Engine,
+    actor_id: u64,
+    name: &[u8],
+    ip: [u8; 4],
+    port: u16,
+    seen: &mut Option<Seen>,
+) {
+    log(&format!(
+        "[net] dial {}.{}.{}.{}",
+        ip[0], ip[1], ip[2], ip[3]
+    ));
+    let Ok(id) = engine.tcp_connect(ip, port) else {
+        reply(rx, b"unavailable\n", 0);
+        return;
+    };
+    let now = clock_ms();
+    if !wait_established(engine, id, now) {
+        engine.tcp_release(id);
+        reply(rx, b"timed out\n", 0);
+        return;
+    }
+    let learned = Arc::new(LearnVerifier {
+        key: Mutex::new([0; 32]),
+        saw: Mutex::new(false),
+        provider: filtered_provider(),
+    });
+    let result = learn_handshake(engine, id, Arc::clone(&learned), clock_ms());
+    engine.tcp_close(id);
+    let Ok(()) = result else {
+        reply(rx, b"timed out\n", 0);
+        return;
+    };
+    let saw = learned.saw.lock().map(|g| *g).unwrap_or(false);
+    let key = learned.key.lock().map(|g| *g).unwrap_or([0; 32]);
+    if !saw || key == [0; 32] {
+        reply(rx, b"timed out\n", 0);
+        return;
+    }
+    *seen = Some(Seen {
+        name: name.to_vec(),
+        key,
+    });
+    audit(actor_id, name, &key, "unseen");
+    let mut text = [0u8; 7 + 64 + 1];
+    text[..7].copy_from_slice(b"unseen ");
+    const HEX: &[u8] = b"0123456789abcdef";
+    for (i, byte) in key.iter().enumerate() {
+        text[7 + i * 2] = HEX[(byte >> 4) as usize];
+        text[8 + i * 2] = HEX[(byte & 0xf) as usize];
+    }
+    text[71] = b'\n';
+    reply(rx, &text, 0);
+}
+
+fn learn_handshake(
+    engine: &mut Engine,
+    id: u8,
+    learned: Arc<LearnVerifier>,
+    start: u64,
+) -> Result<(), &'static str> {
+    let server = ServerName::try_from("echo".to_string()).map_err(|_| "bad")?;
+    let config = learn_config(learned).map_err(|_| "bad")?;
+    let mut conn = Connection::Client(ClientConnection::new(config, server).map_err(|_| "bad")?);
+    let mut early = Vec::new();
+    let limit = start.saturating_add(HANDSHAKE_MS);
+    while clock_ms() < limit {
+        drive_tls(engine, id, &mut conn, &mut early)?;
+        if !conn.is_handshaking() {
+            return Ok(());
+        }
+        pump(engine);
+        let _ = sleep_ms(20);
+    }
+    Err("deadline")
+}
+
+fn learn_config(learned: Arc<LearnVerifier>) -> Result<Arc<ClientConfig>, Error> {
+    let provider = Arc::clone(&learned.provider);
+    let config = ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13])?
+        .dangerous()
+        .with_custom_certificate_verifier(learned)
+        .with_no_client_auth();
+    Ok(Arc::new(config))
 }
 
 fn hand_live(

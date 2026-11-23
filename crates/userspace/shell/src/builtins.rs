@@ -73,7 +73,7 @@ pub(crate) fn show_help() {
     help_row(b"fetch", b"dashboard (alias: dashboard)");
     help_row(b"fetch <name>", b"dial a granted name and print");
     help_row(b"net link", b"address, or down");
-    help_row(b"net allow ...", b"name, locator, key file");
+    help_row(b"net allow ...", b"name, locator, optional key file");
     help_row(b"stats", b"uptime / frames / heap / galfs");
     help_row(b"dmesg", b"recent kernel log lines");
     help_row(b"tasks", b"tty, state, cpu, parent");
@@ -2121,8 +2121,8 @@ fn net_allow(cwd: &Cwd, tail: &[u8]) {
             &rest[sp + 1..]
         };
     }
-    if nparts != 3 {
-        write_console(b"net allow <name> <ip:port> <keyfile>\n");
+    if nparts < 2 {
+        write_console(b"net allow <name> <ip:port> [keyfile]\n");
         prompt(cwd);
         return;
     }
@@ -2146,10 +2146,15 @@ fn net_allow(cwd: &Cwd, tail: &[u8]) {
         };
         (ip, port, 4)
     };
-    let Some(key) = read_key(cwd, parts[2]) else {
-        write_console(b"bad key\n");
-        prompt(cwd);
-        return;
+    let key = if nparts == 3 {
+        let Some(key) = read_key(cwd, parts[2]) else {
+            write_console(b"bad key\n");
+            prompt(cwd);
+            return;
+        };
+        key
+    } else {
+        [0u8; 32]
     };
     let name = parts[0];
     if name.len() > 32 {

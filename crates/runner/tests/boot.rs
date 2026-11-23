@@ -7856,17 +7856,19 @@ fn milestone_117_ssh_reads_a_file() {
     for byte in pin {
         pin_hex.push_str(&format!("{byte:02x}"));
     }
-    let save_pin = format!("echo {pin_hex} > k");
     let mut owned: Vec<(String, String)> = with_login(&[])
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
     owned.extend(type_line("echo hi > note", "admin@galexy> "));
-    owned.extend(type_line(&save_pin, "admin@galexy> "));
-    owned.extend(type_line("net allow ssh 10.0.2.2:4598 k", "ok"));
+    owned.extend(type_line("net allow ssh 10.0.2.2:4598", "ok"));
     owned.extend(type_line("grant w /card/ssh ssh", "ssh: attached"));
     owned.extend(type_line("echo hold", "ssh: file"));
-    owned.extend(type_line("ssh-open", "Password: "));
+    owned.extend(type_line(
+        "ssh-open",
+        "Are you sure you want to continue connecting (yes/no)? ",
+    ));
+    owned.extend(type_line("yes", "Password: "));
     owned.extend(masked_word("testpass"));
     owned.push(("ret".into(), "ssh: session".into()));
     owned.extend(type_line("echo done", "ssh: refused"));

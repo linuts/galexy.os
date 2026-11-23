@@ -1013,8 +1013,12 @@ pub const NET_OP_RECV: u8 = 13;
 /// (`TOKEN_READ` dials, `TOKEN_WRITE` accepts) and then the name. The
 /// program passes no address. `read` on the card dials the stored
 /// locator. `write` accepts one inbound connection on the stored port.
-/// The reply's lane stays open and `net` copies the TLS plaintext both
-/// ways. A second acceptor is `held`. This is not a new syscall.
+/// An empty pin does not open a lane: the reply is `unseen` and the
+/// peer key. Direction `3` stores that key after the seat says yes.
+/// Direction `4` drops it. A pin that is already stored has to match,
+/// and a different key is `changed`. The reply's lane stays open and
+/// `net` copies the TLS plaintext both ways. A second acceptor is
+/// `held`. This is not a new syscall.
 pub const NET_OP_STREAM: u8 = 14;
 
 /// USB control: list enumerated devices, one per line. The reply is

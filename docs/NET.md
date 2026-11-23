@@ -49,7 +49,7 @@ checked.
 | In-kernel TCP/IP | A parse bug on a packet would be ring 0. The kernel moves frames. The `net` service speaks the protocols. A second stack, a C stack, raw sockets, and promiscuous mode stay out. |
 | IP addresses and port numbers in the syscall ABI | Ports stay an internal demux. A program does not pass them to a syscall. Milestones 112 and 113 let a program pass one exact address or port on the existing net cap, and only with that card. An app still cannot bind `0.0.0.0`, spoof a source, or race a port it does not hold. |
 | Cleartext as an application right | The bytes an app reads on a lane are the plaintext of a finished TLS 1.3 session. There is no raw TCP Cap. Milestone 116 grants one exact datagram peer, and only with that card. Write on the card does not capture. |
-| The public WebPKI as the default trust | A name is pinned to a key the admin installed. Trust-on-first-use is not silent. A system CA bundle is not in the image. |
+| The public WebPKI as the default trust | A name is pinned to a key. An empty pin on a dial asks the seat, shows the fingerprint, and stores the key only on yes. A different key later is refused. The DNS resolver pin stays one the admin installed. Trust-on-first-use is that question, not a silent accept. A system CA bundle is not in the image. |
 | TLS before 1.3, renegotiation, compression, 0-RTT | Replay and oracle bugs we do not have to accept. 0-RTT can be a later right. It is off in this phase. |
 | A hand-rolled handshake | The service links a maintained Rust TLS 1.3 implementation (rustls-class) with a pure-Rust crypto provider. No C. If that crate will not link on `x86_64-unknown-galexy`, Milestone 82 fixes the link. It does not replace the handshake. |
 | QUIC as a second API | QUIC is the intended next carrier. It shows up behind the same lane Cap. This phase's carrier is TLS 1.3 over TCP, inside the service. |
@@ -170,11 +170,16 @@ There is no environment block and no `/etc`. Shell history is the other file a p
 
 A directory entry pins a 32-byte public key (a raw key, the RFC 7250
 shape, not a chain). The verifier accepts that key and rejects every
-other. The audit line for a dial carries the actor, the name, the
+other. `net allow` may omit the key file. The first dial of that name
+learns the peer key, shows `fp=` (the first eight bytes of SHA-256),
+and asks `yes` or `no`. Yes stores the key on the name and writes one
+line to `ssh.known` in the seat's tree. No stores nothing. A later
+dial that sees a different key replies `changed` and does not ask
+again. The audit line for a dial carries the actor, the name, the
 first eight bytes of the fingerprint in hex, and the result. It does
-not carry the key, the session secrets, or the plaintext. Serial,
-`dmesg`, and the console follow the same rule as passwords
-(`STYLE.md`).
+not carry the key, the session secrets, or the plaintext. Serial and
+`dmesg` follow the same rule as passwords (`STYLE.md`). The question
+itself is the one place the fingerprint is shown.
 
 Cipher suites for this phase: `TLS_AES_128_GCM_SHA256` and
 `TLS_CHACHA20_POLY1305_SHA256`, X25519, TLS 1.3 only. The password KDF

@@ -235,6 +235,22 @@ impl Record {
             .any(|i| &slot.actors[i][..slot.actor_len[i] as usize] == actor)
     }
 
+    /// Stores `key` when `name` has no pin yet.
+    ///
+    /// An empty key is refused. A pin that is already set stays as it
+    /// is, so a changed key cannot replace a stored one through this path.
+    pub fn remember_key(&mut self, name: &[u8], key: [u8; 32]) -> Result<(), CfgError> {
+        if key == [0; 32] {
+            return Err(CfgError::BadRecord);
+        }
+        let slot = self.find_mut(name).ok_or(CfgError::Missing)?;
+        if slot.key != [0; 32] {
+            return Err(CfgError::BadRecord);
+        }
+        slot.key = key;
+        Ok(())
+    }
+
     /// The entry, if the name is installed.
     pub fn find(&self, name: &[u8]) -> Option<&Name> {
         self.names[..self.name_count as usize]
@@ -472,6 +488,21 @@ mod tests {
         assert_eq!(back, rec);
         rec.revoke(b"echo", b"admin").unwrap();
         assert!(!rec.may_dial(b"echo", b"admin"));
+    }
+
+    #[test]
+    fn an_empty_pin_can_be_remembered_once() {
+        let mut rec = Record::empty_ask();
+        let mut ip = [0u8; 16];
+        ip[..4].copy_from_slice(&[192, 168, 0, 2]);
+        rec.allow(b"ssh", 22, KIND_IPV4, ip, [0; 32]).unwrap();
+        let key = [0x44; 32];
+        rec.remember_key(b"ssh", key).unwrap();
+        assert_eq!(rec.find(b"ssh").unwrap().key, key);
+        assert!(rec.remember_key(b"ssh", [0x55; 32]).is_err());
+        assert_eq!(rec.find(b"ssh").unwrap().key, key);
+        assert!(rec.remember_key(b"ssh", [0; 32]).is_err());
+        assert!(rec.remember_key(b"missing", key).is_err());
     }
 
     #[test]

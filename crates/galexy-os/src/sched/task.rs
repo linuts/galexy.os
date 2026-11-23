@@ -1413,7 +1413,7 @@ fn net_card(
         galexy_abi::NET_OP_SERVE => (card_path(b"/admin@card/", name), galfs::RIGHT_WRITE),
         galexy_abi::NET_OP_STREAM => {
             let need = match bytes.get(1).copied() {
-                Some(galfs::RIGHT_READ) => galfs::RIGHT_READ,
+                Some(galfs::RIGHT_READ) | Some(3) | Some(4) => galfs::RIGHT_READ,
                 Some(galfs::RIGHT_WRITE) => galfs::RIGHT_WRITE,
                 _ => return (0, galfs::RIGHT_READ, CardPath::empty()),
             };
