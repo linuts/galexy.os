@@ -8,8 +8,8 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- [#168](https://github.com/linuts/galexy.os/pull/168) — Docs — the `/net` record is version 2, and the wire, net-control, and lane rows are experimental.
-  Opcodes 8–13 are in `NET.md`. A stored address or port is a card on `0x800A`. Dial is the read token, and a USB list is the port card. `DISK_VERSION` is 17. `std::net` is the lane, and Python `socket` is on the allow-list. README and the plans name the card calls, the claimed keyboard, and datagram receive. SSH stays 117. No code change.
+- [#168](https://github.com/linuts/galexy.os/pull/168) — Docs and USB cards — the `/net` record is version 2, and the wire, net-control, and lane rows are experimental.
+  Opcodes 8–13 are in `NET.md`. A stored address or port is a card on `0x800A`. Dial is the read token. Init creates `/usb/1` through `/usb/16` and does not grant them, so a USB list is that card. `DISK_VERSION` is 17. `std::net` is the lane, and Python `socket` is on the allow-list. README and the plans name the card calls, the claimed keyboard, and datagram receive. SSH stays 117.
 - [#167](https://github.com/linuts/galexy.os/pull/167) — Net — `ping <name>` resolves over the pinned DNS-over-TLS resolver and prints the ICMP reply.
   A missing ping card and a bad pin send no query. Port 53 stays unused. No new syscall. SSH stays open.
 - [#166](https://github.com/linuts/galexy.os/pull/166) — Rust `std::net` and Python `socket` call the existing net cards: bind, listen, datagram send and receive, and an address or a port.

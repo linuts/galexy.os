@@ -496,6 +496,24 @@ fn ensure_cards() {
         let _ = close(Cap::from_bits(ping.value));
     }
     let _ = create(b"/usb/");
+    // Ports 1..=16 are the bits in the usb list header. The objects
+    // exist so admin's root covers them. Init does not grant them.
+    for port in 1u8..=16 {
+        let mut path = [0u8; 8];
+        path[..5].copy_from_slice(b"/usb/");
+        let end = if port >= 10 {
+            path[5] = b'0' + port / 10;
+            path[6] = b'0' + port % 10;
+            7
+        } else {
+            path[5] = b'0' + port;
+            6
+        };
+        let made = create(&path[..end]);
+        if made.ok {
+            let _ = close(Cap::from_bits(made.value));
+        }
+    }
 }
 
 fn ensure_net_record() {

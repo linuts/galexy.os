@@ -178,8 +178,8 @@ Cap `0x800B` (the controller) accepts a read, and a one-byte arm
 write, only when `current_is_usb()` is true. That is
 `thread.name() == "usb"`, plus `READ` or `WRITE` on the cap. Cap
 `0x800C` (list) parks any task whose `fs_root` is set. Logged-out
-is `AccessDenied`. Init creates `/usb/` and does not grant a USB
-object. `DISK_VERSION` stays 17. A port is one to three decimal
+is `AccessDenied`. Init creates `/usb/1` through `/usb/16` and
+does not grant them. `DISK_VERSION` stays 17. A port is one to three decimal
 digits and fits `NAME_CAP`.
 
 Each listed device is one object, `/usb/<port>` under the admin
