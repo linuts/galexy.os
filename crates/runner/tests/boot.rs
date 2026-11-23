@@ -1875,6 +1875,33 @@ fn unlock_test_passes() {
     );
 }
 
+/// Same remount as [`unlock_test_passes`], on virtio-blk.
+///
+/// The sealed image has inode blocks. Re-reading them used to wait on
+/// the device while `VOLUME_KEY` was still held, and virtio's halt
+/// panicked. IDE polling never reached that halt.
+#[test]
+fn unlock_virtio_test_passes() {
+    let (code, serial) = boot_galfs_once_virtio(&image("test-unlock"), false);
+    assert_eq!(
+        code,
+        Some(QEMU_EXIT_SUCCESS),
+        "test-unlock on virtio should exit with Success; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[PANIC]"),
+        "inode re-read must not panic; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[galfs] unlocked slot"),
+        "correct passphrase must remount; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[test-unlock] passed"),
+        "test-unlock success marker missing; serial:\n{serial}"
+    );
+}
+
 #[test]
 fn idle_test_passes() {
     let (code, serial) = boot(&image("test-idle"));

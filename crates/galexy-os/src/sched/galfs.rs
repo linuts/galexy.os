@@ -1741,7 +1741,11 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
         copy_table(&best, &mut table);
         install_pool(&table, sibling.as_deref(), clock);
     }
-    if let Some(key) = VOLUME_KEY.lock().as_ref().copied() {
+    // The copy is its own statement. An `if let` scrutinee keeps the
+    // `VOLUME_KEY` guard alive for the whole body, and the inode re-read
+    // below waits on the disk.
+    let key_copy = VOLUME_KEY.lock().as_ref().copied();
+    if let Some(key) = key_copy {
         // Objects are already in `TABLE` (copied from the winning slot).
         // This pass only records where those inode blocks live, and it
         // does not lock `TABLE`: other CPUs take `TABLE` without `VOL`.
@@ -4734,7 +4738,14 @@ pub(crate) fn truncate(index: u32, new_len: usize) -> Result<(), SysError> {
         return Err(SysError::BadValue);
     }
     let i = index as usize;
-    if (new_len as u64) > TABLE.lock().geo.file_max || super::large::len(i).is_some() {
+    // Same temporary rule as the unlock re-read: the guard must die
+    // before `truncate_large`, which takes the table again and may wait
+    // on the disk.
+    let over_inline = {
+        let cap = TABLE.lock().geo.file_max;
+        (new_len as u64) > cap
+    };
+    if over_inline || super::large::len(i).is_some() {
         return truncate_large(index, new_len);
     }
     let old = {
