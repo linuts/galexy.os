@@ -8,6 +8,7 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
+- [#178](https://github.com/linuts/galexy.os/pull/178) — Login — attaching the compiler sysroot after unlock no longer freezes the seat. The import holds the filesystem table with interrupts off, and admin's usage is counted once. A second `cargo run` still reuses the packed userspace ramdisk. The `rustc` ELF is not rebuilt. No `cargo clean`. The nightly pin stays. DNS, cards, net, and the rustc metadata workaround are unchanged.
 - [#177](https://github.com/linuts/galexy.os/pull/177) — Login — the target JSON stays a ramdisk mapping, so a 0-byte append no longer panics the seat. A console write during a passphrase line is drawn on the next lines and the prompt is reprinted. A second `cargo run` reuses the packed userspace ramdisk. The `rustc` ELF is not rebuilt. No `cargo clean`. The nightly pin stays. DNS, cards, net, and the rustc metadata workaround are unchanged.
 - [#176](https://github.com/linuts/galexy.os/pull/176) — Host build — the login Python build passes `-Zembed-metadata=yes` and `CARGO_INCREMENTAL=0`.
   This nightly otherwise leaves a metadata stub in the rlib, and `cargo +galexy` reports `can't find crate` for `parking_lot`, `ascii`, and the rest of the RustPython graph. The flag rebuilds those crates in the existing target directory. `target/galexy-rustc/rustc` is reused. No `cargo clean`. The nightly pin stays. DNS, cards, net, and the rustc metadata workaround are unchanged.
