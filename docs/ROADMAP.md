@@ -4,7 +4,7 @@ Direction-level plan. Concrete check-off items live in `TODO.md`.
 
 ## Where we stand (October 2026)
 
-Through Milestone 119. Milestones 120–124 (one address type) are open.
+Through Milestone 119. Milestone 125 has landed: the DNS resolver trusts the Mozilla bundle in the image. Milestones 120–124 (one address type) are open.
 The bar is a **secure, fast, modern-only,
 full-feature, ready** OS. Each row says what is true today and which
 milestone closes the gap.
@@ -13,8 +13,8 @@ milestone closes the gap.
 | --- | --- | --- |
 | **Secure** | Capabilities everywhere (26 syscalls, no ambient PID / fd); PBKDF2 passwords, lockout, idle logout, must-change; sealed dual-slot GALF (ChaCha20 + HMAC); W^X user maps, NX, guard pages, kstack canary, stack/secret wipe; TOCTOU-safe copies; lock-order table; audit lines without secrets; zero `static mut`; SMEP / SMAP / UMIP when CPUID reports them; kernel KASLR in P4 indexes 1..=24; Spectre v1 mask on dispatch; per-actor KDF cost (GALF v12) | KPTI / IBRS / MDS / CET waived for v1.0 (single-tenant guest, kernel half stays mapped; `THREAT.md`) |
 | **Fast** | Deadline one-shot LAPIC, tickless idle, idle steal, park/wake for sleep / keyboard / pipe / virtio-blk; IF=0 syscall path never allocates; console budget; release profile (`opt-level = 3`, fat LTO); KVM when `KVM_CREATE_VCPU` succeeds; `test-bench` numbers in `PERF.md`; pipe ends move at spawn | GALF v17 writes the changed 4 KiB blocks plus one 64 KiB metadata slot, and that slot is one virtio data request (Milestone **97**). One desk compile names 41 objects (Milestone **99**). PCID and a new heap allocator stay waived (`PERF.md`: yield does not switch CR3 and does not allocate). ATA PIO stays the legacy disk fallback. Desktop-class throughput stays a non-goal. The landing host's KVM column is empty: a snapshot restore dropped VMXON while `CR4.VMXE` stayed set |
-| **Modern only** | `-M q35` default; PCIe ECAM when `MCFG` is present; virtio 1.x + MSI-X; virtio-input keyboard; HPET (else PIT) calibration with a CPUID 0x15/0x16 cross-check; x2APIC and TSC-deadline when CPUID reports them; 8259 mask-only when the FADT says the pair is absent | Named fallbacks stay: PS/2, PIO IDE on `-M pc`, legacy virtio I/O BAR, port PCI config. QEMU TCG through 8.2 does not enumerate x2APIC; TCG still does not enumerate TSC-deadline. 5-level paging, huge user pages, and a GPU beyond GOP stay out. The network is Phase 10 and Phase 16 through Milestone 119. USB is Phase 13, and Milestone 102 claims the QEMU boot keyboard |
-| **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, pipelines, background jobs, tab completion; utilities including `edit`, `head`, `tail`, `wc`, `grep`, `uptime`; per-task heap, argv, `Clock`, capability channels; galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; init owns shutdown, `svc`, and the service table; on-OS Cranelift `rustc` at the login shell (`rustc hello.rs -o /hello`, then `/hello`); RustPython as `python` on that same `cargo run` image (`python hello.py`, and `python` with no file is the REPL); SSH and SFTP on `/card/ssh`. Read on `/card/out/<program>` dials, and `share r` keeps that read | Network landed through Milestone **119** (`docs/NET.md`): a lane and a card, not a socket syscall. USB landed as **Phase 13** (`docs/USB.md`), and Milestone **102** claims the QEMU keyboard. Other vendor drivers stay unwritten |
+| **Modern only** | `-M q35` default; PCIe ECAM when `MCFG` is present; virtio 1.x + MSI-X; virtio-input keyboard; HPET (else PIT) calibration with a CPUID 0x15/0x16 cross-check; x2APIC and TSC-deadline when CPUID reports them; 8259 mask-only when the FADT says the pair is absent | Named fallbacks stay: PS/2, PIO IDE on `-M pc`, legacy virtio I/O BAR, port PCI config. QEMU TCG through 8.2 does not enumerate x2APIC; TCG still does not enumerate TSC-deadline. 5-level paging, huge user pages, and a GPU beyond GOP stay out. The network is Phase 10 and Phase 16 through Milestone 119. Milestone 125 is the resolver bundle, and it is not a lane trust. USB is Phase 13, and Milestone 102 claims the QEMU boot keyboard |
+| **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, pipelines, background jobs, tab completion; utilities including `edit`, `head`, `tail`, `wc`, `grep`, `uptime`; per-task heap, argv, `Clock`, capability channels; galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; init owns shutdown, `svc`, and the service table; on-OS Cranelift `rustc` at the login shell (`rustc hello.rs -o /hello`, then `/hello`); RustPython as `python` on that same `cargo run` image (`python hello.py`, and `python` with no file is the REPL); SSH and SFTP on `/card/ssh`. Read on `/card/out/<program>` dials, and `share r` keeps that read | Network landed through Milestone **119** (`docs/NET.md`): a lane and a card, not a socket syscall. Milestone **125** trusts the resolver to the Mozilla roots. A lane does not. USB landed as **Phase 13** (`docs/USB.md`), and Milestone **102** claims the QEMU keyboard. Other vendor drivers stay unwritten |
 | **Ready** | 93 QEMU test kernels, 155 runner tests (BIOS + UEFI, `q35` + `pc`, including `edit`, `test-userheap`, `test-channel`, `test-bench`, `test-lockgrow`, `test-dmasplit`, `test-wire`, `test-lane`, `test-usb`, legacy virtio, PS/2 typing, `svc status`, shutdown-through-init, a sealed-disk `passwd` reboot, `rustc_hello_typing_e2e`, `python_hello_runs`, `python_repl_typing_e2e`, `python_hello_typing_e2e`, `fetch_grant_typing_e2e`, `net_flood_deadline_leaves_the_seat`, `ping_gateway_replies`, `usb_list_shows_the_keyboard`, `milestone_117_ssh_reads_a_file`, and `outbound_card_dials_two_names`), host suites green; CI workflow (`host` + `qemu` jobs, release images); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 and 63–77 are closed. Phases 10 and 13 have landed, and Milestones 97–119 have landed. The `review-rc1` tag and the `v1.0` tag are the owner's call. `v1.0` waits on a KVM pass (`KVM_CREATE_VCPU` fails on the landing host; `PERF.md` KVM cells) |
 
 Order of work: **51 → 52** (`review-rc1`), then **63 → 64 → 65 → 66 →
@@ -52,7 +52,9 @@ address, one port, and one local bind. Milestone **115** listens
 with write on the port card. Milestone **116** sends one datagram
 to the stored peer and receives one from that peer. **117** is
 SSH, and it has landed. **118** is one outbound card. **119**
-stores that card. **120** through **124** are one address type.
+stores that card. **125** is the resolver bundle: `net pin <ip>`
+is enough, and a lane does not use it. **120** through **124**
+are one address type.
 The `v1.0` tag still
 waits on the KVM cells. This plan does not
 apply it.
@@ -485,6 +487,8 @@ QUIC as a second API, iptables, a second NIC. QUIC may later ride the
 same lane Cap. USB is Phase 13, not a carrier for this phase. Phase 16
 grants a card for a passed address, a port, `bind`, `listen`, and one
 datagram. Phase 10 does not. Those calls landed in Milestones 112–116.
+The DNS resolver trusts the Mozilla bundle in the image. That trust
+is the resolver only. It is not a lane, and it is not a Phase 10 right.
 
 ## Phase 13 — USB (before `v1.0`) ✅
 
@@ -769,6 +773,11 @@ card for a v6 reply come before any other v6 traffic. Listening
 stays write on the port card. General browser TLS stays out.
 Those boxes stay open. This plan does not tag `v1.0`.
 
+Milestone 125 is the resolver. The image carries the Mozilla roots.
+`net pin <ip>` trusts a certificate that chains to them and is valid
+for that address. A key file is that raw key, and the bundle is not
+consulted. Lanes, SSH host keys, and `net allow` do not use it.
+
 What this phase does not add:
 
 - A `MAX_CPUS` above 8, an x2APIC id, or a shell that leaves the BSP
@@ -781,7 +790,7 @@ What this phase does not add:
 - OpenSSH, libssh, a crates.io SSH library, CPython, or a TCP stack inside `rustc` or Python
 - A second grant language beside the galfs token, or a reboot-persistent always
 - Checking the KVM `v1.0` boxes
-- A v6-only opcode, a second card tree, or general browser TLS
+- A v6-only opcode, a second card tree, or general browser TLS. WebPKI on a lane stays out. The DNS resolver's Mozilla bundle is Milestone 125 and stops there
 - The `v1.0` tag
 
 ## Standing principles

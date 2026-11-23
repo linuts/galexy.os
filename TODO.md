@@ -3619,6 +3619,38 @@ accept.
       syscall, the `v1.0` tag, and the KVM rows. Milestones 118
       and 119 are not this row
 
+## Milestone 125 — The resolver trusts the bundle
+
+`net pin <ip>` is enough. The image carries the Mozilla roots.
+The resolver certificate must chain to that bundle and be valid
+for that address. A key file is optional. When it is passed, that
+raw key is the pin and the bundle is not consulted. A certificate
+that chains to neither is refused, and no query is sent.
+`10.0.2.2` and `10.0.2.3` stay refused. DNS stays DNS-over-TLS
+on port 853. This is the resolver only. A lane, an SSH host key,
+and `net allow` do not use the bundle.
+
+- [x] **The bundle**: pure Rust (`webpki-roots`). No C and no
+      OpenSSL. The handshake checks the chain and the address.
+      No key file is required
+- [x] **The key file still wins**: that 32-byte key is the only
+      certificate accepted. The bundle is not consulted. A
+      different key sends no query
+- [x] **Fail closed**: a certificate that chains to neither is
+      refused. No query is sent. `10.0.2.2` and `10.0.2.3` stay
+      refused, with or without a key file. Plaintext DNS and
+      UDP/53 stay refused
+- [x] **Proof**: `resolver_trusts_the_bundle` accepts a chain
+      with no key file and refuses a certificate that does not
+      chain. `resolver_pin_still_wins` sends no query for that
+      certificate, accepts only the key in the file, and still
+      refuses the two gateway addresses
+- [x] **Out of this milestone**: WebPKI on a lane, an SSH host
+      key, or `net allow`. RSA stays refused. No second stack,
+      no raw socket, no plaintext DNS, no general browser TLS,
+      no new opcode, the `v1.0` tag, and the KVM rows. Milestones
+      120–124 stay open
+
 
 ---
 

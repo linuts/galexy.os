@@ -1205,8 +1205,9 @@ the existing DNS-over-TLS path, port 853. Milestone 124 covers a
 v6 reply with read on `/card/out/<program>`. The reply is read on
 that connection. Listening stays write on the port card.
 Milestones 118 and 119 have landed. Plaintext DNS, raw sockets,
-and general browser TLS stay out. The boxes for 120–124 stay
-open. The reading copy is `NET.md`.
+and general browser TLS stay out. The DNS resolver trusts the
+CA bundle in the image. That bundle is not a lane trust. The
+boxes for 120–124 stay open. The reading copy is `NET.md`.
 
 ### Memory policy (Milestone 48)
 
@@ -1476,14 +1477,15 @@ main image and are listed at the end.
 | `test-badelf`, `test-negative` | `badelf_test_passes`, `negative_test_passes` | M51 hostile ELF oracle and negative suite; M63 loader returns `SysError` and caps image pages |
 | `test-smep`, `test-smap`, `test-umip`, `test-kaslr` | `smep_test_passes`, `smap_test_passes`, `umip_test_passes`, `kaslr_kernel_base_differs_across_boots` | M63 SMEP, SMAP, UMIP, kernel KASLR (`kaslr` boots the image twice) |
 | `test-soak`, `test-fairness`, `test-pathological`, `test-bench` | `soak_test_passes`, `fairness_test_passes`, `pathological_test_passes`, `bench_test_passes` | M51 soak (exact table closure per round), steal fairness under load, console-budget flood; M64 `test-bench` prints `[bench] name=… us=…` and the runner asserts KVM ceilings |
-| main image | `main_kernel_boots_and_timer_ticks`, `uefi_image_boots_and_timer_ticks`, `shell_*_typing_e2e`, `shell_run_hello_typing_e2e_uefi`, `shell_tty_switch_e2e`, `util_typing_e2e_on`, `assert_passwords_masked`, `uart_console_login_e2e`, `shell_stdmin_typing_e2e` | M21 / M29 / M33 / M40 / M43 / M50 / M54 seats, shell, utilities, masked prompts; `shell_password_paste_typing_e2e` (M51 pathological input), `default_image_has_no_crash_seam_e2e` (M52 default-build audit), `uart_console_login_e2e` (COM1 is the console: DEL, CR, masked password); `shell_stdmin_typing_e2e` (M68 `std` on the galexy target); `shell_edit_complete_typing_e2e` (M100: `pri` lists `println` and `print`); `outbound_card_dials_two_names` (M118: one outbound card, two names, a subdomain, one address, listen refused) |
+| main image | `main_kernel_boots_and_timer_ticks`, `uefi_image_boots_and_timer_ticks`, `shell_*_typing_e2e`, `shell_run_hello_typing_e2e_uefi`, `shell_tty_switch_e2e`, `util_typing_e2e_on`, `assert_passwords_masked`, `uart_console_login_e2e`, `shell_stdmin_typing_e2e` | M21 / M29 / M33 / M40 / M43 / M50 / M54 seats, shell, utilities, masked prompts; `shell_password_paste_typing_e2e` (M51 pathological input), `default_image_has_no_crash_seam_e2e` (M52 default-build audit), `uart_console_login_e2e` (COM1 is the console: DEL, CR, masked password); `shell_stdmin_typing_e2e` (M68 `std` on the galexy target); `shell_edit_complete_typing_e2e` (M100: `pri` lists `println` and `print`); `outbound_card_dials_two_names` (M118: one outbound card, two names, a subdomain, one address, listen refused); `resolver_pin_still_wins` (M125: no key trusts the bundle, a wrong key sends no query, the key file sends one) |
 | `gxld` image | `gxld_image_run_hello_typing_e2e`, `gxld_image_util_typing_e2e` | M69 linker differential |
 
 Host suites (no QEMU): `galexy-abi` (table integrity), `galexy-core`
 (`Ring`, tar, `parse_path` exhaustive sweep), `galexy-crypto`
 (vectors), `galexy-galf` (slot round trip, generation monotonicity,
 token algebra properties, v13 image check including a 64 MiB file),
-`galfs-fsck`, `gxld`.
+`galfs-fsck`, `gxld`. `resolver_trusts_the_bundle` accepts a chain
+with no key and refuses a certificate outside the Mozilla roots.
 
 ## User heap, clock, and channels (Milestone 66)
 
