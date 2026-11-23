@@ -2,8 +2,10 @@
 //!
 //! Magic, version, mode, an optional learned lease, the directory, then
 //! the pinned resolver. Tag 0 is absent. Tag 1 is the address and a
-//! 32-byte key. Tag 2 is the address, and the resolver trusts the
-//! bundle in the image. An unknown tag is refused. A version this
+//! 32-byte key. Tag 2 is the address and the domain taken from the
+//! certificate. The resolver trusts the bundle in the image for that
+//! domain. A tag 2 record with no domain still loads. An unknown tag
+//! is refused. A version this
 //! crate does not know is an error. Callers do not guess. Version 1
 //! is refused.
 
@@ -28,6 +30,8 @@ pub const KIND_PORT: u8 = 9;
 pub const KIND_DGRAM: u8 = 10;
 /// DNS-over-TLS port. The record does not store another one.
 pub const DOT_PORT: u16 = 853;
+/// Domain taken from the resolver certificate. It fits in a pin reply.
+pub const RESOLVER_NAME_MAX: usize = 128;
 /// Mode byte: ask DHCP.
 pub const MODE_ASK: u8 = 0;
 /// Mode byte: use the stored locator and skip DHCP.
@@ -114,10 +118,15 @@ impl Name {
 pub struct Resolver {
     /// Resolver address. Not the QEMU gateway and not `10.0.2.3`.
     pub addr: [u8; 4],
-    /// Raw key. `None` trusts the bundle in the image. `Some` is that
-    /// key, and the bundle is not consulted. Callers do not write these
-    /// bytes to the console.
+    /// Raw key. `None` trusts the bundle in the image for [`Self::name`].
+    /// `Some` is that key, and the bundle is not consulted. Callers do
+    /// not write these bytes to the console.
     pub key: Option<[u8; 32]>,
+    /// Domain from the certificate. Empty when a key is the pin, and
+    /// empty on a tag 2 record written before the domain was stored.
+    pub name: [u8; RESOLVER_NAME_MAX],
+    /// Length of [`Self::name`]. Zero means no domain.
+    pub name_len: u8,
 }
 
 /// The whole file.
@@ -149,13 +158,34 @@ impl Record {
 
     /// Stores the resolver. `10.0.2.2` and `10.0.2.3` are refused.
     ///
-    /// `key` absent trusts the bundle in the image. `key` present is
-    /// that raw key, and the bundle is not consulted.
+    /// `key` absent trusts the bundle in the image. The domain is stored
+    /// with [`Self::pin_domain`]. `key` present is that raw key, and the
+    /// bundle is not consulted.
     pub fn pin(&mut self, addr: [u8; 4], key: Option<[u8; 32]>) -> Result<(), CfgError> {
         if addr == [10, 0, 2, 2] || addr == [10, 0, 2, 3] {
             return Err(CfgError::BadRecord);
         }
-        self.resolver = Some(Resolver { addr, key });
+        self.resolver = Some(Resolver {
+            addr,
+            key,
+            name: [0; RESOLVER_NAME_MAX],
+            name_len: 0,
+        });
+        Ok(())
+    }
+
+    /// Stores the domain taken from the certificate. A key pin has no
+    /// domain. A wildcard is refused.
+    pub fn pin_domain(&mut self, name: &[u8]) -> Result<(), CfgError> {
+        let Some(resolver) = self.resolver.as_mut() else {
+            return Err(CfgError::BadRecord);
+        };
+        if resolver.key.is_some() || !domain_ok(name) {
+            return Err(CfgError::BadRecord);
+        }
+        resolver.name = [0; RESOLVER_NAME_MAX];
+        resolver.name[..name.len()].copy_from_slice(name);
+        resolver.name_len = name.len() as u8;
         Ok(())
     }
 
@@ -313,10 +343,39 @@ pub fn encode(record: &Record, out: &mut [u8]) -> Result<usize, CfgError> {
             None => {
                 w.u8(2)?;
                 w.bytes(&resolver.addr)?;
+                w.u8(resolver.name_len)?;
+                w.bytes(&resolver.name[..resolver.name_len as usize])?;
             }
         },
     }
     Ok(w.at)
+}
+
+fn domain_ok(name: &[u8]) -> bool {
+    if name.is_empty() || name.len() > RESOLVER_NAME_MAX || name.starts_with(b"*.") {
+        return false;
+    }
+    let mut label = 0usize;
+    let mut dot = false;
+    for b in name {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' => {
+                label += 1;
+                if label > 63 {
+                    return false;
+                }
+            }
+            b'.' => {
+                if label == 0 {
+                    return false;
+                }
+                dot = true;
+                label = 0;
+            }
+            _ => return false,
+        }
+    }
+    label != 0 && dot
 }
 
 fn kind_ok(kind: u8) -> bool {
@@ -402,6 +461,8 @@ pub fn decode(bytes: &[u8]) -> Result<Record, CfgError> {
             Some(Resolver {
                 addr,
                 key: Some(key),
+                name: [0; RESOLVER_NAME_MAX],
+                name_len: 0,
             })
         }
         2 => {
@@ -410,7 +471,25 @@ pub fn decode(bytes: &[u8]) -> Result<Record, CfgError> {
             if addr == [10, 0, 2, 2] || addr == [10, 0, 2, 3] {
                 return Err(CfgError::BadRecord);
             }
-            Some(Resolver { addr, key: None })
+            let mut name = [0u8; RESOLVER_NAME_MAX];
+            let mut name_len = 0u8;
+            if r.at < bytes.len() {
+                name_len = r.u8()?;
+                let n = name_len as usize;
+                if n > RESOLVER_NAME_MAX {
+                    return Err(CfgError::BadRecord);
+                }
+                r.bytes(&mut name[..n])?;
+                if n > 0 && !domain_ok(&name[..n]) {
+                    return Err(CfgError::BadRecord);
+                }
+            }
+            Some(Resolver {
+                addr,
+                key: None,
+                name,
+                name_len,
+            })
         }
         _ => return Err(CfgError::BadRecord),
     };
@@ -510,6 +589,14 @@ mod tests {
         assert_eq!(decode(&keyed[..kn]).unwrap(), rec);
         rec.pin([172, 30, 0, 9], None).unwrap();
         assert!(rec.resolver.unwrap().key.is_none());
+        assert_eq!(rec.resolver.unwrap().name_len, 0);
+        rec.pin_domain(b"one.one.one.one").unwrap();
+        assert_eq!(
+            &rec.resolver.unwrap().name[..rec.resolver.unwrap().name_len as usize],
+            b"one.one.one.one"
+        );
+        assert!(rec.pin_domain(b"*.evil.test").is_err());
+        assert!(rec.pin_domain(b"localhost").is_err());
         rec.grant(b"echo", b"admin").unwrap();
         assert!(rec.may_dial(b"echo", b"admin"));
         assert!(!rec.may_dial(b"echo", b"other"));
@@ -519,6 +606,10 @@ mod tests {
         assert_eq!(back, rec);
         rec.revoke(b"echo", b"admin").unwrap();
         assert!(!rec.may_dial(b"echo", b"admin"));
+        let legacy = &buf[..n - 1 - "one.one.one.one".len()];
+        let old = decode(legacy).unwrap();
+        assert_eq!(old.resolver.unwrap().name_len, 0);
+        assert_eq!(old.resolver.unwrap().addr, [172, 30, 0, 9]);
     }
 
     #[test]

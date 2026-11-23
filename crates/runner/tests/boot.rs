@@ -6231,9 +6231,10 @@ fn ping_name_resolves() {
     );
 }
 
-/// Milestone 125. No key file trusts the bundle. The listener certificate
-/// chains to neither that bundle nor a wrong pin, so no query is sent.
-/// The key file accepts only that key. `10.0.2.2` and `10.0.2.3` stay refused.
+/// Milestone 125. No key file reads the certificate. The listener
+/// certificate chains to neither the bundle nor a wrong pin, so the pin
+/// is refused and no query is sent. The key file accepts only that key.
+/// `10.0.2.2` and `10.0.2.3` stay refused.
 #[test]
 fn resolver_pin_still_wins() {
     let (cert_der, key_der) = listener_identity();
@@ -6252,7 +6253,7 @@ fn resolver_pin_still_wins() {
     owned.extend(type_line("connect --putkey", "wrote"));
     owned.extend(type_line("net pin 10.0.2.2 /k", "access denied"));
     owned.extend(type_line("net pin 10.0.2.3 /k", "access denied"));
-    owned.extend(type_line("net pin 172.30.0.2", "ok"));
+    owned.extend(type_line("net pin 172.30.0.2", "access denied"));
     owned.extend(type_line("ping google.com", "access denied"));
     owned.extend(type_line("net pin 172.30.0.2 /bad", "ok"));
     owned.extend(type_line("ping google.com", "access denied"));
