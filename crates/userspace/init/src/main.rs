@@ -533,6 +533,9 @@ fn line_eq(snap: &[u8], name: &[u8]) -> bool {
 /// holds one object per listed port. Init does not grant them.
 fn ensure_cards() {
     let _ = create(b"/card/");
+    // One object per program. Init creates the directory and does not
+    // grant it. Read on `/card/out/<program>` is that program's dial.
+    let _ = create(b"/card/out/");
     let ping = create(b"/card/ping");
     if ping.ok {
         let _ = close(Cap::from_bits(ping.value));

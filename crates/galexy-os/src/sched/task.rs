@@ -873,7 +873,8 @@ pub(crate) fn task_net_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let (admin, tty, debug_id, session_gen, root, tokens) = {
+        let mut name_raw = [0u8; NAME_CAP];
+        let (admin, tty, debug_id, session_gen, root, tokens, name_len) = {
             let owner = running_proc_index(&threads, slot)?;
             let thread = &threads[owner];
             // A logged-out seat is denied before the service is consulted,
@@ -885,6 +886,8 @@ pub(crate) fn task_net_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(
                 return Err(SysError::Unsupported);
             }
             let admin = u8::from(galfs::is_admin_root(thread.fs_root));
+            let n = thread.name_len as usize;
+            name_raw[..n].copy_from_slice(&thread.name_bytes[..n]);
             (
                 admin,
                 thread.tty,
@@ -892,15 +895,17 @@ pub(crate) fn task_net_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(
                 thread.session_gen,
                 thread.fs_root,
                 thread.fs_tokens,
+                n,
             )
         };
+        let task = core::str::from_utf8(&name_raw[..name_len]).unwrap_or("");
         if threads.iter().any(|t| {
             t.state.load(Ordering::Acquire) == STATE_WAITING
                 && t.io_kind.load(Ordering::Acquire) == IO_NET_RPC
         }) {
             return Err(SysError::NoResource);
         }
-        let (held, need, ask_path) = net_card(&tokens, root, bytes);
+        let (held, need, ask_path) = net_card(&tokens, root, bytes, task);
         if need != 0
             && held & need == 0
             && net_card_denied(root, &tokens, &ask_path)
@@ -1380,13 +1385,24 @@ fn net_card(
     tokens: &[galfs::Token; galfs::TOKEN_SLOTS],
     root: u32,
     bytes: &[u8],
+    task: &str,
 ) -> (u8, u8, CardPath) {
     if bytes.is_empty() {
         return (0, 0, CardPath::empty());
     }
+    let outbound = galfs::holds_outbound(tokens, task);
     let name = net_name(bytes);
     let (path, need) = match bytes[0] {
         galexy_abi::NET_OP_DIAL => {
+            // Read on `/card/out/<task>` dials any name and any address.
+            // The per-name card is not consulted. Listen stays on its port.
+            if outbound {
+                return (
+                    galfs::RIGHT_READ | galexy_abi::NET_HELD_OUT,
+                    galfs::RIGHT_READ,
+                    CardPath::empty(),
+                );
+            }
             if let Some((host, port)) = split_v4_port(name) {
                 let host_path = card_path(b"/admin@card/", host);
                 let port_path = card_path(b"/admin@card/", port);
@@ -1412,7 +1428,17 @@ fn net_card(
         galexy_abi::NET_OP_PING => (card_path(b"/admin@card/", b"ping"), galfs::RIGHT_READ),
         galexy_abi::NET_OP_SERVE => (card_path(b"/admin@card/", name), galfs::RIGHT_WRITE),
         galexy_abi::NET_OP_STREAM => {
-            let need = match bytes.get(1).copied() {
+            let dir = bytes.get(1).copied();
+            // Direction 1 is a dial. Accept and the pin store stay on
+            // the named card. The outbound card does not accept.
+            if dir == Some(galfs::RIGHT_READ) && outbound {
+                return (
+                    galfs::RIGHT_READ | galexy_abi::NET_HELD_OUT,
+                    galfs::RIGHT_READ,
+                    CardPath::empty(),
+                );
+            }
+            let need = match dir {
                 Some(galfs::RIGHT_READ) | Some(3) | Some(4) => galfs::RIGHT_READ,
                 Some(galfs::RIGHT_WRITE) => galfs::RIGHT_WRITE,
                 _ => return (0, galfs::RIGHT_READ, CardPath::empty()),
@@ -1640,7 +1666,11 @@ fn finish_network_ask(threads: &mut [Thread], index: usize) {
     let owner = proc_index(threads, index + 1).unwrap_or(index);
     let root = threads[owner].fs_root;
     let tokens = threads[owner].fs_tokens;
-    let (held, need, path) = net_card(&tokens, root, &payload[..len]);
+    let mut name_raw = [0u8; NAME_CAP];
+    let nlen = threads[owner].name_len as usize;
+    name_raw[..nlen].copy_from_slice(&threads[owner].name_bytes[..nlen]);
+    let task = core::str::from_utf8(&name_raw[..nlen]).unwrap_or("");
+    let (held, need, path) = net_card(&tokens, root, &payload[..len], task);
     // One call can need two cards, such as an address and a port.
     // The first yes installs one token. A different missing card asks
     // again. The same path does not.

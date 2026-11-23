@@ -534,3 +534,13 @@ needed a `DISK_VERSION` bump. The actor strings inside `/net`
 are not an authority. Cap `0x800B` stays with the task named
 `usb`; the seat token gates the list, not that cap. Repair of
 anything other than a bad share stays unwritten.
+
+`/card/out/<program>` is that program's outbound dial
+(Milestones 118 and 119). The object is a file. Its parent
+directory is `out` and that directory's parent is `card`.
+Read is the grant. An ancestor token does not count, and
+admin's root does not satisfy it. `apply_shares` skips the
+object, so login does not put it on the shell. Spawn installs
+the read when the starting actor's share names that task.
+`share r` and `unshare` are the existing 6-byte metadata row.
+`DISK_VERSION` stays 17.

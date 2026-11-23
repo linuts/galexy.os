@@ -913,14 +913,21 @@ pub const CHAN_MSG_MAX: usize = 256;
 /// - `0`: admin (`1` when the sender's root is the admin actor)
 /// - `1`: sender TTY, 0-based
 /// - `2`: card rights on a net RPC ([`TOKEN_READ`] is dial, [`TOKEN_WRITE`]
-///   is accept). On a usb RPC, `2..4` is a bit mask of ports 1..=16
-///   the caller may list (bit 0 is port 1)
+///   is accept). [`NET_HELD_OUT`] is also set when the task holds read
+///   on `/card/out/<task>`. That bit dials. It does not accept. On a
+///   usb RPC, `2..4` is a bit mask of ports 1..=16 the caller may list
+///   (bit 0 is port 1)
 /// - `3`: high byte of that usb mask; zero on a net RPC
 /// - `4..12`: seat debug id (`u64`)
 /// - `12..20`: session generation (`u64`)
 ///
 /// The caller's payload starts at this offset. See [`INIT_OP_STATUS`].
 pub const INIT_RPC_HDR: usize = 20;
+
+/// Net RPC header byte 2, beside the token rights. The task holds read
+/// on the exact object `/card/out/<its name>`. Dial any name or address.
+/// Not a galfs right, and not accept.
+pub const NET_HELD_OUT: u8 = 0x20;
 
 /// Largest user payload on an init control `send`.
 pub const INIT_RPC_MAX: usize = CHAN_MSG_MAX - INIT_RPC_HDR;

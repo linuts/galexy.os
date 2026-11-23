@@ -250,8 +250,9 @@ Milestone **109** adds `socket` to the allow-list, starting with
 
 A compatibility layer keeps the name programs already call.
 `socket.connect` asks (Milestone 107), then dials a granted name
-through `net`. The value is still a lane, the same body
-`lane.read` returns. A program that does not hold the card parks.
+through `net`, unless that program holds read on
+`/card/out/python` (Milestone 118). The value is still a lane, the same body
+`lane.read` returns. There is no side path. A program that does not hold the card parks.
 The seat prints `python wants the network`. Yes installs a token
 for this run. No is `OSError` and the interpreter stays up.
 There is no socket syscall and no second stack. This is not a

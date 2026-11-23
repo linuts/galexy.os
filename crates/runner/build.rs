@@ -1158,12 +1158,9 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
         if pkg == "ssh" {
             for extra in ["ssh-open", "ssh-read"] {
                 let path = elf.with_file_name(extra);
-                let extra_bytes = std::fs::read(&path)
-                    .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-                assert!(
-                    extra_bytes.starts_with(b"\x7fELF"),
-                    "{extra} is not an ELF"
-                );
+                let extra_bytes =
+                    std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+                assert!(extra_bytes.starts_with(b"\x7fELF"), "{extra} is not an ELF");
                 bins.insert(extra.into(), strip_debug(extra_bytes));
             }
         }
@@ -1180,7 +1177,10 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
             let connect = elf.with_file_name("connect");
             let connect_bytes = std::fs::read(&connect)
                 .unwrap_or_else(|e| panic!("read {}: {e}", connect.display()));
-            assert!(connect_bytes.starts_with(b"\x7fELF"), "connect is not an ELF");
+            assert!(
+                connect_bytes.starts_with(b"\x7fELF"),
+                "connect is not an ELF"
+            );
             bins.insert("connect".into(), strip_debug(connect_bytes));
         }
     }

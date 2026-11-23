@@ -64,6 +64,23 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
             has_card(&toks, desk, rights),
             "durable share must survive reboot"
         );
+        let outbound = galfs::ensure_outbound("dial").expect("outbound card");
+        assert!(
+            !has_card(&toks, outbound, galfs::RIGHT_READ),
+            "login must not install /card/out/dial"
+        );
+        let mut spawned = [Token::empty(); galfs::TOKEN_SLOTS];
+        galfs::install_outbound_card(eve, &mut spawned, "dial");
+        assert!(
+            has_card(&spawned, outbound, galfs::RIGHT_READ),
+            "the named program must reload the outbound share"
+        );
+        let mut other = [Token::empty(); galfs::TOKEN_SLOTS];
+        galfs::install_outbound_card(eve, &mut other, "connect");
+        assert!(
+            !has_card(&other, outbound, galfs::RIGHT_READ),
+            "a second program must not hold dial's card"
+        );
         println!("[test-share-disk] share survived reboot");
         serial_println!("[test-share-disk] passed");
         exit_qemu(QemuExitCode::Success);
@@ -83,6 +100,15 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galfs::push_token(&mut share_toks, dan, galfs::RIGHT_ALL).expect("card for dan");
     galfs::add_share(admin, &share_toks, "dan@Desktop", rights, "eve")
         .expect("share Desktop to eve");
+    let outbound = galfs::ensure_outbound("dial").expect("outbound card");
+    galfs::add_share(
+        admin,
+        &admin_cred.tokens,
+        "card/out/dial",
+        galfs::RIGHT_READ,
+        "eve",
+    )
+    .expect("share outbound card to eve");
     galfs::sync();
 
     // Sanity on this boot before reboot.
@@ -91,6 +117,16 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     galfs::push_token(&mut toks, eve, galfs::RIGHT_ALL).expect("eve home");
     galfs::apply_shares(eve, &mut toks).expect("apply before reboot");
     assert!(has_card(&toks, desk, rights), "share applies before reboot");
+    assert!(
+        !has_card(&toks, outbound, galfs::RIGHT_READ),
+        "apply_shares must leave the outbound card off the shell"
+    );
+    let mut spawned = [Token::empty(); galfs::TOKEN_SLOTS];
+    galfs::install_outbound_card(eve, &mut spawned, "dial");
+    assert!(
+        has_card(&spawned, outbound, galfs::RIGHT_READ),
+        "spawn installs the outbound card on dial"
+    );
 
     println!("[test-share-disk] wrote share to disk");
     serial_println!("[test-share-disk] wrote");

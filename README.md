@@ -23,7 +23,7 @@ Milestones 72–77 run a Cranelift `rustc` on Galexy and put it on the
 login image: `rustc hello.rs -o /hello`, then `/hello`.
 Milestones 91–96 put RustPython on that same boot: `python hello.py`,
 and `python` with no file is the REPL.
-The QEMU suite is 153 runner tests plus host tests (`test-big` boots
+The QEMU suite is 154 runner tests plus host tests (`test-big` boots
 only under KVM; the rustc and python boots run when those ELFs were
 present at image build). Phase 10 adds `wire_test_passes`,
 `lane_test_passes`, `net_udp_and_tcp_reach_the_host`,
@@ -376,13 +376,15 @@ crates/
   seal. The login table stays. Milestones 97–99. It can land beside
   Phase 13, and it does not gate `v1.0`. Plan:
   [`docs/GALFS.md`](docs/GALFS.md)
-- **Phase 16** — Milestones 104–117 landed. One kernel boots at
+- **Phase 16** — Milestones 104–119 landed. One kernel boots at
   `-smp 4` and `-smp 8` (the suite stays at 2, and the cap stays 8).
   A network name and a listed USB port are galfs cards. A foreground
   program without the card asks the shell. `TcpStream::connect` and
   Python `socket.connect` are that ask, then a lane. An address, a
   port, bind, listen, and a datagram are cards (112–116). SSH and
-  SFTP are `/card/ssh` (117).
+  SFTP are `/card/ssh` (117). Read on `/card/out/<program>` dials
+  any stored name and any address (118). `share r` keeps that read
+  across reboot (119). Listen stays the port card.
   The `v1.0` tag still waits on the KVM cells. Plan:
   [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`

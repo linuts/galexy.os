@@ -8,9 +8,9 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
 use galexy_abi::{
-    Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DGRAM, NET_OP_DIAL,
-    NET_OP_GRANT, NET_OP_LINK, NET_OP_LISTEN, NET_OP_PIN, NET_OP_PING, NET_OP_RECV, NET_OP_RESOLVE,
-    NET_OP_REVOKE, NET_OP_SERVE, NET_OP_STREAM,
+    Cap, SysError, INIT_RPC_HDR, NET_HELD_OUT, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DGRAM,
+    NET_OP_DIAL, NET_OP_GRANT, NET_OP_LINK, NET_OP_LISTEN, NET_OP_PIN, NET_OP_PING, NET_OP_RECV,
+    NET_OP_RESOLVE, NET_OP_REVOKE, NET_OP_SERVE, NET_OP_STREAM,
 };
 use galexy_net::Engine;
 use galexy_netcfg::{
@@ -73,6 +73,7 @@ fn main() {
     let mut flood_ids: Vec<u8> = Vec::new();
     let mut flood_logged = false;
     let mut lives: Vec<Live> = Vec::new();
+    let mut plains: Vec<Plain> = Vec::new();
     let mut seen: Option<Seen> = None;
     loop {
         pump(&mut engine);
@@ -105,6 +106,7 @@ fn main() {
         }
         enqueue_accepted(&mut engine, &mut gates);
         pump_lives(&mut engine, &mut lives);
+        pump_plains(&mut engine, &mut plains);
         if let Some(start) = flood_at {
             if flood_ids.len() < 4 {
                 if let Some(gw) = engine.locator().map(|(_, _, gw)| gw) {
@@ -131,6 +133,7 @@ fn main() {
                 now,
                 &mut flood_at,
                 &mut lives,
+                &mut plains,
                 &mut seen,
             );
         }
@@ -169,6 +172,7 @@ fn handle(
     now: u64,
     flood_at: &mut Option<u64>,
     lives: &mut Vec<Live>,
+    plains: &mut Vec<Plain>,
     seen: &mut Option<Seen>,
 ) {
     if msg.len() < INIT_RPC_HDR + 1 {
@@ -201,7 +205,9 @@ fn handle(
                 reply(rx, b"down\n", 0);
             }
         }
-        NET_OP_DIAL => dial(rx, engine, record, admin, actor_id, msg[2], rest, now),
+        NET_OP_DIAL => dial(
+            rx, engine, record, admin, actor_id, msg[2], rest, now, plains,
+        ),
         NET_OP_RESOLVE => resolve(rx, engine, record, actor_id, msg[2], rest, now),
         NET_OP_PIN if admin => pin(rx, record, rest),
         NET_OP_BIND => bind_local(rx, engine, record, msg[2], rest),
@@ -232,15 +238,27 @@ fn dial(
     held: u8,
     rest: &[u8],
     now: u64,
+    plains: &mut Vec<Plain>,
 ) {
     let Some((name, _claimed)) = two_fields(rest) else {
         reply(rx, b"bad\n", 0);
         return;
     };
     // Read on the card is dial. The check is the held bit from the
-    // kernel. A passed address is not a directory name.
+    // kernel. A passed address is not a directory name. The outbound
+    // bit dials a name or an address without that name's card.
     if let Some((ip, passed_port)) = parse_passed(name) {
-        dial_passed(rx, engine, record, actor_id, held, ip, passed_port, now);
+        dial_passed(
+            rx,
+            engine,
+            record,
+            actor_id,
+            held,
+            ip,
+            passed_port,
+            now,
+            plains,
+        );
         return;
     }
     let Some(entry) = record.find(name) else {
@@ -274,7 +292,18 @@ fn dial(
         reply(rx, b"access denied\n", 0);
         return;
     }
-    finish_dial(rx, engine, actor_id, name, ip, port, &key, now);
+    open_client(
+        rx,
+        engine,
+        actor_id,
+        name,
+        ip,
+        port,
+        &key,
+        now,
+        held & NET_HELD_OUT != 0,
+        plains,
+    );
 }
 
 fn dial_passed(
@@ -286,12 +315,40 @@ fn dial_passed(
     ip: [u8; 4],
     passed_port: Option<u16>,
     now: u64,
+    plains: &mut Vec<Plain>,
 ) {
+    let outbound = held & NET_HELD_OUT != 0;
     if held & 1 == 0 || ip == [0, 0, 0, 0] {
         reply(rx, b"access denied\n", 0);
         return;
     }
-    let Some(addr) = find_kind(record, KIND_ADDR, ip, None) else {
+    let stored = find_kind(record, KIND_ADDR, ip, None);
+    if outbound {
+        // A stored address keeps its pin. The port in the dial does
+        // not need a second card. An address that is not stored is
+        // plaintext on the port the program passed.
+        let port = if let Some(port) = passed_port {
+            port
+        } else if let Some(addr) = stored {
+            addr.port
+        } else {
+            reply(rx, b"access denied\n", 0);
+            return;
+        };
+        if port == 0 {
+            reply(rx, b"access denied\n", 0);
+            return;
+        }
+        let key = stored.map(|addr| addr.key).unwrap_or([0; 32]);
+        let label = stored
+            .map(|addr| addr.name_bytes().to_vec())
+            .unwrap_or_default();
+        open_client(
+            rx, engine, actor_id, &label, ip, port, &key, now, true, plains,
+        );
+        return;
+    }
+    let Some(addr) = stored else {
         reply(rx, b"access denied\n", 0);
         return;
     };
@@ -310,7 +367,136 @@ fn dial_passed(
     }
     let key = addr.key;
     let label = addr.name_bytes().to_vec();
-    finish_dial(rx, engine, actor_id, &label, ip, port, &key, now);
+    open_client(
+        rx, engine, actor_id, &label, ip, port, &key, now, false, plains,
+    );
+}
+
+/// A stored pin stays the one-shot TLS fetch. So does every dial that
+/// does not hold the outbound card, including an empty pin: the echo
+/// tests speak TLS. An empty pin on the outbound card is a plaintext
+/// lane. The program writes the request and reads the reply there.
+fn open_client(
+    rx: Cap,
+    engine: &mut Engine,
+    actor_id: u64,
+    name: &[u8],
+    ip: [u8; 4],
+    port: u16,
+    key: &[u8; 32],
+    now: u64,
+    outbound: bool,
+    plains: &mut Vec<Plain>,
+) {
+    if outbound && *key == [0; 32] {
+        plain_open(rx, engine, actor_id, name, ip, port, now, plains);
+    } else {
+        finish_dial(rx, engine, actor_id, name, ip, port, key, now);
+    }
+}
+
+/// One plaintext TCP session. The program writes on the lane and reads
+/// the reply there. No second card, and no TLS.
+struct Plain {
+    tcp: u8,
+    lane: Cap,
+    to_lane: Vec<u8>,
+    to_tcp: Vec<u8>,
+}
+
+fn plain_open(
+    rx: Cap,
+    engine: &mut Engine,
+    actor_id: u64,
+    name: &[u8],
+    ip: [u8; 4],
+    port: u16,
+    now: u64,
+    plains: &mut Vec<Plain>,
+) {
+    log(&format!(
+        "[net] dial {}.{}.{}.{}",
+        ip[0], ip[1], ip[2], ip[3]
+    ));
+    let Ok(id) = engine.tcp_connect(ip, port) else {
+        audit(actor_id, name, &[0; 32], "unavailable");
+        reply(rx, b"unavailable\n", 0);
+        return;
+    };
+    if !wait_established(engine, id, now) {
+        engine.tcp_release(id);
+        audit(actor_id, name, &[0; 32], "deadline");
+        log("[net] deadline");
+        reply(rx, b"timed out\n", 0);
+        return;
+    }
+    let mut pair = [0u64; 2];
+    if !lane_pair(&mut pair).ok {
+        engine.tcp_close(id);
+        audit(actor_id, name, &[0; 32], "unavailable");
+        reply(rx, b"unavailable\n", 0);
+        return;
+    }
+    plains.push(Plain {
+        tcp: id,
+        lane: Cap::from_bits(pair[0]),
+        to_lane: Vec::new(),
+        to_tcp: Vec::new(),
+    });
+    audit(actor_id, name, &[0; 32], "ok");
+    reply(rx, b"ok\n", pair[1]);
+}
+
+fn pump_plains(engine: &mut Engine, plains: &mut Vec<Plain>) {
+    let mut i = 0;
+    while i < plains.len() {
+        if step_plain(engine, &mut plains[i]) {
+            i += 1;
+        } else {
+            let plain = plains.swap_remove(i);
+            engine.tcp_close(plain.tcp);
+            let _ = close(plain.lane);
+        }
+    }
+}
+
+fn step_plain(engine: &mut Engine, plain: &mut Plain) -> bool {
+    let mut buf = [0u8; 1024];
+    let n = engine.tcp_recv(plain.tcp, &mut buf);
+    if n > 0 {
+        plain.to_lane.extend_from_slice(&buf[..n]);
+    }
+    if !plain.to_lane.is_empty() {
+        let got = write_poll(plain.lane, &plain.to_lane);
+        if got.ok {
+            let n = (got.value as usize).min(plain.to_lane.len());
+            plain.to_lane.drain(..n);
+        } else if SysError::from_code(got.value) != SysError::NoResource {
+            return false;
+        }
+    }
+    let got = read_poll(plain.lane, &mut buf);
+    if got.ok {
+        if got.value == 0 {
+            return false;
+        }
+        plain.to_tcp.extend_from_slice(&buf[..got.value as usize]);
+    } else if SysError::from_code(got.value) != SysError::NoResource {
+        return false;
+    }
+    let mut at = 0;
+    while at < plain.to_tcp.len() {
+        match engine.tcp_send(plain.tcp, &plain.to_tcp[at..]) {
+            Ok(0) => break,
+            Err(()) => return false,
+            Ok(n) => at += n,
+        }
+    }
+    if at > 0 {
+        plain.to_tcp.drain(..at);
+        engine.poll(clock_ms());
+    }
+    engine.tcp_established(plain.tcp) || !plain.to_lane.is_empty()
 }
 
 fn finish_dial(
