@@ -123,6 +123,8 @@ fn panic(info: &PanicInfo) -> ! {
         drivers::dmesg::force_unlock_for_panic();
     }
     drivers::serial::set_debug_log(true);
+    // The login prompt has no newline yet. Start the panic on its own line.
+    drivers::serial::write_bytes(b"\n");
     serial_println!("[PANIC] {}", info);
     let expected = EXPECTED_PANIC.lock().take();
     let location = info.location().map(|loc| loc.file());
