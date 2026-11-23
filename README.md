@@ -382,7 +382,8 @@ crates/
   program without the card asks the shell. `TcpStream::connect` and
   Python `socket.connect` are that ask, then a lane. An address, a
   port, bind, listen, and a datagram are cards (112–116). SSH is
-  last (117), and that box stays open.
+  117, and that box stays open. One program's outbound card is
+  118 and 119, and those boxes stay open.
   The `v1.0` tag still waits on the KVM cells as well. Plan:
   [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`

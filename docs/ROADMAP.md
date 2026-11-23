@@ -4,7 +4,7 @@ Direction-level plan. Concrete check-off items live in `TODO.md`.
 
 ## Where we stand (October 2026)
 
-Through Milestone 116. Milestone 117 (SSH) is open. The bar is a **secure, fast, modern-only,
+Through Milestone 116. Milestone 117 (SSH) is open. Milestones 118 and 119 (one program's outbound card) are open. The bar is a **secure, fast, modern-only,
 full-feature, ready** OS. Each row says what is true today and which
 milestone closes the gap.
 
@@ -14,7 +14,7 @@ milestone closes the gap.
 | **Fast** | Deadline one-shot LAPIC, tickless idle, idle steal, park/wake for sleep / keyboard / pipe / virtio-blk; IF=0 syscall path never allocates; console budget; release profile (`opt-level = 3`, fat LTO); KVM when `KVM_CREATE_VCPU` succeeds; `test-bench` numbers in `PERF.md`; pipe ends move at spawn | GALF v17 writes the changed 4 KiB blocks plus one 64 KiB metadata slot, and that slot is one virtio data request (Milestone **97**). One desk compile names 41 objects (Milestone **99**). PCID and a new heap allocator stay waived (`PERF.md`: yield does not switch CR3 and does not allocate). ATA PIO stays the legacy disk fallback. Desktop-class throughput stays a non-goal. The landing host's KVM column is empty: a snapshot restore dropped VMXON while `CR4.VMXE` stayed set |
 | **Modern only** | `-M q35` default; PCIe ECAM when `MCFG` is present; virtio 1.x + MSI-X; virtio-input keyboard; HPET (else PIT) calibration with a CPUID 0x15/0x16 cross-check; x2APIC and TSC-deadline when CPUID reports them; 8259 mask-only when the FADT says the pair is absent | Named fallbacks stay: PS/2, PIO IDE on `-M pc`, legacy virtio I/O BAR, port PCI config. QEMU TCG through 8.2 does not enumerate x2APIC; TCG still does not enumerate TSC-deadline. 5-level paging, huge user pages, and a GPU beyond GOP stay out. The network is Phase 10 and Phase 16 through Milestone 116. USB is Phase 13, and Milestone 102 claims the QEMU boot keyboard |
 | **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, pipelines, background jobs, tab completion; utilities including `edit`, `head`, `tail`, `wc`, `grep`, `uptime`; per-task heap, argv, `Clock`, capability channels; galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; init owns shutdown, `svc`, and the service table; on-OS Cranelift `rustc` at the login shell (`rustc hello.rs -o /hello`, then `/hello`); RustPython as `python` on that same `cargo run` image (`python hello.py`, and `python` with no file is the REPL) | Network landed through Milestone **116** (`docs/NET.md`): a lane and a card, not a socket syscall. USB landed as **Phase 13** (`docs/USB.md`), and Milestone **102** claims the QEMU keyboard. Other vendor drivers stay unwritten |
-| **Ready** | 93 QEMU test kernels, 153 runner tests (BIOS + UEFI, `q35` + `pc`, including `edit`, `test-userheap`, `test-channel`, `test-bench`, `test-lockgrow`, `test-dmasplit`, `test-wire`, `test-lane`, `test-usb`, legacy virtio, PS/2 typing, `svc status`, shutdown-through-init, a sealed-disk `passwd` reboot, `rustc_hello_typing_e2e`, `python_hello_runs`, `python_repl_typing_e2e`, `python_hello_typing_e2e`, `fetch_grant_typing_e2e`, `net_flood_deadline_leaves_the_seat`, `ping_gateway_replies`, and `usb_list_shows_the_keyboard`), host suites green; CI workflow (`host` + `qemu` jobs, release images); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 and 63–77 are closed. Phases 10 and 13 have landed, and Milestones 97–116 have landed. Milestone 117 (SSH) is open. The `review-rc1` tag and the `v1.0` tag are the owner's call. `v1.0` waits on a KVM pass (`KVM_CREATE_VCPU` fails on the landing host; `PERF.md` KVM cells) |
+| **Ready** | 93 QEMU test kernels, 153 runner tests (BIOS + UEFI, `q35` + `pc`, including `edit`, `test-userheap`, `test-channel`, `test-bench`, `test-lockgrow`, `test-dmasplit`, `test-wire`, `test-lane`, `test-usb`, legacy virtio, PS/2 typing, `svc status`, shutdown-through-init, a sealed-disk `passwd` reboot, `rustc_hello_typing_e2e`, `python_hello_runs`, `python_repl_typing_e2e`, `python_hello_typing_e2e`, `fetch_grant_typing_e2e`, `net_flood_deadline_leaves_the_seat`, `ping_gateway_replies`, and `usb_list_shows_the_keyboard`), host suites green; CI workflow (`host` + `qemu` jobs, release images); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 and 63–77 are closed. Phases 10 and 13 have landed, and Milestones 97–116 have landed. Milestone 117 (SSH) is open. Milestones 118 and 119 (one program's outbound card) are open. The `review-rc1` tag and the `v1.0` tag are the owner's call. `v1.0` waits on a KVM pass (`KVM_CREATE_VCPU` fails on the landing host; `PERF.md` KVM cells) |
 
 Order of work: **51 → 52** (`review-rc1`), then **63 → 64 → 65 → 66 →
 67**. Security first because every later change should land
@@ -49,9 +49,10 @@ USB port, and a foreground ask the shell answers. Milestone
 DNS-over-TLS, dial that address past `10.0.2.2`, and grant one
 address, one port, and one local bind. Milestone **115** listens
 with write on the port card. Milestone **116** sends one datagram
-to the stored peer and receives one from that peer. **117** is SSH, last. The `v1.0` tag still
-waits on the KVM cells and on that sequence. This plan does not
-apply it.
+to the stored peer and receives one from that peer. **117** is SSH.
+**118** and **119** are one program's outbound card. The `v1.0` tag still
+waits on the KVM cells and on 117. This plan does not check 118 or
+119, and it does not apply the tag.
 
 ## Phase 0 — Boot & TTY ✅
 
@@ -681,9 +682,9 @@ hard links.
 
 Milestones **104–109** landed. **108** and **109** connect by a
 granted name, and the value is a lane. Milestones **110–116** are
-the real stack. Milestone **117** is SSH, and it is last. Nothing
-here tags `v1.0`. The KVM rows stay open. Checkboxes live in
-`TODO.md`.
+the real stack. Milestone **117** is SSH. Milestones **118** and
+**119** are one program's outbound card. Nothing here tags
+`v1.0`. The KVM rows stay open. Checkboxes live in `TODO.md`.
 The reading copies are `DESIGN.md` (CPUs), `NET.md` (firewall,
 the stack, SSH), `USB.md` (device cards), `GALFS.md` (the card
 those two reuse), and `PYTHON.md` (the ask).
@@ -704,8 +705,10 @@ token gates. There is no rule language. The firewall is the card.
 
 A foreground program without the card asks. The shell prints
 `<name> wants the network` or `<name> wants storage`. Yes
-installs a token for that run, not an always that survives
-reboot. No is `AccessDenied`. Milestones 108 and 109 keep the
+installs a token for that run. A grant for every program
+stays out. Milestone 119 stores one program's outbound card as
+a share, and that card survives reboot. No is `AccessDenied`.
+Milestones 108 and 109 keep the
 names `std::net::TcpStream::connect` and Python `socket.connect`.
 Each asks, then dials a granted name through `net`. The value is
 still a lane. The lane boot was run. There is no socket syscall
@@ -739,8 +742,25 @@ local program open a session. No new syscall. No OpenSSH, no
 libssh, no C, and no crates.io SSH library. Strict key exchange,
 Curve25519, Ed25519 host keys, ChaCha20-Poly1305 or AES-256-GCM.
 Auth is the existing password hash. SFTP is a subsystem and uses
-the galfs tokens the seat already holds. The `v1.0` tag still
-waits on the KVM cells and on 117. This plan does not apply it.
+the galfs tokens the seat already holds.
+
+A full name is its own card, and a subdomain is another card, so
+a browser asks for every host on a page. A stored address is its
+own card. A dial by name does not also need the resolved address.
+A program that passes an address still needs that address card.
+Read dials. Write accepts. A yes is that run of that program.
+Admin's root covers files. It does not cover every name.
+Milestone 118 is `/card/out/<program>`. Read on that exact object
+lets that one task dial any name, and an address it passes. The
+seat sees no line. A program without the card still asks per
+name. No leaves it up. The card does not accept. Inbound stays
+write on the port it listens on. Milestone 119 stores that card
+with `share`, the same row as a durable file right. After reboot
+the named program dials with no ask, including an init row before
+a seat logs in. Login does not put the card on the shell. A
+child does not inherit it. The `v1.0` tag still waits on the KVM
+cells and on 117. This plan does not check 118 or 119, and it
+does not apply the tag.
 
 What this phase does not add:
 
@@ -752,8 +772,8 @@ What this phase does not add:
 - Plaintext DNS (UDP/53)
 - Telnet, FTP, rsh, SSHv1, `ssh-rsa`, CBC, SHA-1, or TLS before 1.3
 - OpenSSH, libssh, a crates.io SSH library, CPython, or a TCP stack inside `rustc` or Python
-- A second grant language beside the galfs token, or a reboot-persistent always
-- Checking Milestone 117, or the KVM `v1.0` boxes
+- A second grant language beside the galfs token. A grant for every program stays out. One program's outbound card is a share of `/card/out/<program>` (Milestones 118 and 119)
+- Checking Milestone 117, Milestones 118 or 119, or the KVM `v1.0` boxes
 - The `v1.0` tag
 
 ## Standing principles

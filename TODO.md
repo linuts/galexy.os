@@ -2344,10 +2344,13 @@ unset.
       card are denied. Rust and Python connect by name only after the
       seat allows it. A name resolves over TLS and a program reaches a
       host that is not `10.0.2.2`. A raw IP, a port, `bind`, `listen`,
-      and one datagram are cards (Milestones 112–116). SSH is last:
+      and one datagram are cards (Milestones 112–116). SSH is 117:
       a host client reads one file over SFTP, and a legacy algorithm
       is refused. Milestone 83 and Milestones 110–116 are checked.
-      Milestone 117 and the KVM rows stay open until their own runs
+      Milestone 117 and the KVM rows stay open until their own runs.
+      Milestones 118 and 119 stay open. They are one program's
+      outbound card. This plan does not check them and does not tag
+      `v1.0`
 - [ ] Tag `v1.0` with the changelog. The tag needs the KVM cells and
       Phase 16, including Milestone 117. This plan does not apply it
 
@@ -3089,9 +3092,10 @@ syscall.
 
 Milestones 103–116 have landed. Milestone 83 and Milestones 110–116
 are checked. A passed address, a port, bind, listen, and one
-datagram are cards. Milestone 117 is SSH, and it stays open. The
-KVM rows under the `v1.0` gate stay open. Do not tag `v1.0`.
-`docs/ROADMAP.md` is the phase.
+datagram are cards. Milestone 117 is SSH, and it stays open.
+Milestones 118 and 119 are one program's outbound card, and they
+stay open. The KVM rows under the `v1.0` gate stay open. Do not
+tag `v1.0`. `docs/ROADMAP.md` is the phase.
 
 ## Milestone 104 — Prove four and eight CPUs
 
@@ -3386,9 +3390,11 @@ peer with a card. It is not DNS, and it is not a raw socket.
 
 ## Milestone 117 — SSH and SFTP
 
-The last milestone. It waits until Milestone 111 has reached a
-host past `10.0.2.2`, and until Milestone 115 has shown
-Milestone 83's handoff. One ring-3 Rust service. No new syscall.
+SSH. It waits until Milestone 111 has reached a host past
+`10.0.2.2`, and until Milestone 115 has shown Milestone 83's
+handoff. One ring-3 Rust service. No new syscall. Milestones
+118 and 119 are the outbound card. This service accepts with
+write on `/card/ssh`. The outbound card does not accept.
 
 - [ ] **One service**: an init row, the same shape as `net`. The
       SSH protocol is in-tree Rust. No OpenSSH, no libssh, no C,
@@ -3419,6 +3425,89 @@ Milestone 83's handoff. One ring-3 Rust service. No new syscall.
 - [ ] **Out of this milestone**: a new syscall, a root shell that
       bypasses cards, a second stack, raw sockets, old
       algorithms, plaintext DNS, the `v1.0` tag, and the KVM rows
+
+## Milestone 118 — One program may dial
+
+A full name is its own card, and a subdomain is a different card.
+A stored address is its own card. A dial by name does not also
+need the address that came back. A program that passes an address
+still needs that address card. Read dials. Write accepts. A yes
+is that run of that program, and another program asks again.
+Admin's root covers files. It does not cover every network name.
+A browser asks again for every script, image, and API host. This
+milestone is one outbound card for one program. It does not
+accept.
+
+- [ ] **The card**: `/card/out/<program>`. The last component is
+      the task name. Init creates `/card/out/` and does not grant
+      it. The program object starts ungranted. Read on that exact
+      object lets that task dial. Holding admin's root does not
+      satisfy it. An ancestor token does not
+- [ ] **What it dials**: any name. A subdomain, a script host, an
+      image host, and an API host are that one card. An address
+      the program passes. The lookup inside the dial. A dial by
+      name still does not need the address that came back
+- [ ] **One direction**: outbound dial. The card does not bind,
+      listen, or accept. Inbound stays write on the port the
+      program listens on. A datagram stays that peer's card.
+      Ping stays `/card/ping`
+- [ ] **What the seat sees**: the program that holds the card
+      dials the next host with no line. A program without it,
+      and without that name's card, still prints
+      `<task> wants the network`. Yes is that name for this run.
+      No is `AccessDenied` and the program stays up. Yes on a
+      name does not install `/card/out/<program>`. Logged-out
+      is `AccessDenied` and does not ask
+- [ ] **This run**: `grant r /card/out/<program> <task>` installs
+      read on that task. The token dies when the task exits.
+      Another program asks for its own names. Per-name cards
+      stay for a program that was not given this one
+- [ ] **Proof**: the program with the card reads a body from two
+      names and from one address it passes. The seat prints no
+      ask. The same program, without write on the port card,
+      accepts nothing, and the peer's handshake does not complete.
+      A second program without the card prints one ask. No leaves
+      it up. Logged-out sends no packet
+- [ ] **Out of this milestone**: the share that survives reboot
+      (Milestone 119), a suffix rule, a packet filter, a second
+      stack, a raw socket, `setsockopt`, plaintext DNS, a new
+      syscall, the `v1.0` tag, and the KVM rows
+
+## Milestone 119 — The outbound card survives reboot
+
+The grant from Milestone 118 dies with the task. After reboot a
+server is asked on every name. This milestone stores that same
+card the way a durable file right is stored. It is a share. It
+is not a packet filter, not a second stack, and not a raw socket.
+
+- [ ] **What is stored**: `share r /card/out/<program> <actor>`.
+      The row is the existing share: actor, object, read. The
+      path names the program, so the 6-byte record holds it.
+      `DISK_VERSION` stays 17. The `/net` record stays version 2.
+      `unshare` drops the row. No new syscall
+- [ ] **What survives reboot**: spawn installs read on that task
+      when the share's actor is the one starting it. Init starts
+      its rows as admin, so admin's share is on that row at boot,
+      before a seat logs in, and the row dials with no ask. A
+      seat-started program takes the logged-in actor's share.
+      Login does not put this object on the shell. A child does
+      not inherit it. A second program of the same actor does
+      not hold it
+- [ ] **What the seat sees**: after reboot the named program dials
+      a new name with no line. A program with no share and no
+      name card still prints `<task> wants the network`. No
+      leaves it up. Logged-out is `AccessDenied`
+- [ ] **The listen card**: write on the port stays the accept.
+      This share does not store it. A yes for that write still
+      dies with the task
+- [ ] **Proof**: share the card, reboot, and the named program
+      reads a body. The seat prints no ask. A host decode of the
+      sealed slot shows the share. A second program still asks.
+      `unshare`, then reboot, asks again
+- [ ] **Out of this milestone**: a grant for every program, a
+      listen grant that survives reboot, a suffix rule, a packet
+      filter, a second stack, a raw socket, plaintext DNS, a new
+      syscall, the `v1.0` tag, and the KVM rows
 
 ---
 

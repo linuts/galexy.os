@@ -523,7 +523,7 @@ Demo limits above are the shipped contract. A second indirect block
 is not scheduled; object `len` is already `u64`. New code must not
 invent a second ambient “path implies permission” API beside tokens.
 
-## Cards outside the tree (Milestones 105 and 106)
+## Cards outside the tree (Milestones 105, 106, 118, and 119)
 
 A token stays an object id and rights. A network name is
 `/card/<name>` and ping is `/card/ping`. A listed USB port is
@@ -534,3 +534,9 @@ needed a `DISK_VERSION` bump. The actor strings inside `/net`
 are not an authority. Cap `0x800B` stays with the task named
 `usb`; the seat token gates the list, not that cap. Repair of
 anything other than a bad share stays unwritten.
+
+Milestones 118 and 119 add `/card/out/<program>`. Read on that
+exact object lets that one task dial. The durable row is a share
+of that object, the same 6-byte record as a file right. `DISK_VERSION`
+stays 17. Login does not put this object on the shell. Spawn
+installs it on the named task. The boxes stay open.

@@ -355,8 +355,9 @@ an ambient socket. Phase 16's extra calls are cards. Milestones
 
 Milestones **105**, **107**, **108**, and **109** landed. **108**
 and **109** are the name layer. **110–116** are the real stack.
-**117** is SSH, and it is last. Checkboxes in `TODO.md`. This plan
-does not tag `v1.0` and does not check the KVM rows.
+**117** is SSH. **118** and **119** are one program's outbound
+card. Checkboxes in `TODO.md`. This plan does not tag `v1.0`
+and does not check the KVM rows.
 
 A network name is a galfs object under `/card` (the same object
 as `/admin@card/<name>`). `/card/ping` is the ping card. The
@@ -384,7 +385,9 @@ and the program stays up. A second ask for the same right in
 the same run does not print. A task that already holds the
 token does not ask. The kernel does not draw a dialog. There
 is no new syscall number. The token dies when the task exits.
-It is not an always that survives reboot.
+It is not an always that survives reboot. Milestone 119 stores
+one program's outbound card as a share. That share is not a
+grant for every program.
 
 Milestone 108 keeps the name `std::net::TcpStream::connect`. The
 call asks (Milestone 107), then dials a granted name through
@@ -435,25 +438,65 @@ asks for each card that is missing. No is `AccessDenied` in Rust and `OSError`
 in Python. The value is still a lane or the card reply. `setsockopt`
 stays refused. There is no second stack.
 
-Milestone 117 is the server a person connects to, and it is last.
-It waits on 111. One init row, in-tree Rust,
-no OpenSSH, no libssh, no C, and no crates.io SSH library.
-`/card/ssh` write accepts. Read lets a local program open a
-session. Strict key exchange, then `curve25519-sha256`. Host keys
-are Ed25519. Cipher `chacha20-poly1305` or `aes256-gcm`. The MAC
-is the AEAD. SFTP is a subsystem of that session, and the files
-it can touch are the galfs tokens the seat already holds (the
-existing PBKDF2 path, not a new user table). A client that offers
-only a refused algorithm gets no session. Serial does not carry
-the host-key private bytes or the password. There is no fallback
-to a legacy group, and no new syscall.
+Milestone 117 is the server a person connects to. It waits on 111.
+One init row, in-tree Rust, no OpenSSH, no libssh, no C, and no
+crates.io SSH library. `/card/ssh` write accepts. Read lets a
+local program open a session. Strict key exchange, then
+`curve25519-sha256`. Host keys are Ed25519. Cipher
+`chacha20-poly1305` or `aes256-gcm`. The MAC is the AEAD. SFTP is
+a subsystem of that session, and the files it can touch are the
+galfs tokens the seat already holds (the existing PBKDF2 path, not
+a new user table). A client that offers only a refused algorithm
+gets no session. Serial does not carry the host-key private bytes
+or the password. There is no fallback to a legacy group, and no
+new syscall.
+
+Milestones 118 and 119 are the outbound card. A full name is its
+own card today, and a subdomain is a different card, so a browser
+asks again for every script, image, and API host. A stored address
+is its own card. A dial by name does not also need the resolved
+address. A program that passes an address still needs that address
+card. Read dials. Write accepts. A yes is that run of that one
+program. Admin's root covers files. It does not cover every name.
+
+`/card/out/<program>` is one object. The last component is the
+task name. Init creates `/card/out/` and does not grant it. Read
+on that exact object lets that task dial any name, and an address
+it passes. The lookup inside the dial does not ask again. A dial
+by name still does not need the address that came back. Holding
+admin's root does not satisfy the card. The card does not bind,
+listen, or accept. Inbound stays write on the port the program
+listens on. A datagram stays that peer's card. Ping stays
+`/card/ping`. Per-name cards stay for a program that was not given
+this one.
+
+The seat sees no line while the program holds the card. A program
+without it, and without that name's card, still prints
+`<task> wants the network`. Yes is that name for this run. No is
+`AccessDenied` and the program stays up. Yes on a name does not
+install the outbound card. Logged-out is `AccessDenied`.
+
+`grant r /card/out/<program> <task>` is this run. The token dies
+with the task. Milestone 119 stores it with
+`share r /card/out/<program> <actor>`, the same share row a durable
+file right uses. The path names the program, so the 6-byte record
+holds it. `DISK_VERSION` stays 17. The `/net` record stays version
+2. Spawn installs read on that task when the share's actor is the
+one starting it. Init starts its rows as admin, so admin's share
+is on that row at boot, before a seat logs in, and the server dials
+with no ask. A seat-started program takes the logged-in actor's
+share, so a browser dials the names a page needs with no prompt per
+host. Login does not put this object on the shell. A child does
+not inherit it. `unshare` drops the row. The listen card stays a
+separate write grant, and a yes for that write still dies with the
+task. There is no new syscall.
 
 Still refused after these milestones: the BSD option surface,
 `setsockopt`, a port or an address in the syscall ABI, cleartext
 as an application right, plaintext DNS, TLS before 1.3, iptables,
-raw frames, raw sockets, promiscuous mode, a second stack, telnet,
-FTP, rsh, SSHv1, `ssh-rsa`, CBC, and SHA-1. The `v1.0` tag stays
-unapplied.
+a suffix rule, a grant for every program, raw frames, raw sockets,
+promiscuous mode, a second stack, telnet, FTP, rsh, SSHv1,
+`ssh-rsa`, CBC, and SHA-1. The `v1.0` tag stays unapplied.
 
 ## Files this phase touches
 

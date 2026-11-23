@@ -1168,7 +1168,7 @@ Both runtimes call those cards. `setsockopt` stays refused.
 the body, a denied `socket.connect` is `OSError`, and yes prints
 the body. Reaching a host past `10.0.2.2` is Milestone 111.
 
-### A real network (Milestones 110–117)
+### A real network (Milestones 110–119)
 
 `net` resolves a name over TLS and dials the address that comes
 back. The destination is not the QEMU user gateway `10.0.2.2`.
@@ -1186,6 +1186,20 @@ Inbound from outside is Milestone 115: write on the port card,
 then Milestone 83 hands the lane to that one listener. SSH is
 Milestone 117, after that stack: one ring-3 Rust service,
 `/card/ssh`, no new syscall. The `v1.0` tag is not applied here.
+
+A full name is its own card, and a subdomain is another card.
+A stored address is its own card. A dial by name does not also
+need the resolved address. A program that passes an address still
+needs that address card. Admin's root covers files. It does not
+cover every name. Milestone 118 is `/card/out/<program>`. Read on
+that exact object lets that one task dial any name, and an address
+it passes. The seat sees no line. A program without the card still
+asks per name. No leaves the program up. The card does not accept.
+Inbound stays write on the port it listens on. Milestone 119 stores
+that card with `share`, the same row as a durable file right. After
+reboot the named program dials with no ask. Login does not put the
+card on the shell. A child does not inherit it. Logged-out stays
+denied. There is no new syscall.
 
 ### Memory policy (Milestone 48)
 
