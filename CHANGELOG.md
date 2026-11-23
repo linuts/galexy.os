@@ -8,7 +8,7 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Milestone 125 — The DNS resolver trusts the Mozilla roots in the image.
+- [#173](https://github.com/linuts/galexy.os/pull/173) — Milestone 125 — The DNS resolver trusts the Mozilla roots in the image.
   `net pin <ip>` is enough. A key file is optional, and when it is passed that pin wins and the bundle is not consulted. A certificate that chains to neither is refused and no query is sent. `10.0.2.2` and `10.0.2.3` stay refused. DNS stays DNS-over-TLS on port 853. Lanes, SSH host keys, and `net allow` do not use the bundle. No C, no OpenSSL, no new opcode. The `v1.0` tag stays unapplied.
 - [#171](https://github.com/linuts/galexy.os/pull/171) — Docs — Milestones 120–124 plan one address type for v4 and v6.
   Cards, dial, the reply, bind, listen, datagrams, and routing use that type. The parse refuses an ambiguous form. A neighbor past the QEMU path, a DNS-over-TLS answer that can be v6, and the same outbound card for a v6 reply come before any other v6 traffic. Listening stays write on the port card. No second stack, no v6 opcode, no raw socket, no plaintext DNS, and no general browser TLS. The boxes stay open. This does not tag `v1.0`. SSH stays 117. Milestones 118 and 119 stay checked.
