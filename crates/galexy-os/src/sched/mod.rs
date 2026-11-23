@@ -238,7 +238,17 @@ pub fn init() {
 /// rlib header from an earlier seal) is replaced from the ramdisk.
 /// A stored admin quota below the pool is raised first, so an older
 /// sealed disk can name `libcore`'s metadata.
+///
+/// The work takes the galfs table lock. It runs with interrupts off.
+/// The main loop used to hold that lock with interrupts on, the timer
+/// switched to the shell, and the shell's next filesystem call spun
+/// with interrupts clear (galexy.os#86). The seat looked frozen after
+/// the passphrase was accepted.
 pub fn install_compiler_sysroot() {
+    x86_64::instructions::interrupts::without_interrupts(install_compiler_sysroot_gated);
+}
+
+fn install_compiler_sysroot_gated() {
     if galfs::volume_locked() {
         return;
     }
@@ -252,6 +262,10 @@ pub fn install_compiler_sysroot() {
         return;
     }
     galfs::raise_admin_quota_for_sysroot();
+    // One walk of the inode table, then each new name updates that total.
+    // Recounting on every file turns a million-slot volume into a long
+    // freeze with the table lock held.
+    galfs::begin_admin_usage_cache();
     let root = galfs::admin_root();
     let lib = sysroot_mkdir(root, "lib");
     let rustlib = sysroot_mkdir(lib, "rustlib");
@@ -265,14 +279,17 @@ pub fn install_compiler_sysroot() {
             place_sysroot_file(root, name, bytes, name);
         }
     }
+    galfs::end_admin_usage_cache();
     serial_println!("rustc-sysroot: {} entries", names.len());
 }
 
 /// Imports the sysroot when an unlock asked for it and the volume is open.
 ///
-/// The unlock syscall only sets the flag. This runs from the main loop,
-/// with interrupts on. The libraries stay ramdisk mappings, so the
-/// attach itself does not grow the heap by the size of the sysroot.
+/// The unlock syscall only sets the flag. This runs from the main loop.
+/// The libraries stay ramdisk mappings, so the attach itself does not
+/// grow the heap by the size of the sysroot. The import disables
+/// interrupts while it holds the table lock; see
+/// [`install_compiler_sysroot`].
 pub fn install_compiler_sysroot_if_due() {
     if !galfs::take_compiler_sysroot_due() {
         return;

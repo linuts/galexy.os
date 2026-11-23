@@ -130,9 +130,14 @@ fn ensure_data(store: &mut Store, index: usize, data_index: usize) -> Option<u32
 }
 
 /// `Some(len)` when `index` has been promoted.
+///
+/// A miss does not grow the slot table. Quota checks call this for every
+/// live file, and growing a `Vec` here allocated while `TABLE` was held.
 pub fn len(index: usize) -> Option<u32> {
-    let mut store = STORE.lock();
-    let _ = ensure_slots(&mut store, index);
+    if index >= MAX_PROMOTED {
+        return None;
+    }
+    let store = STORE.lock();
     store
         .files
         .get(index)

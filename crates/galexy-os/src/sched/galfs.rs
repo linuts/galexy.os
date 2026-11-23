@@ -2518,6 +2518,7 @@ fn make_child(table: &mut Table, parent: u32, name: &str, kind: u8) -> Result<u3
     obj.actor = actor as u8;
     place_name(obj, name);
     link_child(table, parent, oi as u32);
+    charge_usage(actor, 1, 0);
     Ok(oi as u32)
 }
 
@@ -3009,11 +3010,73 @@ pub fn raise_admin_quota_for_sysroot() {
     mark_dirty();
 }
 
+/// Set while the compiler sysroot import is attaching names.
+///
+/// The admin usage is counted once. Each new object updates the totals.
+/// Without this, every file walks a volume that can hold a million
+/// inodes, and that walk holds `TABLE`.
+static USAGE_CACHE_ON: AtomicBool = AtomicBool::new(false);
+static USAGE_CACHE_AI: AtomicU32 = AtomicU32::new(u32::MAX);
+static USAGE_CACHE_OBJECTS: AtomicU32 = AtomicU32::new(0);
+static USAGE_CACHE_BYTES: AtomicU64 = AtomicU64::new(0);
+
+fn usage_cache_hit(ai: usize) -> bool {
+    USAGE_CACHE_ON.load(Ordering::Acquire) && USAGE_CACHE_AI.load(Ordering::Relaxed) == ai as u32
+}
+
+/// Counts admin's objects once. Later creates on that actor add to it
+/// until [`end_admin_usage_cache`] or a write that does not.
+pub fn begin_admin_usage_cache() {
+    let table = TABLE.lock();
+    let Some(ai) = table
+        .actors
+        .iter()
+        .position(|a| a.used && a.name_is(ADMIN_NAME))
+    else {
+        return;
+    };
+    let (objects, bytes) = usage_scan(&table, ai);
+    USAGE_CACHE_AI.store(ai as u32, Ordering::Relaxed);
+    USAGE_CACHE_OBJECTS.store(objects, Ordering::Relaxed);
+    USAGE_CACHE_BYTES.store(bytes, Ordering::Relaxed);
+    // Publish while `TABLE` is still held so the next creator charges
+    // this total instead of racing a walk that already finished.
+    USAGE_CACHE_ON.store(true, Ordering::Release);
+    drop(table);
+}
+
+/// Drops the one-shot admin total. The next check walks the table again.
+pub fn end_admin_usage_cache() {
+    USAGE_CACHE_ON.store(false, Ordering::Release);
+}
+
+fn charge_usage(ai: usize, objects: u32, bytes: u64) {
+    if !usage_cache_hit(ai) {
+        return;
+    }
+    if objects != 0 {
+        USAGE_CACHE_OBJECTS.fetch_add(objects, Ordering::Relaxed);
+    }
+    if bytes != 0 {
+        USAGE_CACHE_BYTES.fetch_add(bytes, Ordering::Relaxed);
+    }
+}
+
 fn actor_usage(table: &Table, ai: usize) -> (u32, u64) {
+    if usage_cache_hit(ai) {
+        return (
+            USAGE_CACHE_OBJECTS.load(Ordering::Relaxed),
+            USAGE_CACHE_BYTES.load(Ordering::Relaxed),
+        );
+    }
     let actor = &table.actors[ai];
     if actor.used_objects > 0 || actor.used_bytes > 0 {
         return (actor.used_objects, actor.used_bytes);
     }
+    usage_scan(table, ai)
+}
+
+fn usage_scan(table: &Table, ai: usize) -> (u32, u64) {
     let mut objects = 0u32;
     let mut bytes = 0u64;
     for (index, obj) in table.objects.iter().enumerate() {
@@ -3271,6 +3334,7 @@ pub fn import_promoted(parent: u32, name: &str, bytes: &[u8]) -> Result<u32, Sys
     if !super::large::create_from(id as usize, bytes) {
         return Err(SysError::NoResource);
     }
+    charge_usage(actor_of(id), 0, bytes.len() as u64);
     mark_dirty();
     Ok(id)
 }
@@ -3296,8 +3360,18 @@ pub fn import_shared(parent: u32, name: &str, bytes: &'static [u8]) -> Result<u3
     if !super::large::create_shared(id as usize, bytes) {
         return Err(SysError::NoResource);
     }
+    charge_usage(actor_of(id), 0, bytes.len() as u64);
     mark_dirty();
     Ok(id)
+}
+
+fn actor_of(id: u32) -> usize {
+    TABLE
+        .lock()
+        .objects
+        .get(id as usize)
+        .map(|obj| obj.actor as usize)
+        .unwrap_or(0)
 }
 
 fn free_object(table: &Table) -> Option<usize> {
@@ -3500,6 +3574,8 @@ pub(crate) fn create(
     name: &str,
     replace: bool,
 ) -> Result<Option<u32>, SysError> {
+    // Replacing a file drops bytes the admin cache would still count.
+    end_admin_usage_cache();
     let parsed = parse_path(name)?;
     if parsed.n == 0 {
         return Err(SysError::Unsupported);
@@ -3550,6 +3626,7 @@ pub(crate) fn remove(
     tokens: &[Token; TOKEN_SLOTS],
     name: &str,
 ) -> Result<u32, SysError> {
+    end_admin_usage_cache();
     let parsed = parse_path(name)?;
     if parsed.n == 0 {
         return Err(SysError::Unsupported);
@@ -3895,6 +3972,7 @@ fn promote_large(table: &mut Table, index: usize) -> bool {
 /// Appends `src` to a file. Returns the byte count written (short on full
 /// file, exhausted block pool, or actor byte quota).
 pub(crate) fn append(index: u32, src: &[u8]) -> Option<usize> {
+    end_admin_usage_cache();
     let mut table = TABLE.lock();
     let i = index as usize;
     if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
@@ -3909,6 +3987,7 @@ pub(crate) fn append(index: u32, src: &[u8]) -> Option<usize> {
 /// `start` beyond the end is zero-filled first, so a seek past EOF followed
 /// by a write behaves like POSIX. Returns the byte count written.
 pub(crate) fn write_at(index: u32, start: usize, src: &[u8]) -> Option<usize> {
+    end_admin_usage_cache();
     let mut table = TABLE.lock();
     let i = index as usize;
     if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
@@ -4219,6 +4298,7 @@ fn truncate_large(index: u32, new_len: usize) -> Result<(), SysError> {
 
 /// Sets a file's length, allocating or freeing data blocks as needed.
 pub(crate) fn truncate(index: u32, new_len: usize) -> Result<(), SysError> {
+    end_admin_usage_cache();
     if new_len > super::large::LARGE_FILE_MAX as usize {
         return Err(SysError::BadValue);
     }
