@@ -226,9 +226,9 @@ pub fn init() {
 /// Paths match `test-rustc-hello`: the target JSON at the admin root,
 /// and each `srlib/*` file under
 /// `/lib/rustlib/x86_64-unknown-galexy/lib`. One kernel import per
-/// file. An rlib or rmeta keeps the ramdisk mapping until something
-/// writes it. The JSON is small and is copied into the v12 pool.
-/// None of those bodies are sealed to disk.
+/// file. The JSON and every rlib stay ramdisk mappings until something
+/// writes them. None of those bodies are copied into the v12 pool, and
+/// none are sealed to disk.
 ///
 /// A locked volume is skipped. The pre-unlock RAM table is thrown away
 /// when the sealed disk is loaded, which is why `rustc` then cannot
@@ -260,9 +260,9 @@ pub fn install_compiler_sysroot() {
     for name in &names {
         let bytes = ramdisk::find(name).unwrap_or_else(|| panic!("ramdisk file vanished: {name}"));
         if let Some(file_name) = name.strip_prefix("srlib/") {
-            place_sysroot_file(libs, file_name, bytes, &sysroot_lib_path(file_name), true);
+            place_sysroot_file(libs, file_name, bytes, &sysroot_lib_path(file_name));
         } else {
-            place_sysroot_file(root, name, bytes, name, false);
+            place_sysroot_file(root, name, bytes, name);
         }
     }
     serial_println!("rustc-sysroot: {} entries", names.len());
@@ -287,31 +287,26 @@ fn sysroot_lib_path(name: &str) -> alloc::string::String {
     path
 }
 
-/// Writes `bytes` at `name` under `parent`. An existing file of the same
-/// length is kept. A different length is removed via `remove_path` (an
-/// admin-root path) and written again.
-fn place_sysroot_file(
-    parent: u32,
-    name: &str,
-    bytes: &'static [u8],
-    remove_path: &str,
-    promoted: bool,
-) {
+/// Attaches `bytes` at `name` under `parent`. An existing file of the
+/// same length is kept. A different length is removed via `remove_path`
+/// (an admin-root path) and attached again.
+///
+/// The bytes stay the ramdisk mapping. Copying the target JSON into the
+/// v12 pool returned 0 on a sealed disk (`short write`, 0 of 749) and
+/// panicked the login. A failure is logged. The seat stays up.
+fn place_sysroot_file(parent: u32, name: &str, bytes: &'static [u8], remove_path: &str) {
     if let Some(id) = galfs::find_under(parent, name) {
         if galfs::object_len(id) == Some(bytes.len()) {
             return;
         }
-        galfs::remove_as_admin(remove_path)
-            .unwrap_or_else(|err| panic!("remove {remove_path}: {err:?}"));
+        if let Err(err) = galfs::remove_as_admin(remove_path) {
+            serial_println!("rustc-sysroot: remove {} failed: {:?}", remove_path, err);
+            return;
+        }
     }
-    if promoted {
-        galfs::import_shared(parent, name, bytes)
-            .unwrap_or_else(|err| panic!("import {name}: {err:?}"));
-    } else {
-        let id = galfs::create_file_under(parent, name)
-            .unwrap_or_else(|err| panic!("create {name}: {err:?}"));
-        let wrote = galfs::append_file(id, bytes).unwrap_or(0);
-        assert_eq!(wrote, bytes.len(), "short write {name}");
+    if let Err(err) = galfs::import_shared(parent, name, bytes) {
+        serial_println!("rustc-sysroot: import {} failed: {:?}", name, err);
+        let _ = galfs::remove_as_admin(remove_path);
     }
 }
 
