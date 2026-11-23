@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use galexy_abi::{
     Cap, SysError, INIT_RPC_HDR, NET_HELD_OUT, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DGRAM,
     NET_OP_DIAL, NET_OP_GRANT, NET_OP_LINK, NET_OP_LISTEN, NET_OP_PIN, NET_OP_PING, NET_OP_RECV,
-    NET_OP_RESOLVE, NET_OP_REVOKE, NET_OP_SERVE, NET_OP_STREAM,
+    NET_OP_RESOLVE, NET_OP_REVOKE, NET_OP_SERVE, NET_OP_STREAM, PING_LOOKUP,
 };
 use galexy_net::Engine;
 use galexy_netcfg::{
@@ -812,6 +812,22 @@ fn lookup_dns(
     name: &[u8],
     now: u64,
 ) -> Result<[u8; 4], &'static str> {
+    let mut ips = [[0u8; 4]; 1];
+    let n = lookup_addrs(engine, record, name, now, &mut ips)?;
+    if n == 0 {
+        Err("denied")
+    } else {
+        Ok(ips[0])
+    }
+}
+
+fn lookup_addrs(
+    engine: &mut Engine,
+    record: &Record,
+    name: &[u8],
+    now: u64,
+    out: &mut [[u8; 4]],
+) -> Result<usize, &'static str> {
     let Some(resolver) = record.resolver else {
         return Err("denied");
     };
@@ -829,15 +845,25 @@ fn lookup_dns(
     let dns_name = (resolver.key.is_none() && resolver.name_len > 0)
         .then_some(&resolver.name[..resolver.name_len as usize]);
     let result = match tls_exchange(engine, id, resolver.key, dns_name, now, &query) {
-        Ok(body) => dot_answer(&body).ok_or("denied"),
+        Ok(body) => {
+            let n = dot_addrs(&body, out);
+            if n == 0 {
+                Err("denied")
+            } else {
+                Ok(n)
+            }
+        }
         Err(why) => Err(why),
     };
     engine.tcp_release(id);
-    if let Ok(ip) = result {
-        log(&format!(
-            "[net] dot {}.{}.{}.{}",
-            ip[0], ip[1], ip[2], ip[3]
-        ));
+    if let Ok(n) = result {
+        if n > 0 {
+            let ip = out[0];
+            log(&format!(
+                "[net] dot {}.{}.{}.{}",
+                ip[0], ip[1], ip[2], ip[3]
+            ));
+        }
     }
     result
 }
@@ -1104,44 +1130,52 @@ fn dot_complete(body: &[u8]) -> bool {
     body.len() >= 2 + n && n >= 12
 }
 
-fn dot_answer(body: &[u8]) -> Option<[u8; 4]> {
-    if !dot_complete(body) {
-        return None;
+fn dot_addrs(body: &[u8], out: &mut [[u8; 4]]) -> usize {
+    if !dot_complete(body) || out.is_empty() {
+        return 0;
     }
     let n = u16::from_be_bytes([body[0], body[1]]) as usize;
-    dns_a(&body[2..2 + n])
+    dns_addrs(&body[2..2 + n], out)
 }
 
-fn dns_a(buf: &[u8]) -> Option<[u8; 4]> {
-    if buf.len() < 12 {
-        return None;
+fn dns_addrs(buf: &[u8], out: &mut [[u8; 4]]) -> usize {
+    if buf.len() < 12 || out.is_empty() {
+        return 0;
     }
     let answers = u16::from_be_bytes([buf[6], buf[7]]) as usize;
-    let mut i = skip_name(buf, 12)?;
+    let mut i = match skip_name(buf, 12) {
+        Some(at) => at,
+        None => return 0,
+    };
     if i + 4 > buf.len() {
-        return None;
+        return 0;
     }
     i += 4;
+    let mut n = 0usize;
     for _ in 0..answers {
-        i = skip_name(buf, i)?;
+        i = match skip_name(buf, i) {
+            Some(at) => at,
+            None => return n,
+        };
         if i + 10 > buf.len() {
-            return None;
+            return n;
         }
         let kind = u16::from_be_bytes([buf[i], buf[i + 1]]);
         let rdlen = u16::from_be_bytes([buf[i + 8], buf[i + 9]]) as usize;
         i += 10;
         if i + rdlen > buf.len() {
-            return None;
+            return n;
         }
-        if kind == 1 && rdlen == 4 {
+        if kind == 1 && rdlen == 4 && n < out.len() {
             let ip = [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]];
             if ip != [10, 0, 2, 2] && ip != [0, 0, 0, 0] {
-                return Some(ip);
+                out[n] = ip;
+                n += 1;
             }
         }
         i += rdlen;
     }
-    None
+    n
 }
 
 fn skip_name(buf: &[u8], mut i: usize) -> Option<usize> {
@@ -1554,6 +1588,10 @@ fn ping(rx: Cap, engine: &mut Engine, record: &Record, held: u8, rest: &[u8], no
         reply(rx, b"access denied\n", 0);
         return;
     }
+    if rest.len() > 4 && rest.first() == Some(&PING_LOOKUP) {
+        lookup_only(rx, engine, record, rest, now);
+        return;
+    }
     let dst = if rest.len() == 4 {
         [rest[0], rest[1], rest[2], rest[3]]
     } else {
@@ -1569,33 +1607,82 @@ fn ping(rx: Cap, engine: &mut Engine, record: &Record, held: u8, rest: &[u8], no
             }
         }
     };
-    if engine.icmp_echo(dst, b"galexy").is_err() {
-        reply(rx, b"down\n", 0);
-        return;
+    reply(rx, &echoes(engine, dst), 0);
+}
+
+/// Three ICMP echoes on this one call. The net slot admits one RPC, so
+/// the echoes stay here instead of coming back as three more calls.
+fn echoes(engine: &mut Engine, dst: [u8; 4]) -> Vec<u8> {
+    const N: usize = 3;
+    let mut times = [0u64; N];
+    let mut ok = [false; N];
+    let mut sent = 0usize;
+    let mut text = String::new();
+    for i in 0..N {
+        if engine.icmp_echo(dst, b"galexy").is_err() {
+            if sent == 0 {
+                return b"down\n".to_vec();
+            }
+            break;
+        }
+        let start = clock_ms();
+        let mut got: Option<[u8; 4]> = None;
+        loop {
+            let now = clock_ms();
+            if now.saturating_sub(start) >= 3_000 {
+                break;
+            }
+            pump(engine);
+            engine.poll(now);
+            pump(engine);
+            if let Some(addr) = engine.take_echo() {
+                got = Some(addr);
+                times[i] = now.saturating_sub(start);
+                break;
+            }
+            let _ = sleep_ms(20);
+        }
+        sent += 1;
+        if let Some(addr) = got {
+            ok[i] = true;
+            text.push_str(&format!(
+                "reply from {}.{}.{}.{} time {} ms\n",
+                addr[0], addr[1], addr[2], addr[3], times[i]
+            ));
+        } else {
+            text.push_str("timeout\n");
+        }
     }
-    let start = clock_ms();
-    loop {
-        let now = clock_ms();
-        if now.saturating_sub(start) >= 3_000 {
-            reply(rx, b"timeout\n", 0);
-            return;
+    let received = ok[..sent].iter().filter(|hit| **hit).count();
+    text.push_str(&format!("sent {sent} received {received}"));
+    if received > 0 {
+        text.push_str(" time");
+        for i in 0..sent {
+            if ok[i] {
+                text.push_str(&format!(" {}", times[i]));
+            }
         }
-        pump(engine);
-        engine.poll(now);
-        pump(engine);
-        if let Some(from) = engine.take_echo() {
-            reply(
-                rx,
-                format!(
-                    "reply from {}.{}.{}.{}\n",
-                    from[0], from[1], from[2], from[3]
-                )
-                .as_bytes(),
-                0,
-            );
-            return;
+        text.push_str(" ms");
+    }
+    text.push('\n');
+    text.into_bytes()
+}
+
+fn lookup_only(rx: Cap, engine: &mut Engine, record: &Record, rest: &[u8], now: u64) {
+    let Some(name) = dns_rest(&rest[1..]) else {
+        reply(rx, b"bad\n", 0);
+        return;
+    };
+    let mut ips = [[0u8; 4]; 8];
+    match lookup_addrs(engine, record, name, now, &mut ips) {
+        Ok(n) => {
+            let mut text = String::new();
+            for ip in &ips[..n] {
+                text.push_str(&format!("{}.{}.{}.{}\n", ip[0], ip[1], ip[2], ip[3]));
+            }
+            reply(rx, text.as_bytes(), 0);
         }
-        let _ = sleep_ms(20);
+        Err(why) => reply_lookup(rx, why),
     }
 }
 

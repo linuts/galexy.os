@@ -75,6 +75,8 @@ pub(crate) fn show_help() {
     help_row(b"net link", b"address, or down");
     help_row(b"net allow ...", b"name, locator, optional key file");
     help_row(b"net pin <ip> [keyfile]", b"resolver; key file optional");
+    help_row(b"ping <ip or name>", b"three echoes, then the times");
+    help_row(b"nslookup <name>", b"name and addresses from the pin");
     help_row(b"stats", b"uptime / frames / heap / galfs");
     help_row(b"dmesg", b"recent kernel log lines");
     help_row(b"tasks", b"tty, state, cpu, parent");
@@ -225,6 +227,10 @@ pub(crate) fn dispatch(
     }
     if let Some(rest) = arg_of(line, b"net") {
         net_cmd(cwd, rest);
+        return None;
+    }
+    if let Some(rest) = arg_of(line, b"nslookup") {
+        nslookup_cmd(cwd, rest);
         return None;
     }
     if let Some(rest) = arg_of(line, b"ping") {
@@ -1947,11 +1953,16 @@ fn ping_cmd(cwd: &Cwd, rest: &[u8]) {
     if let Some(ip) = parse_ip(text) {
         let mut payload = [0u8; 5];
         payload[0] = galexy_abi::NET_OP_PING;
-        payload[1..5].copy_from_slice(&ip);
+        payload[1..].copy_from_slice(&ip);
         finish_net(cwd, &payload, false);
         return;
     }
     if dns_name(text) {
+        if text.len() + 2 > galexy_abi::INIT_RPC_MAX {
+            write_console(b"bad\n");
+            prompt(cwd);
+            return;
+        }
         let mut payload = [0u8; galexy_abi::INIT_RPC_MAX];
         payload[0] = galexy_abi::NET_OP_PING;
         payload[1] = text.len() as u8;
@@ -1961,6 +1972,138 @@ fn ping_cmd(cwd: &Cwd, rest: &[u8]) {
     }
     write_console(b"ping <ip or name>\n");
     prompt(cwd);
+}
+
+fn nslookup_cmd(cwd: &Cwd, rest: &[u8]) {
+    let name = trim(rest);
+    if !dns_name(name) {
+        write_console(b"nslookup <name>\n");
+        prompt(cwd);
+        return;
+    }
+    let mut ips = [[0u8; 4]; 8];
+    let mut err = [0u8; 64];
+    match lookup_name(name, &mut ips, &mut err) {
+        Ok(n) if n > 0 => {
+            for ip in ips.iter().take(n) {
+                write_lookup_line(name, *ip);
+            }
+        }
+        Ok(_) => {
+            write_console(b"access denied\n");
+        }
+        Err(n) => write_note(&err[..n]),
+    }
+    prompt(cwd);
+}
+
+/// One name lookup on the ping card. `Ok` is the address count in `ips`.
+/// `Err` is the reply text length in `err`, and no echo was sent.
+fn lookup_name(name: &[u8], ips: &mut [[u8; 4]], err: &mut [u8]) -> Result<usize, usize> {
+    if name.len() + 3 > galexy_abi::INIT_RPC_MAX {
+        return Err(note(b"bad\n", err));
+    }
+    let mut payload = [0u8; galexy_abi::INIT_RPC_MAX];
+    payload[0] = galexy_abi::NET_OP_PING;
+    payload[1] = galexy_abi::PING_LOOKUP;
+    payload[2] = name.len() as u8;
+    payload[3..3 + name.len()].copy_from_slice(name);
+    let mut reply = [0u8; galexy_abi::CHAN_MSG_MAX];
+    let got = net_rpc(&payload[..3 + name.len()], &mut reply);
+    if !got.ok {
+        return Err(note(b"access denied\n", err));
+    }
+    let n = (got.value as usize).min(reply.len());
+    if n < 8 {
+        return Err(note(b"bad\n", err));
+    }
+    let text = &reply[8..n];
+    if let Some(count) = parse_addrs(text, ips) {
+        return Ok(count);
+    }
+    Err(note(text, err))
+}
+
+fn note(text: &[u8], err: &mut [u8]) -> usize {
+    let n = text.len().min(err.len());
+    err[..n].copy_from_slice(&text[..n]);
+    n
+}
+
+fn write_note(text: &[u8]) {
+    if text.is_empty() {
+        write_console(b"bad\n");
+        return;
+    }
+    write_console(text);
+    if text.last() != Some(&b'\n') {
+        write_console(b"\n");
+    }
+}
+
+fn parse_addrs(text: &[u8], ips: &mut [[u8; 4]]) -> Option<usize> {
+    let mut count = 0usize;
+    let mut rest = text;
+    let mut any = false;
+    while !rest.is_empty() {
+        let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());
+        let line = trim(&rest[..end]);
+        rest = if end == rest.len() {
+            b""
+        } else {
+            &rest[end + 1..]
+        };
+        if line.is_empty() {
+            continue;
+        }
+        any = true;
+        let ip = parse_ip(line)?;
+        if count < ips.len() {
+            ips[count] = ip;
+            count += 1;
+        }
+    }
+    if any {
+        Some(count)
+    } else {
+        None
+    }
+}
+
+fn write_lookup_line(name: &[u8], ip: [u8; 4]) {
+    let mut buf = [0u8; 256];
+    let mut n = 0usize;
+    if !push_bytes(&mut buf, &mut n, name) {
+        return;
+    }
+    let _ = push_byte(&mut buf, &mut n, b' ');
+    push_ip(&mut buf, &mut n, ip);
+    let _ = push_byte(&mut buf, &mut n, b'\n');
+    write_console(&buf[..n]);
+}
+
+fn push_ip(out: &mut [u8], n: &mut usize, ip: [u8; 4]) {
+    for (i, oct) in ip.iter().enumerate() {
+        if i > 0 {
+            let _ = push_byte(out, n, b'.');
+        }
+        push_u64(out, n, u64::from(*oct));
+    }
+}
+
+fn push_u64(out: &mut [u8], n: &mut usize, mut value: u64) {
+    if value == 0 {
+        let _ = push_byte(out, n, b'0');
+        return;
+    }
+    let mut tmp = [0u8; 20];
+    let mut i = tmp.len();
+    while value > 0 {
+        i -= 1;
+        tmp[i] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    let _ = push_bytes(out, n, &tmp[i..]);
 }
 
 fn net_cmd(cwd: &Cwd, rest: &[u8]) {
