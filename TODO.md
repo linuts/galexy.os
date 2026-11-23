@@ -2328,8 +2328,8 @@ unset.
 - [x] Phase 14 — Milestones 91–96 (`docs/PYTHON.md`). A typed login
       on the image `cargo run` boots runs `python hello.py` and a
       program that reads and writes a galfs file. No new syscall.
-      `socket` stays off the allow-list. `python` with no file is
-      the REPL
+      `socket` is on the allow-list and calls the cards. `setsockopt`
+      stays off. `python` with no file is the REPL
 - [ ] Suite green on BIOS + UEFI, TCG + KVM, `q35` + the `pc` legacy
       case (BIOS + UEFI, TCG, `q35` + `pc` are green at 124 tests. The
       KVM pass needs a host where `KVM_CREATE_VCPU` succeeds. On the
@@ -3527,7 +3527,8 @@ items stay here with rationale.
       `cargo run` boots `python` and, when the compiler ELF was
       built, `rustc` with its sysroot. `python hello.py` and a file
       copy are `python_hello_typing_e2e`. No new syscall. `socket`
-      stays off the allow-list. `python` with no file is the REPL
+      is on the allow-list and calls the cards. `setsockopt` stays
+      off. `python` with no file is the REPL
 - [x] ~~`passwd` on a sealed-disk boot hung the machine
       (galexy.os#86)~~ — CLOSED by PR #88. Two IF=0 deadlocks: a lock
       holder's heap growth waited on a shootdown ack from a CPU spinning

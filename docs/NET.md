@@ -149,7 +149,7 @@ The service has to have an address before it can talk to anyone. Milestone 80 is
 
 DHCP here is a client. Discover, offer, request, ack. The first offer wins. Galexy does not serve DHCP in this phase. A lease is learned state: address, prefix, gateway, expiry. On expiry the service asks again. A missing record means mode `ask` and an empty directory, so a fresh QEMU boot still gets an address.
 
-`link` reports the result. Any logged-in seat may read it. The locator in that reply is our address, not a dial argument. Programs still cannot pass an address or a port into a syscall.
+`link` reports the result. Any logged-in seat may read it. The locator in that reply is our address, not a dial argument. A program does not pass an address or a port to a new syscall. It passes one stored address or port on net cap `0x800A`, and only with that card.
 
 ## The record
 
@@ -243,8 +243,8 @@ Milestone 80.
 The machine acquires an address and exchanges one datagram with
 another device.
 
-- `crates/galexy-netcfg` defines the version-1 record. Host tests
-  round-trip one. A wrong version is an error.
+- `crates/galexy-netcfg` defines the version-2 record. Version 1 is
+  refused. Host tests round-trip one. A wrong version is an error.
 - Init creates `/net` in the admin tree when it is missing (mode
   `ask`, no names) and passes `net` a token for that file only.
 - Mode `ask`: DHCP discover, offer, request, ack. On QEMU user
@@ -299,7 +299,8 @@ missing pin still fails closed.
 Shell builtin `fetch <name>`. Typed on a login seat that holds the
 grant: the command prints a small body served by the host peer, then
 the prompt returns. A seat without the grant sees `access denied`
-and the host sees no handshake. `std::net` is still unsupported.
+and the host sees no handshake. `std::net` is the lane.
+`TcpStream::connect` asks, then dials.
 
 ### 85 Solid — Phase 10 gate
 
