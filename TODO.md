@@ -3219,8 +3219,9 @@ Reaching a host past `10.0.2.2` is Milestone 111, not this one.
       `scripts/python-allow.txt` in the same change, for that
       `connect` only. `bind`, `listen`, UDP, `setsockopt`, and any
       call that passes an IP or a port stay refused until the
-      milestone that names that card (112–116). They do not exist
-      yet. `ssl` and `asyncio` networks stay refused. The host
+      milestone that names that card (112–116). Milestones 112–116
+      have since granted them. `ssl` and `asyncio` networks stay
+      refused. The host
       allow-list test matches the file
 - [x] **Proof**: `python_lane_typing_e2e`'s `ImportError` line moved
       here, to a `socket.connect` that is denied, plus one
@@ -3519,9 +3520,9 @@ items stay here with rationale.
 - [x] ~~No network stack~~ — **Phase 10**, Milestones 78–85, landed
       (`docs/NET.md`). The `v1.0` tag waits on a KVM pass
 - [x] ~~No USB stack~~ — **Phase 13**, Milestones 86–88, landed
-      (`docs/USB.md`). The bus lists a device and the driver table
-      ships empty. Vendor drivers stay unnumbered. The `v1.0` tag
-      waits on a KVM pass
+      (`docs/USB.md`). The bus lists a device. Milestone 102 claims
+      the QEMU keyboard. Other vendor drivers stay unwritten. The
+      `v1.0` tag waits on a KVM pass
 - [x] ~~No Python interpreter~~ — **Phase 14**, Milestones 91–96.
       `cargo run` boots `python` and, when the compiler ELF was
       built, `rustc` with its sysroot. `python hello.py` and a file

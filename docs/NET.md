@@ -68,7 +68,7 @@ kernel wire Cap 0x8009          only the task named net
     ▼
 net  (ring 3, init child, restart)
     │  IPv6 and IPv4, neighbor discovery, ICMP echo, UDP, TCP, TLS 1.3
-    │  directory: name → locator + pinned key + who may dial
+    │  directory: name → locator + pinned key + the token that may dial
     │
     ├── lane Cap ──read/write── the program that dialed
     └── gate ──new lane Caps── the one listener for that name
@@ -96,11 +96,11 @@ Opcodes on `0x800A`, appended and then stable, same rule as init:
 | Op | Who | Effect |
 | --- | --- | --- |
 | 1 `link` | any logged-in seat | `down`, `up`, or `up` plus our locator once Milestone 80 has one |
-| 2 `dial` | a seat granted that name | reply carries the app end of a new lane |
+| 2 `dial` | read on the card | reply carries the app end of a new lane. The actor list is not the check |
 | 3 `allow` | admin | install a name: locator, pinned key, no grants yet |
-| 4 `grant` | admin | let an actor dial a name |
-| 5 `revoke` | admin | drop that dial right |
-| 6 `serve` | admin | attach a gate for a name to the calling task |
+| 4 `grant` | admin | write an actor on the record. That list is not the dial right. The shell writes the read token on `/card/<name>` |
+| 5 `revoke` | admin | drop that actor-list entry. The shell drops the card token. The list is not the dial right |
+| 6 `serve` | admin, and write on the card | attach a gate for a name to the calling task |
 | 7 `ping` | a seat that holds the ping card | ICMP echo to one IPv4 address, or to a DNS name resolved over the pinned DNS-over-TLS resolver. The reply is `reply from` that address, or `timeout`. No lane Cap. No card, no query |
 | 8 `resolve` | read on a DNS card | DNS-over-TLS lookup. The reply is the address. No lane Cap. The resolver key stays in the record |
 | 9 `pin` | admin | Pin the DNS-over-TLS resolver: four address bytes, then the 32-byte key. `10.0.2.2` and `10.0.2.3` are refused |

@@ -275,8 +275,9 @@ now, the same way the network rules are.
   descriptor per physically contiguous run. Descriptors are
   interpreted by the `usb` service. A bad length is `BadValue`.
 - **Only `usb` holds the controller** (Cap `0x800B`). Listing
-  (Cap `0x800C`) is any logged-in seat. Listing does not attach a
-  driver and does not inject keys.
+  (Cap `0x800C`) shows the ports whose read card the seat holds.
+  Logged-out is denied. Listing does not attach a driver and does
+  not inject keys.
 - **One driver table.** `crates/userspace/usb/src/drivers/mod.rs` is
   the only registration. A NIC driver delivers Ethernet frames to
   `net` and does not speak TCP.
@@ -294,8 +295,9 @@ not wait on Phase 10, and Phase 10 does not wait on it.
   checkout, not a copy of that repository.
 - **No new syscall and no new Cap.** The seat starts one run and
   Cap-waits. Init does not supervise it. `Lane` stays 35.
-  `MAX_PROC_CAPS` stays 16. `DISK_VERSION` stays 12. The target
-  JSON stays as it is.
+  `MAX_PROC_CAPS` stays 16. Phase 14 did not bump `DISK_VERSION`.
+  The live version is 17 after Milestone 99. The target JSON stays
+  as it is.
 - **The allow-list is `scripts/python-allow.txt`.** A module that
   is not listed raises `ImportError`. `ssl`, `asyncio`, `pip`,
   `subprocess`, `ctypes`, and `os.fork` stay off that list.

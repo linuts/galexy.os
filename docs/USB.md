@@ -12,8 +12,9 @@ dongle are still unwritten.
 
 ## What you can see
 
-A logged-in seat can list what enumeration found. A row is a device
-the controller enumerated, not a claim that a driver is attached.
+A seat lists the ports whose read card it holds. Logged-out is
+denied. A row is a device the controller enumerated, not a claim
+that a driver is attached.
 
 | Word | What it is |
 | --- | --- |
@@ -48,9 +49,9 @@ controller Cap 0x800B       only the task named usb
     ▼
 usb  (ring 3, init child)
     │  device and configuration descriptors
-    │  the driver table (empty of vendor code in Milestone 88)
+    │  the driver table (the boot keyboard; vendor rows stay unwritten)
     │
-    └── list ── read by any logged-in seat on Cap 0x800C
+    └── list ── ports whose read card the seat holds, on Cap 0x800C
 ```
 
 `0x800C` is a control Cap in the init style. `send` parks for a
