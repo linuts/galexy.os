@@ -106,13 +106,49 @@ pub(crate) enum IoOp {
     ParkLane { id: u8, read: bool },
 }
 
+/// What a file read still has to do after `THREADS` drops.
+enum ReadReady {
+    /// Archive, pipe, lane, or an empty buffer. Already finished.
+    Finished(IoOp),
+    /// Galfs object. The disk read runs without `THREADS`.
+    Galfs { obj: u32, start: usize },
+}
+
+/// What a file write still has to do after `THREADS` drops.
+enum WriteReady {
+    /// Pipe, lane, or an empty buffer. Already finished.
+    Finished(IoOp),
+    /// Galfs object. The disk write runs without `THREADS`.
+    Galfs { obj: u32, offset: usize },
+}
+
+/// Moves the cursor when this open still names `obj`.
+fn advance_galfs_cursor(slot: usize, index: usize, obj: u32, offset: usize) {
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let Ok(owner) = running_proc_index(&threads, slot) else {
+            return;
+        };
+        let Some(file) = threads[owner].files[index].as_mut() else {
+            return;
+        };
+        if matches!(file.body, FileBody::Galfs(body) if body == obj) {
+            file.offset = offset;
+        }
+    });
+}
+
 pub(in crate::sched) fn task_read_inner(cap: Cap, dst: &mut [u8]) -> Result<IoOp, SysError> {
     let index = file_slot(cap)?;
     let slot = current_slot();
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    interrupts::without_interrupts(|| {
+    // A galfs body is read after `THREADS` drops. A cache miss loads the
+    // block from disk and halts with interrupts on. The timer takes
+    // `THREADS`; holding it across that halt never returns, and the
+    // uptime counter stops.
+    let ready = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let owner = running_proc_index(&threads, slot)?;
         let thread = &mut threads[owner];
@@ -122,43 +158,48 @@ pub(in crate::sched) fn task_read_inner(cap: Cap, dst: &mut [u8]) -> Result<IoOp
             return Err(SysError::AccessDenied);
         }
         if dst.is_empty() {
-            return Ok(IoOp::Ready(0));
+            return Ok(ReadReady::Finished(IoOp::Ready(0)));
         }
         let start = file.offset;
-        let op = match file.body {
+        match file.body {
             FileBody::Archive(bytes) => {
                 let available = bytes.len().saturating_sub(start);
                 let n = dst.len().min(available);
                 dst[..n].copy_from_slice(&bytes[start..start + n]);
-                IoOp::Ready(n)
+                file.offset = start + n;
+                Ok(ReadReady::Finished(IoOp::Ready(n)))
             }
-            FileBody::Galfs(obj) => {
-                IoOp::Ready(galfs::read_at(obj, start, dst).ok_or(SysError::BadCap)?)
-            }
+            FileBody::Galfs(obj) => Ok(ReadReady::Galfs { obj, start }),
             FileBody::Pipe { id, end } => {
                 if end != pipe::PipeEnd::Read {
                     return Err(SysError::AccessDenied);
                 }
-                match pipe::try_read(id, dst)? {
+                let op = match pipe::try_read(id, dst)? {
                     pipe::ReadResult::Ready(n) => IoOp::Ready(n),
                     pipe::ReadResult::Eof => IoOp::Ready(0),
                     pipe::ReadResult::WouldBlock => IoOp::ParkPipe { id, read: true },
-                }
+                };
+                Ok(ReadReady::Finished(op))
             }
-            FileBody::Channel { .. } => return Err(SysError::Unsupported),
-            FileBody::Lane { id, end } => match lane::try_read(id, end, dst)? {
-                lane::ReadResult::Ready(n) => IoOp::Ready(n),
-                lane::ReadResult::Eof => IoOp::Ready(0),
-                lane::ReadResult::WouldBlock => IoOp::ParkLane { id, read: true },
-            },
-        };
-        if let IoOp::Ready(n) = op {
-            if !matches!(file.body, FileBody::Pipe { .. } | FileBody::Lane { .. }) {
-                file.offset = start + n;
+            FileBody::Channel { .. } => Err(SysError::Unsupported),
+            FileBody::Lane { id, end } => {
+                let op = match lane::try_read(id, end, dst)? {
+                    lane::ReadResult::Ready(n) => IoOp::Ready(n),
+                    lane::ReadResult::Eof => IoOp::Ready(0),
+                    lane::ReadResult::WouldBlock => IoOp::ParkLane { id, read: true },
+                };
+                Ok(ReadReady::Finished(op))
             }
         }
-        Ok(op)
-    })
+    })?;
+    match ready {
+        ReadReady::Finished(op) => Ok(op),
+        ReadReady::Galfs { obj, start } => {
+            let n = galfs::read_at(obj, start, dst).ok_or(SysError::BadCap)?;
+            advance_galfs_cursor(slot, index, obj, start + n);
+            Ok(IoOp::Ready(n))
+        }
+    }
 }
 
 /// Writes `src` into a galfs file at the cursor. An archive open is
@@ -186,53 +227,74 @@ pub(crate) fn task_write_ex(cap: Cap, src: &[u8]) -> Result<IoOp, SysError> {
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    let (op, galfs_wrote, wake_pipe, wake_lane) = interrupts::without_interrupts(|| {
-        let mut threads = THREADS.lock();
+    // Same halt as [`task_read_inner`]: `net pin` rewrites `/net` after the
+    // block has been sealed and evicted. Copying it back in reads the disk.
+    let (ready, wake_pipe, wake_lane) = interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
         let owner = running_proc_index(&threads, slot)?;
-        let thread = &mut threads[owner];
+        let thread = &threads[owner];
         let must_change = thread.must_change;
-        let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
+        let file = thread.files[index].as_ref().ok_or(SysError::BadCap)?;
         let effective = file.rights.intersection(cap.rights());
         if !effective.contains(CapRights::WRITE) {
             return Err(SysError::AccessDenied);
         }
         if src.is_empty() {
-            return Ok((IoOp::Ready(0), false, None, None));
+            return Ok((WriteReady::Finished(IoOp::Ready(0)), None, None));
         }
         if must_change && matches!(file.body, FileBody::Galfs(_)) {
             return Err(SysError::AccessDenied);
         }
         match file.body {
-            FileBody::Galfs(obj) => {
-                let n = galfs::write_at(obj, file.offset, src).ok_or(SysError::BadCap)?;
-                file.offset += n;
-                Ok((IoOp::Ready(n), n > 0, None, None))
-            }
+            FileBody::Galfs(obj) => Ok((
+                WriteReady::Galfs {
+                    obj,
+                    offset: file.offset,
+                },
+                None,
+                None,
+            )),
             FileBody::Pipe { id, end } => {
                 if end != pipe::PipeEnd::Write {
                     return Err(SysError::AccessDenied);
                 }
                 match pipe::try_write(id, src)? {
-                    pipe::WriteResult::Ready(n) => Ok((IoOp::Ready(n), false, Some(id), None)),
-                    pipe::WriteResult::WouldBlock => {
-                        Ok((IoOp::ParkPipe { id, read: false }, false, None, None))
+                    pipe::WriteResult::Ready(n) => {
+                        Ok((WriteReady::Finished(IoOp::Ready(n)), Some(id), None))
                     }
+                    pipe::WriteResult::WouldBlock => Ok((
+                        WriteReady::Finished(IoOp::ParkPipe { id, read: false }),
+                        None,
+                        None,
+                    )),
                     pipe::WriteResult::Closed => Err(SysError::Unsupported),
                 }
             }
             FileBody::Lane { id, end } => match lane::try_write(id, end, src)? {
-                lane::WriteResult::Ready(n) => Ok((IoOp::Ready(n), false, None, Some(id))),
-                lane::WriteResult::WouldBlock => {
-                    Ok((IoOp::ParkLane { id, read: false }, false, None, None))
+                lane::WriteResult::Ready(n) => {
+                    Ok((WriteReady::Finished(IoOp::Ready(n)), None, Some(id)))
                 }
+                lane::WriteResult::WouldBlock => Ok((
+                    WriteReady::Finished(IoOp::ParkLane { id, read: false }),
+                    None,
+                    None,
+                )),
                 lane::WriteResult::Closed => Err(SysError::Unsupported),
             },
             FileBody::Archive(_) | FileBody::Channel { .. } => Err(SysError::Unsupported),
         }
     })?;
-    if galfs_wrote {
-        galfs::mark_dirty();
-    }
+    let op = match ready {
+        WriteReady::Finished(op) => op,
+        WriteReady::Galfs { obj, offset } => {
+            let n = galfs::write_at(obj, offset, src).ok_or(SysError::BadCap)?;
+            advance_galfs_cursor(slot, index, obj, offset + n);
+            if n > 0 {
+                galfs::mark_dirty();
+            }
+            IoOp::Ready(n)
+        }
+    };
     if let Some(id) = wake_pipe {
         wake_pipe_waiters(id);
     }
@@ -382,29 +444,38 @@ pub(crate) fn task_truncate(cap: Cap, new_len: u64) -> Result<(), SysError> {
     if new_len > galfs::FILE_BYTES {
         return Err(SysError::BadValue);
     }
-    interrupts::without_interrupts(|| {
-        let mut threads = THREADS.lock();
+    let obj = interrupts::without_interrupts(|| {
+        let threads = THREADS.lock();
         let owner = running_proc_index(&threads, slot)?;
-        let thread = &mut threads[owner];
+        let thread = &threads[owner];
         deny_must_change(thread)?;
-        let file = thread.files[index].as_mut().ok_or(SysError::BadCap)?;
+        let file = thread.files[index].as_ref().ok_or(SysError::BadCap)?;
         let effective = file.rights.intersection(cap.rights());
         if !effective.contains(CapRights::WRITE) {
             return Err(SysError::AccessDenied);
         }
         match file.body {
-            FileBody::Galfs(obj) => {
-                galfs::truncate(obj, new_len as usize)?;
-                if file.offset > new_len as usize {
-                    file.offset = new_len as usize;
-                }
-                Ok(())
-            }
+            FileBody::Galfs(obj) => Ok(obj),
             FileBody::Archive(_)
             | FileBody::Pipe { .. }
             | FileBody::Channel { .. }
             | FileBody::Lane { .. } => Err(SysError::Unsupported),
         }
+    })?;
+    // Truncate can copy a stable block back from disk. `THREADS` stays
+    // dropped across that halt; see [`task_read_inner`].
+    galfs::truncate(obj, new_len as usize)?;
+    let new_len = new_len as usize;
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        let owner = running_proc_index(&threads, slot)?;
+        let thread = &mut threads[owner];
+        if let Some(file) = thread.files[index].as_mut() {
+            if matches!(file.body, FileBody::Galfs(body) if body == obj) && file.offset > new_len {
+                file.offset = new_len;
+            }
+        }
+        Ok::<(), SysError>(())
     })?;
     galfs::mark_dirty();
     Ok(())
