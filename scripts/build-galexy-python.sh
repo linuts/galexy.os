@@ -25,8 +25,11 @@ if [[ ! -x "$SYSROOT/bin/rustc" ]]; then
     echo "build-galexy-python: nightly rustc missing at $SYSROOT/bin/rustc" >&2
     exit 1
 fi
-if ! rustup toolchain list | grep -q '^galexy'; then
-    echo "build-galexy-python: rustup toolchain 'galexy' is missing (cargo xtask sysroot)" >&2
+# `toolchain list` still prints a dangling `rustup toolchain link`.
+# `cargo +galexy` then says the toolchain is not installed. `which`
+# follows the link and fails when the directory is gone.
+if ! rustup which --toolchain galexy rustc >/dev/null 2>&1; then
+    echo "build-galexy-python: rustup toolchain 'galexy' is missing or its directory is gone (cargo xtask sysroot)" >&2
     exit 1
 fi
 

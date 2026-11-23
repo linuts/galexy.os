@@ -3,6 +3,8 @@ use std::process::Command;
 
 #[path = "login_compilers.rs"]
 mod login_compilers;
+#[path = "toolchain_link.rs"]
+mod toolchain_link;
 
 fn main() {
     watch_userspace();
@@ -693,10 +695,9 @@ fn ensure_login_compilers() {
         eprintln!("[runner] building rustc for cargo run");
         run_host_script("scripts/build-galexy-rustc.sh");
     }
-    if !galexy_toolchain_linked() {
-        eprintln!("[runner] linking the galexy sysroot");
-        run_xtask_sysroot();
-    }
+    // Python's `cargo +galexy` needs this link. A name still printed by
+    // `rustup toolchain list` after the directory disappeared is not one.
+    ensure_galexy_toolchain(&root);
     if !root.join("target/galexy-python/python").is_file() {
         eprintln!("[runner] building python for cargo run");
         run_host_script("scripts/build-galexy-python.sh");
@@ -715,13 +716,66 @@ fn cargo_subcommand() -> Option<String> {
     Some(String::from_utf8_lossy(sub).into_owned())
 }
 
+/// `cargo +galexy` works. `toolchain list` is the wrong question: it
+/// still names a link whose directory was removed, and the python
+/// build then dies with `toolchain 'galexy' is not installed`.
 fn galexy_toolchain_linked() -> bool {
-    let Ok(out) = Command::new("rustup").args(["toolchain", "list"]).output() else {
+    let Ok(out) = Command::new("rustup")
+        .args([
+            "which",
+            "--toolchain",
+            toolchain_link::TOOLCHAIN_NAME,
+            "rustc",
+        ])
+        .output()
+    else {
         return false;
     };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .any(|line| line.split_whitespace().next() == Some("galexy"))
+    toolchain_link::which_rustc_usable(out.status.success(), &String::from_utf8_lossy(&out.stdout))
+}
+
+/// The rustc ELF is already built by the time this runs. Relink a
+/// complete `target/galexy-toolchain` in place. Build std only when
+/// that directory is gone or incomplete.
+fn ensure_galexy_toolchain(root: &Path) {
+    if galexy_toolchain_linked() {
+        return;
+    }
+    eprintln!("[runner] linking the galexy sysroot");
+    let dir = root.join("target/galexy-toolchain");
+    if toolchain_link::sysroot_dir_ready(&dir) {
+        link_rustup_toolchain(&dir);
+        if galexy_toolchain_linked() {
+            return;
+        }
+        panic!(
+            "rustup toolchain link {} {} did not leave a usable rustc",
+            toolchain_link::TOOLCHAIN_NAME,
+            dir.display()
+        );
+    }
+    run_xtask_sysroot();
+}
+
+fn link_rustup_toolchain(dir: &Path) {
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    eprintln!(
+        "[runner] rustup toolchain link {} {}",
+        toolchain_link::TOOLCHAIN_NAME,
+        dir.display()
+    );
+    let status = Command::new("rustup")
+        .args(["toolchain", "link", toolchain_link::TOOLCHAIN_NAME])
+        .arg(&dir)
+        .status()
+        .unwrap_or_else(|e| panic!("spawn rustup toolchain link: {e}"));
+    if !status.success() {
+        panic!(
+            "rustup toolchain link {} {} failed ({status})",
+            toolchain_link::TOOLCHAIN_NAME,
+            dir.display()
+        );
+    }
 }
 
 fn run_host_script(rel: &str) {
