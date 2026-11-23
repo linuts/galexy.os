@@ -8,7 +8,7 @@ Format: `#PR — Milestone — what landed`. PR numbers link to GitHub.
 
 ## Unreleased
 
-- Milestone 117 — SSH and SFTP, client and server, in one ring-3 Rust service.
+- [#170](https://github.com/linuts/galexy.os/pull/170) — Milestone 117 — SSH and SFTP, client and server, in one ring-3 Rust service.
   `/card/ssh` write accepts. Read opens a session. The program passes no address. `net` keeps the TCP bytes.
   Strict key exchange, Curve25519, an Ed25519 host key, and ChaCha20-Poly1305. The MAC is that AEAD.
   SFTP is a subsystem. The file read uses the seat's existing password hash and galfs tokens.
