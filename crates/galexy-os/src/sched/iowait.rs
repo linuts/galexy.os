@@ -546,15 +546,26 @@ pub unsafe fn syscall_handoff(
 /// RSP).
 pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
     crate::arch::cpu::note_switch();
-    if crate::drivers::virtio_blk::completion_ready() {
-        wake_io_block();
-    }
     watchdog_observe();
     crate::arch::cpu::set_departed_slot(0);
     // Tickless: advance by the one-shot duration that just fired.
     let elapsed = crate::arch::apic::take_armed_ms();
     crate::arch::timer::tick_by(elapsed);
     let now = crate::arch::timer_ticks();
+
+    // A virtio-blk waiter is halted on this CPU and may still hold
+    // `THREADS` from the syscall that started the transfer. `wake_io_block`
+    // and the scheduler both take that lock. Taking it here never returns:
+    // the holder is this same CPU, inside the halt. Leave it there. The
+    // uptime counter has already advanced. The waiter polls `used.idx`.
+    if crate::drivers::virtio_blk::xfer_wait_cpu() == Some(crate::arch::cpu::current_index()) {
+        crate::arch::apic::arm_oneshot_ms(crate::arch::apic::quantum_ms());
+        crate::arch::end_timer_interrupt();
+        return 0;
+    }
+    if crate::drivers::virtio_blk::completion_ready() {
+        wake_io_block();
+    }
 
     let me = cpu_sched();
     let next_ctx = interrupts::without_interrupts(|| {
