@@ -490,7 +490,87 @@ unsafe impl Send for Thread {}
 /// All preemptive threads, in round-robin order. Touched by the main loop
 /// and the timer handler — access is IRQ-gated (see lock audit). Slots stay
 /// in the vec (indexes must not shift); a freed record can be overwritten.
-pub(in crate::sched) static THREADS: Mutex<Vec<Thread>> = Mutex::new(Vec::new());
+///
+/// Holding this lock counts as a device-wait lock: a disk transfer must not
+/// run, and must not turn interrupts on, while it is held.
+pub(in crate::sched) static THREADS: ThreadTable = ThreadTable::new();
+
+static THREAD_DEPTH: [AtomicUsize; crate::arch::cpu::MAX_CPUS] =
+    [const { AtomicUsize::new(0) }; crate::arch::cpu::MAX_CPUS];
+
+pub(in crate::sched) struct ThreadTable {
+    inner: Mutex<Vec<Thread>>,
+}
+
+impl ThreadTable {
+    pub(in crate::sched) const fn new() -> Self {
+        Self {
+            inner: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub(in crate::sched) fn lock(&self) -> ThreadGuard<'_> {
+        ThreadGuard::claimed(self.inner.lock())
+    }
+
+    pub(in crate::sched) fn try_lock(&self) -> Option<ThreadGuard<'_>> {
+        Some(ThreadGuard::claimed(self.inner.try_lock()?))
+    }
+}
+
+pub(in crate::sched) struct ThreadGuard<'a> {
+    inner: core::mem::ManuallyDrop<crate::sync::MutexGuard<'a, Vec<Thread>>>,
+    cpu: Option<usize>,
+}
+
+impl<'a> ThreadGuard<'a> {
+    fn claimed(inner: crate::sync::MutexGuard<'a, Vec<Thread>>) -> Self {
+        let cpu = match crate::arch::cpu::try_current_index() {
+            Some(cpu) if cpu < crate::arch::cpu::MAX_CPUS => Some(cpu),
+            _ => None,
+        };
+        if let Some(cpu) = cpu {
+            THREAD_DEPTH[cpu].fetch_add(1, Ordering::Release);
+            crate::sync::io_depth_inc(cpu);
+        }
+        Self {
+            inner: core::mem::ManuallyDrop::new(inner),
+            cpu,
+        }
+    }
+}
+
+impl Drop for ThreadGuard<'_> {
+    fn drop(&mut self) {
+        unsafe { core::mem::ManuallyDrop::drop(&mut self.inner) };
+        if let Some(cpu) = self.cpu {
+            THREAD_DEPTH[cpu].fetch_sub(1, Ordering::Release);
+            crate::sync::io_depth_dec(cpu);
+        }
+    }
+}
+
+impl core::ops::Deref for ThreadGuard<'_> {
+    type Target = Vec<Thread>;
+    fn deref(&self) -> &Vec<Thread> {
+        &self.inner
+    }
+}
+
+impl core::ops::DerefMut for ThreadGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Vec<Thread> {
+        &mut self.inner
+    }
+}
+
+pub(in crate::sched) fn threads_held_here() -> bool {
+    match crate::arch::cpu::try_current_index() {
+        Some(cpu) if cpu < crate::arch::cpu::MAX_CPUS => {
+            THREAD_DEPTH[cpu].load(Ordering::Acquire) > 0
+        }
+        _ => false,
+    }
+}
 
 /// Per-CPU rotation state (SMP, M18): each CPU keeps its OWN round-robin —
 /// the global rotation statics would double-enter a task the moment two

@@ -144,10 +144,10 @@ pub(in crate::sched) fn task_read_inner(cap: Cap, dst: &mut [u8]) -> Result<IoOp
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    // A galfs body is read after `THREADS` drops. A cache miss loads the
-    // block from disk and halts with interrupts on. The timer takes
-    // `THREADS`; holding it across that halt never returns, and the
-    // uptime counter stops.
+    // The device wait turns interrupts on. It must not run while this
+    // CPU holds `THREADS` or a galfs lock. This syscall reaches that
+    // wait, so the thread table drops first. Every disk path does this;
+    // it is not a special case for read.
     let ready = interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let owner = running_proc_index(&threads, slot)?;
@@ -227,8 +227,8 @@ pub(crate) fn task_write_ex(cap: Cap, src: &[u8]) -> Result<IoOp, SysError> {
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    // Same halt as [`task_read_inner`]: `net pin` rewrites `/net` after the
-    // block has been sealed and evicted. Copying it back in reads the disk.
+    // Same rule as [`task_read_inner`]: the write reaches the device wait,
+    // so `THREADS` is not held across it.
     let (ready, wake_pipe, wake_lane) = interrupts::without_interrupts(|| {
         let threads = THREADS.lock();
         let owner = running_proc_index(&threads, slot)?;
@@ -344,6 +344,7 @@ pub(crate) fn task_create(name: &str, replace: bool) -> Result<Cap, SysError> {
         return Err(SysError::BadCap);
     }
     let cap = interrupts::without_interrupts(|| {
+        let _vol = galfs::volume_guard();
         let mut threads = THREADS.lock();
         let owner = running_proc_index(&threads, slot)?;
         let thread = &mut threads[owner];
@@ -387,6 +388,7 @@ pub(crate) fn task_remove(name: &str) -> Result<(), SysError> {
         return Err(SysError::BadCap);
     }
     interrupts::without_interrupts(|| {
+        let _vol = galfs::volume_guard();
         let mut threads = THREADS.lock();
         let (fs_root, fs_tokens) = {
             let owner = running_proc_index(&threads, slot)?;
@@ -424,6 +426,7 @@ pub(crate) fn task_rename(old: &str, new: &str) -> Result<(), SysError> {
         return Err(SysError::BadCap);
     }
     interrupts::without_interrupts(|| {
+        let _vol = galfs::volume_guard();
         let threads = THREADS.lock();
         let owner = running_proc_index(&threads, slot)?;
         let thread = &threads[owner];
@@ -462,8 +465,8 @@ pub(crate) fn task_truncate(cap: Cap, new_len: u64) -> Result<(), SysError> {
             | FileBody::Lane { .. } => Err(SysError::Unsupported),
         }
     })?;
-    // Truncate can copy a stable block back from disk. `THREADS` stays
-    // dropped across that halt; see [`task_read_inner`].
+    // Truncate can read a stable block back from disk. `THREADS` stays
+    // dropped across that wait; see [`task_read_inner`].
     galfs::truncate(obj, new_len as usize)?;
     let new_len = new_len as usize;
     interrupts::without_interrupts(|| {

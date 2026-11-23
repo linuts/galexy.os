@@ -553,11 +553,11 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
     crate::arch::timer::tick_by(elapsed);
     let now = crate::arch::timer_ticks();
 
-    // A virtio-blk waiter is halted on this CPU and may still hold
-    // `THREADS` from the syscall that started the transfer. `wake_io_block`
-    // and the scheduler both take that lock. Taking it here never returns:
-    // the holder is this same CPU, inside the halt. Leave it there. The
-    // uptime counter has already advanced. The waiter polls `used.idx`.
+    // This CPU is inside virtio-blk, holding the device lock, on the
+    // transfer stack. It does not hold `THREADS` or a galfs lock. Do not
+    // build a switch frame here and do not leave this CPU: another thread
+    // would spin on the device. The tick above already advanced uptime.
+    // Every other CPU still takes `THREADS`.
     if crate::drivers::virtio_blk::xfer_wait_cpu() == Some(crate::arch::cpu::current_index()) {
         crate::arch::apic::arm_oneshot_ms(crate::arch::apic::quantum_ms());
         crate::arch::end_timer_interrupt();
@@ -695,8 +695,8 @@ pub unsafe fn on_timer_tick(frame: *mut context::Context) -> u64 {
         }
 
         // A virtio-blk waiter is halted on this CPU while holding the
-        // device lock (and, for galfs, the sector buffer). Leave it
-        // there; another thread on this CPU would spin on those locks.
+        // device lock. The galfs locks are already dropped. Leave the
+        // waiter here; another thread on this CPU would spin on `DEV`.
         if crate::drivers::virtio_blk::xfer_wait_cpu() == Some(usize::from(my_cpu)) {
             next_slot = me.current.load(Ordering::Relaxed);
         }
@@ -1494,6 +1494,17 @@ pub(crate) fn task_park_keyboard(cap_bits: u64, addr: u64, len: u32) -> Result<(
         park_io(&mut threads, slot, IO_KEYBOARD, 0, addr, len, cap_bits);
         Ok(())
     })
+}
+
+/// Halt until a device interrupt. The caller must not hold `THREADS` or a
+/// galfs lock: the timer takes `THREADS`, and a peer that holds `THREADS`
+/// may be waiting on that galfs lock.
+pub(crate) fn halt_for_device() {
+    assert!(
+        !super::thread::threads_held_here() && !crate::sync::io_lock_held(),
+        "device wait while THREADS or a galfs lock is held"
+    );
+    x86_64::instructions::interrupts::enable_and_hlt();
 }
 
 /// Park the current user task until virtio-blk's used ring advances.
