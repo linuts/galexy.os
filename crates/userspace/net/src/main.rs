@@ -5,7 +5,8 @@
 //! Session keys are not written to the console. DNS-over-TLS checks the
 //! resolver against the Mozilla roots in this image, unless a key file
 //! was passed. That key is the pin, and the roots are not consulted.
-//! A lane does not use those roots.
+//! No key file reads the domain off the certificate, tells the seat,
+//! and later requires that domain. A lane does not use those roots.
 
 mod trust;
 
@@ -28,7 +29,7 @@ use galexy_rt::{
 };
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{verify_tls13_signature, CryptoProvider};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
+use rustls::pki_types::{CertificateDer, IpAddr, Ipv4Addr, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{
     ClientConfig, ClientConnection, Connection, DigitallySignedStruct, Error, ServerConfig,
     ServerConnection, SignatureScheme,
@@ -214,7 +215,7 @@ fn handle(
             rx, engine, record, admin, actor_id, msg[2], rest, now, plains,
         ),
         NET_OP_RESOLVE => resolve(rx, engine, record, actor_id, msg[2], rest, now),
-        NET_OP_PIN if admin => pin(rx, record, rest),
+        NET_OP_PIN if admin => pin(rx, engine, record, rest, now),
         NET_OP_BIND => bind_local(rx, engine, record, msg[2], rest),
         NET_OP_LISTEN => listen(rx, engine, record, msg[2], actor_id, gates, rest),
         NET_OP_DGRAM => datagram(rx, engine, record, msg[2], rest),
@@ -728,7 +729,7 @@ fn resolve(
     }
 }
 
-fn pin(rx: Cap, record: &mut Record, rest: &[u8]) {
+fn pin(rx: Cap, engine: &mut Engine, record: &mut Record, rest: &[u8], now: u64) {
     let key = if rest.len() == 4 {
         None
     } else if rest.len() >= 4 + 32 {
@@ -740,6 +741,31 @@ fn pin(rx: Cap, record: &mut Record, rest: &[u8]) {
         return;
     };
     let addr = [rest[0], rest[1], rest[2], rest[3]];
+    if addr == [10, 0, 2, 2] || addr == [10, 0, 2, 3] {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    if key.is_none() {
+        let name = match probe_domain(engine, addr, now) {
+            Ok(name) => name,
+            Err(why) => {
+                reply_lookup(rx, why);
+                return;
+            }
+        };
+        if record.pin(addr, None).is_err() || record.pin_domain(&name).is_err() {
+            reply(rx, b"access denied\n", 0);
+            return;
+        }
+        save_record(record);
+        let mut text = Vec::with_capacity(4 + name.len());
+        text.extend_from_slice(b"ok ");
+        text.extend_from_slice(&name);
+        text.push(b'\n');
+        log(&format!("[net] pin {}", String::from_utf8_lossy(&name)));
+        reply(rx, &text, 0);
+        return;
+    }
     if record.pin(addr, key).is_err() {
         reply(rx, b"access denied\n", 0);
         return;
@@ -789,6 +815,9 @@ fn lookup_dns(
     let Some(resolver) = record.resolver else {
         return Err("denied");
     };
+    if resolver.key.is_none() && resolver.name_len == 0 {
+        return Err("denied");
+    }
     let query = dns_query(name).ok_or("bad")?;
     let id = engine
         .tcp_connect(resolver.addr, galexy_netcfg::DOT_PORT)
@@ -797,7 +826,9 @@ fn lookup_dns(
         engine.tcp_release(id);
         return Err("deadline");
     }
-    let result = match tls_exchange(engine, id, resolver.addr, resolver.key, now, &query) {
+    let dns_name = (resolver.key.is_none() && resolver.name_len > 0)
+        .then_some(&resolver.name[..resolver.name_len as usize]);
+    let result = match tls_exchange(engine, id, resolver.key, dns_name, now, &query) {
         Ok(body) => dot_answer(&body).ok_or("denied"),
         Err(why) => Err(why),
     };
@@ -835,16 +866,64 @@ fn wait_established(engine: &mut Engine, id: u8, start: u64) -> bool {
     false
 }
 
-fn tls_exchange(
+/// Handshake only. The domain on the certificate is the pin. No query
+/// is written.
+fn probe_domain(engine: &mut Engine, addr: [u8; 4], start: u64) -> Result<Vec<u8>, &'static str> {
+    let id = engine
+        .tcp_connect(addr, galexy_netcfg::DOT_PORT)
+        .map_err(|_| "unavailable")?;
+    if !wait_established(engine, id, start) {
+        engine.tcp_release(id);
+        return Err("deadline");
+    }
+    let result = probe_leaf(engine, id, addr, start);
+    engine.tcp_release(id);
+    let leaf = result?;
+    let name = trust::dns_pin_name(&leaf, galexy_netcfg::RESOLVER_NAME_MAX).ok_or("denied")?;
+    if !trust::name_on_cert(&leaf, &name) {
+        return Err("denied");
+    }
+    Ok(name)
+}
+
+fn probe_leaf(
     engine: &mut Engine,
     id: u8,
     addr: [u8; 4],
+    start: u64,
+) -> Result<Vec<u8>, &'static str> {
+    let config =
+        trust::learn_client(trust::bundle_roots(), trust::provider()).map_err(|_| "bad")?;
+    let server = ServerName::IpAddress(IpAddr::V4(Ipv4Addr::from(addr)));
+    let mut conn = Connection::Client(ClientConnection::new(config, server).map_err(|_| "bad")?);
+    let limit = start.saturating_add(HANDSHAKE_MS);
+    while clock_ms() < limit {
+        if !conn.is_handshaking() {
+            break;
+        }
+        drive_tls(engine, id, &mut conn, &mut Vec::new())?;
+        pump(engine);
+        let _ = sleep_ms(20);
+    }
+    if conn.is_handshaking() {
+        return Err("deadline");
+    }
+    conn.peer_certificates()
+        .and_then(|chain| chain.first())
+        .map(|cert| cert.as_ref().to_vec())
+        .ok_or("denied")
+}
+
+fn tls_exchange(
+    engine: &mut Engine,
+    id: u8,
     key: Option<[u8; 32]>,
+    dns_name: Option<&[u8]>,
     start: u64,
     send: &[u8],
 ) -> Result<Vec<u8>, &'static str> {
     let (config, server) =
-        trust::resolver_client(addr, key, trust::provider()).map_err(|_| "bad")?;
+        trust::resolver_client(key, dns_name, trust::provider()).map_err(|_| "bad")?;
     let mut conn = Connection::Client(ClientConnection::new(config, server).map_err(|_| "bad")?);
     let mut body = Vec::new();
     let mut sent = false;

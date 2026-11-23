@@ -774,9 +774,11 @@ stays write on the port card. General browser TLS stays out.
 Those boxes stay open. This plan does not tag `v1.0`.
 
 Milestone 125 is the resolver. The image carries the Mozilla roots.
-`net pin <ip>` trusts a certificate that chains to them and is valid
-for that address. A key file is that raw key, and the bundle is not
-consulted. Lanes, SSH host keys, and `net allow` do not use it.
+`net pin <ip>` reads the domain off the certificate, tells the seat,
+and trusts a certificate that chains to those roots, is currently
+valid, and is valid for that domain. A key file is that raw key,
+and the bundle is not consulted. Lanes, SSH host keys, and
+`net allow` do not use it.
 
 What this phase does not add:
 

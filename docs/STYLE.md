@@ -252,9 +252,11 @@ Phase 16 (Milestones **108–119**) is the later plan. 108 through
   address or port only with the card from 112 or 113.
 - **Pinned keys, TLS 1.3 only.** A lane has no WebPKI default. The
   DNS resolver is the exception: the image carries the Mozilla
-  roots, and `net pin <ip>` trusts a certificate that chains to
-  them and is valid for that address. A key file replaces that
-  check. SSH host keys and `net allow` do not use the bundle. No
+  roots. `net pin <ip>` reads the domain off the certificate, tells
+  the seat, and later trusts a certificate that chains to those
+  roots, is currently valid, and is valid for that domain. A key
+  file replaces that check. SSH host keys and `net allow` do not
+  use the bundle. No
   TLS 1.2, no compression, no renegotiation, no 0-RTT in this phase.
   The handshake is a maintained Rust crate, not a private
   implementation. Session keys and private keys stay off serial,

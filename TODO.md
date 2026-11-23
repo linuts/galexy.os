@@ -3622,17 +3622,20 @@ accept.
 ## Milestone 125 — The resolver trusts the bundle
 
 `net pin <ip>` is enough. The image carries the Mozilla roots.
-The resolver certificate must chain to that bundle and be valid
-for that address. A key file is optional. When it is passed, that
-raw key is the pin and the bundle is not consulted. A certificate
-that chains to neither is refused, and no query is sent.
+The pin reads the domain off the certificate and the seat prints
+it. The certificate must chain to that bundle, be currently
+valid, and be valid for that domain. A key file is optional.
+When it is passed, that raw key is the pin and the bundle is not
+consulted. A certificate that chains to neither is refused, and
+no query is sent.
 `10.0.2.2` and `10.0.2.3` stay refused. DNS stays DNS-over-TLS
 on port 853. This is the resolver only. A lane, an SSH host key,
 and `net allow` do not use the bundle.
 
 - [x] **The bundle**: pure Rust (`webpki-roots`). No C and no
-      OpenSSL. The handshake checks the chain and the address.
-      No key file is required
+      OpenSSL. The handshake checks the chain, the dates, and
+      the domain taken from the certificate. The seat prints
+      that domain. No key file is required
 - [x] **The key file still wins**: that 32-byte key is the only
       certificate accepted. The bundle is not consulted. A
       different key sends no query
