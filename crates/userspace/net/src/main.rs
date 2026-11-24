@@ -11,6 +11,7 @@
 mod trust;
 
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use galexy_abi::{
@@ -622,6 +623,7 @@ fn drive_tls(
     let mut buf = [0u8; 2048];
     let n = engine.tcp_recv(id, &mut buf);
     if n > 0 {
+        note_pin_rx(&buf[..n]);
         conn.read_tls(&mut &buf[..n]).map_err(|_| "bad")?;
         let _io = conn.process_new_packets().map_err(|err| {
             let text = format!("{err}");
@@ -749,18 +751,22 @@ fn pin(rx: Cap, engine: &mut Engine, record: &mut Record, rest: &[u8], now: u64)
     }
     if key.is_none() {
         note_pin_reason("refused");
+        begin_pin_rx();
         let name = match probe_domain(engine, addr, now) {
             Ok(name) => name,
             Err(why) => {
                 reply_pin(rx, why);
+                end_pin_rx();
                 return;
             }
         };
         if record.pin(addr, None).is_err() || record.pin_domain(&name).is_err() {
             note_pin_reason("bad name");
             reply_pin(rx, "denied");
+            end_pin_rx();
             return;
         }
+        end_pin_rx();
         save_record(record);
         let mut text = Vec::with_capacity(4 + name.len());
         text.extend_from_slice(b"ok ");
@@ -964,8 +970,15 @@ fn probe_leaf(
 /// One short line for a refused `net pin`. Lookup and dial keep their
 /// own replies; this text is only what `reply_pin` prints.
 fn reply_pin(rx: Cap, why: &str) {
+    let seen = pin_rx_line();
     if why == "deadline" {
-        reply_lookup(rx, "deadline");
+        if seen.is_empty() {
+            reply_lookup(rx, "deadline");
+        } else {
+            let mut msg = seen;
+            msg.push_str("timed out\n");
+            reply(rx, msg.as_bytes(), 0);
+        }
         return;
     }
     if why == "unavailable" {
@@ -976,8 +989,56 @@ fn reply_pin(rx: Cap, why: &str) {
     if line.is_empty() || line.eq_ignore_ascii_case("access denied") {
         line = "refused".to_string();
     }
-    line.push('\n');
-    reply(rx, line.as_bytes(), 0);
+    let mut msg = seen;
+    msg.push_str(&line);
+    msg.push('\n');
+    reply(rx, msg.as_bytes(), 0);
+}
+
+/// First bytes of the pin flight. The kernel log is hidden; the seat
+/// only sees what `reply_pin` writes.
+static PIN_RX_ON: AtomicBool = AtomicBool::new(false);
+static PIN_RX: Mutex<String> = Mutex::new(String::new());
+
+fn begin_pin_rx() {
+    if let Ok(mut slot) = PIN_RX.lock() {
+        slot.clear();
+    }
+    PIN_RX_ON.store(true, Ordering::Relaxed);
+}
+
+fn end_pin_rx() {
+    PIN_RX_ON.store(false, Ordering::Relaxed);
+    if let Ok(mut slot) = PIN_RX.lock() {
+        slot.clear();
+    }
+}
+
+fn note_pin_rx(bytes: &[u8]) {
+    if !PIN_RX_ON.load(Ordering::Relaxed) || bytes.is_empty() {
+        return;
+    }
+    let Ok(mut slot) = PIN_RX.lock() else {
+        return;
+    };
+    if !slot.is_empty() {
+        return;
+    }
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let n = bytes.len().min(8);
+    let mut text = String::with_capacity(n * 2);
+    for &b in &bytes[..n] {
+        text.push(HEX[(b >> 4) as usize] as char);
+        text.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    *slot = text;
+}
+
+fn pin_rx_line() -> String {
+    match PIN_RX.lock() {
+        Ok(slot) if !slot.is_empty() => format!("rx {}\n", slot.as_str()),
+        _ => String::new(),
+    }
 }
 
 /// Remembers the reason for the pin attempt in flight.

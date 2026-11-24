@@ -212,7 +212,10 @@ certificate. The bundle is the Mozilla roots, linked as pure Rust
 (`webpki-roots`). No key file is required. A key file is optional.
 When it is passed, that raw 32-byte key is the pin and the bundle
 is not consulted for that resolver. A certificate that chains to
-neither is refused, and no query is sent. `10.0.2.2` and `10.0.2.3`
+neither is refused, and no query is sent. The seat then prints
+the cause (`clock not set`, `certificate not yet valid`,
+`chain refused`, or the other reason) and, when bytes arrived,
+`rx` plus the first of them. `10.0.2.2` and `10.0.2.3`
 stay refused. The pure-Rust provider already in `net` verifies
 ECDSA P-256, ECDSA P-384, and Ed25519. An RSA signature is refused.
 There is no OpenSSL and no C.
