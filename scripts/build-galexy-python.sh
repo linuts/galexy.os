@@ -110,6 +110,29 @@ export CARGO_PROFILE_RELEASE_LTO=off
 # bootstrap still splits metadata; this is only the host build of python.
 export CARGO_INCREMENTAL=0
 unset CARGO_ENCODED_RUSTFLAGS
+# This nightly's rustc worker stack is 17 MiB (`DEFAULT_STACK_SIZE` in
+# rustc_session). Compiling `icu_normalizer` while `icu_casemap` and
+# `rustpython-unicode` are also in codegen faults that stack. rustc's
+# own SIGSEGV handler prints
+# `…/bin/../lib/librustc_driver-*.so(+offset)` and truncates the trace
+# at 256 frames. That is this host compiler, not the OOM killer
+# (SIGKILL, no handler, and the other jobs would not still be
+# running) and not a cranelift rejection of the crate: the same
+# compiler and target compile `icu_normalizer` 2.2.0 when it is alone.
+# The handler's advice is to double the stack. A smaller inherited
+# value would shrink the 17 MiB default, so raise it. One cargo job,
+# and no inherited jobserver, so those three rustc processes are not
+# in codegen together. Finished crates stay. No `cargo clean`.
+case ${RUST_MIN_STACK:-} in
+    ''|*[!0-9]*) export RUST_MIN_STACK=35651584 ;;
+    *)
+        if [[ "$RUST_MIN_STACK" -lt 35651584 ]]; then
+            export RUST_MIN_STACK=35651584
+        fi
+        ;;
+esac
+export CARGO_BUILD_JOBS=1
+unset CARGO_MAKEFLAGS MAKEFLAGS MFLAGS
 
 cargo +galexy build --release \
     -Zembed-metadata=yes \
@@ -127,7 +150,8 @@ if [[ "${GALEXY_SKIP_PYTHON_CHECK:-}" != "1" ]]; then
     cd "$ROOT"
     # The Galexy link args above are for the target ELF. A host
     # `cargo test` must not inherit `--image-base`.
-    unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_PROFILE_RELEASE_LTO CARGO_INCREMENTAL
+    unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_PROFILE_RELEASE_LTO CARGO_INCREMENTAL \
+        RUST_MIN_STACK CARGO_BUILD_JOBS
     cargo test -p xtask python_elf::pinned_python_elf_is_loadable -- --exact
 )
 fi
