@@ -318,6 +318,22 @@ makes the rlib loadable on its own, so those dependents wait for
 the finished crate. The flag is part of the unit fingerprint, so
 a target directory left by the failed build rebuilds those crates.
 No `cargo clean`.
+The same script sets `RUST_MIN_STACK` to 35651584 (twice this
+nightly's 17 MiB rustc worker stack) when a smaller value is
+inherited, and `CARGO_BUILD_JOBS=1`. rustc's SIGSEGV handler prints
+`bin/../lib/librustc_driver-*.so(+offset)` and truncates the trace
+at 256 frames. On this nightly that library is
+`librustc_driver-f344ad00d19f4329.so`. The handler is what runs for
+a stack-guard fault. The OOM killer sends SIGKILL, which cannot
+print the trace, and it would not leave `icu_casemap` and
+`rustpython-unicode` compiling. A `cargo +galexy` of
+`icu_normalizer` 2.2.0 (the pin) with Cranelift for this target
+finishes on that same compiler when the rustc is alone. The
+doubled stack is the value the handler prints for the 17 MiB
+default. One job keeps the other Unicode crates out of codegen
+beside it. Neither value is part of the crate fingerprint, so a
+crate that already finished is left in place. The guest kernel
+stack is unchanged.
 
 Cranelift's codegen for this OS uses SSE. The kernel enables
 `CR4.OSFXSR` on every CPU (an AP's trampoline otherwise reloads CR4

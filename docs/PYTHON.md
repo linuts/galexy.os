@@ -147,7 +147,18 @@ this soft-float target. That `cargo +galexy` invocation also passes
 `-Zembed-metadata=yes` and `CARGO_INCREMENTAL=0`, the same host-build
 settings as `docs/RUSTC.md`. Without them this nightly leaves a
 metadata stub in the rlib, and a dependent reports `can't find
-crate`. The host build does not pass `--sysroot`
+crate`. The same script sets `RUST_MIN_STACK` to 35651584 (34 MiB,
+twice this nightly's 17 MiB rustc worker stack) when the environment
+is smaller, and `CARGO_BUILD_JOBS=1`. A parallel `cargo +galexy` of
+this graph SIGSEGVs in `librustc_driver` while compiling
+`icu_normalizer`, and the handler truncates the backtrace. The same
+compiler, the same `librustc_driver` build id, and this target
+compile `icu_normalizer` 2.2.0 when that rustc is the only one.
+The doubled stack is the figure that handler prints. One job keeps
+`icu_casemap` and `rustpython-unicode` from codegenning beside it.
+Finished crates stay. No `cargo clean`. This is the host compiler's
+stack. The guest kernel stack is unchanged. The host build does not
+pass `--sysroot`
 of this repository, and `targets/x86_64-unknown-galexy.json` is
 unchanged. There is no C library and no `std::net`. The Rust
 `libc` crate inside the sysroot is the same empty one every
