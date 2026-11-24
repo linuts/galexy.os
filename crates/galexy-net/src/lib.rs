@@ -62,6 +62,9 @@ struct Conn {
     tx_off: usize,
     last_tx_ms: u64,
     accepted: bool,
+    /// One segment that arrived ahead of `rcv_nxt`. Empty when none.
+    ooo_seq: u32,
+    ooo: Vec<u8>,
 }
 
 impl Conn {
@@ -81,6 +84,8 @@ impl Conn {
             tx_off: 0,
             last_tx_ms: 0,
             accepted: false,
+            ooo_seq: 0,
+            ooo: Vec::new(),
         }
     }
 }
@@ -464,13 +469,21 @@ impl Engine {
 
     /// Copy received bytes out of the connection.
     pub fn tcp_recv(&mut self, id: u8, dst: &mut [u8]) -> usize {
-        let Some(c) = self.conns.get_mut(id as usize) else {
-            return 0;
+        let n = {
+            let Some(c) = self.conns.get_mut(id as usize) else {
+                return 0;
+            };
+            let n = dst.len().min(c.rx_len);
+            dst[..n].copy_from_slice(&c.rx[..n]);
+            if n > 0 {
+                c.rx.copy_within(n..c.rx_len, 0);
+                c.rx_len -= n;
+            }
+            n
         };
-        let n = dst.len().min(c.rx_len);
-        dst[..n].copy_from_slice(&c.rx[..n]);
-        c.rx.copy_within(n..c.rx_len, 0);
-        c.rx_len -= n;
+        if n > 0 {
+            self.drain_held(id);
+        }
         n
     }
 
@@ -689,9 +702,18 @@ impl Engine {
             return;
         }
         let ihl = (ip[0] & 0x0f) as usize * 4;
-        if ip.len() < ihl {
+        if ihl < 20 || ip.len() < ihl {
             return;
         }
+        let total = u16::from_be_bytes([ip[2], ip[3]]) as usize;
+        if total < ihl {
+            return;
+        }
+        // Padding and a second frame sit past the IP length. A short
+        // capture stops early. Either one splices the TLS flight if it
+        // is treated as payload.
+        let have = ip.len().min(total);
+        let ip = &ip[..have];
         let src = [ip[12], ip[13], ip[14], ip[15]];
         let dst = [ip[16], ip[17], ip[18], ip[19]];
         if src != [0, 0, 0, 0] && src != [255, 255, 255, 255] {
@@ -935,14 +957,92 @@ impl Engine {
             }
             c.snd_una = ack;
         }
-        if !payload.is_empty() && seq == self.conns[id as usize].rcv_nxt {
+        if !payload.is_empty() {
+            self.accept_payload(id, seq, payload);
+        }
+    }
+
+    /// In-order bytes, the new tail of an overlap, or one segment held
+    /// across a hole. `rcv_nxt` moves only by bytes kept.
+    fn accept_payload(&mut self, id: u8, seq: u32, payload: &[u8]) {
+        let rcv = self.conns[id as usize].rcv_nxt;
+        let end = seq.wrapping_add(payload.len() as u32);
+        if !seq_lt(rcv, end) {
+            self.emit_tcp(id, 0x10, &[]);
+            return;
+        }
+        let (seq, owned) = if seq_lt(seq, rcv) {
+            let skip = rcv.wrapping_sub(seq) as usize;
+            (rcv, payload[skip..].to_vec())
+        } else {
+            (seq, payload.to_vec())
+        };
+        if seq == self.conns[id as usize].rcv_nxt {
+            self.take_in_order(id, &owned);
+            self.drain_held(id);
+        } else {
+            self.hold_ooo(id, seq, &owned);
+        }
+        self.emit_tcp(id, 0x10, &[]);
+    }
+
+    fn take_in_order(&mut self, id: u8, payload: &[u8]) {
+        let (n, rest_seq, rest) = {
             let c = &mut self.conns[id as usize];
             let room = BUF - c.rx_len;
             let n = payload.len().min(room);
-            c.rx[c.rx_len..c.rx_len + n].copy_from_slice(&payload[..n]);
-            c.rx_len += n;
-            c.rcv_nxt = c.rcv_nxt.wrapping_add(n as u32);
-            self.emit_tcp(id, 0x10, &[]);
+            if n > 0 {
+                c.rx[c.rx_len..c.rx_len + n].copy_from_slice(&payload[..n]);
+                c.rx_len += n;
+                c.rcv_nxt = c.rcv_nxt.wrapping_add(n as u32);
+            }
+            (n, c.rcv_nxt, payload[n..].to_vec())
+        };
+        if n < payload.len() {
+            self.hold_ooo(id, rest_seq, &rest);
+        }
+    }
+
+    /// Keep the segment closest to the hole. One slot is enough for the
+    /// middle piece of a three-segment flight to wait for the first.
+    fn hold_ooo(&mut self, id: u8, seq: u32, payload: &[u8]) {
+        if payload.is_empty() {
+            return;
+        }
+        let c = &mut self.conns[id as usize];
+        if !c.ooo.is_empty() && !seq_lt(seq, c.ooo_seq) {
+            return;
+        }
+        c.ooo_seq = seq;
+        c.ooo.clear();
+        let n = payload.len().min(BUF);
+        c.ooo.extend_from_slice(&payload[..n]);
+    }
+
+    fn drain_held(&mut self, id: u8) {
+        loop {
+            let c = &self.conns[id as usize];
+            if c.ooo.is_empty() {
+                return;
+            }
+            let seq = c.ooo_seq;
+            let rcv = c.rcv_nxt;
+            let end = seq.wrapping_add(c.ooo.len() as u32);
+            if !seq_lt(rcv, end) {
+                self.conns[id as usize].ooo.clear();
+                return;
+            }
+            if seq_lt(rcv, seq) {
+                return;
+            }
+            let skip = rcv.wrapping_sub(seq) as usize;
+            let rest = self.conns[id as usize].ooo[skip..].to_vec();
+            self.conns[id as usize].ooo.clear();
+            if BUF == self.conns[id as usize].rx_len {
+                self.hold_ooo(id, rcv, &rest);
+                return;
+            }
+            self.take_in_order(id, &rest);
         }
     }
 
@@ -963,15 +1063,21 @@ impl Engine {
         };
         let hop = self.next_hop(dst);
         let dst_mac = self.lookup(hop).unwrap_or([0xff; 6]);
-        let mut tcp = Vec::with_capacity(20 + payload.len());
+        // MSS 1460. A larger segment does not fit one virtio receive
+        // buffer, so the flight never arrives.
+        let mss = [2u8, 4, 0x05, 0xb4];
+        let opts: &[u8] = if flags & 0x02 != 0 { &mss } else { &[] };
+        let hdr = 20 + opts.len();
+        let mut tcp = Vec::with_capacity(hdr + payload.len());
         tcp.extend_from_slice(&src_port.to_be_bytes());
         tcp.extend_from_slice(&dst_port.to_be_bytes());
         tcp.extend_from_slice(&seq.to_be_bytes());
         tcp.extend_from_slice(&ack.to_be_bytes());
-        tcp.push(5 << 4);
+        tcp.push(((hdr / 4) as u8) << 4);
         tcp.push(flags);
         tcp.extend_from_slice(&8192u16.to_be_bytes());
         tcp.extend_from_slice(&[0, 0, 0, 0]);
+        tcp.extend_from_slice(opts);
         tcp.extend_from_slice(payload);
         stamp_tcp(&mut tcp, src_ip, dst);
         let frame = ipv4_frame(self.mac, dst_mac, src_ip, dst, 6, &tcp);
@@ -1001,6 +1107,10 @@ impl Engine {
             c.last_tx_ms = now_ms;
         }
     }
+}
+
+fn seq_lt(a: u32, b: u32) -> bool {
+    (a.wrapping_sub(b) as i32) < 0
 }
 
 fn prefix_of(mask: [u8; 4]) -> u8 {
@@ -1419,6 +1529,167 @@ mod tests {
         assert!(line.contains("fp="));
         assert!(!line.contains("1111111111111111"));
         assert!(lookup_name("echo").is_err());
+    }
+
+    /// Cloudflare's DNS-over-TLS reply: 3263 bytes, record header
+    /// `16 03 03 00 7a`. The rest is a pattern so a splice fails the compare.
+    fn cloudflare_flight() -> Vec<u8> {
+        let mut flight = vec![0u8; 3263];
+        flight[..8].copy_from_slice(&[0x16, 0x03, 0x03, 0x00, 0x7a, 0x02, 0x00, 0x00]);
+        for (i, b) in flight.iter_mut().enumerate().skip(8) {
+            *b = (i.wrapping_mul(17)) as u8;
+        }
+        flight
+    }
+
+    struct Dot {
+        engine: Engine,
+        id: u8,
+        rcv: u32,
+        sport: u16,
+        ack: u32,
+    }
+
+    fn dial_dot() -> Dot {
+        let mut engine = Engine::new([1; 6], false);
+        engine.set_fixed([10, 0, 2, 15], 24, [10, 0, 2, 2]);
+        engine.learn([10, 0, 2, 2], [9; 6]);
+        let id = engine.tcp_connect([1, 1, 1, 1], 853).unwrap();
+        let syn = engine.pop().unwrap();
+        assert_eq!(syn[46] >> 4, 6, "syn carries mss");
+        assert_eq!(&syn[54..58], &[2, 4, 0x05, 0xb4]);
+        let isn = u32::from_be_bytes([syn[38], syn[39], syn[40], syn[41]]);
+        let sport = u16::from_be_bytes([syn[34], syn[35]]);
+        let server_isn = 1_000_000u32;
+        engine.ingest(&peer_tcp(
+            sport,
+            server_isn,
+            isn.wrapping_add(1),
+            0x12,
+            &[],
+            &[],
+        ));
+        assert!(engine.tcp_established(id));
+        let _ = engine.pop();
+        Dot {
+            engine,
+            id,
+            rcv: server_isn.wrapping_add(1),
+            sport,
+            ack: isn.wrapping_add(1),
+        }
+    }
+
+    fn peer_tcp(dport: u16, seq: u32, ack: u32, flags: u8, opts: &[u8], payload: &[u8]) -> Vec<u8> {
+        let mut tcp = Vec::with_capacity(20 + opts.len() + payload.len());
+        tcp.extend_from_slice(&853u16.to_be_bytes());
+        tcp.extend_from_slice(&dport.to_be_bytes());
+        tcp.extend_from_slice(&seq.to_be_bytes());
+        tcp.extend_from_slice(&ack.to_be_bytes());
+        let hdr = 20 + opts.len();
+        assert_eq!(hdr % 4, 0);
+        tcp.push(((hdr / 4) as u8) << 4);
+        tcp.push(flags);
+        tcp.extend_from_slice(&65535u16.to_be_bytes());
+        tcp.extend_from_slice(&[0, 0, 0, 0]);
+        tcp.extend_from_slice(opts);
+        tcp.extend_from_slice(payload);
+        stamp_tcp(&mut tcp, [1, 1, 1, 1], [10, 0, 2, 15]);
+        ipv4_frame([9; 6], [1; 6], [1, 1, 1, 1], [10, 0, 2, 15], 6, &tcp)
+    }
+
+    fn feed(dot: &mut Dot, off: u32, bytes: &[u8]) {
+        dot.engine.ingest(&peer_tcp(
+            dot.sport,
+            dot.rcv.wrapping_add(off),
+            dot.ack,
+            0x18,
+            &[],
+            bytes,
+        ));
+    }
+
+    fn recv_all(engine: &mut Engine, id: u8) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut buf = [0u8; 2048];
+        loop {
+            let n = engine.tcp_recv(id, &mut buf);
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(&buf[..n]);
+        }
+        out
+    }
+
+    #[test]
+    fn dot_flight_three_segments_is_intact() {
+        let mut dot = dial_dot();
+        let flight = cloudflare_flight();
+        feed(&mut dot, 0, &flight[..1460]);
+        feed(&mut dot, 0, &flight[..1460]);
+        feed(&mut dot, 1460, &flight[1460..2920]);
+        feed(&mut dot, 2920, &flight[2920..]);
+        let got = recv_all(&mut dot.engine, dot.id);
+        assert_eq!(got.len(), 3263);
+        assert_eq!(&got[..8], &[0x16, 0x03, 0x03, 0x00, 0x7a, 0x02, 0x00, 0x00]);
+        assert_eq!(got, flight);
+    }
+
+    #[test]
+    fn dot_flight_middle_segment_first_is_intact() {
+        let mut dot = dial_dot();
+        let flight = cloudflare_flight();
+        feed(&mut dot, 1460, &flight[1460..2920]);
+        feed(&mut dot, 0, &flight[..1460]);
+        feed(&mut dot, 2920, &flight[2920..]);
+        assert_eq!(recv_all(&mut dot.engine, dot.id), flight);
+    }
+
+    #[test]
+    fn dot_flight_overlap_is_not_spliced() {
+        let mut dot = dial_dot();
+        let flight = cloudflare_flight();
+        feed(&mut dot, 0, &flight[..1460]);
+        feed(&mut dot, 1000, &flight[1000..2920]);
+        feed(&mut dot, 2920, &flight[2920..]);
+        assert_eq!(recv_all(&mut dot.engine, dot.id), flight);
+    }
+
+    #[test]
+    fn bytes_past_ip_length_are_not_payload() {
+        let mut dot = dial_dot();
+        let flight = cloudflare_flight();
+        let mut frame = peer_tcp(dot.sport, dot.rcv, dot.ack, 0x18, &[], &flight[..127]);
+        frame.extend_from_slice(&[0x00, 0x03, 0xff, 0xff]);
+        dot.engine.ingest(&frame);
+        let got = recv_all(&mut dot.engine, dot.id);
+        assert_eq!(got, flight[..127]);
+        assert_eq!(&got[..4], &[0x16, 0x03, 0x03, 0x00]);
+    }
+
+    #[test]
+    fn truncated_segment_then_overlap_fills_the_tail() {
+        let mut dot = dial_dot();
+        let flight = cloudflare_flight();
+        let mut frame = peer_tcp(dot.sport, dot.rcv, dot.ack, 0x18, &[], &flight[..400]);
+        frame.truncate(frame.len() - 80);
+        dot.engine.ingest(&frame);
+        assert_eq!(recv_all(&mut dot.engine, dot.id), flight[..320]);
+        feed(&mut dot, 0, &flight[..400]);
+        assert_eq!(recv_all(&mut dot.engine, dot.id), flight[320..400]);
+    }
+
+    #[test]
+    fn tcp_timestamp_option_is_not_payload() {
+        let mut dot = dial_dot();
+        let flight = cloudflare_flight();
+        let opts = [1u8, 1, 8, 10, 0, 0, 0, 1, 0, 0, 0, 2];
+        let frame = peer_tcp(dot.sport, dot.rcv, dot.ack, 0x18, &opts, &flight[..180]);
+        dot.engine.ingest(&frame);
+        let got = recv_all(&mut dot.engine, dot.id);
+        assert_eq!(&got[..4], &[0x16, 0x03, 0x03, 0x00]);
+        assert_eq!(got, flight[..180]);
     }
 
     impl Engine {
