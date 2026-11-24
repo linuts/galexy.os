@@ -216,6 +216,7 @@ fn handle(
         ),
         NET_OP_RESOLVE => resolve(rx, engine, record, actor_id, msg[2], rest, now),
         NET_OP_PIN if admin => pin(rx, engine, record, rest, now),
+        NET_OP_PIN => reply(rx, b"not admin\n", 0),
         NET_OP_BIND => bind_local(rx, engine, record, msg[2], rest),
         NET_OP_LISTEN => listen(rx, engine, record, msg[2], actor_id, gates, rest),
         NET_OP_DGRAM => datagram(rx, engine, record, msg[2], rest),
@@ -228,7 +229,7 @@ fn handle(
         NET_OP_STREAM => stream(
             rx, engine, record, msg[2], actor_id, gates, rest, lives, seen,
         ),
-        NET_OP_ALLOW | NET_OP_GRANT | NET_OP_REVOKE | NET_OP_SERVE | NET_OP_PIN => {
+        NET_OP_ALLOW | NET_OP_GRANT | NET_OP_REVOKE | NET_OP_SERVE => {
             reply(rx, b"access denied\n", 0);
         }
         _ => reply(rx, b"bad\n", 0),
@@ -625,6 +626,7 @@ fn drive_tls(
         let _io = conn.process_new_packets().map_err(|err| {
             let text = format!("{err}");
             log(&format!("[net] tls {text}"));
+            note_pin_reason(&text);
             if text.contains("pin-mismatch") {
                 "changed"
             } else {
@@ -746,15 +748,17 @@ fn pin(rx: Cap, engine: &mut Engine, record: &mut Record, rest: &[u8], now: u64)
         return;
     }
     if key.is_none() {
+        note_pin_reason("refused");
         let name = match probe_domain(engine, addr, now) {
             Ok(name) => name,
             Err(why) => {
-                reply_lookup(rx, why);
+                reply_pin(rx, why);
                 return;
             }
         };
         if record.pin(addr, None).is_err() || record.pin_domain(&name).is_err() {
-            reply(rx, b"access denied\n", 0);
+            note_pin_reason("bad name");
+            reply_pin(rx, "denied");
             return;
         }
         save_record(record);
@@ -767,7 +771,8 @@ fn pin(rx: Cap, engine: &mut Engine, record: &mut Record, rest: &[u8], now: u64)
         return;
     }
     if record.pin(addr, key).is_err() {
-        reply(rx, b"access denied\n", 0);
+        note_pin_reason("refused");
+        reply_pin(rx, "denied");
         return;
     }
     save_record(record);
@@ -905,8 +910,12 @@ fn probe_domain(engine: &mut Engine, addr: [u8; 4], start: u64) -> Result<Vec<u8
     let result = probe_leaf(engine, id, addr, start);
     engine.tcp_release(id);
     let leaf = result?;
-    let name = trust::dns_pin_name(&leaf, galexy_netcfg::RESOLVER_NAME_MAX).ok_or("denied")?;
+    let Some(name) = trust::dns_pin_name(&leaf, galexy_netcfg::RESOLVER_NAME_MAX) else {
+        note_pin_reason("no name on certificate");
+        return Err("denied");
+    };
     if !trust::name_on_cert(&leaf, &name) {
+        note_pin_reason("name not on certificate");
         return Err("denied");
     }
     Ok(name)
@@ -918,10 +927,15 @@ fn probe_leaf(
     addr: [u8; 4],
     start: u64,
 ) -> Result<Vec<u8>, &'static str> {
-    let config =
-        trust::learn_client(trust::bundle_roots(), trust::provider()).map_err(|_| "bad")?;
+    let config = trust::learn_client(trust::bundle_roots(), trust::provider()).map_err(|err| {
+        note_pin_reason(&err.to_string());
+        "denied"
+    })?;
     let server = ServerName::IpAddress(IpAddr::V4(Ipv4Addr::from(addr)));
-    let mut conn = Connection::Client(ClientConnection::new(config, server).map_err(|_| "bad")?);
+    let mut conn = Connection::Client(ClientConnection::new(config, server).map_err(|err| {
+        note_pin_reason(&err.to_string());
+        "denied"
+    })?);
     let limit = start.saturating_add(HANDSHAKE_MS);
     while clock_ms() < limit {
         if !conn.is_handshaking() {
@@ -934,10 +948,100 @@ fn probe_leaf(
     if conn.is_handshaking() {
         return Err("deadline");
     }
-    conn.peer_certificates()
+    match conn
+        .peer_certificates()
         .and_then(|chain| chain.first())
         .map(|cert| cert.as_ref().to_vec())
-        .ok_or("denied")
+    {
+        Some(der) => Ok(der),
+        None => {
+            note_pin_reason("no certificate");
+            Err("denied")
+        }
+    }
+}
+
+/// One short line for a refused `net pin`. Lookup and dial keep their
+/// own replies; this text is only what `reply_pin` prints.
+fn reply_pin(rx: Cap, why: &str) {
+    if why == "deadline" {
+        reply_lookup(rx, "deadline");
+        return;
+    }
+    if why == "unavailable" {
+        reply_lookup(rx, "unavailable");
+        return;
+    }
+    let mut line = pin_reason_line();
+    if line.is_empty() || line.eq_ignore_ascii_case("access denied") {
+        line = "refused".to_string();
+    }
+    line.push('\n');
+    reply(rx, line.as_bytes(), 0);
+}
+
+/// Remembers the reason for the pin attempt in flight.
+static PIN_WHY: Mutex<String> = Mutex::new(String::new());
+
+fn note_pin_reason(text: &str) {
+    let line = short_pin_reason(text);
+    if let Ok(mut slot) = PIN_WHY.lock() {
+        *slot = line;
+    }
+}
+
+fn pin_reason_line() -> String {
+    match PIN_WHY.lock() {
+        Ok(slot) if !slot.is_empty() => slot.clone(),
+        _ => "refused".to_string(),
+    }
+}
+
+/// `clock not set`, `certificate not yet valid`, `chain refused`, or
+/// another single line. Never `access denied`.
+fn short_pin_reason(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("not valid yet") || lower.contains("notvalidyet") {
+        return if clock_anchored() {
+            "certificate not yet valid".to_string()
+        } else {
+            "clock not set".to_string()
+        };
+    }
+    if lower.contains("unknownissuer") || lower.contains("unknown issuer") {
+        return "chain refused".to_string();
+    }
+    if lower.contains("certificate expired") || lower.contains("expiredcontext") {
+        return "certificate expired".to_string();
+    }
+    let mut line = String::new();
+    for ch in text.chars() {
+        if ch == '\n' || ch == '\r' {
+            break;
+        }
+        if line.len() >= 72 {
+            break;
+        }
+        line.push(ch);
+    }
+    let line = line.trim();
+    let line = line
+        .strip_prefix("invalid peer certificate: ")
+        .unwrap_or(line);
+    if line.is_empty() || line.eq_ignore_ascii_case("access denied") {
+        "refused".to_string()
+    } else {
+        line.to_string()
+    }
+}
+
+/// True when `Date` is a civil UTC time. An unset clock is uptime, which
+/// is below the year 2000 floor the CMOS reader accepts.
+fn clock_anchored() -> bool {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .is_some_and(|elapsed| elapsed.as_secs() >= 946_684_800)
 }
 
 fn tls_exchange(

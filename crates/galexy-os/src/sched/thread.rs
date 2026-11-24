@@ -25,7 +25,13 @@ use x86_64::{PhysAddr, VirtAddr};
 /* ---------------- preemptive threads ---------------- */
 
 /// Per-thread kernel stack size.
-pub(crate) const THREAD_STACK_SIZE: usize = 32 * 1024;
+///
+/// Volume unlock runs PBKDF2-HMAC-SHA256 on the caller's kernel stack.
+/// That nest (pbkdf2, hmac, sha256 compress, plus the syscall frame) is
+/// about 36 KiB. A 32 KiB stack continued into the previous allocation
+/// and zeroed init's saved `iret` frame, so the next return to init
+/// raised `#GP` and the seat froze. 64 KiB covers that nest.
+pub(crate) const THREAD_STACK_SIZE: usize = 64 * 1024;
 
 /// 16-byte-aligned buffer (FXSAVE requires it).
 #[repr(align(16))]
