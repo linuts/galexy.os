@@ -73,12 +73,12 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     }
 
     // One more reap cycle for determinism, then heap accounting: the three
-    // 32 KiB stacks + 3 fx areas (512 B each) must have been freed. A few
-    // hundred bytes of tombstone bookkeeping may remain (Thread slots stay
-    // in the Vec by design; see the STATE_* docs).
+    // 64 KiB kernel stacks + 3 fx areas (512 B each) must have been freed.
+    // A few hundred bytes of tombstone bookkeeping may remain (Thread slots
+    // stay in the Vec by design; see the STATE_* docs).
     sched::reap();
     let used_after = galexy_os::arch::mm::heap::used_bytes();
-    let expected_freed = (32 * 1024 + 512) * THREADS;
+    let expected_freed = (64 * 1024 + 512) * THREADS;
     assert!(
         used_after < used_before + expected_freed / 2,
         "stacks must return to the heap: before={used_before} after={used_after}"

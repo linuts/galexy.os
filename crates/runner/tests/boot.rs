@@ -1628,6 +1628,119 @@ fn disk_wait_keeps_the_seat_scheduled() {
     );
 }
 
+/// Second boot of a volume that already has a file. The passphrase path,
+/// then `svc date`, `net pin 1.1.1.1`, `nslookup`, and `shutdown`.
+#[test]
+fn sealed_volume_date_pin_shutdown() {
+    let disk = common::fresh_galfs_image("sealed-pin");
+    let mut owned: Vec<(String, String)> = Vec::new();
+    for pairs in [CREATE_VOLUME_KEYS, LOGIN_ADMIN_TESTPASS_KEYS] {
+        for (code, echo) in pairs {
+            owned.push(((*code).to_string(), (*echo).to_string()));
+        }
+    }
+    owned.extend(type_line("cd Desktop", "admin@galexy:/Desktop> "));
+    owned.extend(type_line("echo hello > note", "admin@galexy:/Desktop> "));
+    owned.extend(type_line("sync", "admin@galexy:/Desktop> "));
+    owned.extend(type_line("shutdown", "[init] power"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial1 = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &keys,
+        "New passphrase: ",
+        "[init] power",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    assert!(
+        !serial1.contains("[PANIC]"),
+        "boot 1 panicked; serial:\n{serial1}"
+    );
+    assert!(
+        serial1.contains("[init] power"),
+        "boot 1 did not power off; serial:\n{serial1}"
+    );
+
+    let mut owned: Vec<(String, String)> = Vec::new();
+    for (code, echo) in UNLOCK_GALFS_KEYS {
+        owned.push(((*code).to_string(), (*echo).to_string()));
+    }
+    for (code, echo) in LOGIN_ADMIN_TESTPASS_KEYS {
+        owned.push(((*code).to_string(), (*echo).to_string()));
+    }
+    owned.extend(type_line("cd Desktop", "admin@galexy:/Desktop> "));
+    owned.extend(type_line("cat note", "hello"));
+    owned.extend(type_line("svc date", " utc"));
+    owned.extend(type_line("net pin 1.1.1.1", "ok "));
+    owned.extend(type_line("nslookup google.com", "google.com "));
+    owned.extend(type_line("shutdown", "[init] power"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &keys,
+        "Volume passphrase: ",
+        "[init] power",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    let _ = std::fs::remove_file(&disk);
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "boot 2 panicked; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("device wait while THREADS or a galfs lock is held"),
+        "disk wait still held a lock the timer needs; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("hello"),
+        "the file from boot 1 was not there; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains(" utc") && !serial.contains("unset"),
+        "svc date did not return a civil time; serial:\n{serial}"
+    );
+    assert!(
+        serial.lines().any(pin_ok_line),
+        "net pin did not print ok and a domain; serial:\n{serial}"
+    );
+    assert!(
+        !serial.lines().any(|line| line.trim() == "access denied"),
+        "net pin printed a bare access denied; serial:\n{serial}"
+    );
+    assert!(
+        serial.lines().any(|line| line.contains("google.com ")),
+        "nslookup did not print the name; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[init] shutdown") && serial.contains("[init] power"),
+        "shutdown did not power off; serial:\n{serial}"
+    );
+    let samples = uptime_tenths(&serial);
+    assert!(
+        samples.len() >= 2 && samples.iter().copied().max() > samples.iter().copied().min(),
+        "uptime counter did not advance ({samples:?}); serial:\n{serial}"
+    );
+}
+
+fn pin_ok_line(line: &str) -> bool {
+    let Some(name) = line.trim().strip_prefix("ok ") else {
+        return false;
+    };
+    name.contains('.')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+}
+
 /// Tenths of a second from status-bar lines `up <sec>.<tenth>s`.
 fn uptime_tenths(serial: &str) -> Vec<u32> {
     let bytes = serial.as_bytes();
@@ -6523,7 +6636,7 @@ fn resolver_pin_still_wins() {
     owned.extend(type_line("connect --putkey", "wrote"));
     owned.extend(type_line("net pin 10.0.2.2 /k", "access denied"));
     owned.extend(type_line("net pin 10.0.2.3 /k", "access denied"));
-    owned.extend(type_line("net pin 172.30.0.2", "access denied"));
+    owned.extend(type_line("net pin 172.30.0.2", "chain refused"));
     owned.extend(type_line("ping google.com", "access denied"));
     owned.extend(type_line("net pin 172.30.0.2 /bad", "ok"));
     owned.extend(type_line("ping google.com", "access denied"));
@@ -6571,8 +6684,12 @@ fn resolver_pin_still_wins() {
     );
     assert_eq!(
         serial.matches("access denied").count(),
-        7,
+        6,
         "a refused resolver or a bad pin was accepted; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("chain refused"),
+        "a certificate that chains to neither did not say why; serial:\n{serial}"
     );
 }
 
