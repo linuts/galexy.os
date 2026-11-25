@@ -229,9 +229,11 @@ Phase 16 (Milestones **108–119**) is the later plan. 108 through
 - **A line in `/policy` is the call.** `connect` stays a lane.
   A `net dial` rule names the caller and the host. A `net listen`
   rule names the caller and the port. A `net icmp` rule names ping.
-  A `net time` rule names the caller and one address. `net time <ip>`
-  sends one NTP packet to UDP port 123 and sets civil UTC from the
-  reply. No name, no poll, no NTS.
+  A `net time` rule names the caller and one address or one DNS name.
+  `net time <ip>` sends one NTP packet to UDP port 123. `net time <name>`
+  looks that name up once on the pinned DNS-over-TLS resolver, then
+  sends that packet. Success prints civil UTC. No pin prints
+  `access denied` and sends nothing. No poll, no NTS, no plaintext DNS.
   `usb use` names one device id. `std::net` and Python `socket`
   call those rules: listen, datagram send and receive, and an
   address or a port. Bind of the stored local address is admin.

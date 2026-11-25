@@ -1043,11 +1043,14 @@ pub const NET_OP_RECV: u8 = 11;
 /// hold the call. This is not a new syscall.
 pub const NET_OP_STREAM: u8 = 12;
 /// Net control: one NTP query. Admin only. Four payload bytes are an
-/// IPv4 address. `net` sends one packet to UDP port 123 and reads one
-/// reply from that address. The transmit timestamp sets `Date` and the
-/// CMOS clock. A `sec net time` rule must name the caller and that
-/// address. A missing rule sends nothing. There is no name lookup, no
-/// poll, and no NTS. Port 53 is not used. This is not a new syscall.
+/// IPv4 address. A longer payload is a length-prefixed DNS name: one
+/// lookup on the pinned DNS-over-TLS resolver, then the same query to
+/// that address. No pin replies `access denied` and sends nothing.
+/// `net` sends one packet to UDP port 123 and reads one reply from
+/// that address. The transmit timestamp sets `Date` and the CMOS
+/// clock. A `sec net time` rule must name the caller and that address
+/// or that name. A missing rule sends nothing. There is no poll and
+/// no NTS. Port 53 is not used. This is not a new syscall.
 pub const NET_OP_TIME: u8 = 13;
 
 /// USB control: list enumerated devices, one per line. The reply is

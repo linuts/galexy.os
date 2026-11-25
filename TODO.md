@@ -3672,10 +3672,12 @@ smear.
       UDP port 123 and reads one reply from that address. The
       transmit time in the reply sets `Date` and the CMOS chip.
       A reply from any other address is ignored. The wire must be
-      up. No name is resolved: the clock is why a name cannot be
-      looked up yet. The address is four bytes until Milestone 120
+      up. A DNS name is one lookup on the pinned DNS-over-TLS
+      resolver, then that same packet. No pin prints `access denied`
+      and sends nothing. Plaintext DNS stays unused. The address is
+      four bytes until Milestone 120
 - [x] **Who asks**: the administrative seat. The command is
-      `net time <ip>`. No new syscall. Opcode 13 on net cap
+      `net time <ip>` or `net time <name>`. No new syscall. Opcode 13 on net cap
       `0x800A` appends. A logged-out seat is `AccessDenied`. A
       program that is not the administrative user is refused.
       Port 53 stays unused

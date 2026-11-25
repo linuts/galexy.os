@@ -6366,7 +6366,9 @@ fn net_udp_and_tcp_reach_the_host() {
 }
 
 /// Milestone 126: one NTP reply sets civil UTC. A missing rule sends
-/// nothing. `10.0.2.2` and `10.0.2.3` stay refused as resolvers.
+/// nothing. A name is one lookup on the pinned DNS-over-TLS resolver.
+/// No pin prints `access denied` and sends no packet. `10.0.2.2` and
+/// `10.0.2.3` stay refused as resolvers.
 #[test]
 fn net_time_sets_the_date() {
     let unix = std::time::SystemTime::now()
@@ -6378,6 +6380,26 @@ fn net_time_sets_the_date() {
     let when = std::str::from_utf8(&buf[..n]).expect("utf8").to_string();
     let shown = format!("{when} utc");
     let day = when[..10].to_string();
+    let (cert_der, key_der) = listener_identity();
+    let dot_hits = Arc::new(AtomicUsize::new(0));
+    let query = Arc::new(Mutex::new(Vec::new()));
+    let dot_bg = Arc::clone(&dot_hits);
+    let query_bg = Arc::clone(&query);
+    // A resolved 10.0.2.2 is dropped, the same as a resolver pin of that
+    // address. The answer is the host address the NTP socket also hears.
+    let dot = std::thread::spawn(move || {
+        host_dot_serve_answer(
+            cert_der,
+            key_der,
+            dot_bg,
+            Some(query_bg),
+            [172, 30, 0, 2],
+            "127.0.0.1",
+            18_853,
+        )
+    });
+    wait_local_port(18_853);
+    let proxy = start_dot_proxy(853, 18_853);
     let ntp = start_fixed_ntp(unix);
     let mut owned: Vec<(String, String)> = with_login(&[])
         .into_iter()
@@ -6388,7 +6410,9 @@ fn net_time_sets_the_date() {
     owned.extend(type_line("net pin 10.0.2.2", "access denied"));
     owned.extend(type_line("net pin 10.0.2.3", "access denied"));
     owned.extend(type_line("net pin 1.1.1.1", "clock not set"));
-    owned.extend(type_line("net time time.example", "bad"));
+    owned.extend(type_line("net time example", "bad"));
+    owned.extend(type_line("sec net time time.example shell", "ok"));
+    owned.extend(type_line("net time time.example", "access denied"));
     owned.extend(type_line("net time 10.0.2.2", "access denied"));
     owned.extend(type_line("sec net time 1.2.3.4 shell", "ok"));
     owned.extend(type_line("net time 10.0.2.2", "access denied"));
@@ -6396,6 +6420,10 @@ fn net_time_sets_the_date() {
     owned.extend(type_line("net time 10.0.2.2", &shown));
     owned.extend(type_line("svc date", &day));
     owned.extend(type_line("net pin 1.1.1.1", "ok "));
+    owned.extend(type_line("connect --putkey", "wrote"));
+    owned.extend(type_line("net pin 172.30.0.2 /k", "ok"));
+    owned.extend(type_line("sec net time cloudflare-dns.com shell", "ok"));
+    owned.extend(type_line("net time cloudflare-dns.com", &shown));
     owned.extend(type_line("sec net time 10.0.2.2 shell2", "ok"));
     owned.extend(type_line("useradd eve", "Password: "));
     owned.extend([
@@ -6413,6 +6441,7 @@ fn net_time_sets_the_date() {
         ("ret".into(), "eve@galexy> ".into()),
     ]);
     owned.extend(type_line("net time 10.0.2.2", "access denied"));
+    owned.extend(type_line("net time cloudflare-dns.com", "access denied"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
         .map(|(code, echo)| (code.as_str(), echo.as_str()))
@@ -6428,6 +6457,9 @@ fn net_time_sets_the_date() {
     );
     let hits = ntp.hits();
     drop(ntp);
+    drop(proxy);
+    drop(dot);
+    let asked = query.lock().map(|q| q.clone()).unwrap_or_default();
     assert!(
         !serial.contains("[PANIC]") && !serial.contains("double fault"),
         "kernel panicked; serial:\n{serial}"
@@ -6453,8 +6485,17 @@ fn net_time_sets_the_date() {
         "the pin did not proceed after the clock was set; serial:\n{serial}"
     );
     assert_eq!(
-        hits, 1,
-        "a refused query must not send, and the allowed query sends once; serial:\n{serial}"
+        hits, 2,
+        "the address query and the domain query each send once; serial:\n{serial}"
+    );
+    assert_eq!(
+        dot_hits.load(Ordering::Relaxed),
+        1,
+        "an unpinned name sent a lookup; serial:\n{serial}"
+    );
+    assert!(
+        asked.windows(10).any(|w| w == b"cloudflare") && asked.windows(3).any(|w| w == b"com"),
+        "the lookup was not for cloudflare-dns.com: {asked:?}"
     );
     assert!(
         !serial.contains("udp/53") && !serial.contains("port 53"),
@@ -6572,6 +6613,122 @@ while time.time() < end:
         hits_path,
         script,
         pid_path,
+    }
+}
+
+struct PortProxy {
+    child: std::process::Child,
+    script: std::path::PathBuf,
+    pid_path: std::path::PathBuf,
+}
+
+impl Drop for PortProxy {
+    fn drop(&mut self) {
+        if let Ok(pid) = std::fs::read_to_string(&self.pid_path) {
+            let _ = std::process::Command::new("sudo")
+                .args(["-n", "kill", "-TERM", pid.trim()])
+                .status();
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.script);
+        let _ = std::fs::remove_file(&self.pid_path);
+    }
+}
+
+/// Port 853 is the resolver port. Some hosts refuse an unprivileged
+/// bind there, so a root proxy forwards it to the server on `dest`.
+fn start_dot_proxy(listen: u16, dest: u16) -> PortProxy {
+    let id = std::process::id();
+    let dir = std::env::temp_dir();
+    let pid_path = dir.join(format!("galexy-dot-proxy-{id}.pid"));
+    let script = dir.join(format!("galexy-dot-proxy-{id}.py"));
+    let src = r#"import os, socket, sys, threading, time
+listen_port, dest_port, pid_path = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
+open(pid_path, "w").write(str(os.getpid()))
+os.chmod(pid_path, 0o644)
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("0.0.0.0", listen_port))
+s.listen(16)
+s.settimeout(0.5)
+
+def pump(src, dst):
+    try:
+        while True:
+            data = src.recv(16384)
+            if not data:
+                break
+            dst.sendall(data)
+    except Exception:
+        pass
+    try:
+        dst.shutdown(socket.SHUT_WR)
+    except Exception:
+        pass
+
+end = time.time() + 500
+while time.time() < end:
+    try:
+        client, _ = s.accept()
+    except socket.timeout:
+        continue
+    try:
+        upstream = socket.create_connection(("127.0.0.1", dest_port), 5)
+    except Exception:
+        client.close()
+        continue
+    threading.Thread(target=pump, args=(client, upstream), daemon=True).start()
+    threading.Thread(target=pump, args=(upstream, client), daemon=True).start()
+"#;
+    std::fs::write(&script, src).expect("write dot proxy");
+    let mut child = std::process::Command::new("sudo")
+        .args([
+            "-n",
+            "python3",
+            script.to_str().expect("script path"),
+            &listen.to_string(),
+            &dest.to_string(),
+            pid_path.to_str().expect("pid path"),
+        ])
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("sudo python3 for the DNS-over-TLS proxy");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if std::fs::read_to_string(&pid_path).is_ok() {
+            break;
+        }
+        if let Some(status) = child.try_wait().expect("proxy wait") {
+            let mut err = String::new();
+            if let Some(stderr) = child.stderr.as_mut() {
+                let _ = std::io::Read::read_to_string(stderr, &mut err);
+            }
+            panic!("dot proxy exited {status}: {err}");
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("dot proxy did not bind");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    PortProxy {
+        child,
+        script,
+        pid_path,
+    }
+}
+
+fn wait_local_port(port: u16) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    loop {
+        if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+            return;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("nothing accepted on {port}");
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -8478,8 +8635,28 @@ fn host_dot_serve(
     hits: Arc<AtomicUsize>,
     query_out: Option<Arc<Mutex<Vec<u8>>>>,
 ) {
+    host_dot_serve_answer(
+        cert_der,
+        key_der,
+        hits,
+        query_out,
+        [172, 30, 0, 2],
+        "0.0.0.0",
+        853,
+    );
+}
+
+fn host_dot_serve_answer(
+    cert_der: Vec<u8>,
+    key_der: Vec<u8>,
+    hits: Arc<AtomicUsize>,
+    query_out: Option<Arc<Mutex<Vec<u8>>>>,
+    addr: [u8; 4],
+    bind_ip: &'static str,
+    port: u16,
+) {
     let config = tls_server(cert_der, key_der);
-    let listener = std::net::TcpListener::bind(("0.0.0.0", 853)).expect("bind dot 853");
+    let listener = std::net::TcpListener::bind((bind_ip, port)).expect("bind dot");
     listener.set_nonblocking(true).expect("dot nonblocking");
     let deadline = std::time::Instant::now() + Duration::from_secs(400);
     while std::time::Instant::now() < deadline {
@@ -8511,7 +8688,7 @@ fn host_dot_serve(
                 saved.extend_from_slice(&query);
             }
         }
-        let answer = dns_a_response(&query, [172, 30, 0, 2]);
+        let answer = dns_a_response(&query, addr);
         let _ = tls.write_all(&answer);
     }
 }

@@ -15,8 +15,8 @@ pub const VERB_DIAL: u8 = 1;
 pub const VERB_LISTEN: u8 = 2;
 pub const VERB_ICMP: u8 = 3;
 pub const VERB_USB: u8 = 4;
-/// One NTP server. The object is `*` or one IPv4 address. The port is
-/// 123 and is not written in the line.
+/// One NTP server. The object is `*`, one IPv4 address, or one DNS
+/// name. The port is 123 and is not written in the line.
 pub const VERB_TIME: u8 = 5;
 
 const SUB_ID: u8 = 1;
@@ -139,7 +139,8 @@ fn object_shape(verb: u8, object: &[u8]) -> bool {
     match verb {
         VERB_DIAL => dial_shape(object),
         VERB_LISTEN => listen_shape(object),
-        VERB_ICMP | VERB_TIME => object == b"*" || ipv4(object).is_some(),
+        VERB_ICMP => object == b"*" || ipv4(object).is_some(),
+        VERB_TIME => object == b"*" || ipv4(object).is_some() || time_name(object),
         VERB_USB => usb_id(object),
         _ => false,
     }
@@ -236,6 +237,36 @@ fn split_port(text: &[u8]) -> Option<(&[u8], u16)> {
     let colon = text.iter().rposition(|b| *b == b':')?;
     let port = parse_u16(&text[colon + 1..])?;
     Some((&text[..colon], port))
+}
+
+/// A DNS name on a `net time` line. No port and no star. A three-byte
+/// name is not a name on the time opcode: four payload bytes are an
+/// address.
+fn time_name(name: &[u8]) -> bool {
+    if name.is_empty() || name.len() == 3 || name.len() > 64 {
+        return false;
+    }
+    let mut label = 0usize;
+    let mut dot = false;
+    for b in name {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' => {
+                label += 1;
+                if label > 63 {
+                    return false;
+                }
+            }
+            b'.' => {
+                if label == 0 {
+                    return false;
+                }
+                dot = true;
+                label = 0;
+            }
+            _ => return false,
+        }
+    }
+    label != 0 && dot
 }
 
 fn ipv4(text: &[u8]) -> Option<[u8; 4]> {
@@ -398,7 +429,24 @@ mod tests {
         assert!(allows(text, &stamp_name("shell2"), VERB_TIME, b"9.9.9.9"));
         assert!(valid_line(b"net time * name shell"));
         assert!(!valid_line(b"net time *:123 name shell"));
-        assert!(!valid_line(b"net time time.example name shell"));
+        assert!(valid_line(b"net time time.example name shell"));
+        assert!(valid_line(b"net time cloudflare-dns.com name shell"));
+        assert!(!valid_line(b"net time *.example name shell"));
+        assert!(!valid_line(b"net time time.example:123 name shell"));
+        let named = b"net time cloudflare-dns.com name shell\n";
+        assert!(allows(
+            named,
+            &stamp_name("shell"),
+            VERB_TIME,
+            b"cloudflare-dns.com"
+        ));
+        assert!(!allows(named, &stamp_name("shell"), VERB_TIME, b"1.1.1.1"));
+        assert!(!allows(
+            named,
+            &stamp_name("shell"),
+            VERB_TIME,
+            b"time.example"
+        ));
     }
 
     #[test]

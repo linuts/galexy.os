@@ -321,7 +321,7 @@ fn handle(
         NET_OP_ALLOW if admin => allow(rx, record, rest),
         NET_OP_SERVE if admin => serve(rx, engine, record, &stamp, actor_id, gates, rest),
         NET_OP_PING => ping(rx, engine, record, &stamp, rest, now),
-        NET_OP_TIME => time_query(rx, engine, &stamp, admin, rest),
+        NET_OP_TIME => time_query(rx, engine, record, &stamp, admin, rest, now),
         NET_OP_STREAM => stream(
             rx, engine, record, &stamp, actor_id, gates, rest, lives, seen,
         ),
@@ -1700,26 +1700,61 @@ fn two_fields(rest: &[u8]) -> Option<(&[u8], &[u8])> {
 }
 
 /// One NTP query. The administrative seat asks. A `net time` line in
-/// `/policy` names that seat and the address. No name, no poll, no NTS.
-fn time_query(rx: Cap, engine: &mut Engine, stamp: &Stamp, admin: bool, rest: &[u8]) {
+/// `/policy` names that seat and the address, or the DNS name. A name
+/// is one lookup on the pinned DNS-over-TLS resolver, then one packet
+/// to that address. No pin is the resolver's refusal, and no packet.
+/// No poll, no NTS, no plaintext DNS.
+fn time_query(
+    rx: Cap,
+    engine: &mut Engine,
+    record: &Record,
+    stamp: &Stamp,
+    admin: bool,
+    rest: &[u8],
+    now: u64,
+) {
     if !admin {
         reply(rx, b"access denied\n", 0);
         return;
     }
-    if rest.len() != 4 {
-        reply(rx, b"bad\n", 0);
-        return;
-    }
-    let ip = [rest[0], rest[1], rest[2], rest[3]];
-    if ip == [0, 0, 0, 0] || ip == [255, 255, 255, 255] {
-        reply(rx, b"bad\n", 0);
-        return;
-    }
-    let object = format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
-    if !time_ok(stamp, object.as_bytes()) {
-        reply(rx, b"access denied\n", 0);
-        return;
-    }
+    let (ip, object) = if rest.len() == 4 {
+        let ip = [rest[0], rest[1], rest[2], rest[3]];
+        if ip == [0, 0, 0, 0] || ip == [255, 255, 255, 255] {
+            reply(rx, b"bad\n", 0);
+            return;
+        }
+        let object = format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
+        if !time_ok(stamp, object.as_bytes()) {
+            reply(rx, b"access denied\n", 0);
+            return;
+        }
+        (ip, object)
+    } else {
+        let Some(name) = dns_rest(rest) else {
+            reply(rx, b"bad\n", 0);
+            return;
+        };
+        if !time_ok(stamp, name) {
+            reply(rx, b"access denied\n", 0);
+            return;
+        }
+        let ip = match lookup_dns(engine, record, name, now) {
+            Ok(ip) => ip,
+            Err(why) => {
+                reply_lookup(rx, why);
+                return;
+            }
+        };
+        if ip == [0, 0, 0, 0] || ip == [255, 255, 255, 255] {
+            reply(rx, b"bad\n", 0);
+            return;
+        }
+        let Ok(object) = core::str::from_utf8(name) else {
+            reply(rx, b"bad\n", 0);
+            return;
+        };
+        (ip, object.to_string())
+    };
     if engine.locator().is_none() {
         reply(rx, b"down\n", 0);
         return;

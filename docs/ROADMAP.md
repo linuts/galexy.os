@@ -4,7 +4,7 @@ Direction-level plan. Concrete check-off items live in `TODO.md`.
 
 ## Where we stand (October 2026)
 
-Through Milestone 119. Milestone 125 has landed: the DNS resolver trusts the Mozilla bundle in the image. Milestone 126 has landed: `net time <ip>` sets civil UTC from one NTP reply. Milestones 120–124 (one address type) stay open. Next, and not waiting on them: 127 makes the first user the administrator, and 128 is that first boot.
+Through Milestone 119. Milestone 125 has landed: the DNS resolver trusts the Mozilla bundle in the image. Milestone 126 has landed: `net time <ip>` or a pinned DNS name sets civil UTC from one NTP reply. Milestones 120–124 (one address type) stay open. Next, and not waiting on them: 127 makes the first user the administrator, and 128 is that first boot.
 The bar is a **secure, fast, modern-only,
 full-feature, ready** OS. Each row says what is true today and which
 milestone closes the gap.
@@ -798,11 +798,14 @@ Milestone **126** has landed. Milestones **127–128** do not wait
 on 120–124. Checkboxes live in `TODO.md`. This does not tag `v1.0`.
 
 126 is one NTP query. `net time <ip>` sends one packet to UDP
-port 123 and sets `Date` from the reply. The administrative seat
-asks, and a `net time` line in `/policy` names that seat and the
-address. There is no name lookup, no poll loop, and no NTS: NTS
-needs a clock, and this row is the clock. `Clock` stays
-milliseconds since boot. `net_time_sets_the_date` is the run.
+port 123 and sets `Date` from the reply. `net time <name>` looks
+that name up once on the pinned DNS-over-TLS resolver and sends
+the same packet. The administrative seat asks, and a `net time`
+line in `/policy` names that seat and the address or the name. No
+pin prints `access denied` and sends nothing. There is no poll
+loop and no NTS: NTS needs a clock, and this row is the clock.
+`Clock` stays milliseconds since boot. `net_time_sets_the_date`
+is the run.
 
 127 removes the account named `admin` from a production disk. The
 user created at setup is the administrative actor.
