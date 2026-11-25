@@ -1603,7 +1603,8 @@ fn disk_wait_keeps_the_seat_scheduled() {
 }
 
 /// Second boot of a volume that already has a file. The passphrase path,
-/// then `svc date`, `net dns 1.1.1.1`, `nslookup`, and `shutdown`.
+/// then `svc date`, `net dns 1.1.1.1`, and `shutdown`. A later lookup is
+/// a `/policy` rule, not this command.
 #[test]
 fn sealed_volume_date_pin_shutdown() {
     let disk = common::fresh_galfs_image("sealed-pin");
@@ -1650,7 +1651,6 @@ fn sealed_volume_date_pin_shutdown() {
     owned.extend(type_line("cat note", "hello"));
     owned.extend(type_line("svc date", " utc"));
     owned.extend(type_line("net dns 1.1.1.1", "ok "));
-    owned.extend(type_line("nslookup google.com", "google.com "));
     owned.extend(type_line("shutdown", "[init] power"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
@@ -1689,10 +1689,6 @@ fn sealed_volume_date_pin_shutdown() {
     assert!(
         !serial.lines().any(|line| line.trim() == "access denied"),
         "net dns printed a bare access denied; serial:\n{serial}"
-    );
-    assert!(
-        serial.lines().any(|line| line.contains("google.com ")),
-        "nslookup did not print the name; serial:\n{serial}"
     );
     assert!(
         serial.contains("[init] shutdown") && serial.contains("[init] power"),
