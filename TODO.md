@@ -2344,7 +2344,7 @@ unset.
       card are denied. Rust and Python connect by name only after the
       seat allows it. A name resolves over TLS and a program reaches a
       host that is not `10.0.2.2`. A raw IP, a port, `bind`, `listen`,
-      and one datagram are cards (Milestones 112–116). SSH is 117:
+      and one datagram are cards (Milestones 112–116). SSH is last:
       a host client reads one file over SFTP, and a legacy algorithm
       is refused. Milestone 83 and Milestones 110–117 are checked.
       The KVM rows stay open

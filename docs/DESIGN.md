@@ -1173,7 +1173,7 @@ Rust proof. `python_lane_typing_e2e` is the Python proof:
 `lane.read` prints the body, and a connect with no rule is
 `OSError`. Reaching a host past `10.0.2.2` is Milestone 111.
 
-### A real network (Milestones 110–119)
+### A real network (Milestones 110–117)
 
 `net` resolves a name over TLS and dials the address that comes
 back. The destination is not the QEMU user gateway `10.0.2.2`.
@@ -1207,20 +1207,6 @@ Listening stays a `net listen` rule. Plaintext DNS, raw sockets,
 and general browser TLS stay out. The DNS resolver trusts the
 CA bundle in the image. That bundle is not a lane trust. The
 boxes for 120–124 stay open. The reading copy is `NET.md`.
-
-A full name is its own card, and a subdomain is another card.
-A stored address is its own card. A dial by name does not also
-need the resolved address. A program that passes an address still
-needs that address card. Admin's root covers files. It does not
-cover every name. Milestone 118 is `/card/out/<program>`. Read on
-that exact object lets that one task dial any name, and an address
-it passes. The seat sees no line. A program without the card still
-asks per name. No leaves the program up. The card does not accept.
-Inbound stays write on the port it listens on. Milestone 119 stores
-that card with `share`, the same row as a durable file right. After
-reboot the named program dials with no ask. Login does not put the
-card on the shell. A child does not inherit it. Logged-out stays
-denied. There is no new syscall.
 
 ### Memory policy (Milestone 48)
 

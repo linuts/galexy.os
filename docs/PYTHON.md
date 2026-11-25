@@ -278,13 +278,6 @@ Reaching a host past `10.0.2.2` is Milestone 111, not this
 section. An address is one type for v4 and v6 (Milestones
 120–124). There is no second stack and no general browser TLS.
 
-A program that holds read on `/card/out/<program>` dials the next
-name with no line on the seat. That card is Milestones 118 and 119.
-119 stores it as a share, so the same program dials after reboot.
-A program without the card still asks per name. No is `OSError`
-and the interpreter stays up. The card does not listen. Logged-out
-stays denied.
-
 ## Changing this subsystem
 
 1. One milestone in `TODO.md` and in this file.
