@@ -151,7 +151,12 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
    There is no passphrase baked into the production image. Test
    kernels still unlock with `galfs`. The fresh-disk prompt appears
    only when the image has no GALF header. A sealed disk asks
-   `Volume passphrase:`. Wrong password prints `Login incorrect`
+   `Volume passphrase:` and then login. That is one-time setup: the
+   disk question, the new passphrase, and first-user creation do not
+   return. A name typed at `Login as:` that is not an account prints
+   `Login incorrect` and is not created. The first user is the
+   administrator. There is no account named `admin`. `useradd` is
+   that administrator only. Wrong password prints `Login incorrect`
    and repeats the screen. A cool-down prints `Login locked`
    (see below).
 3. After a successful password login the prompt is `user@galexy>`.

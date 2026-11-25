@@ -3752,8 +3752,11 @@ does not run it. Skip sends nothing.
 - [x] **Proof**: a blank production image reaches login only after
       those answers, including skip. The actor name is the one typed.
       Serial has no `[net] addr` and neither secret. A second boot
-      asks for the passphrase and does not ask for a disk, a user,
-      or a resolver
+      asks for the passphrase and then login. It does not ask for a
+      disk, a user, or a resolver. Typing those answers does not
+      create an account. A non-admin `useradd` is refused
+      (`first_boot_is_one_time`). Skip still sends nothing
+      (`first_boot_skip_sends_nothing`)
 - [x] **Out of this milestone**: a static address, IPv6 address
       configuration, a second user during setup, a timezone, NTS,
       a new syscall, Milestones 120–124, the `v1.0` tag, and the

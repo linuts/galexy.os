@@ -5828,6 +5828,187 @@ fn first_boot_skip_sends_nothing() {
     );
 }
 
+/// After first boot, the next boot offers the volume passphrase and
+/// login. Disk, passphrase-setup, and first-user answers typed there
+/// do not create an account. A non-admin still cannot `useradd`.
+#[test]
+fn first_boot_is_one_time() {
+    let disk = common::fresh_galfs_image("one-time");
+    let mut owned: Vec<(String, String)> = Vec::new();
+    for (code, echo) in [
+        ("1", "1"),
+        ("ret", "New passphrase: "),
+        ("g", "*"),
+        ("a", "*"),
+        ("l", "*"),
+        ("f", "*"),
+        ("s", "*"),
+        ("ret", "Confirm: "),
+        ("g", "*"),
+        ("a", "*"),
+        ("l", "*"),
+        ("f", "*"),
+        ("s", "*"),
+        ("ret", "Account name: "),
+    ] {
+        owned.push((code.to_string(), echo.to_string()));
+    }
+    owned.extend(type_line("ada", "Password: "));
+    owned.extend(masked_word("seatpass"));
+    owned.push(("ret".to_string(), "Confirm: ".to_string()));
+    owned.extend(masked_word("seatpass"));
+    owned.push(("ret".to_string(), "Resolver address, or skip: ".to_string()));
+    owned.extend(type_line("skip", "Login as: "));
+    owned.extend(type_line("ada", "Password: "));
+    owned.extend(masked_word("seatpass"));
+    owned.push(("ret".to_string(), "ada@galexy> ".to_string()));
+    owned.extend(type_line("useradd eve", "Password: "));
+    owned.extend(masked_word("evepass"));
+    owned.push(("ret".to_string(), "ada@galexy> ".to_string()));
+    owned.extend(type_line("sync", "ada@galexy> "));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &keys,
+        "Disk: ",
+        "[auth] useradd user=eve",
+        Duration::from_millis(30),
+        Duration::from_secs(300),
+    );
+    assert!(
+        !serial.contains("[PANIC]"),
+        "boot 1 panicked; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[galfs] formatted sealed disk"),
+        "the disk was not sealed; serial:\n{serial}"
+    );
+    let added = serial
+        .find("[auth] useradd user=eve")
+        .unwrap_or_else(|| panic!("eve was not created; serial:\n{serial}"));
+    assert!(
+        serial[added..].contains("[galfs] committing slot"),
+        "eve was not committed; serial:\n{serial}"
+    );
+    assert_passwords_masked(&serial);
+
+    let mut again: Vec<(String, String)> = Vec::new();
+    // A disk index is not a passphrase, and it does not format.
+    again.push(("1".to_string(), "*".to_string()));
+    again.push(("ret".to_string(), "Volume unlock failed".to_string()));
+    // A new passphrase, typed twice as a setup would confirm it.
+    again.extend(masked_word("zzpass"));
+    again.push(("ret".to_string(), "Volume unlock failed".to_string()));
+    again.extend(masked_word("zzpass"));
+    again.push(("ret".to_string(), "Volume unlock failed".to_string()));
+    again.extend(masked_word("galfs"));
+    again.push(("ret".to_string(), "Login as: ".to_string()));
+    // A first-user name at login does not create that account.
+    again.extend(type_line("zoe", "Password: "));
+    again.extend(masked_word("newpass"));
+    again.push(("ret".to_string(), "Login incorrect".to_string()));
+    again.extend(type_line("ada", "Password: "));
+    again.extend(masked_word("seatpass"));
+    again.push(("ret".to_string(), "ada@galexy> ".to_string()));
+    again.extend(type_line("users", "ada@galexy> "));
+    // Logout returns to login. The volume stays open until the next
+    // boot, and the prompt is login, not the disk or the account.
+    again.extend(type_line("logout", "Login as: "));
+    again.extend(type_line("zoe", "Password: "));
+    again.extend(masked_word("newpass"));
+    again.push(("ret".to_string(), "Login incorrect".to_string()));
+    again.extend(type_line("eve", "Password: "));
+    again.extend(masked_word("evepass"));
+    again.push(("ret".to_string(), "eve@galexy> ".to_string()));
+    again.extend(type_line("useradd mallory", "Password: "));
+    again.extend(masked_word("mallpass"));
+    again.push(("ret".to_string(), "useradd: access denied".to_string()));
+    again.extend(type_line("users", "eve@galexy> "));
+    let keys: Vec<(&str, &str)> = again
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &keys,
+        "Volume passphrase: ",
+        "useradd: access denied",
+        Duration::from_millis(30),
+        Duration::from_secs(300),
+    );
+    let _ = std::fs::remove_file(&disk);
+    assert!(
+        !serial.contains("[PANIC]"),
+        "boot 2 panicked; serial:\n{serial}"
+    );
+    for line in [
+        "Disk:",
+        "Account name:",
+        "New passphrase:",
+        "Resolver address",
+        "This disk is not the system volume.",
+        "This disk has no passphrase yet.",
+        "Choose a disk.",
+    ] {
+        assert!(
+            !serial.contains(line),
+            "a sealed disk asked `{line}`; serial:\n{serial}"
+        );
+    }
+    assert!(
+        serial.contains("Volume passphrase:") && serial.contains("Login as:"),
+        "boot 2 did not offer the passphrase and login; serial:\n{serial}"
+    );
+    assert!(
+        serial.matches("Volume unlock failed").count() >= 3,
+        "setup answers were accepted as the volume passphrase; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("Login incorrect"),
+        "a new name at login was accepted; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[auth] session login user=ada")
+            && serial.contains("[auth] session login user=eve"),
+        "the existing accounts did not log in; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[auth] session login user=zoe")
+            && !serial.contains("[auth] useradd user=zoe")
+            && !serial.contains("[auth] useradd user=mallory"),
+        "setup answers created an account; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("useradd: access denied"),
+        "a non-admin added a user; serial:\n{serial}"
+    );
+    let clean = common::strip_host_chrome(&serial);
+    assert!(
+        clean.matches("users\nada\neve\n").count() >= 2,
+        "users did not list ada and eve; serial:\n{serial}"
+    );
+    assert!(
+        !clean.contains("\nzoe\n") && !clean.contains("\nmallory\n"),
+        "a typed setup name became an account; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[net] addr") && !serial.contains("[net] udp"),
+        "boot 2 sent; serial:\n{serial}"
+    );
+    assert_passwords_masked(&serial);
+    for secret in ["seatpass", "evepass", "newpass", "mallpass", "zzpass"] {
+        assert!(
+            !serial.contains(secret),
+            "serial carried {secret}; serial:\n{serial}"
+        );
+    }
+}
+
 /// The reviewer tour: a fresh disk, two seats, and a card that makes
 /// owner's Desktop visible to eve. The foreign path is `/owner@Desktop`.
 #[test]
