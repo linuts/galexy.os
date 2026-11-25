@@ -9,9 +9,9 @@ use core::sync::atomic::Ordering;
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
     close, dmesg_cap, grant, init_rpc, init_rpc_at, init_rpc_every, net_rpc, open, read, reboot,
-    revoke, share, shutdown, spawn_with, stat, stats_cap, sync, tasks_cap, threads_cap, unshare,
-    user, user_lock, user_login, user_logout, user_name, user_name_pass, user_passwd, user_quota,
-    user_setquota, user_volpass, volume_query, write_console,
+    revoke, share, shutdown, sleep_ms, spawn_with, stat, stats_cap, sync, tasks_cap, threads_cap,
+    unshare, user, user_lock, user_login, user_logout, user_name, user_name_pass, user_passwd,
+    user_quota, user_setquota, user_volpass, volume_query, write_console,
 };
 
 /// Sectioned help — short command column + one-line blurb.
@@ -491,8 +491,9 @@ pub(crate) fn dispatch(
         spawn_and_prompt(cwd, b"python", b"", grants, true);
         return None;
     }
-    // `ssh user@address` prompts for a password and waits. The address
-    // is the dial. `ssh-open` with no address uses the stored peer.
+    // `ssh user@address` dials port 22. A port other than 22 is
+    // `ssh user@address:port`. The password is the peer account's.
+    // `ssh-open` with no address uses the stored peer.
     if line == b"ssh-open" {
         let grants = galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_KEYBOARD;
         spawn_and_prompt(cwd, b"ssh-open", b"", grants, true);
@@ -501,7 +502,7 @@ pub(crate) fn dispatch(
     if let Some(rest) = arg_of(line, b"ssh") {
         let grants = galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_KEYBOARD;
         if !rest.contains(&b'@') {
-            write_console(b"ssh <user>@<address>\n");
+            write_console(b"ssh <user>@<address>[:port]\n");
             prompt(cwd);
             return None;
         }
@@ -2405,7 +2406,15 @@ fn send_allow(cwd: &Cwd, name: &[u8], port: u16, kind: u8, ip: [u8; 4], key: [u8
 
 fn finish_net(cwd: &Cwd, payload: &[u8], body: bool) {
     let mut reply = [0u8; galexy_abi::CHAN_MSG_MAX];
-    let got = net_rpc(payload, &mut reply);
+    let mut got = net_rpc(payload, &mut reply);
+    // The listener holds the one net call while it asks. A miss is
+    // NoResource, not a denial. Try again once it has let go.
+    let mut tries = 0u8;
+    while !got.ok && SysError::from_code(got.value) == SysError::NoResource && tries < 8 {
+        let _ = sleep_ms(50);
+        got = net_rpc(payload, &mut reply);
+        tries += 1;
+    }
     if !got.ok {
         write_console(b"access denied\n");
         prompt(cwd);

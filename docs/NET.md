@@ -173,7 +173,8 @@ shape, not a chain). The verifier accepts that key and rejects every
 other. `net allow` may omit the key file. The first dial of that name
 learns the peer key, shows `fp=` (the first eight bytes of SHA-256),
 and asks `yes` or `no`. Yes stores the key on the name and writes one
-line to `ssh.known` in the seat's tree. No stores nothing. A later
+line to `ssh.known` in the seat's tree. A dial of an address stores
+that key on the address. No stores nothing. A later
 dial that sees a different key replies `changed` and does not ask
 again. The audit line for a dial carries the actor, the name, the
 first eight bytes of the fingerprint in hex, and the result. It does
@@ -450,8 +451,10 @@ A dial rule does not listen. DNS-over-TLS on port 853 is unchanged.
 
 `ping`, `fetch`, and `usb list` are programs. The shell starts
 them, and the stamp is theirs. `ssh user@address` is `ssh-open`
-and dials that address. The guest listener is the `ssh` program
-on port 4598.
+and dials that address on port 22. A port other than 22 is
+`ssh user@address:port`. The password is the peer account's
+password. The guest listener is the `ssh` program on port 4598.
+It does not print while it waits.
 
 Milestone 108 keeps the name `std::net::TcpStream::connect`. The
 call dials a name through `net` when a rule names the caller and
@@ -504,7 +507,9 @@ Milestone 117 is that server. `milestone_117_ssh_reads_a_file` is
 the run. One init row, in-tree Rust, no OpenSSH, no libssh, no C,
 and no crates.io SSH library. `net listen *:4598 name ssh` accepts.
 A `net dial` rule lets a local program open a session. The program
-passes the address on `ssh user@address`. `net` keeps the TCP
+passes the address on `ssh user@address`, or
+`ssh user@address:port` when the port is not 22. The password is
+the peer account's password. `net` keeps the TCP
 bytes. Strict key exchange, then `curve25519-sha256`. Host keys
 are Ed25519. The cipher is `chacha20-poly1305@openssh.com`. The
 MAC is that AEAD. SFTP is a subsystem of that session, and the

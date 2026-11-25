@@ -2027,6 +2027,36 @@ struct Live {
     wire: Vec<u8>,
 }
 
+/// The pin for this dial. The address string wins when yes stored it.
+/// A named locator for the same address is the fallback.
+fn address_key(record: &Record, name: &[u8], ip: [u8; 4]) -> [u8; 32] {
+    if let Some(entry) = record.find(name) {
+        if entry.ip[..4] == ip {
+            return entry.key;
+        }
+    }
+    find_kind(record, KIND_ADDR, ip, None)
+        .or_else(|| find_kind(record, KIND_IPV4, ip, None))
+        .map(|entry| entry.key)
+        .unwrap_or([0; 32])
+}
+
+/// Stores a learned pin. An address has no row until yes, so that row
+/// is created here. A row that already holds a pin is left as it is.
+fn remember_pin(record: &mut Record, name: &[u8], key: [u8; 32]) -> bool {
+    if let Some((ip, port)) = parse_passed(name) {
+        let port = port.unwrap_or(22);
+        let known = record.find(name).map(|entry| entry.ip[..4] == ip);
+        if let Some(same) = known {
+            return same && record.remember_key(name, key).is_ok();
+        }
+        let mut wide = [0u8; 16];
+        wide[..4].copy_from_slice(&ip);
+        return record.allow(name, port, KIND_IPV4, wide, key).is_ok();
+    }
+    record.remember_key(name, key).is_ok()
+}
+
 fn stream_target(name: &[u8]) -> Option<([u8; 4], u16)> {
     let (ip, port) = parse_passed(name)?;
     let port = port.unwrap_or(22);
@@ -2060,17 +2090,10 @@ fn stream(
                 reply(rx, b"access denied\n", 0);
                 return;
             }
-            let key = find_kind(record, KIND_ADDR, ip, None)
-                .or_else(|| find_kind(record, KIND_IPV4, ip, None))
-                .map(|entry| entry.key)
-                .unwrap_or([0; 32]);
+            let key = address_key(record, name, ip);
             live_dial(rx, engine, actor_id, name, ip, port, key, lives, seen);
             return;
         }
-    }
-    if name.is_empty() || parse_passed(name).is_some() {
-        reply(rx, b"bad\n", 0);
-        return;
     }
     if dir == 3 || dir == 4 {
         let who = &stamp.name[..stamp.name_len as usize];
@@ -2087,13 +2110,17 @@ fn stream(
             reply(rx, b"bad\n", 0);
             return;
         };
-        if got.name.as_slice() != name || record.remember_key(name, got.key).is_err() {
+        if got.name.as_slice() != name || !remember_pin(record, name, got.key) {
             reply(rx, b"bad\n", 0);
             return;
         }
         save_record(record);
         audit(actor_id, name, &got.key, "remembered");
         reply(rx, b"ok\n", 0);
+        return;
+    }
+    if name.is_empty() || parse_passed(name).is_some() {
+        reply(rx, b"bad\n", 0);
         return;
     }
     let Some(entry) = record.find(name) else {

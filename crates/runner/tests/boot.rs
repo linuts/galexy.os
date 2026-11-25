@@ -8355,9 +8355,11 @@ fn dns_a_response(query: &[u8], answer: [u8; 4]) -> Vec<u8> {
     wire
 }
 
-/// One session from the host reads a file. `ssh-open` dials when a
-/// `sec` rule names it. A refused algorithm fails. Init installs the
-/// listen rule, so the service accepts without a grant.
+/// One session from the host reads a file. The `ssh` name is the
+/// listen port. `ssh user@address:port` dials that peer when a `sec`
+/// rule names `ssh-open`. The password is the peer account's, which
+/// is the seat password. A refused algorithm fails. Init installs the
+/// listen rule. The listener does not print `ssh: wait`.
 #[test]
 fn milestone_117_ssh_reads_a_file() {
     let guest_port = 4598u16;
@@ -8386,7 +8388,7 @@ fn milestone_117_ssh_reads_a_file() {
     owned.extend(type_line("sec net dial 10.0.2.2:4598 ssh-open", "ok"));
     owned.extend(type_line("echo hold", "ssh: file"));
     owned.extend(type_line(
-        "ssh-open",
+        "ssh admin@10.0.2.2:4598",
         "Are you sure you want to continue connecting (yes/no)? ",
     ));
     owned.extend(type_line("yes", "Password: "));
@@ -8435,6 +8437,14 @@ fn milestone_117_ssh_reads_a_file() {
         "the local client did not open a session; serial:\n{serial}"
     );
     assert!(
+        serial.contains("name=10.0.2.2:4598"),
+        "the client dialed a stored name; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("ssh: wait"),
+        "the listener printed ssh: wait; serial:\n{serial}"
+    );
+    assert!(
         bad.load(Ordering::Relaxed),
         "a refused algorithm was accepted; note={}; serial:\n{serial}",
         note.lock().unwrap()
@@ -8463,24 +8473,6 @@ fn serial_ssh_contains(needle: &str) -> bool {
         }
     }
     false
-}
-
-fn serial_ssh_count(needle: &str) -> usize {
-    let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) else {
-        return 0;
-    };
-    let prefix = format!("galexy-serial-typing_ssh-{}", std::process::id());
-    let mut best = 0usize;
-    for ent in rd.flatten() {
-        let name = ent.file_name().to_string_lossy().into_owned();
-        if !name.starts_with(&prefix) || !name.ends_with(".log") {
-            continue;
-        }
-        if let Ok(text) = std::fs::read_to_string(ent.path()) {
-            best = best.max(text.matches(needle).count());
-        }
-    }
-    best
 }
 
 fn host_ssh_server(port: u16, stop: Arc<AtomicBool>) {
@@ -8527,7 +8519,7 @@ fn host_ssh_exchange(
         Ok(bytes) => *file.lock().unwrap() = bytes,
         Err(err) => *note.lock().unwrap() = err,
     }
-    while std::time::Instant::now() < deadline && serial_ssh_count("ssh: wait") < 2 {
+    while std::time::Instant::now() < deadline && !serial_ssh_contains("ssh: session") {
         std::thread::sleep(Duration::from_millis(50));
     }
     if host_refused_kex(host_port) {
