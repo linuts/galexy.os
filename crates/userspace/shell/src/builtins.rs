@@ -75,6 +75,7 @@ pub(crate) fn show_help() {
     help_row(b"net link", b"address, or down");
     help_row(b"net allow ...", b"name, locator, optional key file");
     help_row(b"net pin <ip> [keyfile]", b"resolver; key file optional");
+    help_row(b"net time <ip or name>", b"one NTP query, then civil UTC");
     help_row(b"ping <ip or name>", b"three echoes, then the times");
     help_row(b"nslookup <name>", b"name and addresses from the pin");
     help_row(b"stats", b"uptime / frames / heap / galfs");
@@ -2080,6 +2081,10 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
         net_pin(cwd, tail);
         return;
     }
+    if let Some(tail) = arg_of(rest, b"time") {
+        net_time(cwd, tail);
+        return;
+    }
     if let Some(tail) = arg_of(rest, b"resolve") {
         net_resolve(cwd, tail);
         return;
@@ -2110,7 +2115,7 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
         finish_net(cwd, &payload[..1 + n], true);
         return;
     }
-    write_console(b"net: link, pin, allow, resolve, addr, port, peer, listen, serve\n");
+    write_console(b"net: link, pin, time, allow, resolve, addr, port, peer, listen, serve\n");
     prompt(cwd);
 }
 
@@ -2192,6 +2197,32 @@ fn net_allow(cwd: &Cwd, tail: &[u8]) {
     payload[at..at + 32].copy_from_slice(&key);
     at += 32;
     finish_net(cwd, &payload[..at], false);
+}
+
+fn net_time(cwd: &Cwd, tail: &[u8]) {
+    let tail = trim(tail);
+    if tail.is_empty() || tail.contains(&b' ') {
+        write_console(b"net time <ip or name>\n");
+        prompt(cwd);
+        return;
+    }
+    if let Some(ip) = parse_ip(tail) {
+        let mut payload = [0u8; 5];
+        payload[0] = galexy_abi::NET_OP_TIME;
+        payload[1..5].copy_from_slice(&ip);
+        finish_net(cwd, &payload, false);
+        return;
+    }
+    if !dns_name(tail) {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    }
+    let mut payload = [0u8; 256];
+    payload[0] = galexy_abi::NET_OP_TIME;
+    payload[1] = tail.len() as u8;
+    payload[2..2 + tail.len()].copy_from_slice(tail);
+    finish_net(cwd, &payload[..2 + tail.len()], false);
 }
 
 fn net_pin(cwd: &Cwd, tail: &[u8]) {
@@ -2465,6 +2496,35 @@ fn parse_ip(text: &[u8]) -> Option<[u8; 4]> {
         return None;
     }
     Some(ip)
+}
+
+/// A dotted DNS name. Four payload bytes stay an IPv4 address, so a
+/// three-byte name is not a name on this opcode.
+fn dns_name(name: &[u8]) -> bool {
+    if name.is_empty() || name.len() == 3 || name.len() > 234 {
+        return false;
+    }
+    let mut label = 0usize;
+    let mut dot = false;
+    for b in name {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' => {
+                label += 1;
+                if label > 63 {
+                    return false;
+                }
+            }
+            b'.' => {
+                if label == 0 {
+                    return false;
+                }
+                dot = true;
+                label = 0;
+            }
+            _ => return false,
+        }
+    }
+    label != 0 && dot
 }
 
 fn parse_u16(text: &[u8]) -> Option<u16> {
