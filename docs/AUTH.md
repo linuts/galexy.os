@@ -75,6 +75,12 @@ payload, see `GALFS.md`):
 
 Older images (including sealed v7) are refused (format recreates admin).
 
+Milestone **127** stops creating that account on a production disk.
+The user named at first boot is the administrative actor. Milestone
+**128** is the screen: the volume passphrase, that user, then the
+network. The boxes are open. Test kernels may still format a known
+account so the suite can log in. That account is not the product.
+
 ## Pieces
 
 | Piece | Meaning |

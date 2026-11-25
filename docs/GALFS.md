@@ -523,24 +523,19 @@ Demo limits above are the shipped contract. A second indirect block
 is not scheduled; object `len` is already `u64`. New code must not
 invent a second ambient “path implies permission” API beside tokens.
 
-## Cards outside the tree (Milestones 105 and 106)
+## `/policy` is exact
 
-A token stays an object id and rights. A network name is
-`/card/<name>` and ping is `/card/ping`. A listed USB port is
-`/usb/<port>`. Both live under the admin root, so
-`/admin@card/<name>` and `/admin@usb/<port>` are the same
-objects. `NAME_CAP` is 64. A port is one to three digits. Neither
-needed a `DISK_VERSION` bump. The actor strings inside `/net`
-are not an authority. Cap `0x800B` stays with the task named
-`usb`; the seat token gates the list, not that cap. Repair of
-anything other than a bad share stays unwritten.
+A token stays an object id and rights. Dial, listen, ICMP, and
+USB use are not tokens. They are lines in `/policy`. Init creates
+that file. The creator, and init on the next boot, hold read and
+write on that object and not by way of an ancestor. `covers`
+returns false for `/policy` unless the token names the file
+itself, so admin's root does not rewrite the table. `net` and
+`usb` hold read. `DISK_VERSION` is 18. A dev disk reformats.
+The actor strings inside `/net` are not an authority. Cap
+`0x800B` stays with the task named `usb`. The list on `0x800C`
+is the stamp matched against `/policy`. Repair of anything other
+than a bad share stays unwritten.
 
-`/card/out/<program>` is that program's outbound dial
-(Milestones 118 and 119). The object is a file. Its parent
-directory is `out` and that directory's parent is `card`.
-Read is the grant. An ancestor token does not count, and
-admin's root does not satisfy it. `apply_shares` skips the
-object, so login does not put it on the shell. Spawn installs
-the read when the starting actor's share names that task.
 `share r` and `unshare` are the existing 6-byte metadata row.
-`DISK_VERSION` stays 17.
+They store a file token. They do not store a dial.

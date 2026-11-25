@@ -2779,25 +2779,6 @@ pub(crate) fn install_policy_token(tokens: &mut [Token; TOKEN_SLOTS]) {
     }
 }
 
-fn make_child(table: &mut Table, parent: u32, name: &str, kind: u8) -> Result<u32, SysError> {
-    let actor = table.objects[parent as usize].actor as usize;
-    if !can_add_object(table, actor) {
-        return Err(SysError::NoResource);
-    }
-    let Some(oi) = free_object(table) else {
-        return Err(SysError::NoResource);
-    };
-    let obj = &mut table.objects[oi];
-    *obj = Object::empty();
-    obj.kind = kind;
-    obj.parent = parent;
-    obj.actor = actor as u8;
-    place_name(obj, name);
-    link_child(table, parent, oi as u32);
-    charge_usage(actor, 1, 0);
-    Ok(oi as u32)
-}
-
 /// Whether `root` is the immortal admin actor root.
 pub fn is_admin_root(root: u32) -> bool {
     root != NO_OBJECT && root == ADMIN_ROOT.load(Ordering::Relaxed)

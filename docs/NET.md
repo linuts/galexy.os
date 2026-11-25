@@ -8,10 +8,10 @@ listener. `serve_hands_the_lane_to_its_listener` is the run: the
 attaching seat prints the TLS body, and a second admin seat that
 holds the write bit receives `held`.
 
-The network is the lane and the card. DHCP, ping, a granted TLS 1.3
-lane, listen, one datagram, and SSH are in the tree. A seat logs in
-over that one service when it holds `/card/ssh` (`THREAT.md`). The
-object is not a socket.
+The network is the lane and a line in `/policy`. DHCP, ping, a
+granted TLS 1.3 lane, listen, one datagram, and SSH are in the tree.
+The guest SSH service accepts when `/policy` has
+`net listen *:4598 name ssh`. The object is not a socket.
 
 ## What a program holds
 
@@ -29,8 +29,8 @@ The words this phase uses:
 | **Lane** | The application object. TLS 1.3 to one peer. Bytes in, bytes out. |
 | **Gate** | The right to receive new lanes for one **name**. Held by one listener. |
 | **Name** | A label in the net service's directory (`echo`, `docs`). The same charset as a galfs path component, at most 64 bytes. |
-| **Locator** | One address and a transport port, stored inside the directory. The address is one type. A v4 value and a v6 value are that type. A locator is how the service finds a peer. A program may pass that stored address or port only when it holds the card. |
-| **Dial** | Ask the service for a lane to a name this seat was granted. |
+| **Locator** | One address and a transport port, stored inside the directory. The address is one type. A v4 value and a v6 value are that type. A locator is how the service finds a peer. A program may pass that address or port only when a `sec` rule names it. |
+| **Dial** | Ask the service for a lane. A `net dial` line in `/policy` must name the caller and the host. |
 | **Fetch** | The shell command that dials, reads the lane to EOF, and prints the bytes. The phase gate. |
 
 `shell`, `shell2`, … `shell12` stay the seats. `net` is a supervised
@@ -44,16 +44,16 @@ checked.
 
 | Refused | Why |
 | --- | --- |
-| BSD sockets and Winsock (`socket`, `bind`, `listen`, `accept`, `connect`, `sendto`, `recvfrom`, `setsockopt`) | That API is an ambient port namespace. Galexy does not grow one. Milestones 112–116 honor one address, one port, one local bind, one listen, and one datagram peer, each with its card. `setsockopt` stays refused. |
-| `std::net::TcpStream` and a POSIX shim in the PAL | Milestone 108 keeps the name `TcpStream::connect`. It asks, then dials a granted name, one stored address, or one stored `address:port`. The value is still a lane. `TcpListener::bind` binds the stored local address when the seat holds write on that card. `accept` on that listener, and `listen_port`, accept on the stored port with write on that card. The value is a lane. `UdpSocket::send_card` sends to the stored peer. `UdpSocket::recv_card` receives one datagram from that same peer. Port 53 stays refused. `setsockopt` stays refused. There is no socket syscall and no POSIX shim. |
+| BSD sockets and Winsock (`socket`, `bind`, `listen`, `accept`, `connect`, `sendto`, `recvfrom`, `setsockopt`) | That API is an ambient port namespace. Galexy does not grow one. A dial, a listen, and a datagram each need a line in `/policy`. `setsockopt` stays refused. |
+| `std::net::TcpStream` and a POSIX shim in the PAL | `TcpStream::connect` dials a name, an address, or `address:port` when a `net dial` rule names the caller and that host. The value is still a lane. `TcpListener::bind` binds the stored local address, and only for admin. `accept` and `listen_port` accept on the stored port when a `net listen` rule names the caller and that port. `UdpSocket::send_card` and `UdpSocket::recv_card` use a `net dial` rule for that peer. Port 53 stays refused. `setsockopt` stays refused. There is no socket syscall and no POSIX shim. |
 | In-kernel TCP/IP | A parse bug on a packet would be ring 0. The kernel moves frames. The `net` service speaks the protocols. A second stack, a C stack, raw sockets, promiscuous mode, and a v6-only opcode stay out. IPv4 and IPv6 are one address type (Milestones 120–124). |
-| IP addresses and port numbers in the syscall ABI | Ports stay an internal demux. A program does not pass them to a syscall. Milestones 112 and 113 let a program pass one exact address or port on the existing net cap, and only with that card. An app still cannot bind `0.0.0.0`, spoof a source, or race a port it does not hold. |
-| Cleartext as an application right | The bytes an app reads on a lane are the plaintext of a finished TLS 1.3 session. There is no raw TCP Cap. Milestone 116 grants one exact datagram peer, and only with that card. Write on the card does not capture. |
+| IP addresses and port numbers in the syscall ABI | Ports stay an internal demux. A program does not pass them to a syscall. A program may pass one address or port on the existing net cap, and only when a rule names that caller and that host or port. An app still cannot bind `0.0.0.0`, spoof a source, or race a port it does not hold. |
+| Cleartext as an application right | A stored pin is a TLS 1.3 lane. An empty pin, on a dial the rule allows, is a plaintext TCP lane: the program writes the request and reads the response. There is no raw TCP Cap. A datagram needs a `net dial` rule for that peer. Holding the rule does not capture. |
 | The public WebPKI as the default trust for a lane | A name is pinned to a key. An empty pin on a dial asks the seat, shows the fingerprint, and stores the key only on yes. A different key later is refused. Trust-on-first-use is that question, not a silent accept. The DNS resolver is the exception. The image carries a system CA bundle, the Mozilla roots. `net pin <ip>` reads the certificate at that address, stores the domain on it, and tells the seat. Later lookups trust a certificate that chains to the bundle, is currently valid, and is valid for that domain. The address you typed stays the address. A key file is still the raw key, and then the bundle is not consulted. SSH host keys and `net allow` do not use the bundle. |
 | TLS before 1.3, renegotiation, compression, 0-RTT | Replay and oracle bugs we do not have to accept. 0-RTT can be a later right. It is off in this phase. |
 | A hand-rolled handshake | The service links a maintained Rust TLS 1.3 implementation (rustls-class) with a pure-Rust crypto provider. No C. If that crate will not link on `x86_64-unknown-galexy`, Milestone 82 fixes the link. It does not replace the handshake. |
 | QUIC as a second API | QUIC is the intended next carrier. It shows up behind the same lane Cap. This phase's carrier is TLS 1.3 over TCP, inside the service. |
-| iptables, eBPF, NAT, raw frames, promiscuous capture | One device, one service, a grant list. Packet capture is not a side effect of holding a lane. |
+| iptables, eBPF, NAT, raw frames, promiscuous capture | One device, one service, one file of rules. Packet capture is not a side effect of holding a lane. |
 | USB networking, Wi-Fi, a second NIC | virtio-net 1.x on the q35 path from Milestone 65. A legacy virtio I/O BAR is not part of these milestones. |
 | Overloaded pipes | The pipe table is 8 slots of 256 bytes (`sched/pipe.rs`). A lane is its own object. |
 
@@ -68,7 +68,7 @@ kernel wire Cap 0x8009          only the task named net
     ▼
 net  (ring 3, init child, restart)
     │  one address type (v4 and v6), neighbor discovery, ICMP echo, UDP, TCP, TLS 1.3
-    │  directory: name → locator + pinned key + the token that may dial
+    │  directory: name → locator + pinned key. Who may dial is /policy
     │
     ├── lane Cap ──read/write── the program that dialed
     └── gate ──new lane Caps── the one listener for that name
@@ -76,9 +76,10 @@ net  (ring 3, init child, restart)
 
 Seats reach the service the way they reach init. Reserved index
 `0x800A` is the net control Cap. `send` parks for a reply. The kernel
-stamps the same 20-byte header it stamps for init: admin, tty, debug
-id, session generation. A logged-out task is `AccessDenied`. The
-sender cannot set the admin byte.
+stamps the same 44-byte header it stamps for init: admin, tty, the
+task name, the executed file's object id, and that file's parent.
+A logged-out task is `AccessDenied` before `net` looks at the
+opcode. The sender cannot set any of those bytes.
 
 The reply to a dial carries one lane Cap (the application's end) plus
 a short text line. Channel `send` already moves up to two Caps. The
@@ -96,20 +97,19 @@ Opcodes on `0x800A`, appended and then stable, same rule as init:
 | Op | Who | Effect |
 | --- | --- | --- |
 | 1 `link` | any logged-in seat | `down`, `up`, or `up` plus our locator once Milestone 80 has one |
-| 2 `dial` | read on the card | reply carries the app end of a new lane. The actor list is not the check |
-| 3 `allow` | admin | install a name: locator, pinned key, no grants yet |
-| 4 `grant` | admin | write an actor on the record. That list is not the dial right. The shell writes the read token on `/card/<name>` |
-| 5 `revoke` | admin | drop that actor-list entry. The shell drops the card token. The list is not the dial right |
-| 6 `serve` | admin, and write on the card | attach a gate for a name to the calling task |
-| 7 `ping` | a seat that holds the ping card | Three ICMP echoes to one address, or to a DNS name resolved once over the pinned DNS-over-TLS resolver. The reply lists each round-trip time, then sent, received, and those times. A payload whose first byte is 0, then a length-prefixed name, resolves and does not echo; the reply is one address per line. No lane Cap. No card, no query. Today the address is four bytes. Milestones 120–124 make it the one address type, on this opcode |
-| 8 `resolve` | read on a DNS card | DNS-over-TLS lookup. The reply is one address of the one type. No lane Cap. A key file stays in the record. No key file stores the address and the domain from the certificate, and trusts the bundle for that domain. Milestone 123 may return a v6 value. Until that box is checked, the answer is v4 |
-| 9 `pin` | admin | Pin the DNS-over-TLS resolver. Four address bytes connect, read the domain off the certificate, and trust the bundle for that domain. The reply is `ok` and that domain. A 32-byte key, when one is passed, is that pin and the bundle is not consulted. `10.0.2.2` and `10.0.2.3` are refused. Today the address is four bytes. Milestone 120 makes it the one type. The port stays 853 |
-| 10 `bind` | write on the address card | Bind the stored local address. The payload is that address. This opcode does not listen |
-| 11 `listen` | write on the port card | Listen on the stored port. The next reply carries the inbound lane |
-| 12 `datagram` | read on the datagram card | Send one datagram to the stored peer. Port 53 is refused. Write does not send |
-| 13 `recv` | read on that same card | Receive one datagram from that peer. Port 53 is refused. A packet from any other peer is ignored |
+| 2 `dial` | a `net dial` rule names the caller and the host | reply carries the app end of a new lane. The actor list is not the check |
+| 3 `allow` | admin | install a name: locator, pinned key. This stores a key. It does not grant a dial |
+| 4 `serve` | admin, and a `net listen` rule names the caller and the port | attach a gate for a name to the calling task |
+| 5 `ping` | a `net icmp` rule names the caller | Three ICMP echoes to one address, or to a DNS name resolved once over the pinned DNS-over-TLS resolver. The reply lists each round-trip time, then sent, received, and those times. A payload whose first byte is 0, then a length-prefixed name, resolves and does not echo; the reply is one address per line. No lane Cap. No rule, no query. Today the address is four bytes. Milestones 120–124 make it the one address type, on this opcode |
+| 6 `resolve` | the shell, or a `net dial` rule for that name on port 853 | DNS-over-TLS lookup. The reply is one address. No lane Cap. A key file stays in the record. No key file stores the address and the domain from the certificate, and trusts the bundle for that domain. Milestone 123 may return a v6 value. Until that box is checked, the answer is v4 |
+| 7 `pin` | admin | Pin the DNS-over-TLS resolver. Four address bytes connect, read the domain off the certificate, and trust the bundle for that domain. The reply is `ok` and that domain. A 32-byte key, when one is passed, is that pin and the bundle is not consulted. `10.0.2.2` and `10.0.2.3` are refused. Today the address is four bytes. Milestone 120 makes it the one type. The port stays 853 |
+| 8 `bind` | admin | Bind the stored local address. The payload is that address. `0.0.0.0` is denied. This opcode does not listen |
+| 9 `listen` | a `net listen` rule names the caller and the port | Listen on the stored port. The next reply carries the inbound lane. An empty queue replies `idle` and does not hold the call |
+| 10 `datagram` | a `net dial` rule names the caller and that peer | Send one datagram to the stored peer. Port 53 is refused |
+| 11 `recv` | a `net dial` rule names the caller and that peer | Receive one datagram from that peer. Port 53 is refused. A packet from any other peer is ignored |
+| 12 `stream` | a `net dial` rule to dial, a `net listen` rule to accept | One direction byte (`TOKEN_READ` dials, `TOKEN_WRITE` accepts) and then the name. The program passes no address. An empty pin replies `unseen` and the peer key. Direction 3 stores that key after the seat answers yes. Direction 4 drops it. A second acceptor is `held` |
 
-`fetch` is a shell builtin on top of `dial`. `ping <ip>`, `ping <name>`, and `nslookup <name>` are shell builtins on top of opcode 7. None of them is a syscall.
+`fetch <name>` is the `fetch` program and dials that name. `ping <ip>`, `ping <name>`, and `nslookup <name>` are the `ping` program on opcode 5. The shell starts them. A rule names `ping` or `fetch`, not the shell. None of them is a syscall.
 `svc status net` still means "is the process up," through init.
 `link` means "is the wire up."
 
@@ -144,12 +144,12 @@ The service has to have an address before it can talk to anyone. Milestone 80 is
 | Mode | The record below. `ask` runs DHCP. `fixed` uses the locator stored in the record and does not ask. |
 | Address, prefix, gateway | DHCP ack when the mode is `ask`. QEMU user networking offers `10.0.2.15/24` from `10.0.2.2`. A `fixed` record uses the bytes the admin stored. |
 | Gateway MAC | ARP for the gateway, before any unicast IP packet. The cache holds 8 entries. IPv6 neighbor solicitation is the same step, covered by host tests. The QEMU smoke is IPv4. Milestone 122 is the reach past that path, on the one address type. |
-| ICMP echo | `ping <ip>` or `ping <name>` from a logged-in seat that holds the ping card. An address is four bytes until Milestone 120. A name is resolved over DNS-over-TLS, then one echo goes to that answer. The gateway may be the next hop. QEMU user networking answers `10.0.2.2` directly. The seat does not hold the wire. A missing card sends no query. Milestone 122 is one echo to a v6 neighbor or gateway that is not `10.0.2.2`, on this same card. |
+| ICMP echo | `ping <ip>` or `ping <name>` when a `net icmp` rule names the `ping` program. An address is four bytes until Milestone 120. A name is resolved over DNS-over-TLS, then one echo goes to that answer. The gateway may be the next hop. QEMU user networking answers `10.0.2.2` directly. The seat does not hold the wire. A missing rule sends no query. Milestone 122 is one echo to a v6 neighbor or gateway that is not `10.0.2.2`, on this same rule. |
 | First packet a peer must answer | After the ack and the ARP reply, one UDP datagram to the gateway. The payload is `galexy`. The host test receives it. That is Milestone 80. It is not a TCP handshake and it is not a lane. |
 
 DHCP here is a client. Discover, offer, request, ack. The first offer wins. Galexy does not serve DHCP in this phase. A lease is learned state: address, prefix, gateway, expiry. On expiry the service asks again. A missing record means mode `ask` and an empty directory, so a fresh QEMU boot still gets an address.
 
-`link` reports the result. Any logged-in seat may read it. The locator in that reply is our address, not a dial argument. A program does not pass an address or a port to a new syscall. It passes one stored address or port on net cap `0x800A`, and only with that card.
+`link` reports the result. Any logged-in seat may read it. The locator in that reply is our address, not a dial argument. A program does not pass an address or a port to a new syscall. It passes one address or port on net cap `0x800A`, and only when a rule names that caller and that host.
 
 ## The record
 
@@ -161,7 +161,7 @@ Names, grants, pinned keys, and the address mode survive a restart of `net`. The
 | Format | Versioned bytes, version 2, defined by `crates/galexy-netcfg`. Version 1 is refused. Magic, version, mode, optional learned lease, the name directory (name, port, kind, address, 32-byte key, actors), then the optional pinned resolver. Tag 0 is absent. Tag 1 is the address and a 32-byte key. Tag 2 is the address and the domain taken from the certificate, and that resolver trusts the bundle for that domain. A tag 2 record with no domain still loads, and lookup fails closed until the seat pins again. An unknown tag is refused. The version stays 2. |
 | Who parses it | The crate. Host tests round-trip a record. `net` links the same crate. A version it does not know is refused: the service logs the version and will not dial until an admin rewrites the file. |
 | Who may read it | `net`, and admin. Init creates an empty version-2 record (mode `ask`, no names, no resolver) when the file is absent, then spawns `net` with one token: `READ` and `WRITE` on that object and on nothing else. Init holds the admin credential, so it can mint that card. The service does not receive the admin root. |
-| Who writes it | `net`, from `allow`, `grant`, `revoke`, and `pin`, and from a finished DHCP lease. The shell does not poke the file. |
+| Who writes it | `net`, from `allow` and `pin`, and from a finished DHCP lease. The shell does not poke the file. `grant` and `revoke` are not opcodes. Who may dial is `/policy`. |
 | Disk version | Unchanged by this phase. The record is a file in the sealed table, not a new GALF layout. |
 
 There is no environment block and no `/etc`. Shell history is the other file a program already keeps (`shell.history` in the user's tree). The network record follows that idea and is typed, because a lease and a key are not a line of history.
@@ -227,8 +227,9 @@ the seat. WebPKI is not the trust for those.
 `milestones_110_through_114` is the
 run: one TLS query, an answer other than `10.0.2.2`, and a dial
 whose TCP destination is that answer. The same lookup answers a
-dotted name passed to `ping`. The ping card is the right. The name
-does not need its own card. A missing ping card, a missing pin, or
+dotted name passed to `ping`. The `net icmp` rule is the right.
+The name does not need its own dial rule. A missing icmp rule, a
+missing pin, or
 a bad pin sends no query. `ping_name_resolves` is that run.
 `resolver_trusts_the_bundle` accepts a chain with no key file when
 the certificate names the domain taken from it, including when that
@@ -321,10 +322,9 @@ on serial or `dmesg`. `docs/ABI.md` marks syscall 35 and index
 
 ### 83 Names and gates
 
-The directory, `allow` / `grant` / `revoke` / `serve` / `dial`.
-Each change rewrites the record, so a restart of `net` keeps it.
-A name the seat was not granted does not open a TCP connection.
-Admin grants it; dial then returns a lane. `serve` attaches a gate.
+The directory, `allow` / `serve` / `dial`. Each change rewrites
+the record, so a restart of `net` keeps it. A name with no dial
+rule does not open a TCP connection. `serve` attaches a gate.
 The next inbound lane is delivered to that listener. A second
 `serve` from another seat returns `held` and no lane Cap. The lane
 carries TLS plaintext. Locators and ports
@@ -389,76 +389,78 @@ Milestone 109: the same lane, by name. There is no new syscall.
 QUIC, 0-RTT, and device checksum offload are later
 carriers and later rights. They attach to the lane. They do not add
 an ambient socket. The DNS resolver trusts the CA bundle in the
-image. A lane does not. Phase 16's extra calls are cards. Milestones
-110–117 have landed. SSH is the same lane. Milestones 120–124
-are one address type, and they stay open. Milestone 125 is the
-resolver bundle.
+image. A lane does not. Who may dial, listen, or ping is a line
+in `/policy`. Milestones 110–117 have landed. SSH is the same lane.
+Milestones 120–124 are one address type, and they stay open.
+Milestone 125 is the resolver bundle.
 
-## Phase 16 — A card is the firewall
+## The firewall is `/policy`
 
-Milestones **105**, **107**, **108**, and **109** landed. **108**
-and **109** are the name layer. **110–116** are the real stack.
-**117** is SSH, and it has landed. Checkboxes in `TODO.md`. This plan
-does not tag `v1.0` and does not check the KVM rows.
+Milestones **105–119** shipped the same checks as galfs cards
+under `/card` and `/usb`. Those objects are gone. The check is
+one line in `/policy`. Checkboxes in `TODO.md`. This plan does
+not tag `v1.0` and does not check the KVM rows.
 
-A network name is a galfs object under `/card` (the same object
-as `/admin@card/<name>`). `/card/ping` is the ping card. The
-locator and the pinned key stay in the service record. Who may
-use the name is a token. Read is dial. Write is accept. The
-kernel stamps the held bits into header byte 2 (`TOKEN_READ` is
-1, `TOKEN_WRITE` is 2). `net` refuses a dial or a ping without
-bit 1, and an accept without bit 2, before TCP, DNS, or ICMP. A
-ping of a dotted name uses that same bit, then the pinned
-DNS-over-TLS resolver. Actor
-strings stay in the record and are not consulted. `may_dial`
-remains for that record. Logged-out stays `AccessDenied`. There
-is no chain, no interface match, and no packet filter. The
-firewall is the card, not a packet-filter language, and it lives
-in `net`. Admin's root token covers the per-name cards. A seat
-without one does not open TCP. A path or an address is not
-authority.
+`/policy` is a file. Init creates it and, when it is empty, writes
+`net listen *:4598 name ssh` and
+`usb use 0627:0001 name usb-list`. A later boot keeps what is there. Admin appends a line with `sec`. The shell
+stats a path and stores `id <object>`. A path that ends in `/*`
+stores `parent <object>`, so every file in that folder matches.
+A subject with no slash stores `name <task>`. Init (opcode 13)
+appends the line. It refuses a line the matcher will not parse,
+including a bare `*` and a second copy of a line already there.
+The file holds 4096 bytes. A full file replies `full`.
 
-Read on the exact object `/card/out/<program>` is that
-program's outbound card (Milestone 118). Header byte 2 also
-carries `NET_HELD_OUT` (`0x20`), which is not a galfs right.
-The program dials any stored name, including a subdomain, and
-any address it passes, with no per-host ask. The reply comes
-back on the same lane. An empty pin is a plaintext lane, so an
-HTTP client can write the request and read the response. A
-stored pin stays the one-shot TLS fetch. The card does not
-bind, listen, or accept. Write on the port card is still the
-accept. A program without the object keeps the per-name ask.
-Logged-out stays denied. DNS-over-TLS on port 853 is unchanged.
-`share r` stores that read in the metadata slot (Milestone
-119). Init creates `/card/out/` and does not grant it. Login
-does not put the object on the shell. Spawn installs it when
-the actor's share names that task. The token dies with the
-task. `unshare` drops the row. `DISK_VERSION` stays 17.
+The kernel does not read the lines. On `send` to `net` or `usb`
+it stamps 44 bytes the caller cannot set: admin, tty, the task
+name (16 bytes), the executed file's object id, and that file's
+parent. A ramdisk program stamps no object. Executing a script
+runs the `python` binary and stamps the script file, so a rule
+on the interpreter does not cover the script. A logged-out seat
+is `AccessDenied` before the service.
 
-A foreground program that does not hold the token parks. The
-shell, which is Cap-waiting, prints `<name> wants the network`
-or `<name> wants storage`, and reads yes or no. Yes installs a
-token on that task for this run. The parent may `grant` that
-exact path and those rights even when the parent does not hold
-the card. The program cannot grant itself. No is `AccessDenied`
-and the program stays up. A second ask for the same right in
-the same run does not print. A task that already holds the
-token does not ask. The kernel does not draw a dialog. There
-is no new syscall number. The token dies when the task exits.
-A per-name grant is not an always that survives reboot. The
-outbound card is: `share r /card/out/<program> <actor>` is
-read in the metadata slot, and the next boot installs it on
-that named task.
+`net` and `usb` read `/policy` and match the stamp. A miss sends
+nothing and replies `access denied`. The program stays up. There
+is no yes/no ask, no chain, no interface match, and no packet
+filter. An ancestor token does not cover `/policy`. Holding the
+root does not rewrite the table. The creator, and init on the
+next boot, hold the exact read and write. `net` and `usb` hold
+read. File tokens are unchanged. `net allow` still stores a pin.
+It does not grant a dial.
+
+```
+sec net dial *.google.com:80 /Desktop/myapp
+sec net dial 10.0.2.2:22 /Desktop/*
+sec net listen *:4598 ssh
+sec net icmp * ping
+sec usb use 0627:0001 usb-list
+```
+
+A dial object is `host:port`. The host is an address, a name, or
+`*.domain` (one label). A listen object is `*:port` or `ip:port`.
+An ICMP object is `*` or one address. A USB object is `VVVV:PPPP`.
+A name matches a ramdisk program only. A desktop file named `ssh`
+does not match `name ssh`. A rule is the file, so it survives
+reboot. `DISK_VERSION` is 18. A dev disk reformats.
+
+A dial the rule allows, with an empty pin, is a plaintext lane.
+The program writes the request and reads the response. A stored
+pin stays the one-shot TLS fetch. A listen rule does not dial.
+A dial rule does not listen. DNS-over-TLS on port 853 is unchanged.
+
+`ping`, `fetch`, and `usb list` are programs. The shell starts
+them, and the stamp is theirs. `ssh user@address` is `ssh-open`
+and dials that address. The guest listener is the `ssh` program
+on port 4598.
 
 Milestone 108 keeps the name `std::net::TcpStream::connect`. The
-call asks (Milestone 107), then dials a granted name through
-`net`. The value is still a lane. Milestone 109 is that layer for
-Python `socket.connect`: the call asks, then dials, and a no is
-`OSError`. There is no socket syscall and no second stack. rustls
-stays in `net`. The PAL does not parse TCP. This is not a Berkeley
-socket. Those two milestones do not pass an IP or a port.
-`setsockopt` stays refused. Listen is Milestone 115. One datagram
-peer is Milestone 116.
+call dials a name through `net` when a rule names the caller and
+that host. The value is still a lane. Milestone 109 is that layer
+for Python `socket.connect`. A miss is `OSError` and the
+interpreter stays up. A script is ruled by the script's object,
+not by the name `python`. There is no socket syscall and no
+second stack. rustls stays in `net`. The PAL does not parse TCP.
+This is not a Berkeley socket. `setsockopt` stays refused.
 
 Milestone 110 is the lookup: DNS-over-TLS to a pinned resolver,
 not UDP/53, and not `10.0.2.3`. Milestone 111 is the reach. A
@@ -468,77 +470,75 @@ destination is the resolved address, not the QEMU gateway
 TLS stay inside `net`. virtio-net stays the device. `net` stays
 the only packet stack.
 
-Milestone 112 stores one address on a card. Read on that card
-lets the program pass that address and no other. Milestone 113
-stores one destination port. An address card does not imply the
-port. Milestone 114 binds the stored local address, and only
-with write on the address card. Read does not bind. `0.0.0.0`
+Milestone 112 is one address in a `net dial` rule. The rule names
+that address and no other. Milestone 113 is the port on that same
+line. An address rule does not imply a different port. Milestone
+114 binds the stored local address, and only for admin. `0.0.0.0`
 is denied. The record is version 2; version 1 is refused. No new
 syscall, and no new right bit. `milestones_110_through_114` is
 that run. Milestone 83 hands the next lane to the one listener
-that attached the gate, and only when that seat holds the write
-bit. `serve_hands_the_lane_to_its_listener` is that run.
+that attached the gate, and only when a listen rule names that
+caller and the port. `serve_hands_the_lane_to_its_listener` is
+that run.
 
-Milestone 115 opens the gate with write on the port card. Without
-that card, no gate opens. The runner forwards one host TCP
+Milestone 115 opens the gate with a `net listen` rule. Without
+that rule, no gate opens. The runner forwards one host TCP
 connection. The guest does not dial `10.0.2.2`. A second listener
 receives nothing. `milestones_115_and_116` is that run. Milestone
-116 sends one datagram to the peer stored on the card, and only
-with read. The same card receives one datagram from that peer.
-Write does not send and does not capture. Port 53 stays unused.
-The Milestone 80 datagram to the gateway stays inside `net`.
+116 sends one datagram to the peer named by a `net dial` rule.
+The same rule receives one datagram from that peer. A miss sends
+nothing and does not capture. Port 53 stays unused. The Milestone
+80 datagram to the gateway stays inside `net`.
 
-`std::net` and Python `socket` call those cards. `TcpStream::connect`
-and `socket.connect` take a name, one stored address, or one stored
-`address:port`. `TcpListener::bind` and `socket.bind` use the bind
-card. `TcpListener::accept`, `listen_port`, and `socket.listen` use
-the listen card. `UdpSocket::send_card` and `socket.send` send.
-`UdpSocket::recv_card` and `socket.recv` receive. The kernel asks
-when the card is missing. A call that names an address and a port
-asks for each card that is missing. No is `AccessDenied` in Rust and `OSError`
-in Python. The value is still a lane or the card reply. `setsockopt`
-stays refused. There is no second stack.
+`std::net` and Python `socket` call those rules. `TcpStream::connect`
+and `socket.connect` take a name, an address, or `address:port`.
+`TcpListener::bind` and `socket.bind` bind the stored local
+address, and only for admin. `TcpListener::accept`, `listen_port`,
+and `socket.listen` use the listen rule. `UdpSocket::send_card` and
+`socket.send` send. `UdpSocket::recv_card` and `socket.recv` receive.
+A miss is `AccessDenied` in Rust and `OSError` in Python. The
+value is still a lane. `setsockopt` stays refused. There is no
+second stack.
 
 Milestone 117 is that server. `milestone_117_ssh_reads_a_file` is
 the run. One init row, in-tree Rust, no OpenSSH, no libssh, no C,
-and no crates.io SSH library. `/card/ssh` write accepts. Read lets
-a local program open a session. The program passes no address.
-`net` keeps the TCP bytes. Strict key exchange, then
-`curve25519-sha256`. Host keys are Ed25519. The cipher is
-`chacha20-poly1305@openssh.com`. The MAC is that AEAD. SFTP is a
-subsystem of that session, and the files it can touch are the
-galfs tokens the seat already holds (the existing PBKDF2 path, not
-a new user table). A client that offers only a refused algorithm
-gets no session. Serial does not carry the host-key private bytes
-or the password. There is no fallback to a legacy group, and no
-new syscall. Opcode 14 on net cap `0x800A` is the live lane.
-`read` and `write` with `r8` bit 0 set return `NoResource` instead
-of parking, so `net` can relay. Both are experimental in `ABI.md`.
+and no crates.io SSH library. `net listen *:4598 name ssh` accepts.
+A `net dial` rule lets a local program open a session. The program
+passes the address on `ssh user@address`. `net` keeps the TCP
+bytes. Strict key exchange, then `curve25519-sha256`. Host keys
+are Ed25519. The cipher is `chacha20-poly1305@openssh.com`. The
+MAC is that AEAD. SFTP is a subsystem of that session, and the
+files it can touch are the galfs tokens the seat already holds
+(the existing PBKDF2 path, not a new user table). A client that
+offers only a refused algorithm gets no session. Serial does not
+carry the host-key private bytes or the password. There is no
+fallback to a legacy group, and no new syscall. Opcode 12 on net
+cap `0x800A` is the live lane. `read` and `write` with `r8` bit 0
+set return `NoResource` instead of parking, so `net` can relay.
+Both are experimental in `ABI.md`.
 
-An empty pin on the outbound card is a plaintext lane. A stored
-pin stays TLS, and a dial without that card stays the one-shot
-TLS fetch even when the pin is empty. Still refused after these
-milestones: the BSD option surface, `setsockopt`, a port or an
-address in the syscall ABI, a program-chosen cleartext mode when
-a pin is stored, plaintext DNS, TLS before 1.3, iptables,
-raw frames, raw sockets, promiscuous mode, a second stack, telnet,
-FTP, rsh, SSHv1, `ssh-rsa`, CBC, and SHA-1. The `v1.0` tag stays
-unapplied.
+An empty pin on a dial the rule allows is a plaintext lane. A
+stored pin stays TLS. A dial with no rule sends nothing. Still
+refused after these milestones: the BSD option surface,
+`setsockopt`, a port or an address in the syscall ABI, a
+program-chosen cleartext mode when a pin is stored, plaintext
+DNS, TLS before 1.3, iptables, raw frames, raw sockets,
+promiscuous mode, a second stack, telnet, FTP, rsh, SSHv1,
+`ssh-rsa`, CBC, and SHA-1. The `v1.0` tag stays unapplied.
 
 ## One address (Milestones 120–124)
 
-v4 and v6 are one address type. The address card, dial, the reply,
-bind, listen, the datagram, and the route take that type. Opcodes
-stay 1–14. There is no `/card6`, no v6 opcode, and no second stack.
-Milestones 118 and 119 have landed. Listening stays write on the
-port card. The boxes for 120–124 stay open. This plan does not
-tag `v1.0`.
+v4 and v6 are one address type. A dial rule, the reply, bind,
+listen, the datagram, and the route take that type. Opcodes stay
+1–12. There is no v6 opcode and no second stack. Listening stays
+a `net listen` rule. The boxes for 120–124 stay open. This plan
+does not tag `v1.0`.
 
 Milestone 120 is the type. A v4 value and a v6 value are it.
 Today's four-byte lease, resolver, and ping become that type when
 the layout changes, and `galexy-netcfg` bumps. The old version is
-refused. `DISK_VERSION` stays 17. A v4 dial, bind, listen, and
-datagram keep their opcodes. This row sends no v6 packet.
+refused. A v4 dial, bind, listen, and datagram keep their opcodes.
+This row sends no v6 packet.
 
 Milestone 121 is one parser. The shell and `net` call it. It
 refuses a form that can be two addresses, or a name and an
@@ -549,21 +549,27 @@ form opens nothing. No packet.
 
 Milestone 122 is the reach. Neighbor discovery finds one v6
 neighbor or one v6 gateway that is not the QEMU user path
-`10.0.2.2`. One echo goes there, on opcode 7 and `/card/ping`.
-The cache stays 8. No lane. The host test of a solicitation does
-not check this box.
+`10.0.2.2`. One echo goes there, on opcode 5, and a `net icmp`
+rule must name the caller. The cache stays 8. No lane. The host
+test of a solicitation does not check this box.
 
-Milestone 123 is the lookup. Opcode 8, DNS-over-TLS on port 853,
+Milestone 123 is the lookup. Opcode 6, DNS-over-TLS on port 853,
 the pinned resolver. The reply may be a v6 value of the one type.
 The program passes the name. One reply is one address. There is
 no second connection and no UDP/53. This row does not dial.
 
-Milestone 124 is the reply. Read on `/card/out/<program>` dials,
-and the reply is read on that connection, when the answer is v6.
-The same card covers a v6 address the program passes. A dial by
-name does not also need the address card. The card does not bind,
-listen, or accept. Inbound stays write on the port. The lane is
-the one Milestone 118 already uses.
+Milestone 124 is the reply. A `net dial` rule dials, and the reply
+is read on that connection, when the answer is v6. The same rule
+covers a v6 address the program passes. A dial by name does not
+also need a second rule for the resolved address. The rule does
+not bind, listen, or accept. Inbound stays a `net listen` rule.
+The lane is the one a dial already uses.
+
+Milestone 126 is the clock. `net time <ip>` sends one NTP packet
+to UDP port 123 and sets civil UTC from the reply. It does not
+wait on 120–124. The address is not a name: the clock is why a
+name cannot be looked up yet. NTS is later, because NTS needs a
+clock. The box is open.
 
 Milestone 125 is the resolver. `net pin <ip>` is enough. The seat
 reads the domain off the certificate and prints it. The certificate
@@ -590,7 +596,8 @@ resolver.
 | ABI | `crates/galexy-abi`, `docs/ABI.md` |
 | Service | `crates/userspace/net/` (a `std` or `no_std` program, whichever links the TLS crate), packed like `util` |
 | Init row | `crates/userspace/init/src/main.rs` (the row, the empty record, the one token) |
-| Shell | `fetch` and the admin `net` opcodes in `crates/userspace/shell` |
+| Rules | `crates/galexy-sec`. `net` and `usb` match. The shell `sec` command asks init to append a line |
+| Shell | `sec`, and the admin `net` opcodes, in `crates/userspace/shell`. `ping`, `fetch`, and `usb list` are programs under `crates/userspace/util` |
 | Device row | `docs/DEVICES.md` — virtio-net |
 | Tests | `bin/test-wire`, host tests for the record, DHCP, ARP, and TCP, a UDP receipt on the host, a typed `fetch` |
 

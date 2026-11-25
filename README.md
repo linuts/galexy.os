@@ -382,16 +382,13 @@ crates/
   [`docs/GALFS.md`](docs/GALFS.md)
 - **Phase 16** — Milestones 104–119 landed. One kernel boots at
   `-smp 4` and `-smp 8` (the suite stays at 2, and the cap stays 8).
-  A network name and a listed USB port are galfs cards. A foreground
-  program without the card asks the shell. `TcpStream::connect` and
-  Python `socket.connect` are that ask, then a lane. An address, a
-  port, bind, listen, and a datagram are cards (112–116). SSH and
-  SFTP are `/card/ssh` (117). Read on `/card/out/<program>` dials
-  any stored name and any address (118). `share r` keeps that read
-  across reboot (119). Listen stays the port card. One address
-  type is 120–124, and those boxes stay open.
-  The `v1.0` tag still waits on the KVM cells. Plan:
-  [`docs/ROADMAP.md`](docs/ROADMAP.md)
+  Dial, listen, ICMP, and USB use are lines in `/policy`.
+  `TcpStream::connect` and Python `socket.connect` are that rule,
+  then a lane. A miss sends nothing. SSH and SFTP accept on
+  `net listen *:4598 name ssh` (117). A script keeps the script's
+  object, not `python`. One address type is 120–124, and those
+  boxes stay open. The `v1.0` tag still waits on the KVM cells.
+  Plan: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
   static linker (LINKER.md, ✅ Milestone 69), `std` PAL (✅ Milestone
   70), compiler-sized limits and ring-3 `gxld` (✅ Milestone 71),

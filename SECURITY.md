@@ -59,10 +59,9 @@ fixed in a milestone PR with a changelog line.
   at 10 000 iterations.
 - Remote attacks: Phase 10 has landed (`docs/NET.md`). The kernel
   moves frames and does not parse IP. A lane, a ping, and a datagram
-  need the card. Read on `/card/out/<program>` dials for that
-  program and does not listen (Milestones 118 and 119). Remote
-  login is Milestone 117: one SSH service, `/card/ssh`, and no
-  second stack.
+  need a line in `/policy`. A dial rule does not listen. Remote
+  login is Milestone 117: one SSH service,
+  `net listen *:4598 name ssh`, and no second stack.
 - IPv6: Milestones 120–124 plan one address type. They are not in
   the tree. No second stack, no raw socket, no plaintext DNS, and
   no general browser TLS.
@@ -72,7 +71,7 @@ fixed in a milestone PR with a changelog line.
 - Python: `cargo run` carries RustPython as `python` when
   `target/galexy-python/python` was built (`docs/PYTHON.md`).
   A `.py` file runs with the seat's tokens. The interpreter adds
-  no syscall. `socket` calls the net cards. `pip` and `subprocess`
+  no syscall. `socket` calls the lines in `/policy`. `pip` and `subprocess`
   stay out.
 - Denial of service by the operator at the keyboard (the console budget
   and quotas are fairness, not security, mechanisms).

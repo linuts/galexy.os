@@ -278,12 +278,7 @@ fn hex4(text: &[u8]) -> bool {
 }
 
 fn eq_ignore_hex(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter()
-        .zip(b.iter())
-        .all(|(x, y)| x.to_ascii_lowercase() == y.to_ascii_lowercase())
+    a.eq_ignore_ascii_case(b)
 }
 
 fn parse_u32(text: &[u8]) -> Option<u32> {

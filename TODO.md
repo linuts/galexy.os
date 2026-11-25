@@ -3491,43 +3491,50 @@ stays 17. The `/net` record stays version 2. No new syscall.
       shows the share, the file `dial`, and the `out` directory
       under `card`
 
+## sec — `/policy` replaces the card objects
+
+The checks Milestones 105–119 named as `/card` and `/usb/N` are
+lines in `/policy`. Init creates that file. `sec` appends a line.
+`net` and `usb` match the kernel stamp. A miss sends nothing.
+There is no ask. An ancestor token does not cover the file.
+`DISK_VERSION` is 18. The boxes above stay the record of what
+those milestones checked. The objects they name are not created.
+
 ## Milestone 120 — One address type
 
 The lease, the resolver, and a ping are four bytes. The record
 keeps two locator kinds. This row makes one address type. A v4
-value and a v6 value are that type. The address card, dial, the
-reply, bind, listen, the datagram, and the route all take it.
-Opcodes stay 1–14. There is no second card tree and no v6
-opcode. Listening stays write on the port card. This row does
-not send a v6 packet.
+value and a v6 value are that type. A dial rule, the reply, bind,
+listen, the datagram, and the route all take it. Opcodes stay
+1–12. There is no v6 opcode. Listening stays a `net listen` rule.
+This row does not send a v6 packet.
 
 - [ ] **One type**: the stored address, the dial, the reply, bind,
       listen, the datagram, and the next hop are one type. v4 and
       v6 are values of it. The two locator kinds do not stay two
-      paths. The address card stays one card
-- [ ] **The same calls**: a v4 dial, bind, listen, and datagram
-      keep opcodes 2, 10, 11, 12, and 13. Opcode 14 stays the SSH
-      stream. Ping stays opcode 7, and it carries this type. The
-      reply is still read on that connection. Logged-out stays
-      denied. The outbound card from Milestone 118 takes this
-      type. This row does not define that card
+      paths. A dial rule stays one rule
+- [ ] **The same calls**: a v4 dial, bind, listen, datagram, and
+      datagram receive keep opcodes 2, 8, 9, 10, and 11. Opcode 12
+      stays the SSH stream. Ping stays opcode 5, and it carries
+      this type. The reply is still read on that connection.
+      Logged-out stays denied. A `net dial` rule takes this type
 - [ ] **The record**: a layout change bumps `galexy-netcfg`. The
-      old version is refused, not guessed. `DISK_VERSION` stays
-      17. No new syscall and no new opcode
+      old version is refused, not guessed. No new syscall and no
+      new opcode
 - [ ] **Proof**: a v4 body still comes back through that type. A
       stored v6 value is the same type and the same opcode, and
       this row sends no v6 packet
 - [ ] **Out of this milestone**: the parse (121), a neighbor past
       the QEMU path (122), a v6 answer from DNS (123), a v6 reply
-      on the outbound card (124), a second stack, a raw socket,
+      on the dial rule (124), a second stack, a raw socket,
       plaintext DNS, general browser TLS, a new syscall, the
       `v1.0` tag, and the KVM rows
 
 ## Milestone 121 — The parse rejects an ambiguous form
 
 One parser for that type. The shell and `net` call it. A form
-that can be read two ways is refused. The card stores the value,
-not the text. A refused form matches no card and opens nothing.
+that can be read two ways is refused. A rule stores the value,
+not the text. A refused form matches no rule and opens nothing.
 This row sends no packet.
 
 - [ ] **Refused**: a v4 octet with a leading zero. A zone id. A
@@ -3558,10 +3565,10 @@ stays 8 entries. The kernel still only moves frames.
 - [ ] **The reach**: neighbor discovery for that next hop, the
       way ARP is for v4. One echo to that neighbor or gateway.
       The peer is not `10.0.2.2`. No lane
-- [ ] **The same call**: opcode 7 and `/card/ping`. No new opcode.
-      No card, no packet. Logged-out is denied
+- [ ] **The same call**: opcode 5 and a `net icmp` rule. No new
+      opcode. No rule, no packet. Logged-out is denied
 - [ ] **Proof**: the peer answers, and the address is not
-      `10.0.2.2`. A missing card sends nothing. The QEMU user
+      `10.0.2.2`. A missing rule sends nothing. The QEMU user
       path does not check this box. The host test of a
       solicitation does not check it either
 - [ ] **Out of this milestone**: a name lookup (123), an
@@ -3581,7 +3588,7 @@ No lane.
       opcode. A v4 answer still works. One reply is one address.
       The lookup does not open a second connection to try the
       other version
-- [ ] **The card**: no read card, no query. Logged-out is denied.
+- [ ] **The rule**: no dial rule, no query. Logged-out is denied.
       A missing pin sends nothing
 - [ ] **Proof**: one TLS query whose answer is a v6 address.
       Serial does not carry the resolver key. A UDP datagram to
@@ -3591,30 +3598,28 @@ No lane.
       second stack, plaintext DNS, general browser TLS, a new
       syscall, the `v1.0` tag, and the KVM rows
 
-## Milestone 124 — The outbound card covers a v6 reply
+## Milestone 124 — The dial rule covers a v6 reply
 
-Read dials and receives the reply on that connection. Milestone
-118's card is `/card/out/<program>`. When the answer is v6, that
-same card is the right. There is no second outbound card.
-Listening stays write on the port card. This card does not
-accept.
+A `net dial` rule dials and receives the reply on that connection.
+When the answer is v6, that same rule is the right. There is no
+second rule for the address family. Listening stays a
+`net listen` rule. This rule does not accept.
 
-- [ ] **The same card**: read on `/card/out/<program>` dials a
-      name whose answer is v6, and a v6 address the program
-      passes. The reply is read on that connection. A dial by
-      name does not also need the address card. The lane is
-      the one Milestone 118 already uses
+- [ ] **The same rule**: a `net dial` rule dials a name whose
+      answer is v6, and a v6 address the program passes. The
+      reply is read on that connection. A dial by name does not
+      also need a rule for the resolved address. The lane is the
+      one a dial already uses
 - [ ] **What it does not do**: it does not bind, listen, or
-      accept. Inbound stays write on the port. A datagram stays
-      that peer's card. Ping stays `/card/ping`. A program
-      without the outbound card still asks per name. No leaves
-      it up. Logged-out is denied
-- [ ] **Proof**: the program with the card reads a body from a
-      v6 answer. The seat prints no ask. Without the card, no
-      handshake. Without write on the port card, the program
-      accepts nothing
-- [ ] **Out of this milestone**: a second card tree, a second
-      stack, a raw socket, plaintext DNS, general browser TLS,
+      accept. Inbound stays a `net listen` rule. A datagram stays
+      a `net dial` rule for that peer. Ping stays `net icmp`. A
+      program with no rule sends nothing and stays up. Logged-out
+      is denied
+- [ ] **Proof**: the program with the rule reads a body from a
+      v6 answer. Without the rule, no handshake. Without a listen
+      rule, the program accepts nothing
+- [ ] **Out of this milestone**: a second stack, a raw socket,
+      plaintext DNS, general browser TLS,
       a public CA bundle, TLS before 1.3, a new opcode, a new
       syscall, the `v1.0` tag, and the KVM rows. Milestones 118
       and 119 are not this row
@@ -3653,6 +3658,100 @@ and `net allow` do not use the bundle.
       no raw socket, no plaintext DNS, no general browser TLS,
       no new opcode, the `v1.0` tag, and the KVM rows. Milestones
       120–124 stay open
+
+## Milestone 126 — Network time
+
+The date is unset until someone sets it, and a certificate check
+refuses a pin when the clock is unset. This row sets civil UTC from
+one Network Time Protocol server. It does not wait on Milestones
+120–124. `Clock` stays milliseconds since boot. `Date` stays the
+civil clock from Milestone 90. There is no timezone and no leap
+smear.
+
+- [ ] **One query**: `net` sends one NTP packet to one address on
+      UDP port 123 and reads one reply from that address. The
+      transmit time in the reply sets `Date` and the CMOS chip.
+      A reply from any other address is ignored. The wire must be
+      up. No name is resolved: the clock is why a name cannot be
+      looked up yet. The address is four bytes until Milestone 120
+- [ ] **Who asks**: the administrative seat. The command is
+      `net time <ip>`. No new syscall. Opcode 13 on net cap
+      `0x800A` appends. A logged-out seat is `AccessDenied`. A
+      program that is not the administrative user is refused.
+      Port 53 stays unused
+- [ ] **What it does not do**: no second stack, no pool, no
+      background poll, no NTS. NTS needs a clock to check a
+      certificate, and this row is the clock. One shot, then
+      elapsed monotonic time carries `Date` the way a manual set
+      does. A chip that already holds a year in 2000..=2099 still
+      seeds the anchor at boot. This query replaces it
+- [ ] **Proof**: an unset date becomes `svc date` in UTC after one
+      reply, and a certificate pin that was `clock not set` then
+      proceeds. A reply from a different address does not move the
+      clock. Serial does not carry a key. The `v1.0` tag stays
+      unapplied
+- [ ] **Out of this milestone**: NTS, a server pool, a timezone,
+      a leap second, a poll loop, a v6 address, a new syscall,
+      the first-boot screen (128), and the KVM rows
+
+## Milestone 127 — The first user is the administrator
+
+A production disk has an account named `admin` and a password the
+operator types at format. This row removes that account. The user
+created at setup is the administrative actor. `is_admin_root` is
+that actor's root. Further users from `useradd` are not.
+
+- [ ] **No `admin` actor**: format does not create a user named
+      `admin`. The name and the password come from the seat. The
+      name `admin` is refused. An empty name is refused. The
+      password is confirmed. The format default `admin`/`admin`
+      is not written. Must-change of that default has nothing to
+      change on this disk
+- [ ] **The same rights**: the stamp's admin byte is this actor.
+      `svc`, `net pin`, `net time`, `volpass`, and `sec` stay
+      that user's. Another login does not get them by name.
+      `su` to this user is the existing card, and the card names
+      this root, not the string `admin`
+- [ ] **The suite**: test kernels and the disk harness may still
+      format a known account so the boots keep logging in. That
+      account is not created on the production image. The
+      production path is Milestone 128
+- [ ] **Proof**: a production format has one actor, the name the
+      seat typed, and `is_admin_root` is that root. A second
+      `useradd` logs in and `sec` answers `access denied`. Serial
+      does not carry the password
+- [ ] **Out of this milestone**: the setup screen (128), deleting
+      the harness account from the suite, a second administrator,
+      a new syscall, and the `v1.0` tag
+
+## Milestone 128 — First boot
+
+An empty disk does not open a login named `admin`. One seat walks
+three questions, then the login prompt is the user from
+Milestone 127. Milestone 126 has landed, so a pin can check a
+certificate date.
+
+- [ ] **The disk**: the first question is the volume passphrase,
+      confirmed. That formats the filesystem and seals it. A
+      mismatch asks again. No default passphrase is stored. A
+      disk that is already sealed asks for the existing
+      passphrase and skips the rest
+- [ ] **The user**: the second question is the name and the
+      password, confirmed. This is the actor from Milestone 127.
+      There is no account named `admin`
+- [ ] **The network**: the third question shows `link`. The seat
+      types a resolver address or `skip`. An address runs
+      `net time` when the date is unset, then `net pin`. Skip
+      leaves the date and the resolver unset. The login prompt
+      is still that user
+- [ ] **Proof**: a blank production image reaches login only
+      after the three answers, the actor name is the one typed,
+      `svc date` is set when the seat did not skip, and a skip
+      still logs in. A second boot asks for the passphrase and
+      does not ask for a new user. Serial carries neither secret
+- [ ] **Out of this milestone**: a second user during setup, a
+      timezone, NTS, a new syscall, Milestones 120–124, the
+      `v1.0` tag, and the KVM rows
 
 
 ---

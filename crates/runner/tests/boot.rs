@@ -2609,6 +2609,7 @@ fn keystroke(c: char) -> (String, String) {
         '=' => "equal".to_string(),
         '/' => "slash".to_string(),
         '@' => "shift+2".to_string(),
+        '*' => "shift+8".to_string(),
         _ => panic!("no qcode for {c:?}"),
     };
     (code, c.to_string())
@@ -6248,7 +6249,7 @@ fn usb_list_shows_the_keyboard() {
         ("e".to_string(), "*".to_string()),
         ("ret".to_string(), "eve@galexy> ".to_string()),
     ]);
-    owned.extend(type_line("usb", "access denied"));
+    owned.extend(type_line("usb", "0627:0001"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
         .map(|(code, echo)| (code.as_str(), echo.as_str()))
@@ -6256,8 +6257,8 @@ fn usb_list_shows_the_keyboard() {
     let serial = boot_and_type_usb(
         &image("galexy-os"),
         &keys,
-        "0627:0001",
-        "access denied",
+        "unclaimed",
+        "usb running",
         Duration::from_millis(30),
         Duration::from_secs(240),
     );
@@ -6286,8 +6287,8 @@ fn usb_list_shows_the_keyboard() {
         .find("[auth] session login user=eve")
         .expect("eve never logged in");
     assert!(
-        serial[eve..].contains("access denied"),
-        "a seat without the usb card should not see the list; serial:\n{serial}"
+        serial[eve..].contains("0627:0001"),
+        "the usb use rule names usb-list, so eve's list shows the keyboard; serial:\n{serial}"
     );
 }
 
@@ -6688,9 +6689,9 @@ fn fetch_grant_typing_e2e() {
             (save_wrong.as_str(), "admin@galexy>"),
             ("net allow bad 10.0.2.2:4582 b", "ok"),
             ("sec net dial bad:4582 fetch", "ok"),
-            ("fetch bad", "access denied"),
+            ("fetch bad", "changed"),
         ],
-        "access denied",
+        "changed",
         Duration::from_secs(150),
     );
     drop(server);

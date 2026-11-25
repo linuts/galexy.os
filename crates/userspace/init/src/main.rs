@@ -547,7 +547,11 @@ fn ensure_policy() {
     let mut buf = [0u8; 64];
     let got = read(cap, &mut buf);
     if !got.ok || got.value == 0 {
-        let _ = write(cap, b"net listen *:4598 name ssh\n");
+        // The guest SSH service, and the QEMU keyboard `usb list` shows.
+        let _ = write(
+            cap,
+            b"net listen *:4598 name ssh\nusb use 0627:0001 name usb-list\n",
+        );
     }
     let _ = close(cap);
 }

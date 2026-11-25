@@ -81,7 +81,12 @@ fn once(name: &[u8]) -> i32 {
         let _ = close(cap);
         let _ = write_console(b"\n");
     } else if n > 8 {
-        let _ = write_console(&reply[8..n]);
+        let text = &reply[8..n];
+        let _ = write_console(text);
+        if text.starts_with(b"access denied") {
+            let _ = write_console(b"still up\n");
+            return 1;
+        }
     }
     0
 }
