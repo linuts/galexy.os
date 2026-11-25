@@ -1079,14 +1079,26 @@ fn syscall_user(frame: &Context) -> SyscallResult {
                 return SyscallResult::err(SysError::BadValue);
             };
             let result = if crate::sched::galfs::volume_query() == 2 {
-                let mut admin = [0u8; 64];
-                let Some(a) = copy_user_str(frame.rdi, frame.rsi, &mut admin, false) else {
+                let mut name_raw = [0u8; MAX_NAME as usize];
+                let Some(n) = copy_user_str(frame.rdi, frame.rsi, &mut name_raw, true) else {
                     galexy_crypto::wipe_bytes(&mut pass);
-                    galexy_crypto::wipe_bytes(&mut admin);
                     return SyscallResult::err(SysError::BadValue);
                 };
-                let result = crate::sched::galfs::unlock_with(&pass[..p], Some(&admin[..a]));
-                galexy_crypto::wipe_bytes(&mut admin);
+                let mut pw = [0u8; 64];
+                let Some(a) = copy_user_password(frame.r10, &mut pw) else {
+                    galexy_crypto::wipe_bytes(&mut pass);
+                    galexy_crypto::wipe_bytes(&mut pw);
+                    return SyscallResult::err(SysError::BadValue);
+                };
+                let name = core::str::from_utf8(&name_raw[..n]).unwrap_or("");
+                let result = crate::sched::galfs::unlock_with(
+                    &pass[..p],
+                    Some(crate::sched::galfs::SetupUser {
+                        name,
+                        password: &pw[..a],
+                    }),
+                );
+                galexy_crypto::wipe_bytes(&mut pw);
                 result
             } else {
                 crate::sched::galfs::unlock_volume(&pass[..p])
@@ -1191,6 +1203,38 @@ fn syscall_user(frame: &Context) -> SyscallResult {
         }
         _ => SyscallResult::err(SysError::BadValue),
     }
+}
+
+/// Password blob at `addr`: one length byte, then that many password bytes.
+fn copy_user_password(addr: u64, out: &mut [u8]) -> Option<usize> {
+    if addr == 0 {
+        return None;
+    }
+    let mut len_b = [0u8; 1];
+    if user_buffer(addr, 1, false).is_err() {
+        return None;
+    }
+    // SAFETY: `user_buffer` accepted the length byte.
+    unsafe {
+        crate::arch::user_copy::copy_from_user(addr, len_b.as_mut_ptr(), 1);
+    }
+    let n = len_b[0] as usize;
+    if n == 0 || n > out.len() {
+        return None;
+    }
+    let start = addr.saturating_add(1);
+    if user_buffer(start, n as u64, false).is_err() {
+        return None;
+    }
+    // SAFETY: `user_buffer` accepted the password bytes.
+    unsafe {
+        crate::arch::user_copy::copy_from_user(start, out.as_mut_ptr(), n);
+    }
+    if !out[..n].iter().all(|b| b.is_ascii_graphic() || *b == b' ') {
+        galexy_crypto::wipe_bytes(&mut out[..n]);
+        return None;
+    }
+    Some(n)
 }
 
 /// Copies a user string into `out`. When `named`, applies [`file_name_ok`].

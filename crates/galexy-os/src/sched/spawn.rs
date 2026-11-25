@@ -1983,8 +1983,8 @@ pub(crate) fn task_login(name: &str, password: &[u8]) -> Result<(), SysError> {
     if slot == 0 {
         return Err(SysError::BadCap);
     }
-    // The RAM admin exists before a sealed disk is open. A session on
-    // that table would start the seat with nothing committed to disk.
+    // The seat has not named an account yet. A session on the pending
+    // root would start with nothing committed to disk.
     if galfs::volume_locked() {
         return Err(SysError::AccessDenied);
     }
@@ -2180,7 +2180,7 @@ pub(crate) fn task_unlock_session(password: &[u8]) -> Result<(), SysError> {
 ///
 /// `from_login` sets [`Thread::born_admin`] from the target (password
 /// identity). `su` passes `false` so switching to a non-admin actor does
-/// **not** clear born-admin — the seat can `su admin` to return (AUTH.md).
+/// **not** clear born-admin — the seat can `su` back to that root (AUTH.md).
 pub(in crate::sched) fn install_session(
     caller: &mut Thread,
     target: u32,

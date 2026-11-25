@@ -57,7 +57,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     );
     assert_eq!(galfs::sync_explicit(), Err(SysError::Unsupported));
     assert_eq!(
-        galfs::verify_password("admin", b"admin"),
+        galfs::verify_password("owner", b"testpass"),
         Ok(true),
         "RAM admin still answers while the volume is locked"
     );

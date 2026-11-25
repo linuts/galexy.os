@@ -104,7 +104,7 @@ Unknown codes decode to `Unsupported`. New codes append.
 | `spawn` limits | `SPAWN_NAME_MAX = 64`, `SPAWN_ARG_MAX = 4096` | experimental with `spawn` (arg ceiling raised in Milestone 71) |
 | Token rights | READ 1, WRITE 2, LIST 4, CREATE 8, REMOVE 16, ONCE 128 (`grant`/`su` only) | stable |
 | `seek` whence | SET 0, CUR 1, END 2 | stable |
-| `user` ops | WHOAMI 0 … VOLPASS 15 (see crate). `USER_UNLOCK` with `R9 = 0` returns 0 open, 1 sealed and locked, 2 no passphrase yet. A fresh volume also takes the admin password in `RDI`/`RSI` and refuses the format default. `USER_VOLPASS` is admin-only: `RDI`/`RSI` current (`RSI = 0` if none yet), `R8`/`R9` new | existing ops stable; the op space is open |
+| `user` ops | WHOAMI 0 … VOLPASS 15 (see crate). `USER_UNLOCK` with `R9 = 0` returns 0 open, 1 sealed and locked, 2 no passphrase yet. A fresh volume takes the account name in `RDI`/`RSI`, the passphrase in `R8`/`R9`, and the password as a length-byte blob at `R10`. The name `admin` is refused. `USER_VOLPASS` is the administrator only: `RDI`/`RSI` current (`RSI = 0` if none yet), `R8`/`R9` new | existing ops stable; the op space is open |
 | `stat` buffer | 52 bytes: kind u8, rights u8, 2 reserved, size low u32, owner len u8, owner 32 bytes, 3 reserved, size high u32, object id u32. Files under 4 GiB leave the high half zero. [`ABI_EPOCH`] is 2; [`OS_VERSION`] stays `1.0.0` | stable |
 | `quota` buffer | 16 bytes: four LE `u32` — objects used, objects max, bytes used, bytes max | stable |
 | `power` ops | SHUTDOWN 0, REBOOT 1 | stable |

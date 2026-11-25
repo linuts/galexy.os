@@ -110,8 +110,8 @@ fn session_logged_in() -> bool {
 
 /// Login banner + prompts until a password succeeds.
 ///
-/// Returns `Some(must_change)` — `must_change` is set when `admin` still
-/// uses the format default password.
+/// Returns `Some(false)`. The format pair `admin`/`admin` is not written,
+/// so login does not raise the must-change gate.
 fn login_screen(kbd: Cap, tty: u8) -> Option<bool> {
     let mut fresh = prompt_volume(kbd);
     // A denied keyboard returns here while the disk is still locked.
@@ -127,7 +127,7 @@ fn login_screen(kbd: Cap, tty: u8) -> Option<bool> {
         write_tty_digits(tty);
         write_console(b")\n\n");
         if fresh {
-            write_console(b"New volume. Log in as admin with the password you just chose.\n\n");
+            write_console(b"New volume. Log in as the account you just created.\n\n");
             fresh = false;
         }
         write_console(b"Login as: ");
@@ -147,13 +147,11 @@ fn login_screen(kbd: Cap, tty: u8) -> Option<bool> {
                     }
                     LineRead::Line(n) => n,
                 };
-                let default_admin =
-                    &name[..nlen] == b"admin" && &pass[..plen] == ADMIN_DEFAULT_PASS;
                 let result = user_login(&name[..nlen], &pass[..plen]);
                 wipe(&mut pass);
                 if result.ok {
                     write_console(b"\n");
-                    return Some(default_admin);
+                    return Some(false);
                 }
                 if result.value == SysError::Locked as u64 {
                     write_console(b"\nLogin locked\n");
@@ -294,10 +292,13 @@ fn prompt_new_volume(kbd: Cap) -> bool {
             write_console(b"\n");
             return false;
         }
-        let mut admin = [0u8; PASS_MAX];
-        let Some(admin_len) = prompt_admin_password(kbd, &mut admin) else {
+        let mut name = [0u8; USER_MAX];
+        let mut account = [0u8; PASS_MAX];
+        let Some((name_len, account_len)) = prompt_setup_account(kbd, &mut name, &mut account)
+        else {
             wipe(&mut pass);
-            wipe(&mut admin);
+            wipe(&mut name);
+            wipe(&mut account);
             if volume_query() == 0 {
                 write_console(b"\n");
                 return false;
@@ -306,13 +307,15 @@ fn prompt_new_volume(kbd: Cap) -> bool {
         };
         if volume_query() == 0 {
             wipe(&mut pass);
-            wipe(&mut admin);
+            wipe(&mut name);
+            wipe(&mut account);
             write_console(b"\n");
             return false;
         }
-        let result = user_unlock_new(&pass[..n], &admin[..admin_len]);
+        let result = user_unlock_new(&name[..name_len], &account[..account_len], &pass[..n]);
         wipe(&mut pass);
-        wipe(&mut admin);
+        wipe(&mut name);
+        wipe(&mut account);
         if result.ok {
             write_console(b"\n");
             return true;
@@ -321,18 +324,42 @@ fn prompt_new_volume(kbd: Cap) -> bool {
     }
 }
 
-/// Account password for the fresh volume. `None` when the keyboard is
-/// denied or another seat already opened the disk.
-fn prompt_admin_password(kbd: Cap, out: &mut [u8; PASS_MAX]) -> Option<usize> {
+/// Name and password for the fresh volume. `None` when the keyboard is
+/// denied or another seat already opened the disk. The name `admin` is
+/// refused. The password is confirmed. Neither secret is the format pair.
+fn prompt_setup_account(
+    kbd: Cap,
+    name: &mut [u8; USER_MAX],
+    out: &mut [u8; PASS_MAX],
+) -> Option<(usize, usize)> {
     loop {
         if volume_query() == 0 {
             return None;
         }
-        write_console(b"Choose the admin password. The account name is admin.\n");
-        write_console(b"Admin password: ");
+        write_console(b"Account name: ");
+        let name_len = match read_line(kbd, name, false) {
+            LineRead::Denied => return None,
+            LineRead::Cancel | LineRead::Overlong => {
+                wipe(name);
+                continue;
+            }
+            LineRead::Line(0) => {
+                wipe(name);
+                write_console(b"\nA name is required.\n");
+                continue;
+            }
+            LineRead::Line(n) => n,
+        };
+        if &name[..name_len] == b"admin" {
+            wipe(name);
+            write_console(b"\nThe name admin is not an account.\n");
+            continue;
+        }
+        write_console(b"Password: ");
         let n = match read_line(kbd, out, true) {
             LineRead::Denied => return None,
             LineRead::Cancel | LineRead::Overlong => {
+                wipe(name);
                 wipe(out);
                 continue;
             }
@@ -343,20 +370,17 @@ fn prompt_admin_password(kbd: Cap, out: &mut [u8; PASS_MAX]) -> Option<usize> {
             }
             LineRead::Line(n) => n,
         };
-        if &out[..n] == ADMIN_DEFAULT_PASS {
-            wipe(out);
-            write_console(b"\nChoose a different password.\n");
-            continue;
-        }
         write_console(b"Confirm: ");
         let mut confirm = [0u8; PASS_MAX];
         let c = match read_line(kbd, &mut confirm, true) {
             LineRead::Denied => {
+                wipe(name);
                 wipe(out);
                 wipe(&mut confirm);
                 return None;
             }
             LineRead::Cancel | LineRead::Overlong | LineRead::Line(0) => {
+                wipe(name);
                 wipe(out);
                 wipe(&mut confirm);
                 write_console(b"\npasswords do not match\n");
@@ -365,13 +389,14 @@ fn prompt_admin_password(kbd: Cap, out: &mut [u8; PASS_MAX]) -> Option<usize> {
             LineRead::Line(c) => c,
         };
         if n != c || out[..n] != confirm[..c] {
+            wipe(name);
             wipe(out);
             wipe(&mut confirm);
             write_console(b"\npasswords do not match\n");
             continue;
         }
         wipe(&mut confirm);
-        return Some(n);
+        return Some((name_len, n));
     }
 }
 

@@ -18,8 +18,6 @@ pub(crate) const PASS_MAX: usize = 64;
 /// Kept command lines in RAM and in `shell.history`.
 pub(crate) const HIST_MAX: usize = 32;
 pub(crate) const HIST_FILE: &[u8] = b"shell.history";
-/// Format-time admin password; seats that still use it must `passwd` first.
-pub(crate) const ADMIN_DEFAULT_PASS: &[u8] = b"admin";
 
 pub(crate) struct Cwd {
     pub(crate) buf: [u8; PATH_MAX],

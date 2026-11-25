@@ -3701,26 +3701,26 @@ operator types at format. This row removes that account. The user
 created at setup is the administrative actor. `is_admin_root` is
 that actor's root. Further users from `useradd` are not.
 
-- [ ] **No `admin` actor**: format does not create a user named
+- [x] **No `admin` actor**: format does not create a user named
       `admin`. The name and the password come from the seat. The
       name `admin` is refused. An empty name is refused. The
       password is confirmed. The format default `admin`/`admin`
       is not written. Must-change of that default has nothing to
       change on this disk
-- [ ] **The same rights**: the stamp's admin byte is this actor.
+- [x] **The same rights**: the stamp's admin byte is this actor.
       `svc`, `net pin`, `net time`, `volpass`, and `sec` stay
       that user's. Another login does not get them by name.
       `su` to this user is the existing card, and the card names
       this root, not the string `admin`
-- [ ] **The suite**: test kernels and the disk harness may still
+- [x] **The suite**: test kernels and the disk harness may still
       format a known account so the boots keep logging in. That
       account is not created on the production image. The
       production path is Milestone 128
-- [ ] **Proof**: a production format has one actor, the name the
+- [x] **Proof**: a production format has one actor, the name the
       seat typed, and `is_admin_root` is that root. A second
       `useradd` logs in and `sec` answers `access denied`. Serial
       does not carry the password
-- [ ] **Out of this milestone**: the setup screen (128), deleting
+- [x] **Out of this milestone**: the setup screen (128), deleting
       the harness account from the suite, a second administrator,
       a new syscall, and the `v1.0` tag
 

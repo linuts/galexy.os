@@ -113,9 +113,11 @@ pub(crate) fn show_help() {
     write_console(b"  cmd &              background (jobs / fg)\n");
     write_console(b"  *                  names in the current directory\n");
     write_console(b"  a bare program shares this console (no background)\n");
-    write_console(b"  default admin/admin must passwd before other commands\n");
-    write_console(b"  a new disk asks for a volume passphrase, then an admin password\n");
-    write_console(b"  su admin restores a born-admin seat; login always needs a password\n");
+    write_console(b"  the user created at setup is the administrator\n");
+    write_console(b"  a new disk asks for a volume passphrase, then that account\n");
+    write_console(
+        b"  su back to that account restores a born-admin seat; login needs a password\n",
+    );
     write_console(b"  a bare program name loads it from the ramdisk\n");
     write_console(b"  sample programs are under testing/ (testing/hello)\n");
 }
@@ -1226,8 +1228,6 @@ pub(crate) fn user_pass_op(
         pass_inline
     };
 
-    let default_admin =
-        op == galexy_abi::USER_LOGIN && name == b"admin" && pass == ADMIN_DEFAULT_PASS;
     let result = if op == galexy_abi::USER_LOGIN {
         user_login(name, pass)
     } else {
@@ -1235,10 +1235,7 @@ pub(crate) fn user_pass_op(
     };
     wipe(&mut pass_buf);
     if result.ok && op == galexy_abi::USER_LOGIN {
-        *must_change = default_admin;
-        if *must_change {
-            write_console(b"passwd: change the default password\n");
-        }
+        *must_change = false;
     }
     report_user(
         cwd,
@@ -1273,11 +1270,8 @@ pub(crate) fn passwd_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8], must_change: &mut
     };
     let result = user_passwd(name, &pass_buf[..plen]);
     wipe(&mut pass_buf);
-    if result.ok {
-        // Changing own password (empty name) clears the default-password gate.
-        if name.is_empty() || name == b"admin" {
-            *must_change = false;
-        }
+    if result.ok && name.is_empty() {
+        *must_change = false;
     }
     report_user(cwd, b"passwd", result, false);
 }
@@ -1285,18 +1279,6 @@ pub(crate) fn passwd_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8], must_change: &mut
 pub(crate) fn volpass_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8]) {
     if !trim(rest).is_empty() {
         write_console(b"usage: volpass\n");
-        prompt(cwd);
-        return;
-    }
-    let mut name = [0u8; 64];
-    let got = user(&mut name, galexy_abi::USER_WHOAMI);
-    let n = if got.ok {
-        (got.value as usize).min(name.len())
-    } else {
-        0
-    };
-    if &name[..n] != b"admin" {
-        write_console(b"volpass: access denied\n");
         prompt(cwd);
         return;
     }

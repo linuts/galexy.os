@@ -882,11 +882,11 @@ pub fn uart_login_serial(image: &Image) -> String {
     let mut scratch = [0u8; 1024];
     let mut stream = stream;
 
-    // DEL drops the extra `x`, so the name is `admin`. CR is Enter.
+    // DEL drops the extra `x`, so the name is `owner`. CR is Enter.
     let steps: &[(&str, Option<&[u8]>)] = &[
-        ("Login as:", Some(b"admix\x7fn\r")),
-        ("Password:", Some(b"admin\r")),
-        ("passwd: change the default password", None),
+        ("Login as:", Some(b"ownex\x7fr\r")),
+        ("Password:", Some(b"testpass\r")),
+        ("owner@galexy>", None),
     ];
     for (needle, then) in steps {
         if !uart_read_until(

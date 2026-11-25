@@ -420,6 +420,9 @@ pub const USER_SETQUOTA: u64 = 10;
 /// locked, `2` when the disk has no passphrase yet. Otherwise `R8`/`R9`
 /// are the passphrase. A wrong passphrase leaves the RAM table and
 /// refuses disk sync. An empty disk is formatted under the passphrase.
+/// A fresh volume also takes the account name in `RDI`/`RSI` and the
+/// password at `R10` (one length byte, then the bytes). The name
+/// `admin` is refused. That account is the administrator.
 pub const USER_UNLOCK: u64 = 11;
 /// `user` op: freeze this session. The actor, tokens, and cwd stay.
 /// File, spawn, and power calls return [`SysError::Locked`] until
@@ -644,7 +647,9 @@ pub enum Syscall {
     /// [`USER_UNLOCK`] with `R9 = 0` reports the volume (`0` open, `1`
     /// sealed and locked, `2` no passphrase yet); a passphrase in
     /// `R8`/`R9` tries to mount. A fresh volume (`2`) also takes the
-    /// admin password in `RDI`/`RSI` and refuses the format default.
+    /// account name in `RDI`/`RSI` and the password as a length byte
+    /// plus bytes at `R10`. The name `admin` is refused. The format
+    /// pair `admin`/`admin` is not written.
     /// [`USER_VOLPASS`] replaces the passphrase
     /// (`RDI`/`RSI` current, `R8`/`R9` new) and re-wraps the volume key.
     /// [`USER_LOCK`] freezes the seat.
@@ -653,7 +658,7 @@ pub enum Syscall {
     /// into the buffer. Passwords authenticate identity;
     /// tokens authorize object access (see `docs/AUTH.md`). A login
     /// inside a cool-down is `Locked` and does not check the password.
-    /// Deleting admin, a non-empty tree, or an actor a live task still
+    /// Deleting the administrator, a non-empty tree, or an actor a live task still
     /// uses is `Unsupported` / `NotFound`.
     User,
     /// `rename(old, old_len, new, new_len)` — move a galfs dirent.

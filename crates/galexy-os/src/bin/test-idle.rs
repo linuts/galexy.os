@@ -196,18 +196,25 @@ fn wait_word(base: x86_64::VirtAddr, index: usize, want: u64, what: &str) {
 }
 
 fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
-    let admin = b"admin";
+    let name = b"owner";
+    let pass = b"testpass";
     let mut code = alloc::vec::Vec::new();
-    let data_len = admin.len() * 2;
+    let data_len = name.len() + pass.len();
     code.push(0xEB);
     code.push(data_len as u8);
     let name_addr = code_base + 2;
-    code.extend_from_slice(admin);
-    let pass_addr = name_addr + admin.len() as u64;
-    code.extend_from_slice(admin);
+    code.extend_from_slice(name);
+    let pass_addr = name_addr + name.len() as u64;
+    code.extend_from_slice(pass);
 
     mov_r64_imm(&mut code, 15, scratch);
-    login(&mut code, name_addr, pass_addr, admin.len() as u64);
+    login(
+        &mut code,
+        name_addr,
+        name.len() as u64,
+        pass_addr,
+        pass.len() as u64,
+    );
 
     // Lock, prove a non-console syscall is refused, then hold the freeze
     // until the BSP has watched the service run.
@@ -243,7 +250,7 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     mov_r64_imm(&mut code, 6, 0);
     mov_r64_imm(&mut code, 2, USER_UNLOCK_SESSION);
     mov_r64_imm(&mut code, 8, pass_addr);
-    mov_r64_imm(&mut code, 9, admin.len() as u64);
+    mov_r64_imm(&mut code, 9, pass.len() as u64);
     syscall(&mut code);
 
     mov_r64_imm(&mut code, 0, TRIPPED);
@@ -261,18 +268,25 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
 
 /// Logged-in non-shell. `sync` each pass, yield, stop when scratch+8 is set.
 fn build_probe(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
-    let admin = b"admin";
+    let name = b"owner";
+    let pass = b"testpass";
     let mut code = alloc::vec::Vec::new();
-    let data_len = admin.len() * 2;
+    let data_len = name.len() + pass.len();
     code.push(0xEB);
     code.push(data_len as u8);
     let name_addr = code_base + 2;
-    code.extend_from_slice(admin);
-    let pass_addr = name_addr + admin.len() as u64;
-    code.extend_from_slice(admin);
+    code.extend_from_slice(name);
+    let pass_addr = name_addr + name.len() as u64;
+    code.extend_from_slice(pass);
 
     mov_r64_imm(&mut code, 15, scratch);
-    login(&mut code, name_addr, pass_addr, admin.len() as u64);
+    login(
+        &mut code,
+        name_addr,
+        name.len() as u64,
+        pass_addr,
+        pass.len() as u64,
+    );
 
     mov_r64_imm(&mut code, 0, READY);
     store(&mut code, 0, 0x00);
@@ -295,13 +309,19 @@ fn build_probe(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     code
 }
 
-fn login(code: &mut alloc::vec::Vec<u8>, name_addr: u64, pass_addr: u64, len: u64) {
+fn login(
+    code: &mut alloc::vec::Vec<u8>,
+    name_addr: u64,
+    name_len: u64,
+    pass_addr: u64,
+    pass_len: u64,
+) {
     mov_eax(code, Syscall::User as u32);
     mov_r64_imm(code, 7, name_addr);
-    mov_r64_imm(code, 6, len);
+    mov_r64_imm(code, 6, name_len);
     mov_r64_imm(code, 2, USER_LOGIN);
     mov_r64_imm(code, 8, pass_addr);
-    mov_r64_imm(code, 9, len);
+    mov_r64_imm(code, 9, pass_len);
     syscall(code);
 }
 
