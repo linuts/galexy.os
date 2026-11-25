@@ -816,11 +816,11 @@ The user created at setup is the administrative actor.
 one. The suite logs in as `owner` / `testpass`. That account is
 not on a fresh production disk.
 
-128 is the first boot of an empty disk. One seat sets the volume
-passphrase, then that user's name and password, then the resolver
-address or `skip`. A pin runs `net time` first when the date is
-unset. The login prompt is that user. A sealed disk asks for the
-passphrase and does not ask again.
+128 is the first boot of an empty disk. One seat chooses the disk,
+then sets the volume passphrase, then that user's name and password,
+then the resolver address or `skip`. Skip sends nothing. The login
+prompt is that user. DHCP does not start on boot. `net up` starts
+DHCPv4. A sealed disk asks for the passphrase and does not ask again.
 
 ## Standing principles
 

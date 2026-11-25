@@ -17,12 +17,11 @@ use std::sync::{Arc, Mutex};
 use galexy_abi::{
     Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DGRAM, NET_OP_DIAL, NET_OP_DNS,
     NET_OP_LINK, NET_OP_LISTEN, NET_OP_PING, NET_OP_RECV, NET_OP_RESOLVE, NET_OP_SERVE,
-    NET_OP_STREAM, NET_OP_TIME, PING_LOOKUP,
+    NET_OP_STREAM, NET_OP_TIME, NET_OP_UP, PING_LOOKUP,
 };
 use galexy_net::Engine;
 use galexy_netcfg::{
-    decode, encode, Record, KIND_ADDR, KIND_DGRAM, KIND_DNS, KIND_IPV4, KIND_PORT, MODE_FIXED,
-    NAME_MAX,
+    decode, encode, Record, KIND_ADDR, KIND_DGRAM, KIND_DNS, KIND_IPV4, KIND_PORT, NAME_MAX,
 };
 use galexy_rt::{
     chan_recv_poll, chan_send, channel, clock_ms, close, date_set, lane_pair, open, read,
@@ -51,6 +50,8 @@ const DGRAM_SPORT: u16 = 4598;
 /// Not 53.
 const TIME_SPORT: u16 = 4123;
 const TIME_WAIT_MS: u64 = 3_000;
+/// How long `net up` waits for a DHCPv4 lease.
+const UP_WAIT_MS: u64 = 5_000;
 
 fn main() {
     fill_random_once();
@@ -68,15 +69,10 @@ fn main() {
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
     ));
     let mut record = load_record();
-    let mut engine = if record.mode == MODE_FIXED {
-        let mut engine = Engine::new(mac, false);
-        if let Some(lease) = record.lease {
-            engine.set_fixed(lease.addr, lease.prefix, lease.gateway);
-        }
-        engine
-    } else {
-        Engine::new(mac, true)
-    };
+    // DHCP does not start on boot. A stored lease is not applied here
+    // either: that path sends as soon as a locator exists. `net up` is
+    // the command that may send.
+    let mut engine = Engine::new(mac, false);
     let mut gates: Vec<Gate> = Vec::new();
     let mut logged_addr = false;
     let mut logged_udp = false;
@@ -322,6 +318,8 @@ fn handle(
         NET_OP_SERVE if admin => serve(rx, engine, record, &stamp, actor_id, gates, rest),
         NET_OP_PING => ping(rx, engine, record, &stamp, rest, now),
         NET_OP_TIME => time_query(rx, engine, record, &stamp, admin, rest, now),
+        NET_OP_UP if admin => dhcp_up(rx, engine),
+        NET_OP_UP => reply(rx, b"access denied\n", 0),
         NET_OP_STREAM => stream(
             rx, engine, record, &stamp, actor_id, gates, rest, lives, seen,
         ),
@@ -1697,6 +1695,41 @@ fn two_fields(rest: &[u8]) -> Option<(&[u8], &[u8])> {
     }
     let actor = &rest[2 + nlen..2 + nlen + alen];
     Some((name, actor))
+}
+
+/// DHCPv4. The administrative seat asks. No payload. The reply is
+/// `up` and the locator, or `timed out`. A static address is the same
+/// opcode later; this handler does not read one.
+fn dhcp_up(rx: Cap, engine: &mut Engine) {
+    if let Some((addr, prefix, _)) = engine.locator() {
+        reply_up(rx, addr, prefix);
+        return;
+    }
+    engine.start_dhcp();
+    let start = clock_ms();
+    while clock_ms().saturating_sub(start) < UP_WAIT_MS {
+        pump(engine);
+        engine.poll(clock_ms());
+        pump(engine);
+        if let Some((addr, prefix, _)) = engine.locator() {
+            reply_up(rx, addr, prefix);
+            return;
+        }
+        let _ = sleep_ms(20);
+    }
+    reply(rx, b"timed out\n", 0);
+}
+
+fn reply_up(rx: Cap, addr: [u8; 4], prefix: u8) {
+    reply(
+        rx,
+        format!(
+            "up {}.{}.{}.{}/{}\n",
+            addr[0], addr[1], addr[2], addr[3], prefix
+        )
+        .as_bytes(),
+        0,
+    );
 }
 
 /// One NTP query. The administrative seat asks. A `net time` line in

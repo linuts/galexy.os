@@ -135,12 +135,18 @@ log lines stay off this stream unless you pass `--debug` (headless or
 with the window). After login, `dmesg` still shows them.
 
 ```text
+This disk is not the system volume.
+Choose a disk. Formatting it installs the system.
+1 virtio 16384 sectors
+Disk: 1
 This disk has no passphrase yet.
 New passphrase: *****
 Confirm: *****
 Account name: ada
 Password: *****
 Confirm: *****
+Resolver address, or skip: skip
+Lookups stay refused until net dns.
 
 Galexy.OS v1.0.0 (tty1)
 
@@ -150,13 +156,20 @@ Login as: ada
 Password: *****
 ```
 
-A fresh disk has no volume passphrase until that prompt, and no
-account until the name and password after it. The name is clear. The
+A fresh disk asks which disk to format. That format is the install.
+Then a volume passphrase, the account name and password, and a
+resolver address or `skip`. Skip sends nothing. DHCP does not start
+on boot. `net up` starts DHCPv4 later. The name is clear. The
 password is masked and confirmed. An empty name is refused. The name
 `admin` is refused. An empty line asks again. The login screen waits
 until the volume is open. There is no account named `admin` and no
-default password. Later boots ask `Volume passphrase:` for the one you
-chose. After login a fastfetch-style **command center** dashboard
+default password. The first user is the administrator. A fresh disk
+does not create `owner`. Setup runs once. Later boots of a sealed
+disk ask `Volume passphrase:` and then login. A packet leaves only
+for a command the user typed, or for a service they started. DHCP
+starts only from `net up`. A static address and IPv6 are that same
+verb and are not built. Skip sends nothing. After
+login a fastfetch-style **command center** dashboard
 prints (OS / TTY / user / uptime / heap / galfs / tasks), then the
 prompt is `ada@galexy> `.
 The bottom status bar keeps a live strip (uptime, heap, galfs, live

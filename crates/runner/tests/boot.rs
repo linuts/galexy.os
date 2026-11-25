@@ -1553,7 +1553,7 @@ fn disk_wait_keeps_the_seat_scheduled() {
         &image("galexy-os"),
         &disk,
         &keys,
-        "New passphrase: ",
+        "Disk: ",
         "[init] power",
         Duration::from_millis(30),
         Duration::from_secs(240),
@@ -1626,7 +1626,7 @@ fn sealed_volume_date_pin_shutdown() {
         &image("galexy-os"),
         &disk,
         &keys,
-        "New passphrase: ",
+        "Disk: ",
         "[init] power",
         Duration::from_millis(30),
         Duration::from_secs(180),
@@ -1650,6 +1650,7 @@ fn sealed_volume_date_pin_shutdown() {
     owned.extend(type_line("cd Desktop", "owner@galexy:/Desktop> "));
     owned.extend(type_line("cat note", "hello"));
     owned.extend(type_line("svc date", " utc"));
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     owned.extend(type_line("net dns 1.1.1.1", "ok "));
     owned.extend(type_line("shutdown", "[init] power"));
     let keys: Vec<(&str, &str)> = owned
@@ -4545,7 +4546,7 @@ fn rustc_after_unlock_typing_e2e() {
         &image("galexy-os-rustc"),
         &disk,
         &seal,
-        "New passphrase: ",
+        "Disk: ",
         "rustc-sysroot:",
         Duration::from_millis(30),
         Duration::from_secs(600),
@@ -5138,13 +5139,18 @@ fn shell_command_center_typing_e2e() {
 #[test]
 fn volume_locked_blocks_login_typing_e2e() {
     let disk = common::fresh_galfs_image("volume-gate");
-    let mut keys: Vec<(&str, &str)> = vec![("ret", "A passphrase is required.")];
-    keys.extend(CREATE_VOLUME_KEYS.iter().copied());
+    let mut keys: Vec<(&str, &str)> = vec![
+        ("ret", "A disk is required."),
+        ("1", "1"),
+        ("ret", "New passphrase: "),
+        ("ret", "A passphrase is required."),
+    ];
+    keys.extend(CREATE_VOLUME_KEYS.iter().copied().skip(2));
     let serial = common::boot_and_type_galfs(
         &image("galexy-os"),
         &disk,
         &keys,
-        "New passphrase: ",
+        "Disk: ",
         "Login as: ",
         Duration::from_millis(30),
         Duration::from_secs(180),
@@ -5204,6 +5210,8 @@ fn volume_locked_blocks_login_typing_e2e() {
 /// Fresh disk: volume passphrase `galfs`, then account `owner` / `testpass`.
 /// The name is clear. The password is masked.
 const CREATE_VOLUME_KEYS: &[(&str, &str)] = &[
+    ("1", "1"),
+    ("ret", "New passphrase: "),
     ("g", "*"),
     ("a", "*"),
     ("l", "*"),
@@ -5239,6 +5247,11 @@ const CREATE_VOLUME_KEYS: &[(&str, &str)] = &[
     ("a", "*"),
     ("s", "*"),
     ("s", "*"),
+    ("ret", "Resolver address, or skip: "),
+    ("s", "s"),
+    ("k", "k"),
+    ("i", "i"),
+    ("p", "p"),
     ("ret", "Login as: "),
 ];
 
@@ -5341,7 +5354,7 @@ fn release_root_typing_e2e() {
         &image("galexy-os-desk"),
         &disk,
         &keys,
-        "New passphrase: ",
+        "Disk: ",
         "",
         Duration::from_millis(30),
         Duration::from_secs(180),
@@ -5435,7 +5448,7 @@ fn compiler_missing_typing_e2e() {
         &image("galexy-os"),
         &disk,
         &keys,
-        "New passphrase: ",
+        "Disk: ",
         "",
         Duration::from_millis(30),
         Duration::from_secs(180),
@@ -5496,7 +5509,7 @@ fn passwd_on_sealed_disk_typing_e2e() {
         &image("galexy-os"),
         &disk,
         &keys,
-        "New passphrase: ",
+        "Disk: ",
         "",
         Duration::from_millis(30),
         Duration::from_secs(180),
@@ -5595,6 +5608,8 @@ fn first_user_is_the_administrator() {
     let disk = common::fresh_galfs_image("first-user");
     let mut owned: Vec<(String, String)> = Vec::new();
     for (code, echo) in [
+        ("1", "1"),
+        ("ret", "New passphrase: "),
         ("g", "*"),
         ("a", "*"),
         ("l", "*"),
@@ -5621,7 +5636,8 @@ fn first_user_is_the_administrator() {
     owned.extend(masked_word("seatpass"));
     owned.push(("ret".to_string(), "Confirm: ".to_string()));
     owned.extend(masked_word("seatpass"));
-    owned.push(("ret".to_string(), "Login as: ".to_string()));
+    owned.push(("ret".to_string(), "Resolver address, or skip: ".to_string()));
+    owned.extend(type_line("skip", "Login as: "));
     owned.extend(type_line("ada", "Password: "));
     owned.extend(masked_word("seatpass"));
     owned.push(("ret".to_string(), "ada@galexy> ".to_string()));
@@ -5646,7 +5662,7 @@ fn first_user_is_the_administrator() {
         &image("galexy-os"),
         &disk,
         &keys,
-        "New passphrase: ",
+        "Disk: ",
         "access denied",
         Duration::from_millis(30),
         Duration::from_secs(240),
@@ -5677,16 +5693,17 @@ fn first_user_is_the_administrator() {
         serial.contains("[auth] session login user=ada"),
         "the seat's account did not log in; serial:\n{serial}"
     );
-    let listed = serial
+    let clean = common::strip_host_chrome(&serial);
+    let listed = clean
         .find("users\nada\n")
         .unwrap_or_else(|| panic!("users did not list only ada; serial:\n{serial}"));
-    let added = serial
+    let added = clean
         .find("useradd eve")
         .unwrap_or_else(|| panic!("useradd was not typed; serial:\n{serial}"));
     assert!(
         listed < added
-            && !serial[listed..added].contains("eve")
-            && !serial[listed..added].contains("owner"),
+            && !clean[listed..added].contains("eve")
+            && !clean[listed..added].contains("owner"),
         "the fresh disk had another actor; serial:\n{serial}"
     );
     assert!(
@@ -5712,8 +5729,288 @@ fn first_user_is_the_administrator() {
     }
 }
 
+/// A blank production disk walks the setup, including skip, and sends
+/// nothing. The next boot asks only for the passphrase.
+#[test]
+fn first_boot_skip_sends_nothing() {
+    let disk = common::fresh_galfs_image("first-boot");
+    let mut owned: Vec<(String, String)> = Vec::new();
+    for (code, echo) in [
+        ("1", "1"),
+        ("ret", "New passphrase: "),
+        ("g", "*"),
+        ("a", "*"),
+        ("l", "*"),
+        ("f", "*"),
+        ("s", "*"),
+        ("ret", "Confirm: "),
+        ("g", "*"),
+        ("a", "*"),
+        ("l", "*"),
+        ("f", "*"),
+        ("s", "*"),
+        ("ret", "Account name: "),
+    ] {
+        owned.push((code.to_string(), echo.to_string()));
+    }
+    owned.extend(type_line("ada", "Password: "));
+    owned.extend(masked_word("seatpass"));
+    owned.push(("ret".to_string(), "Confirm: ".to_string()));
+    owned.extend(masked_word("seatpass"));
+    owned.push(("ret".to_string(), "Resolver address, or skip: ".to_string()));
+    owned.extend(type_line("skip", "Login as: "));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &keys,
+        "Disk: ",
+        "Login as: ",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    assert!(
+        !serial.contains("[PANIC]"),
+        "boot 1 panicked; serial:\n{serial}"
+    );
+    for line in [
+        "This disk is not the system volume.",
+        "Choose a disk. Formatting it installs the system.",
+        "This disk has no passphrase yet.",
+        "Account name:",
+        "Resolver address, or skip:",
+        "Lookups stay refused until net dns.",
+        "New volume. Log in as the account you just created.",
+    ] {
+        assert!(serial.contains(line), "missing `{line}`; serial:\n{serial}");
+    }
+    assert!(
+        serial.contains("[galfs] formatted sealed disk"),
+        "the disk was not sealed; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[net] addr") && !serial.contains("[net] udp"),
+        "skip sent, or dhcp ran; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("seatpass"),
+        "serial carried the password; serial:\n{serial}"
+    );
+    assert_passwords_masked(&serial);
+
+    let mut again: Vec<(&str, &str)> = vec![("ret", "A passphrase is required.")];
+    again.extend(UNLOCK_GALFS_KEYS.iter().copied());
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &again,
+        "Volume passphrase: ",
+        "Login as: ",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
+    assert!(
+        !serial.contains("[PANIC]"),
+        "boot 2 panicked; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("Disk:")
+            && !serial.contains("Account name:")
+            && !serial.contains("Resolver address"),
+        "a sealed disk asked the setup questions; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[net] addr") && !serial.contains("[net] udp"),
+        "boot 2 sent; serial:\n{serial}"
+    );
+}
+
+/// After first boot, the next boot offers the volume passphrase and
+/// login. Disk, passphrase-setup, and first-user answers typed there
+/// do not create an account. A non-admin still cannot `useradd`.
+#[test]
+fn first_boot_is_one_time() {
+    let disk = common::fresh_galfs_image("one-time");
+    let mut owned: Vec<(String, String)> = Vec::new();
+    for (code, echo) in [
+        ("1", "1"),
+        ("ret", "New passphrase: "),
+        ("g", "*"),
+        ("a", "*"),
+        ("l", "*"),
+        ("f", "*"),
+        ("s", "*"),
+        ("ret", "Confirm: "),
+        ("g", "*"),
+        ("a", "*"),
+        ("l", "*"),
+        ("f", "*"),
+        ("s", "*"),
+        ("ret", "Account name: "),
+    ] {
+        owned.push((code.to_string(), echo.to_string()));
+    }
+    owned.extend(type_line("ada", "Password: "));
+    owned.extend(masked_word("seatpass"));
+    owned.push(("ret".to_string(), "Confirm: ".to_string()));
+    owned.extend(masked_word("seatpass"));
+    owned.push(("ret".to_string(), "Resolver address, or skip: ".to_string()));
+    owned.extend(type_line("skip", "Login as: "));
+    owned.extend(type_line("ada", "Password: "));
+    owned.extend(masked_word("seatpass"));
+    owned.push(("ret".to_string(), "ada@galexy> ".to_string()));
+    owned.extend(type_line("useradd eve", "Password: "));
+    owned.extend(masked_word("evepass"));
+    owned.push(("ret".to_string(), "ada@galexy> ".to_string()));
+    owned.extend(type_line("sync", "ada@galexy> "));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &keys,
+        "Disk: ",
+        "[auth] useradd user=eve",
+        Duration::from_millis(30),
+        Duration::from_secs(300),
+    );
+    assert!(
+        !serial.contains("[PANIC]"),
+        "boot 1 panicked; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[galfs] formatted sealed disk"),
+        "the disk was not sealed; serial:\n{serial}"
+    );
+    let added = serial
+        .find("[auth] useradd user=eve")
+        .unwrap_or_else(|| panic!("eve was not created; serial:\n{serial}"));
+    assert!(
+        serial[added..].contains("[galfs] committing slot"),
+        "eve was not committed; serial:\n{serial}"
+    );
+    assert_passwords_masked(&serial);
+
+    let mut again: Vec<(String, String)> = Vec::new();
+    // A disk index is not a passphrase, and it does not format.
+    again.push(("1".to_string(), "*".to_string()));
+    again.push(("ret".to_string(), "Volume unlock failed".to_string()));
+    // A new passphrase, typed twice as a setup would confirm it.
+    again.extend(masked_word("zzpass"));
+    again.push(("ret".to_string(), "Volume unlock failed".to_string()));
+    again.extend(masked_word("zzpass"));
+    again.push(("ret".to_string(), "Volume unlock failed".to_string()));
+    again.extend(masked_word("galfs"));
+    again.push(("ret".to_string(), "Login as: ".to_string()));
+    // A first-user name at login does not create that account.
+    again.extend(type_line("zoe", "Password: "));
+    again.extend(masked_word("newpass"));
+    again.push(("ret".to_string(), "Login incorrect".to_string()));
+    again.extend(type_line("ada", "Password: "));
+    again.extend(masked_word("seatpass"));
+    again.push(("ret".to_string(), "ada@galexy> ".to_string()));
+    again.extend(type_line("users", "ada@galexy> "));
+    // Logout returns to login. The volume stays open until the next
+    // boot, and the prompt is login, not the disk or the account.
+    again.extend(type_line("logout", "Login as: "));
+    again.extend(type_line("zoe", "Password: "));
+    again.extend(masked_word("newpass"));
+    again.push(("ret".to_string(), "Login incorrect".to_string()));
+    again.extend(type_line("eve", "Password: "));
+    again.extend(masked_word("evepass"));
+    again.push(("ret".to_string(), "eve@galexy> ".to_string()));
+    again.extend(type_line("useradd mallory", "Password: "));
+    again.extend(masked_word("mallpass"));
+    again.push(("ret".to_string(), "useradd: access denied".to_string()));
+    again.extend(type_line("users", "eve@galexy> "));
+    let keys: Vec<(&str, &str)> = again
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &keys,
+        "Volume passphrase: ",
+        "useradd: access denied",
+        Duration::from_millis(30),
+        Duration::from_secs(300),
+    );
+    let _ = std::fs::remove_file(&disk);
+    assert!(
+        !serial.contains("[PANIC]"),
+        "boot 2 panicked; serial:\n{serial}"
+    );
+    for line in [
+        "Disk:",
+        "Account name:",
+        "New passphrase:",
+        "Resolver address",
+        "This disk is not the system volume.",
+        "This disk has no passphrase yet.",
+        "Choose a disk.",
+    ] {
+        assert!(
+            !serial.contains(line),
+            "a sealed disk asked `{line}`; serial:\n{serial}"
+        );
+    }
+    assert!(
+        serial.contains("Volume passphrase:") && serial.contains("Login as:"),
+        "boot 2 did not offer the passphrase and login; serial:\n{serial}"
+    );
+    assert!(
+        serial.matches("Volume unlock failed").count() >= 3,
+        "setup answers were accepted as the volume passphrase; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("Login incorrect"),
+        "a new name at login was accepted; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[auth] session login user=ada")
+            && serial.contains("[auth] session login user=eve"),
+        "the existing accounts did not log in; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[auth] session login user=zoe")
+            && !serial.contains("[auth] useradd user=zoe")
+            && !serial.contains("[auth] useradd user=mallory"),
+        "setup answers created an account; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("useradd: access denied"),
+        "a non-admin added a user; serial:\n{serial}"
+    );
+    let clean = common::strip_host_chrome(&serial);
+    assert!(
+        clean.matches("users\nada\neve\n").count() >= 2,
+        "users did not list ada and eve; serial:\n{serial}"
+    );
+    assert!(
+        !clean.contains("\nzoe\n") && !clean.contains("\nmallory\n"),
+        "a typed setup name became an account; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("[net] addr") && !serial.contains("[net] udp"),
+        "boot 2 sent; serial:\n{serial}"
+    );
+    assert_passwords_masked(&serial);
+    for secret in ["seatpass", "evepass", "newpass", "mallpass", "zzpass"] {
+        assert!(
+            !serial.contains(secret),
+            "serial carried {secret}; serial:\n{serial}"
+        );
+    }
+}
+
 /// The reviewer tour: a fresh disk, two seats, and a card that makes
-/// admin's Desktop visible to eve. The foreign path is `/owner@Desktop`.
+/// owner's Desktop visible to eve. The foreign path is `/owner@Desktop`.
 #[test]
 fn reviewer_demo_typing_e2e() {
     let disk = common::fresh_galfs_image("demo");
@@ -5767,7 +6064,7 @@ fn reviewer_demo_typing_e2e() {
         &image("galexy-os"),
         &disk,
         &keys,
-        "New passphrase: ",
+        "Disk: ",
         "",
         Duration::from_millis(30),
         Duration::from_secs(240),
@@ -6319,6 +6616,7 @@ fn net_lines(lines: &[(&str, &str)], final_marker: &str, timeout: Duration) -> S
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     for (line, marker) in lines {
         owned.extend(type_line(line, marker));
     }
@@ -6468,7 +6766,7 @@ fn net_udp_and_tcp_reach_the_host() {
     let flag = Arc::clone(&got);
     let reader = std::thread::spawn(move || {
         let mut buf = [0u8; 256];
-        for _ in 0..500 {
+        for _ in 0..900 {
             if let Ok((n, _)) = udp.recv_from(&mut buf) {
                 if buf[..n].windows(6).any(|w| w == b"galexy") {
                     flag.store(n, Ordering::Relaxed);
@@ -6477,12 +6775,31 @@ fn net_udp_and_tcp_reach_the_host() {
             }
         }
     });
-    let serial = boot_liveness_until(&image("galexy-os"), Duration::from_secs(120), |s| {
-        s.contains("[net] addr 10.0.2.15/24")
-            && s.contains("[net] udp ok")
-            && s.contains("[net] tcp ok")
-            && s.contains("[net] link up mac=52:54:00:12:34:56")
-    });
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line(
+        "net up 10.0.2.15/24 via 10.0.2.2",
+        "static address is not built",
+    ));
+    owned.extend(type_line(
+        "net up fe80::1/64 via fe80::1",
+        "ipv6 is not built",
+    ));
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "[net] tcp ok",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
+    );
     let _ = tcp.accept();
     reader.join().expect("udp reader");
     assert!(
@@ -6492,6 +6809,23 @@ fn net_udp_and_tcp_reach_the_host() {
     assert!(
         serial.contains("[net] udp ok") && serial.contains("[net] tcp ok"),
         "guest did not finish the proofs; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[net] link up mac=52:54:00:12:34:56"),
+        "link log missing; serial:\n{serial}"
+    );
+    let refused = serial
+        .find("static address is not built")
+        .expect("static form was not recognized");
+    let v6 = serial
+        .find("ipv6 is not built")
+        .expect("ipv6 form was not recognized");
+    let addr = serial
+        .find("[net] addr 10.0.2.15/24")
+        .expect("dhcp did not log an address");
+    assert!(
+        refused < v6 && v6 < addr,
+        "dhcp ran before the unbuilt forms; serial:\n{serial}"
     );
 }
 
@@ -6535,6 +6869,7 @@ fn net_time_sets_the_date() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     owned.extend(type_line("net link", "up 10.0.2.15/24"));
     owned.extend(type_line("svc date", "unset"));
     owned.extend(type_line("net dns 10.0.2.2", "access denied"));
@@ -6898,6 +7233,7 @@ fn ping_name_resolves() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     owned.extend(type_line("net link", "up 10.0.2.15/24"));
     owned.extend(type_line("connect --putkey", "wrote"));
     owned.extend(type_line("net dns 172.30.0.2 /bad", "ok"));
@@ -6992,6 +7328,7 @@ fn ping_three_echoes_and_nslookup() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     owned.extend(type_line("net link", "up 10.0.2.15/24"));
     owned.extend(type_line("connect --putkey", "wrote"));
     owned.extend(type_line("net dns 172.30.0.2 /k", "ok"));
@@ -7102,6 +7439,7 @@ fn resolver_pin_still_wins() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     owned.extend(type_line("net link", "up 10.0.2.15/24"));
     owned.extend(type_line("net dns 10.0.2.2", "access denied"));
     owned.extend(type_line("net dns 10.0.2.3", "access denied"));
@@ -7225,6 +7563,7 @@ fn cards_and_asks_typing_e2e() {
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
     owned.extend(type_line(save_pin.as_str(), "owner@galexy>"));
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     owned.extend(type_line("net allow echo 10.0.2.2:4584 k", "ok"));
     owned.extend(type_line("dial echo", "still up"));
     owned.extend(type_line("sec net dial echo:4584 dial", "ok"));
@@ -7328,6 +7667,7 @@ fn connect_asks_then_dials() {
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
     owned.extend(type_line(save_pin.as_str(), "owner@galexy>"));
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     owned.extend(type_line("net allow echo 10.0.2.2:4586 k", "ok"));
     owned.extend(type_line("sec net dial echo:4586 connect", "ok"));
     owned.extend(type_line("useradd eve", "Password: "));
@@ -7421,6 +7761,7 @@ fn python_lane_typing_e2e() {
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
     owned.extend(type_line(save_pin.as_str(), "owner@galexy>"));
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     owned.extend(type_line("net allow echo 10.0.2.2:4582 k", "ok"));
     owned.extend(type_line(
         "echo print(lane.read(\"echo\")) > lane.py",
@@ -7503,6 +7844,7 @@ fn serve_hands_the_lane_to_its_listener() {
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
     owned.extend(type_line(save_pin.as_str(), "owner@galexy>"));
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     owned.extend(type_line("net allow echo 10.0.2.2:4591 k", "ok"));
     owned.extend(type_line("sec net listen *:4591 shell", "ok"));
     owned.extend(type_line("sec net listen *:4591 shell2", "ok"));
@@ -7780,6 +8122,7 @@ fn milestones_110_through_114() {
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
     owned.extend(type_line("connect --putkey", "wrote"));
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     owned.extend(type_line("net dns 172.30.0.2 /bad", "ok"));
     owned.extend(type_line("net allow docs dns:4594 /k", "ok"));
     owned.extend(type_line("net resolve docs", "access denied"));
@@ -7907,6 +8250,7 @@ fn milestones_115_and_116() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     owned.extend(type_line("net peer nope 0.0.0.0 9", "bad"));
     owned.extend(type_line("net peer nope 172.30.0.2 53", "bad"));
     owned.extend(type_line("net port 4596 10.0.2.15", "ok"));
@@ -8090,6 +8434,7 @@ fn socket_compat_cards() {
     owned.extend(type_line(&addr, "ok"));
     let port = format!("net port 4604 {peer_text}");
     owned.extend(type_line(&port, "ok"));
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     owned.extend(type_line("net link", "10.0.2.15"));
     owned.extend(type_line("net addr 10.0.2.15 0 /k", "ok"));
     owned.extend(type_line("net port 4601 10.0.2.15", "ok"));
@@ -8242,6 +8587,7 @@ fn python_socket_cards() {
     owned.extend(type_line(&addr, "ok"));
     let port = format!("net port 4607 {peer_text}");
     owned.extend(type_line(&port, "ok"));
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     owned.extend(type_line("net link", "10.0.2.15"));
     owned.extend(type_line("net addr 10.0.2.15 0 /k", "ok"));
     owned.extend(type_line("net port 4605 10.0.2.15", "ok"));
@@ -8581,6 +8927,7 @@ fn outbound_card_dials_two_names() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     owned.extend(type_line("net allow alpha 10.0.2.2:4610", "ok"));
     owned.extend(type_line("net allow img.alpha 10.0.2.2:4610", "ok"));
     owned.extend(type_line("net allow beta 10.0.2.2:4611", "ok"));
@@ -8901,6 +9248,7 @@ fn milestone_117_ssh_reads_a_file() {
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
     owned.extend(type_line("echo hi > note", "owner@galexy> "));
+    owned.extend(type_line("net up", "up 10.0.2.15/24"));
     owned.extend(type_line("net allow ssh 10.0.2.2:4598", "ok"));
     owned.extend(type_line("sec net dial 10.0.2.2:4598 ssh-open", "ok"));
     owned.extend(type_line("echo hold", "ssh: file"));

@@ -417,7 +417,8 @@ pub const USER_QUOTA: u64 = 9;
 pub const USER_SETQUOTA: u64 = 10;
 /// `user` op: volume passphrase. `R9 = 0` queries: `rax = 0` when the
 /// volume is open or there is no disk, `1` when a sealed volume is
-/// locked, `2` when the disk has no passphrase yet. Otherwise `R8`/`R9`
+/// locked, `2` when the disk has no passphrase yet, `3` when the seat
+/// still has to choose a disk. Otherwise `R8`/`R9`
 /// are the passphrase. A wrong passphrase leaves the RAM table and
 /// refuses disk sync. An empty disk is formatted under the passphrase.
 /// A fresh volume also takes the account name in `RDI`/`RSI` and the
@@ -442,6 +443,10 @@ pub const USER_LOCKED: u64 = 14;
 /// must already be unlocked. The new passphrase is confirmed by the
 /// caller; this op stores one candidate and re-wraps the volume key.
 pub const USER_VOLPASS: u64 = 15;
+/// `user` op: disks the seat may format. `R9 = 0` writes one line per
+/// disk into the buffer (`RDI`/`RSI`). `R9` is a 1-based index and
+/// chooses that disk. Not a new syscall number.
+pub const USER_DISKS: u64 = 16;
 
 /// Bytes written by [`USER_QUOTA`]: four little-endian `u32` fields —
 /// objects_used, objects_max, bytes_used, bytes_max.
@@ -1056,6 +1061,11 @@ pub const NET_OP_STREAM: u8 = 12;
 /// or that name. A missing rule sends nothing. There is no poll and
 /// no NTS. Port 53 is not used. This is not a new syscall.
 pub const NET_OP_TIME: u8 = 13;
+/// Net control: start the network. Admin only. No payload starts
+/// DHCPv4 and the reply is `up` plus the locator, or `timed out`.
+/// A later static form is the same opcode. IPv6 address configuration
+/// is not this opcode yet. This is not a new syscall.
+pub const NET_OP_UP: u8 = 14;
 
 /// USB control: list enumerated devices, one per line. The reply is
 /// plain text. It does not begin with a lane capability.

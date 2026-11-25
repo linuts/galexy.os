@@ -47,16 +47,19 @@ payload, see `GALFS.md`):
 4. Test kernels and the disk harness auto-unlock with `galfs`.
    Production `galexy-os` calls `set_auto_unlock(false)` before
    `galfs::init`. An empty image (no GALF magic) stays locked until
-   the seat chooses a passphrase and confirms it, then names the
-   administrator and confirms that password. `USER_UNLOCK` on a fresh
-   disk takes the name in `rdi`/`rsi` and the password as a length-byte
-   blob at `r10`. The name `admin` is refused. A sealed image asks for the existing passphrase
-   (`Volume passphrase:`). The login screen does not appear until that
-   passphrase opens the volume. An empty line asks again. A wrong
-   passphrase logs `[galfs] unlock failed; RAM-only`, does **not** mark
-   the disk corrupt (a later passphrase can retry), and `sync` returns
-   `Unsupported`. `USER_LOGIN` is `AccessDenied` while the volume is
-   locked, so a pre-unlock seat has no actor and cannot start a session.
+   the seat chooses the disk (`Disk:`), then a passphrase and confirms
+   it, then names the administrator and confirms that password, then
+   a resolver address or `skip`. Skip sends nothing. `USER_UNLOCK` on
+   a fresh disk takes the name in `rdi`/`rsi` and the password as a
+   length-byte blob at `r10`. The name `admin` is refused. A sealed
+   image asks for the existing passphrase (`Volume passphrase:`) and
+   skips the disk, the account, and the resolver. The login screen
+   does not appear until that passphrase opens the volume. An empty
+   line asks again. A wrong passphrase logs `[galfs] unlock failed;
+   RAM-only`, does **not** mark the disk corrupt (a later passphrase
+   can retry), and `sync` returns `Unsupported`. `USER_LOGIN` is
+   `AccessDenied` while the volume is locked, so a pre-unlock seat
+   has no actor and cannot start a session.
 5. Admin changes the passphrase with `volpass` (`USER_VOLPASS`).
    The volume must already be unlocked. The shell confirms the new
    passphrase, the kernel checks the current one, and the next seal
@@ -79,8 +82,9 @@ create an account named `admin`.
 
 Milestone **127** is that account. The user named at first boot is the
 administrative actor, and `is_admin_root` is that actor's root. Milestone
-**128** is still the rest of the screen: after the passphrase and that
-user, the resolver or skip. Test kernels and a diskless boot still
+**128** is the rest of that screen: choose the disk, the passphrase,
+that user, then the resolver or skip. DHCP stays off until `net up`.
+Test kernels and a diskless boot still
 format `owner` / `testpass` so the suite can log in. That account is
 not written on a fresh production disk.
 
@@ -147,7 +151,12 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
    There is no passphrase baked into the production image. Test
    kernels still unlock with `galfs`. The fresh-disk prompt appears
    only when the image has no GALF header. A sealed disk asks
-   `Volume passphrase:`. Wrong password prints `Login incorrect`
+   `Volume passphrase:` and then login. That is one-time setup: the
+   disk question, the new passphrase, and first-user creation do not
+   return. A name typed at `Login as:` that is not an account prints
+   `Login incorrect` and is not created. The first user is the
+   administrator. There is no account named `admin`. `useradd` is
+   that administrator only. Wrong password prints `Login incorrect`
    and repeats the screen. A cool-down prints `Login locked`
    (see below).
 3. After a successful password login the prompt is `user@galexy>`.

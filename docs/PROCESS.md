@@ -248,8 +248,8 @@ A name is one lookup on the pinned DNS-over-TLS resolver. No pin
 prints `access denied` and sends nothing. A `net time` line in
 `/policy` names that seat and the address or the name. There is
 no poll and no timezone. `net_time_sets_the_date` is the run. First boot
-(Milestone 128) will call it when the seat does not skip the
-network question. That screen is not this row.
+does not call it. The date stays unset until the seat runs `net time`.
+That screen is not this row.
 
 F1–F12 **console switching** stays in the kernel; only task lifecycle
 moves to init.

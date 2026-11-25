@@ -72,6 +72,10 @@ pub(crate) fn show_help() {
     help_section(b"system");
     help_row(b"fetch", b"dashboard (alias: dashboard)");
     help_row(b"fetch <name>", b"dial a granted name and print");
+    help_row(
+        b"net up",
+        b"DHCPv4; net up <ip>/<prefix> via <gateway> is not built (v4 or v6)",
+    );
     help_row(b"net link", b"address, or down");
     help_row(b"net allow ...", b"name, locator, optional key file");
     help_row(b"net dns <ip> [keyfile]", b"resolver; key file optional");
@@ -2056,6 +2060,10 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
         finish_net(cwd, &[galexy_abi::NET_OP_LINK], false);
         return;
     }
+    if let Some(tail) = arg_of(rest, b"up") {
+        net_up(cwd, tail);
+        return;
+    }
     if let Some(tail) = arg_of(rest, b"allow") {
         net_allow(cwd, tail);
         return;
@@ -2098,8 +2106,51 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
         finish_net(cwd, &payload[..1 + n], true);
         return;
     }
-    write_console(b"net: link, dns, time, allow, resolve, addr, port, peer, listen, serve\n");
+    write_console(b"net: link, up, dns, time, allow, resolve, addr, port, peer, listen, serve\n");
     prompt(cwd);
+}
+
+/// `net up` starts DHCPv4. `net up <ip>/<prefix> via <gateway>` is the
+/// static form, v4 or v6, and it is not built. Nothing is sent for it.
+fn net_up(cwd: &Cwd, tail: &[u8]) {
+    let tail = trim(tail);
+    if tail.is_empty() {
+        finish_net(cwd, &[galexy_abi::NET_OP_UP], false);
+        return;
+    }
+    if let Some(ipv6) = static_via(tail) {
+        if ipv6 {
+            write_console(b"ipv6 is not built\n");
+        } else {
+            write_console(b"static address is not built\n");
+        }
+        prompt(cwd);
+        return;
+    }
+    write_console(
+        b"net up starts DHCPv4; net up <ip>/<prefix> via <gateway> is not built (v4 or v6)\n",
+    );
+    prompt(cwd);
+}
+
+/// `<addr>/<prefix> via <gateway>`. `Some(true)` when either side has `:`.
+fn static_via(tail: &[u8]) -> Option<bool> {
+    let via = b" via ";
+    let at = tail.windows(via.len()).position(|w| w == via)?;
+    let left = trim(&tail[..at]);
+    let right = trim(&tail[at + via.len()..]);
+    if left.is_empty() || right.is_empty() {
+        return None;
+    }
+    let slash = left.iter().position(|b| *b == b'/')?;
+    if slash == 0 || slash + 1 >= left.len() {
+        return None;
+    }
+    let prefix = &left[slash + 1..];
+    if prefix.is_empty() || !prefix.iter().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(left.contains(&b':') || right.contains(&b':'))
 }
 
 fn net_allow(cwd: &Cwd, tail: &[u8]) {
@@ -2469,7 +2520,7 @@ fn parse_locator(text: &[u8]) -> Option<([u8; 4], u16)> {
 
 /// A dotted DNS name. Four payload bytes stay an IPv4 address, so a
 /// three-byte name is not a name on this opcode.
-fn parse_ip(text: &[u8]) -> Option<[u8; 4]> {
+pub(crate) fn parse_ip(text: &[u8]) -> Option<[u8; 4]> {
     let mut ip = [0u8; 4];
     let mut last = 0usize;
     for (i, part) in text.split(|b| *b == b'.').enumerate() {

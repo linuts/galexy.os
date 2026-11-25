@@ -3729,31 +3729,38 @@ that actor's root. Further users from `useradd` are not.
 ## Milestone 128 — First boot
 
 An empty disk does not open a login named `admin`. One seat walks
-three questions, then the login prompt is the user from
-Milestone 127. Milestone 126 has landed, so a pin can check a
-certificate date.
+the setup, then the login prompt is the user from Milestone 127.
+The disk question comes first. Formatting that disk is the install.
+DHCP does not start on boot. `net up` starts DHCPv4. First boot
+does not run it. Skip sends nothing.
 
-- [ ] **The disk**: the first question is the volume passphrase,
-      confirmed. That formats the filesystem and seals it. A
-      mismatch asks again. No default passphrase is stored. A
-      disk that is already sealed asks for the existing
-      passphrase and skips the rest
-- [ ] **The user**: the second question is the name and the
-      password, confirmed. This is the actor from Milestone 127.
-      There is no account named `admin`
-- [ ] **The network**: the third question shows `link`. The seat
-      types a resolver address or `skip`. An address runs
-      `net time` when the date is unset, then `net dns`. Skip
-      leaves the date and the resolver unset. The login prompt
-      is still that user
-- [ ] **Proof**: a blank production image reaches login only
-      after the three answers, the actor name is the one typed,
-      `svc date` is set when the seat did not skip, and a skip
-      still logs in. A second boot asks for the passphrase and
-      does not ask for a new user. Serial carries neither secret
-- [ ] **Out of this milestone**: a second user during setup, a
-      timezone, NTS, a new syscall, Milestones 120–124, the
-      `v1.0` tag, and the KVM rows
+- [x] **The disk**: the first question chooses the disk. Formatting
+      it installs the system. Then the volume passphrase, confirmed.
+      A mismatch asks again. No default passphrase is stored. A
+      disk that is already sealed asks for the existing passphrase
+      and skips the rest
+- [x] **The user**: the next question is the name and the password,
+      confirmed. This is the actor from Milestone 127. There is no
+      account named `admin`
+- [x] **The network**: the seat types a resolver address or `skip`.
+      An address runs `net dns` (port 853, certificate name stored).
+      No plaintext DNS. `10.0.2.2` and `10.0.2.3` stay refused.
+      Skip leaves lookups refused until a later `net dns` and sends
+      nothing. There is no `net time` and no `net up` on this screen.
+      `net up` starts DHCPv4. `net up <ip>/<prefix> via <gateway>`
+      is not built, for v4 or v6. The login prompt is still that user
+- [x] **Proof**: a blank production image reaches login only after
+      those answers, including skip. The actor name is the one typed.
+      Serial has no `[net] addr` and neither secret. A second boot
+      asks for the passphrase and then login. It does not ask for a
+      disk, a user, or a resolver. Typing those answers does not
+      create an account. A non-admin `useradd` is refused
+      (`first_boot_is_one_time`). Skip still sends nothing
+      (`first_boot_skip_sends_nothing`)
+- [x] **Out of this milestone**: a static address, IPv6 address
+      configuration, a second user during setup, a timezone, NTS,
+      a new syscall, Milestones 120–124, the `v1.0` tag, and the
+      KVM rows
 
 
 ---

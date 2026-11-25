@@ -76,14 +76,21 @@ impl BlockDevice for PrimarySlave {
     }
 }
 
-/// Probes the slave once. Returns whether a usable disk is there.
-pub fn present() -> bool {
+/// One absence line, and only when something actually asks [`present`].
+static ABSENCE_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// Sector count when a slave answered IDENTIFY.
+///
+/// Absent is `None` and does not log. A virtio boot can look without
+/// printing `no primary slave`. [`present`] still logs that when the
+/// slave is the disk being used.
+pub fn capacity_if_attached() -> Option<u64> {
     if PROBED.load(Ordering::Acquire) {
-        return READY.load(Ordering::Acquire);
+        return attached_capacity();
     }
     let _g = LOCK.lock();
     if PROBED.load(Ordering::Acquire) {
-        return READY.load(Ordering::Acquire);
+        return attached_capacity();
     }
     let ok = identify_slave();
     READY.store(ok, Ordering::Release);
@@ -93,10 +100,29 @@ pub fn present() -> bool {
             "[ata] primary slave ready ({} sectors)",
             CAPACITY.load(Ordering::Relaxed)
         );
+        Some(CAPACITY.load(Ordering::Acquire))
     } else {
+        None
+    }
+}
+
+fn attached_capacity() -> Option<u64> {
+    if READY.load(Ordering::Acquire) {
+        Some(CAPACITY.load(Ordering::Acquire))
+    } else {
+        None
+    }
+}
+
+/// Probes the slave once. Returns whether a usable disk is there.
+pub fn present() -> bool {
+    if capacity_if_attached().is_some() {
+        return true;
+    }
+    if !ABSENCE_LOGGED.swap(true, Ordering::AcqRel) {
         crate::serial_println!("[ata] no primary slave; galfs stays in RAM");
     }
-    ok
+    false
 }
 
 /// Sector count from IDENTIFY (0 if absent / not probed).

@@ -35,7 +35,7 @@ Galexy ABI for user trees.
 
 | Piece | Meaning |
 | --- | --- |
-| Actor | Named account (`admin`, `eve`, …) with one root directory |
+| Actor | Named account (the first one is the administrator, then `eve`, …) with one root directory |
 | Object | File or directory slot in the fixed table (or empty) |
 | Root | Actor’s top directory; path walks start here unless `owner@` |
 | Token | `(object, RIGHT_*)` on a task — the only way to touch galfs |
@@ -264,15 +264,20 @@ a card still names an object id and covers descendants through `parent`.
 
 1. If a `BlockDevice` with capacity ≥ dual-slot image is present and
    auto-unlock is on → try load newest valid sealed slot with `galfs`.
-   Production boot (auto-unlock off) builds a RAM admin table and waits
-   for `USER_UNLOCK`. No GALF header means the seat chooses the
-   passphrase (`volume_query` returns 2). A header means the existing
-   passphrase (`volume_query` returns 1).
-2. Empty zeros (no GALF magic) → format: immortal `admin` + `Desktop/`,
-   new volume key, sync sealed image. Test kernels and a diskless
-   boot still use password `admin`. An interactive fresh disk takes
-   the admin password in the same `USER_UNLOCK` and seals that hash
-   instead. `USER_VOLPASS`
+   Production boot (auto-unlock off) waits for the seat. No chosen
+   disk yet means `volume_query` returns 3. No GALF header means the
+   seat chooses the passphrase (`volume_query` returns 2). A header
+   means the existing passphrase (`volume_query` returns 1). One
+   sealed disk is bound without the disk question.
+2. Empty zeros (no GALF magic) → format: the account the seat named,
+   plus `Desktop/`, a new volume key, and a sealed image. The name
+   `admin` is refused. There is no account named `admin`. The first
+   user is the administrator. Setup is once: a later boot of that
+   sealed disk asks for the existing passphrase, then login. Test kernels
+   and a diskless boot still use `owner` / `testpass`. An interactive
+   fresh disk takes that password in the same `USER_UNLOCK` and seals
+   that hash.
+   `USER_VOLPASS`
    re-wraps an unlocked volume.
 3. Both slots carry GALF magic but fail decode/validate → **refuse
    silent format**; galfs stays unavailable (`Unsupported` on sync /

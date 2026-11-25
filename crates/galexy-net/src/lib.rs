@@ -183,6 +183,21 @@ impl Engine {
         }
     }
 
+    /// Ask DHCP for an IPv4 address. No packet until the next [`Self::poll`].
+    ///
+    /// A locator that is already known is left alone. A discover that is
+    /// already in flight is not restarted.
+    pub fn start_dhcp(&mut self) {
+        if self.locator().is_some() {
+            return;
+        }
+        self.ask = true;
+        if !matches!(self.dhcp, Dhcp::WaitOffer | Dhcp::WaitAck) {
+            self.dhcp = Dhcp::Idle;
+            self.dhcp_ms = 0;
+        }
+    }
+
     /// Fixed mode locator. Does not send DHCP.
     pub fn set_fixed(&mut self, addr: [u8; 4], prefix: u8, gateway: [u8; 4]) {
         self.ask = false;
@@ -1369,6 +1384,21 @@ mod tests {
             68,
             &p,
         )
+    }
+
+    #[test]
+    fn quiet_until_start_dhcp() {
+        let mac = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
+        let mut e = Engine::new(mac, false);
+        e.poll(1_000);
+        e.poll(5_000);
+        assert!(e.pop().is_none());
+        assert!(e.locator().is_none());
+        e.start_dhcp();
+        e.poll(5_000);
+        let discover = e.pop().unwrap();
+        assert_eq!(&discover[12..14], &[0x08, 0x00]);
+        assert!(e.locator().is_none());
     }
 
     #[test]

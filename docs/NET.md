@@ -205,6 +205,12 @@ and it does not ask QEMU's DNS at `10.0.2.3`. QUIC stays the later
 lane carrier, not this lookup. A name that needs DNS and has no
 pinned resolver fails closed.
 
+`net up` starts DHCPv4. DHCP starts only from that command. A packet
+leaves only because the user acted, or because a service they started
+is doing the job they gave it. `net up <ip>/<prefix> via <gateway>`
+is the static form for IPv4 and for IPv6, and it is not built. First
+boot does not run `net up`. Skip sends nothing.
+
 `net dns <ip>` stores that address. It connects on port 853, reads
 the certificate, and stores the domain name on it. The seat prints
 `ok` and that domain. The certificate must chain to the system CA
