@@ -2,8 +2,10 @@
 //!
 //! Each actor has one root directory. `/Desktop` is that actor's child
 //! named Desktop. `/dan@Desktop` is dan's. A token names an object and a
-//! set of rights; the path is only a lookup. Boot creates one immortal
-//! actor, [`ADMIN_NAME`]. `THREADS` is not held across a galfs lock that
+//! set of rights; the path is only a lookup. The first actor is the
+//! administrator: a fresh production disk takes that name from the seat,
+//! and a test kernel or a diskless boot formats [`HARNESS_ACTOR`].
+//! `THREADS` is not held across a galfs lock that
 //! the disk wait must drop, and the disk wait does not take `THREADS`.
 //!
 //! When a [`BlockDevice`] large enough for both metadata slots and the
@@ -173,12 +175,10 @@ impl Actor {
         self.salt = cred.salt;
         self.kdf_iters = cred.iters;
         self.pass_hash = cred.hash;
-        // Default admin password keeps the must-change flag across reboot.
-        if self.name_is(ADMIN_NAME) && password == ADMIN_DEFAULT_PASSWORD.as_bytes() {
-            self.max_objects |= MUST_CHANGE_BIT;
-        } else {
-            self.max_objects &= !MUST_CHANGE_BIT;
-        }
+        // The format pair `admin`/`admin` is not written, so the
+        // must-change flag has nothing to set. `passwd` still clears it.
+        let _ = password;
+        self.max_objects &= !MUST_CHANGE_BIT;
     }
 
     /// The stored salt/cost/hash, for a check that runs after the table
@@ -440,8 +440,14 @@ static ACTIVE_GEN: AtomicU64 = AtomicU64::new(0);
 /// Times this boot loaded an older slot because a newer one failed checks.
 static RECOVERIES: AtomicU64 = AtomicU64::new(0);
 
-/// Name of the immortal boot actor.
-pub const ADMIN_NAME: &str = "admin";
+/// Name format and `useradd` refuse. The administrator is not this string.
+pub const RESERVED_ACTOR_NAME: &str = "admin";
+
+/// Account a test kernel or a diskless boot formats so the suite can log in.
+///
+/// A fresh production disk does not contain this account. The seat types
+/// the name when that disk is sealed.
+pub const HARNESS_ACTOR: &str = "owner";
 
 /// Admin's root object. Valid after [`init`].
 static ADMIN_ROOT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(NO_OBJECT);
@@ -483,8 +489,8 @@ const PAYLOAD_LEN: usize = galexy_galf::PAYLOAD_LEN;
 const _: () = assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * block::SECTOR);
 /// Sectors a volume needs past the LBA base (8 MiB).
 const DISK_MIN_SECTORS: u64 = (galexy_galf::MIN_DISK_BYTES / block::SECTOR) as u64;
-/// Default password for the immortal admin account at format.
-pub const ADMIN_DEFAULT_PASSWORD: &str = "admin";
+/// Password of [`HARNESS_ACTOR`]. Not written onto a fresh production disk.
+pub const HARNESS_PASSWORD: &[u8] = b"testpass";
 /// Bring-up volume passphrase (wraps the disk key). Test kernels and the
 /// disk harness auto-unlock with this. Production `galexy-os` prompts.
 pub const VOLUME_PASSPHRASE: &[u8] = b"galfs";
@@ -685,8 +691,9 @@ pub fn is_dirty() -> bool {
     DIRTY.load(Ordering::Acquire)
 }
 
-/// Builds actor [`ADMIN_NAME`] with an empty Desktop, or loads the newest
-/// valid GALF slot from the block device. Call once.
+/// Builds the harness account, or loads the newest valid GALF slot.
+/// A production disk with no passphrase yet stays empty until the seat
+/// names the administrator. Call once.
 ///
 /// Sync policy: mutates call [`mark_dirty`]; the main loop's 1 Hz tick,
 /// [`sync_explicit`], and power-off call [`sync_if_dirty`] / [`sync`]
@@ -705,6 +712,10 @@ pub fn init() {
         );
     } else if disk_usable() && !auto_unlock() {
         format_ram_table();
+        // Init needs a root to create `/policy` before the seat names
+        // the account. The name stays empty until that unlock, so the
+        // sealed disk does not contain `admin` or the harness account.
+        install_pending_actor();
         let fresh = !disk_has_seal();
         VOLUME_FRESH.store(fresh, Ordering::Release);
         if fresh {
@@ -799,25 +810,62 @@ fn install_live_table(table: &mut Table, on_disk: bool, objects: ObjectTable) {
     }
 }
 
+/// Empty-named root for a locked production disk. [`unlock_with`] writes
+/// the seat's name onto this actor before the first seal.
+fn install_pending_actor() {
+    let mut table = TABLE.lock();
+    if table.actors.iter().any(|actor| actor.used) {
+        return;
+    }
+    let (max_objects, max_bytes) = admin_quota_of(&table);
+    let Some(oi) = free_object(&table) else {
+        return;
+    };
+    let actor = &mut table.actors[0];
+    *actor = Actor::empty();
+    actor.used = true;
+    actor.root = oi as u32;
+    actor.max_objects = max_objects;
+    actor.max_bytes = max_bytes;
+    let obj = &mut table.objects[oi];
+    *obj = Object::empty();
+    obj.kind = KIND_DIR;
+    obj.parent = NO_PARENT;
+    obj.actor = 0;
+    let root = oi as u32;
+    let _ = mkdir_locked(&mut table, root, "Desktop");
+    drop(table);
+    ADMIN_ROOT.store(root, Ordering::Relaxed);
+}
+
 fn format_ram_table() {
     let on_disk = disk_usable();
     bind_pool(on_disk);
     let objects = prepare_live_storage(on_disk);
-    let default = ADMIN_DEFAULT_PASSWORD.as_bytes();
-    let cred = PasswordCred::derive(default);
-    let mut table = TABLE.lock();
-    install_live_table(&mut table, on_disk, objects);
-    let admin = add_actor(&mut table, ADMIN_NAME, default, &cred).expect("galfs: admin");
-    ADMIN_ROOT.store(admin, Ordering::Relaxed);
-    mkdir_locked(&mut table, admin, "Desktop").expect("galfs: admin Desktop");
-    drop(table);
+    {
+        let mut table = TABLE.lock();
+        install_live_table(&mut table, on_disk, objects);
+    }
+    ADMIN_ROOT.store(NO_OBJECT, Ordering::Relaxed);
     ACTIVE_SLOT.store(0, Ordering::Relaxed);
     ACTIVE_GEN.store(0, Ordering::Relaxed);
     DISK_CORRUPT.store(false, Ordering::Release);
 }
 
+/// The known account for a test kernel or a diskless boot.
+fn install_harness_actor() {
+    let password = HARNESS_PASSWORD;
+    let mut cred = PasswordCred::derive(password);
+    let mut table = TABLE.lock();
+    let root = add_actor(&mut table, HARNESS_ACTOR, password, &cred).expect("galfs: harness");
+    mkdir_locked(&mut table, root, "Desktop").expect("galfs: harness Desktop");
+    drop(table);
+    cred.wipe();
+}
+
 fn format_fresh() {
     format_ram_table();
+    install_harness_actor();
     // Fresh volume key for a sealed format (bring-up passphrase).
     let mut vk = [0u8; KEY_LEN];
     crate::arch::rand::fill_bytes(&mut vk);
@@ -900,14 +948,27 @@ pub fn unlock_volume(passphrase: &[u8]) -> Result<(), SysError> {
     unlock_with(passphrase, None)
 }
 
-/// Like [`unlock_volume`], and on a fresh disk installs `admin_password`
-/// before the first seal. The format default is not written to the image.
-pub fn unlock_with(passphrase: &[u8], admin_password: Option<&[u8]>) -> Result<(), SysError> {
+/// The account the seat typed while sealing a fresh disk.
+pub struct SetupUser<'a> {
+    /// Actor name. [`RESERVED_ACTOR_NAME`] and an empty name are refused.
+    pub name: &'a str,
+    /// Password. The seat has already confirmed it.
+    pub password: &'a [u8],
+}
+
+/// Like [`unlock_volume`], and on a fresh disk creates `account` as the
+/// administrator before the first seal. The name `admin` is not written.
+pub fn unlock_with(passphrase: &[u8], account: Option<SetupUser<'_>>) -> Result<(), SysError> {
     if passphrase.is_empty() || passphrase.len() > PASSPHRASE_MAX {
         return Err(SysError::BadValue);
     }
-    if let Some(password) = admin_password {
-        if !password_ok(password) || password == ADMIN_DEFAULT_PASSWORD.as_bytes() {
+    if let Some(user) = account.as_ref() {
+        if user.name.is_empty()
+            || user.name.len() > ACTOR_NAME
+            || user.name == RESERVED_ACTOR_NAME
+            || !component_ok(user.name)
+            || !password_ok(user.password)
+        {
             return Err(SysError::BadValue);
         }
     }
@@ -939,9 +1000,36 @@ pub fn unlock_with(passphrase: &[u8], admin_password: Option<&[u8]>) -> Result<(
             Ok(())
         }
         DiskLoad::Empty => {
-            if let Some(password) = admin_password {
-                set_password(ADMIN_NAME, password)?;
-            }
+            let Some(user) = account else {
+                return Err(SysError::BadValue);
+            };
+            let mut cred = PasswordCred::derive(user.password);
+            let created = {
+                let mut table = TABLE.lock();
+                let pending = table
+                    .actors
+                    .iter()
+                    .position(|actor| actor.used && actor.name_len == 0);
+                if let Some(ai) = pending {
+                    let actor = &mut table.actors[ai];
+                    actor.name = [0; ACTOR_NAME];
+                    let bytes = user.name.as_bytes();
+                    actor.name[..bytes.len()].copy_from_slice(bytes);
+                    actor.name_len = bytes.len() as u8;
+                    actor.install_password(&cred, user.password);
+                    let root = actor.root;
+                    if find_child(&table, root, "Desktop").is_none() {
+                        let _ = mkdir_locked(&mut table, root, "Desktop");
+                    }
+                    ADMIN_ROOT.store(root, Ordering::Relaxed);
+                    Ok(root)
+                } else {
+                    add_actor(&mut table, user.name, user.password, &cred)
+                        .and_then(|root| mkdir_locked(&mut table, root, "Desktop").map(|_| root))
+                }
+            };
+            cred.wipe();
+            created?;
             store_passphrase(passphrase);
             let mut vk = [0u8; KEY_LEN];
             crate::arch::rand::fill_bytes(&mut vk);
@@ -1800,13 +1888,12 @@ fn password_kdf_iters() -> u32 {
 }
 
 fn refresh_roots(table: &Table) {
-    let mut admin = NO_OBJECT;
-    for actor in &table.actors {
-        if actor.used && actor.name_is(ADMIN_NAME) {
-            admin = actor.root;
-            break;
-        }
-    }
+    let admin = table
+        .actors
+        .iter()
+        .find(|actor| actor.used)
+        .map(|actor| actor.root)
+        .unwrap_or(NO_OBJECT);
     ADMIN_ROOT.store(admin, Ordering::Relaxed);
 }
 
@@ -2518,12 +2605,15 @@ fn install_pool(table: &Table, sibling: Option<&[u8]>, clock: u32) {
 /// Structural checks after CRC so a bit-flipped-but-checksum-ok image cannot
 /// take the kernel into undefined object walks.
 fn validate_table(table: &Table) -> bool {
-    let mut saw_admin = false;
+    let mut saw_actor = false;
     for (ai, actor) in table.actors.iter().enumerate() {
         if !actor.used {
             continue;
         }
         if actor.name_len == 0 || actor.name_len as usize > ACTOR_NAME {
+            return false;
+        }
+        if actor.name_is(RESERVED_ACTOR_NAME) {
             return false;
         }
         let root = actor.root as usize;
@@ -2534,11 +2624,9 @@ fn validate_table(table: &Table) -> bool {
         if obj.kind != KIND_DIR || obj.parent != NO_PARENT || obj.actor != ai as u8 {
             return false;
         }
-        if actor.name_is(ADMIN_NAME) {
-            saw_admin = true;
-        }
+        saw_actor = true;
     }
-    if !saw_admin {
+    if !saw_actor {
         return false;
     }
     for share in &table.shares {
@@ -2825,7 +2913,7 @@ pub fn root_named(name: &str) -> Result<u32, SysError> {
 
 /// Creates an actor and an empty Desktop. Returns the new root.
 pub fn add_user(name: &str, password: &[u8]) -> Result<u32, SysError> {
-    if name == ADMIN_NAME {
+    if name == RESERVED_ACTOR_NAME {
         return Err(SysError::Unsupported);
     }
     if !password_ok(password) {
@@ -2902,9 +2990,10 @@ fn password_ok(password: &[u8]) -> bool {
 
 /// Deletes an actor whose tree is only an empty root (and optional empty Desktop).
 ///
-/// Refuses [`ADMIN_NAME`]. Caller must ensure no live task still uses this root.
+/// Refuses the administrator and [`RESERVED_ACTOR_NAME`].
+/// Caller must ensure no live task still uses this root.
 pub fn remove_user(name: &str) -> Result<(), SysError> {
-    if name == ADMIN_NAME {
+    if name == RESERVED_ACTOR_NAME {
         return Err(SysError::Unsupported);
     }
     let mut table = TABLE.lock();
@@ -2912,6 +3001,14 @@ pub fn remove_user(name: &str) -> Result<(), SysError> {
         return Err(SysError::NotFound);
     };
     let root = table.actors[ai].root;
+    let admin = table
+        .actors
+        .iter()
+        .find(|actor| actor.used)
+        .map(|actor| actor.root);
+    if Some(root) == admin {
+        return Err(SysError::Unsupported);
+    }
     let mut desktop: Option<usize> = None;
     for (i, obj) in table.objects.iter().enumerate() {
         if obj.kind == KIND_EMPTY || obj.parent != root {
@@ -3114,11 +3211,7 @@ fn admin_quota_limits() -> (u32, u64) {
 pub fn raise_admin_quota_for_sysroot() {
     let (need_objects, need_bytes) = admin_quota_limits();
     let mut table = TABLE.lock();
-    let Some(actor) = table
-        .actors
-        .iter_mut()
-        .find(|a| a.used && a.name_is(ADMIN_NAME))
-    else {
+    let Some(actor) = table.actors.iter_mut().find(|a| a.used) else {
         return;
     };
     let objects_low = actor.object_limit() < need_objects;
@@ -3155,11 +3248,7 @@ fn usage_cache_hit(ai: usize) -> bool {
 /// until [`end_admin_usage_cache`] or a write that does not.
 pub fn begin_admin_usage_cache() {
     let table = TABLE.lock();
-    let Some(ai) = table
-        .actors
-        .iter()
-        .position(|a| a.used && a.name_is(ADMIN_NAME))
-    else {
+    let Some(ai) = table.actors.iter().position(|a| a.used) else {
         return;
     };
     let (objects, bytes) = usage_scan(&table, ai);
@@ -3253,15 +3342,14 @@ fn subtree_usage(table: &Table, root: u32) -> (u32, u64) {
 }
 
 /// Adds an actor whose credential was derived BEFORE `table` was locked
-/// (see [`PasswordCred`]); `password` is only compared against the default
-/// for the must-change flag.
+/// (see [`PasswordCred`]). The first actor is the administrator.
 fn add_actor(
     table: &mut Table,
     name: &str,
     password: &[u8],
     cred: &PasswordCred,
 ) -> Result<u32, SysError> {
-    if !component_ok(name) || name.len() > ACTOR_NAME {
+    if name == RESERVED_ACTOR_NAME || !component_ok(name) || name.len() > ACTOR_NAME {
         return Err(SysError::BadValue);
     }
     if table.actors.iter().any(|a| a.name_is(name)) {
@@ -3273,7 +3361,8 @@ fn add_actor(
     let Some(oi) = free_object(table) else {
         return Err(SysError::NoResource);
     };
-    let (max_objects, max_bytes) = if name == ADMIN_NAME {
+    let first = !table.actors.iter().any(|a| a.used);
+    let (max_objects, max_bytes) = if first {
         admin_quota_of(table)
     } else {
         (DEFAULT_MAX_OBJECTS, DEFAULT_MAX_BYTES)
@@ -3292,6 +3381,9 @@ fn add_actor(
     obj.kind = KIND_DIR;
     obj.parent = NO_PARENT;
     obj.actor = ai as u8;
+    if first {
+        ADMIN_ROOT.store(oi as u32, Ordering::Relaxed);
+    }
     // Root has an empty name; paths start at its children.
     Ok(oi as u32)
 }

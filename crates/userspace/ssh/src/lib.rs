@@ -65,7 +65,19 @@ pub fn stream_name(dir: u8, name: &[u8]) -> Option<(Vec<u8>, u64)> {
     payload[1] = dir;
     payload[2..2 + name.len()].copy_from_slice(name);
     let mut reply = [0u8; galexy_abi::CHAN_MSG_MAX];
-    let got = galexy_rt::net_rpc(&payload[..2 + name.len()], &mut reply);
+    let call = &payload[..2 + name.len()];
+    let mut got = galexy_rt::net_rpc(call, &mut reply);
+    // One net call at a time. The listener is often the one holding it.
+    // That miss is NoResource, not a refusal of this dial.
+    let mut tries = 0u8;
+    while !got.ok
+        && galexy_abi::SysError::from_code(got.value) == galexy_abi::SysError::NoResource
+        && tries < 8
+    {
+        let _ = galexy_rt::sleep_ms(50);
+        got = galexy_rt::net_rpc(call, &mut reply);
+        tries += 1;
+    }
     if !got.ok || (got.value as usize) < 8 {
         return None;
     }

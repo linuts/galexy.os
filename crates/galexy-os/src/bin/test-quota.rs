@@ -71,17 +71,23 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert_eq!(um2, 8);
     assert_eq!(ub2, 100);
 
-    assert!(galfs::actor_must_change(admin), "fresh admin must change");
-    galfs::set_actor_quota("admin", 16, 64 * 1024 * 1024).expect("old admin cap");
     assert!(
-        galfs::actor_must_change(admin),
-        "set quota keeps must-change"
+        !galfs::actor_must_change(admin),
+        "the format pair is not written"
+    );
+    galfs::set_actor_quota("owner", 16, 64 * 1024 * 1024).expect("old harness cap");
+    assert!(
+        !galfs::actor_must_change(admin),
+        "set quota does not raise must-change"
     );
     galfs::raise_admin_quota_for_sysroot();
-    let (_, am, _, ax) = galfs::actor_quota("admin").expect("admin after raise");
+    let (_, am, _, ax) = galfs::actor_quota("owner").expect("owner after raise");
     assert!(am >= galfs::inode_slots(), "object cap");
     assert!(ax >= 128 * 1024 * 1024, "byte cap");
-    assert!(galfs::actor_must_change(admin), "raise keeps must-change");
+    assert!(
+        !galfs::actor_must_change(admin),
+        "raise does not set must-change"
+    );
 
     static SAMPLE: &[u8] = b"sysroot-bytes";
     let id = galfs::import_shared(admin, "coremeta", SAMPLE).expect("shared");
@@ -96,9 +102,9 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let n = galfs::read_file_bytes(id, &mut got).expect("read copied");
     assert_eq!(&got[..n], b"sysroot!");
 
-    galfs::set_actor_quota("admin", 128, 200 * 1024 * 1024).expect("higher cap");
+    galfs::set_actor_quota("owner", 128, 200 * 1024 * 1024).expect("higher cap");
     galfs::raise_admin_quota_for_sysroot();
-    let (_, _, _, ax) = galfs::actor_quota("admin").expect("admin stays high");
+    let (_, _, _, ax) = galfs::actor_quota("owner").expect("admin stays high");
     assert_eq!(ax, 200 * 1024 * 1024, "raise does not lower a higher quota");
 
     println!("[test-quota] object and byte limits enforced");

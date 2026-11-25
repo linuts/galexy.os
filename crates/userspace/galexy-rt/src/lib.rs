@@ -289,10 +289,28 @@ pub fn user_unlock(passphrase: &[u8]) -> SyscallResult {
     user_name_pass(&[], passphrase, galexy_abi::USER_UNLOCK)
 }
 
-/// Format a fresh disk. `admin_password` replaces the format default
-/// before the first seal. A sealed disk uses [`user_unlock`].
-pub fn user_unlock_new(passphrase: &[u8], admin_password: &[u8]) -> SyscallResult {
-    user_name_pass(admin_password, passphrase, galexy_abi::USER_UNLOCK)
+/// Format a fresh disk. `name` and `password` are the administrator.
+/// The name `admin` is refused. A sealed disk uses [`user_unlock`].
+pub fn user_unlock_new(name: &[u8], password: &[u8], passphrase: &[u8]) -> SyscallResult {
+    if name.is_empty() || password.is_empty() || password.len() > 64 {
+        return SyscallResult::err(galexy_abi::SysError::BadValue);
+    }
+    let mut blob = [0u8; 65];
+    blob[0] = password.len() as u8;
+    blob[1..1 + password.len()].copy_from_slice(password);
+    let result = raw_syscall(
+        Syscall::User as u64,
+        name.as_ptr() as u64,
+        name.len() as u64,
+        galexy_abi::USER_UNLOCK,
+        passphrase.as_ptr() as u64,
+        passphrase.len() as u64,
+        blob.as_ptr() as u64,
+    );
+    for byte in &mut blob {
+        *byte = 0;
+    }
+    result
 }
 
 /// Change the volume passphrase. `current` is empty when the disk has

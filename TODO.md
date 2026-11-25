@@ -3668,29 +3668,31 @@ one Network Time Protocol server. It does not wait on Milestones
 civil clock from Milestone 90. There is no timezone and no leap
 smear.
 
-- [ ] **One query**: `net` sends one NTP packet to one address on
+- [x] **One query**: `net` sends one NTP packet to one address on
       UDP port 123 and reads one reply from that address. The
       transmit time in the reply sets `Date` and the CMOS chip.
       A reply from any other address is ignored. The wire must be
-      up. No name is resolved: the clock is why a name cannot be
-      looked up yet. The address is four bytes until Milestone 120
-- [ ] **Who asks**: the administrative seat. The command is
-      `net time <ip>`. No new syscall. Opcode 13 on net cap
+      up. A DNS name is one lookup on the pinned DNS-over-TLS
+      resolver, then that same packet. No pin prints `access denied`
+      and sends nothing. Plaintext DNS stays unused. The address is
+      four bytes until Milestone 120
+- [x] **Who asks**: the administrative seat. The command is
+      `net time <ip>` or `net time <name>`. No new syscall. Opcode 13 on net cap
       `0x800A` appends. A logged-out seat is `AccessDenied`. A
       program that is not the administrative user is refused.
       Port 53 stays unused
-- [ ] **What it does not do**: no second stack, no pool, no
+- [x] **What it does not do**: no second stack, no pool, no
       background poll, no NTS. NTS needs a clock to check a
       certificate, and this row is the clock. One shot, then
       elapsed monotonic time carries `Date` the way a manual set
       does. A chip that already holds a year in 2000..=2099 still
       seeds the anchor at boot. This query replaces it
-- [ ] **Proof**: an unset date becomes `svc date` in UTC after one
+- [x] **Proof**: an unset date becomes `svc date` in UTC after one
       reply, and a certificate pin that was `clock not set` then
       proceeds. A reply from a different address does not move the
       clock. Serial does not carry a key. The `v1.0` tag stays
       unapplied
-- [ ] **Out of this milestone**: NTS, a server pool, a timezone,
+- [x] **Out of this milestone**: NTS, a server pool, a timezone,
       a leap second, a poll loop, a v6 address, a new syscall,
       the first-boot screen (128), and the KVM rows
 
@@ -3701,26 +3703,26 @@ operator types at format. This row removes that account. The user
 created at setup is the administrative actor. `is_admin_root` is
 that actor's root. Further users from `useradd` are not.
 
-- [ ] **No `admin` actor**: format does not create a user named
+- [x] **No `admin` actor**: format does not create a user named
       `admin`. The name and the password come from the seat. The
       name `admin` is refused. An empty name is refused. The
       password is confirmed. The format default `admin`/`admin`
       is not written. Must-change of that default has nothing to
       change on this disk
-- [ ] **The same rights**: the stamp's admin byte is this actor.
+- [x] **The same rights**: the stamp's admin byte is this actor.
       `svc`, `net dns`, `net time`, `volpass`, and `sec` stay
       that user's. Another login does not get them by name.
       `su` to this user is the existing card, and the card names
       this root, not the string `admin`
-- [ ] **The suite**: test kernels and the disk harness may still
+- [x] **The suite**: test kernels and the disk harness may still
       format a known account so the boots keep logging in. That
       account is not created on the production image. The
       production path is Milestone 128
-- [ ] **Proof**: a production format has one actor, the name the
+- [x] **Proof**: a production format has one actor, the name the
       seat typed, and `is_admin_root` is that root. A second
       `useradd` logs in and `sec` answers `access denied`. Serial
       does not carry the password
-- [ ] **Out of this milestone**: the setup screen (128), deleting
+- [x] **Out of this milestone**: the setup screen (128), deleting
       the harness account from the suite, a second administrator,
       a new syscall, and the `v1.0` tag
 

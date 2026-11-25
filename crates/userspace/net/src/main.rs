@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use galexy_abi::{
     Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DGRAM, NET_OP_DIAL, NET_OP_DNS,
     NET_OP_LINK, NET_OP_LISTEN, NET_OP_PING, NET_OP_RECV, NET_OP_RESOLVE, NET_OP_SERVE,
-    NET_OP_STREAM, PING_LOOKUP,
+    NET_OP_STREAM, NET_OP_TIME, PING_LOOKUP,
 };
 use galexy_net::Engine;
 use galexy_netcfg::{
@@ -25,8 +25,8 @@ use galexy_netcfg::{
     NAME_MAX,
 };
 use galexy_rt::{
-    chan_recv_poll, chan_send, channel, clock_ms, close, lane_pair, open, read, read_poll, seek,
-    sleep_ms, truncate, wire_read, wire_write, write, write_console, write_poll,
+    chan_recv_poll, chan_send, channel, clock_ms, close, date_set, lane_pair, open, read,
+    read_poll, seek, sleep_ms, truncate, wire_read, wire_write, write, write_console, write_poll,
 };
 use galexy_sec::Stamp;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -47,6 +47,10 @@ const MAX_GATES: usize = 8;
 const PENDING: usize = 4;
 /// Source port for a card datagram. Not 53, and not a program argument.
 const DGRAM_SPORT: u16 = 4598;
+/// Source port for one NTP query. The destination is [`galexy_net::NTP_PORT`].
+/// Not 53.
+const TIME_SPORT: u16 = 4123;
+const TIME_WAIT_MS: u64 = 3_000;
 
 fn main() {
     fill_random_once();
@@ -249,6 +253,10 @@ fn icmp_ok(stamp: &Stamp, object: &[u8]) -> bool {
     rule_allows(stamp, galexy_sec::VERB_ICMP, object)
 }
 
+fn time_ok(stamp: &Stamp, object: &[u8]) -> bool {
+    rule_allows(stamp, galexy_sec::VERB_TIME, object)
+}
+
 fn shell_stamp(stamp: &Stamp) -> bool {
     let name = &stamp.name[..stamp.name_len as usize];
     name == b"shell"
@@ -313,6 +321,7 @@ fn handle(
         NET_OP_ALLOW if admin => allow(rx, record, rest),
         NET_OP_SERVE if admin => serve(rx, engine, record, &stamp, actor_id, gates, rest),
         NET_OP_PING => ping(rx, engine, record, &stamp, rest, now),
+        NET_OP_TIME => time_query(rx, engine, record, &stamp, admin, rest, now),
         NET_OP_STREAM => stream(
             rx, engine, record, &stamp, actor_id, gates, rest, lives, seen,
         ),
@@ -1690,6 +1699,120 @@ fn two_fields(rest: &[u8]) -> Option<(&[u8], &[u8])> {
     Some((name, actor))
 }
 
+/// One NTP query. The administrative seat asks. A `net time` line in
+/// `/policy` names that seat and the address, or the DNS name. A name
+/// is one lookup on the pinned DNS-over-TLS resolver, then one packet
+/// to that address. No pin is the resolver's refusal, and no packet.
+/// No poll, no NTS, no plaintext DNS.
+fn time_query(
+    rx: Cap,
+    engine: &mut Engine,
+    record: &Record,
+    stamp: &Stamp,
+    admin: bool,
+    rest: &[u8],
+    now: u64,
+) {
+    if !admin {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    let (ip, object) = if rest.len() == 4 {
+        let ip = [rest[0], rest[1], rest[2], rest[3]];
+        if ip == [0, 0, 0, 0] || ip == [255, 255, 255, 255] {
+            reply(rx, b"bad\n", 0);
+            return;
+        }
+        let object = format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
+        if !time_ok(stamp, object.as_bytes()) {
+            reply(rx, b"access denied\n", 0);
+            return;
+        }
+        (ip, object)
+    } else {
+        let Some(name) = dns_rest(rest) else {
+            reply(rx, b"bad\n", 0);
+            return;
+        };
+        if !time_ok(stamp, name) {
+            reply(rx, b"access denied\n", 0);
+            return;
+        }
+        let ip = match lookup_dns(engine, record, name, now) {
+            Ok(ip) => ip,
+            Err(why) => {
+                reply_lookup(rx, why);
+                return;
+            }
+        };
+        if ip == [0, 0, 0, 0] || ip == [255, 255, 255, 255] {
+            reply(rx, b"bad\n", 0);
+            return;
+        }
+        let Ok(object) = core::str::from_utf8(name) else {
+            reply(rx, b"bad\n", 0);
+            return;
+        };
+        (ip, object.to_string())
+    };
+    if engine.locator().is_none() {
+        reply(rx, b"down\n", 0);
+        return;
+    }
+    let mut nonce = clock_ms().to_be_bytes();
+    if nonce == [0; 8] {
+        nonce[7] = 1;
+    }
+    let packet = galexy_net::ntp_request(nonce);
+    if !engine.udp_arm(ip, galexy_net::NTP_PORT, TIME_SPORT) {
+        reply(rx, b"bad\n", 0);
+        return;
+    }
+    if engine
+        .udp_send(ip, galexy_net::NTP_PORT, TIME_SPORT, &packet)
+        .is_err()
+    {
+        engine.udp_disarm();
+        reply(rx, b"down\n", 0);
+        return;
+    }
+    let start = clock_ms();
+    let mut payload = None;
+    while clock_ms().saturating_sub(start) < TIME_WAIT_MS {
+        pump(engine);
+        engine.poll(clock_ms());
+        pump(engine);
+        if let Some(got) = engine.udp_take() {
+            payload = Some(got);
+            break;
+        }
+        let _ = sleep_ms(20);
+    }
+    engine.udp_disarm();
+    let Some(payload) = payload else {
+        reply(rx, b"timed out\n", 0);
+        return;
+    };
+    let Some(secs) = galexy_net::ntp_unix(&payload, &nonce) else {
+        reply(rx, b"bad\n", 0);
+        return;
+    };
+    if !date_set(secs).ok {
+        reply(rx, b"bad\n", 0);
+        return;
+    }
+    let mut text = [0u8; 19];
+    if galexy_core::format_utc(secs, &mut text) != Some(19) {
+        reply(rx, b"bad\n", 0);
+        return;
+    }
+    let mut line = [0u8; 24];
+    line[..19].copy_from_slice(&text);
+    line[19..24].copy_from_slice(b" utc\n");
+    log(&format!("[net] time {object}"));
+    reply(rx, &line, 0);
+}
+
 fn datagram(rx: Cap, engine: &mut Engine, record: &Record, stamp: &Stamp, rest: &[u8]) {
     let Some((name, payload)) = name_and_body(rest) else {
         reply(rx, b"bad\n", 0);
@@ -2027,6 +2150,36 @@ struct Live {
     wire: Vec<u8>,
 }
 
+/// The pin for this dial. The address string wins when yes stored it.
+/// A named locator for the same address is the fallback.
+fn address_key(record: &Record, name: &[u8], ip: [u8; 4]) -> [u8; 32] {
+    if let Some(entry) = record.find(name) {
+        if entry.ip[..4] == ip {
+            return entry.key;
+        }
+    }
+    find_kind(record, KIND_ADDR, ip, None)
+        .or_else(|| find_kind(record, KIND_IPV4, ip, None))
+        .map(|entry| entry.key)
+        .unwrap_or([0; 32])
+}
+
+/// Stores a learned pin. An address has no row until yes, so that row
+/// is created here. A row that already holds a pin is left as it is.
+fn remember_pin(record: &mut Record, name: &[u8], key: [u8; 32]) -> bool {
+    if let Some((ip, port)) = parse_passed(name) {
+        let port = port.unwrap_or(22);
+        let known = record.find(name).map(|entry| entry.ip[..4] == ip);
+        if let Some(same) = known {
+            return same && record.remember_key(name, key).is_ok();
+        }
+        let mut wide = [0u8; 16];
+        wide[..4].copy_from_slice(&ip);
+        return record.allow(name, port, KIND_IPV4, wide, key).is_ok();
+    }
+    record.remember_key(name, key).is_ok()
+}
+
 fn stream_target(name: &[u8]) -> Option<([u8; 4], u16)> {
     let (ip, port) = parse_passed(name)?;
     let port = port.unwrap_or(22);
@@ -2060,17 +2213,10 @@ fn stream(
                 reply(rx, b"access denied\n", 0);
                 return;
             }
-            let key = find_kind(record, KIND_ADDR, ip, None)
-                .or_else(|| find_kind(record, KIND_IPV4, ip, None))
-                .map(|entry| entry.key)
-                .unwrap_or([0; 32]);
+            let key = address_key(record, name, ip);
             live_dial(rx, engine, actor_id, name, ip, port, key, lives, seen);
             return;
         }
-    }
-    if name.is_empty() || parse_passed(name).is_some() {
-        reply(rx, b"bad\n", 0);
-        return;
     }
     if dir == 3 || dir == 4 {
         let who = &stamp.name[..stamp.name_len as usize];
@@ -2087,13 +2233,17 @@ fn stream(
             reply(rx, b"bad\n", 0);
             return;
         };
-        if got.name.as_slice() != name || record.remember_key(name, got.key).is_err() {
+        if got.name.as_slice() != name || !remember_pin(record, name, got.key) {
             reply(rx, b"bad\n", 0);
             return;
         }
         save_record(record);
         audit(actor_id, name, &got.key, "remembered");
         reply(rx, b"ok\n", 0);
+        return;
+    }
+    if name.is_empty() || parse_passed(name).is_some() {
+        reply(rx, b"bad\n", 0);
         return;
     }
     let Some(entry) = record.find(name) else {
