@@ -457,7 +457,7 @@ pub const DISK_MAGIC: [u8; 4] = *b"GALF";
 /// Older images are refused with a serial line; there is no silent migrate.
 /// Milestone 99 records the desk-compile file count in the geometry and
 /// moves this with `galexy-galf`. The slot layout stays two 64 KiB seals.
-pub const DISK_VERSION: u16 = 17;
+pub const DISK_VERSION: u16 = 18;
 /// Sectors per metadata slot (64 KiB).
 pub const DISK_SECTORS: usize = 128;
 pub const DISK_SLOT_COUNT: usize = 2;
@@ -2759,40 +2759,24 @@ pub fn admin_root() -> u32 {
     ADMIN_ROOT.load(Ordering::Relaxed)
 }
 
-/// Creates `dir/name` under the admin root when it is missing.
-///
-/// A network name and a USB port both fit the existing object name
-/// (`NAME_CAP` is 64). This does not change `DISK_VERSION`.
-pub(crate) fn ensure_card(dir: &str, name: &str) -> Result<u32, SysError> {
-    if !component_ok(dir) || !component_ok(name) {
-        return Err(SysError::BadValue);
-    }
-    let mut table = TABLE.lock();
-    let root = admin_root();
-    if root == NO_OBJECT || (root as usize) >= table.objects.len() {
-        return Err(SysError::NotFound);
-    }
-    let dir_index = match find_child(&table, root, dir) {
-        Some(i) => {
-            if table.objects[i].kind != KIND_DIR {
-                return Err(SysError::Unsupported);
+/// Gives init the exact token on `/policy` when the file already exists.
+pub(crate) fn install_policy_token(tokens: &mut [Token; TOKEN_SLOTS]) {
+    let mut id = POLICY.load(Ordering::Acquire);
+    if id == NO_OBJECT {
+        let table = TABLE.lock();
+        let root = admin_root();
+        if root != NO_OBJECT {
+            if let Some(found) = find_child(&table, root, "policy") {
+                if table.objects[found].kind == KIND_FILE {
+                    id = found as u32;
+                    POLICY.store(id, Ordering::Release);
+                }
             }
-            i as u32
         }
-        None => make_child(&mut table, root, dir, KIND_DIR)?,
-    };
-    let file = match find_child(&table, dir_index, name) {
-        Some(i) => {
-            if table.objects[i].kind != KIND_FILE {
-                return Err(SysError::Unsupported);
-            }
-            i as u32
-        }
-        None => make_child(&mut table, dir_index, name, KIND_FILE)?,
-    };
-    drop(table);
-    mark_dirty();
-    Ok(file)
+    }
+    if id != NO_OBJECT {
+        let _ = galexy_galf::cards::push_token(tokens, id, RIGHT_READ | RIGHT_WRITE);
+    }
 }
 
 fn make_child(table: &mut Table, parent: u32, name: &str, kind: u8) -> Result<u32, SysError> {
@@ -3086,140 +3070,10 @@ pub fn apply_shares(root: u32, tokens: &mut [Token; TOKEN_SLOTS]) -> Result<(), 
         {
             continue;
         }
-        // `/card/out/<program>` is installed on that task at spawn.
-        // Login does not put it on the shell.
-        if outbound_task(&table, share.object).is_some() {
-            continue;
-        }
         // Ignore NoResource — login still succeeds with ALL on home.
         let _ = push_token(tokens, share.object, share.rights);
     }
     Ok(())
-}
-
-/// The program name when `object` is the file `/card/out/<program>`.
-fn outbound_task(table: &Table, object: u32) -> Option<&str> {
-    let obj = table.objects.get(object as usize)?;
-    if obj.kind != KIND_FILE {
-        return None;
-    }
-    let parent = table.objects.get(obj.parent as usize)?;
-    if parent.kind != KIND_DIR || !parent.name_is("out") {
-        return None;
-    }
-    let card = table.objects.get(parent.parent as usize)?;
-    if card.kind != KIND_DIR || !card.name_is("card") {
-        return None;
-    }
-    let n = obj.name_len as usize;
-    core::str::from_utf8(&obj.name[..n]).ok()
-}
-
-/// True when `tokens` holds read on the exact object `/card/out/<task>`.
-///
-/// An ancestor token, including admin's root, does not count.
-pub fn holds_outbound(tokens: &[Token; TOKEN_SLOTS], task: &str) -> bool {
-    if task.is_empty() || task.contains('/') {
-        return false;
-    }
-    let table = TABLE.lock();
-    tokens.iter().any(|token| {
-        token.is_live()
-            && token.rights & RIGHT_READ != 0
-            && outbound_task(&table, token.object) == Some(task)
-    })
-}
-
-/// Drops inherited outbound cards, then installs read on
-/// `/card/out/<task>` when the actor that owns `root` has that share.
-///
-/// A child does not keep a card it did not match. A second program of
-/// the same actor does not receive this one.
-pub fn install_outbound_card(root: u32, tokens: &mut [Token; TOKEN_SLOTS], task: &str) {
-    let object = {
-        let table = TABLE.lock();
-        for token in tokens.iter_mut() {
-            if token.is_live() && outbound_task(&table, token.object).is_some() {
-                *token = Token::empty();
-            }
-        }
-        if root == NO_OBJECT
-            || task.is_empty()
-            || task.contains('/')
-            || root as usize >= table.objects.len()
-        {
-            return;
-        }
-        let ai = table.objects[root as usize].actor;
-        let mut found = None;
-        for share in &table.shares {
-            if !share.used || share.grantee != ai || share.rights & RIGHT_READ == 0 {
-                continue;
-            }
-            if outbound_task(&table, share.object) == Some(task) {
-                found = Some(share.object);
-                break;
-            }
-        }
-        found
-    };
-    if let Some(object) = object {
-        let _ = push_token(tokens, object, RIGHT_READ);
-    }
-}
-
-/// Creates `/card/out/<program>` under the admin root when it is missing.
-///
-/// The file starts with no grant. `DISK_VERSION` stays put.
-pub fn ensure_outbound(program: &str) -> Result<u32, SysError> {
-    if !component_ok(program) {
-        return Err(SysError::BadValue);
-    }
-    let mut table = TABLE.lock();
-    let root = admin_root();
-    if root == NO_OBJECT || (root as usize) >= table.objects.len() {
-        return Err(SysError::NotFound);
-    }
-    let mut created = false;
-    let card = ensure_dir(&mut table, root, "card", &mut created)?;
-    let out = ensure_dir(&mut table, card, "out", &mut created)?;
-    let file = match find_child(&table, out, program) {
-        Some(i) => {
-            if table.objects[i].kind != KIND_FILE {
-                return Err(SysError::Unsupported);
-            }
-            i as u32
-        }
-        None => {
-            created = true;
-            make_child(&mut table, out, program, KIND_FILE)?
-        }
-    };
-    drop(table);
-    if created {
-        mark_dirty();
-    }
-    Ok(file)
-}
-
-fn ensure_dir(
-    table: &mut Table,
-    parent: u32,
-    name: &str,
-    created: &mut bool,
-) -> Result<u32, SysError> {
-    match find_child(table, parent, name) {
-        Some(i) => {
-            if table.objects[i].kind != KIND_DIR {
-                return Err(SysError::Unsupported);
-            }
-            Ok(i as u32)
-        }
-        None => {
-            *created = true;
-            make_child(table, parent, name, KIND_DIR)
-        }
-    }
 }
 
 /// True when `cred` holds every right on `object` (exact or ancestor token).
@@ -3801,8 +3655,26 @@ fn parent_link(table: &Table) -> impl Fn(u32) -> Option<u32> + '_ {
     }
 }
 
+static POLICY: AtomicU32 = AtomicU32::new(NO_OBJECT);
+
+/// The policy file is exact. An ancestor token does not cover it.
 fn covers_object(table: &Table, ancestor: u32, object: u32) -> bool {
+    if object == POLICY.load(Ordering::Acquire) && ancestor != object {
+        return false;
+    }
     galexy_galf::cards::covers(parent_link(table), ancestor, object, OBJECT_SLOTS)
+}
+
+/// `/policy` is the sec table. The creator receives the only write token.
+pub(crate) fn claim_policy_path(name: &str, id: u32, tokens: &mut [Token; TOKEN_SLOTS]) {
+    let Ok(parsed) = parse_path(name) else {
+        return;
+    };
+    if parsed.dir || parsed.n != 1 || parsed.comps[0] != "policy" {
+        return;
+    }
+    POLICY.store(id, Ordering::Release);
+    let _ = galexy_galf::cards::push_token(tokens, id, RIGHT_READ | RIGHT_WRITE);
 }
 
 /// Whether `cred` holds `need` on `object` or an ancestor.
@@ -3834,6 +3706,22 @@ fn lookup(table: &Table, cred: &FsCred, parsed: &ParsedPath<'_>) -> Result<(u32,
         return Err(SysError::NotFound);
     };
     Ok((parent, found))
+}
+
+/// Object id and its parent for a path the caller can read.
+pub(crate) fn path_object(
+    root: u32,
+    tokens: &[Token; TOKEN_SLOTS],
+    name: &str,
+) -> Result<(u32, u32), SysError> {
+    let id = open_file(root, tokens, name)?;
+    let table = TABLE.lock();
+    let parent = table
+        .objects
+        .get(id as usize)
+        .map(|obj| obj.parent)
+        .unwrap_or(NO_PARENT);
+    Ok((id, parent))
 }
 
 /// Looks up a file for open. Directory → `Unsupported` after the token check.
@@ -4932,6 +4820,7 @@ pub(crate) fn stat(
     out[44..48].copy_from_slice(&((size >> 32) as u32).to_le_bytes());
     out[8] = owner_len;
     out[9..9 + owner_len as usize].copy_from_slice(&actor.name[..owner_len as usize]);
+    out[galexy_abi::STAT_ID..galexy_abi::STAT_ID + 4].copy_from_slice(&index.to_le_bytes());
     Ok(STAT_LEN)
 }
 

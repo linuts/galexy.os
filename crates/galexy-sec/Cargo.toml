@@ -1,0 +1,8 @@
+[package]
+name = "galexy-sec"
+version = "0.1.0"
+edition = "2021"
+description = "The sec rule table. One verb, one object, one subject."
+
+[dependencies]
+galexy-abi = { path = "../galexy-abi" }

@@ -1,7 +1,6 @@
 //! dial — ask `net` for a name, twice, in one run.
 //!
-//! The shell Cap-waits. A missing card parks until the seat answers.
-//! The second call is the same task, so a repeated ask does not print.
+//! A missing sec rule is `access denied`. The program stays up.
 
 #![no_std]
 #![no_main]

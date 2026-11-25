@@ -1,5 +1,5 @@
-//! The SSH service. It is the listener `net` hands a lane to when
-//! write on `/card/ssh` is held. It does not parse TCP.
+//! The SSH service. `net` hands it a lane when a listen rule names
+//! `ssh`. It does not parse TCP.
 
 use galexy_abi::{
     Cap, FILE_CAP_BASE, SPAWN_CAP_SHIFT, SPAWN_NO_FG, SPAWN_WAIT, SPAWN_WITH_CAPS, TOKEN_WRITE,
@@ -14,16 +14,19 @@ fn main() {
     let mut told_denied = false;
     let mut listening = false;
     loop {
-        if listening {
-            write_console(b"ssh: wait\n");
-        }
         let Some((text, lane)) = ssh::stream(TOKEN_WRITE as u8) else {
             note_denied(&mut told_denied);
             let _ = sleep_ms(200);
             continue;
         };
+        if text.starts_with(b"idle") {
+            let _ = sleep_ms(200);
+            continue;
+        }
         if text.starts_with(b"attached") {
-            write_console(b"ssh: attached\n");
+            if !listening {
+                write_console(b"ssh: attached\n");
+            }
             told_denied = false;
             listening = true;
             continue;

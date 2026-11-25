@@ -598,7 +598,9 @@ fn answer_card(cap: Cap) -> bool {
     let Some(kind_at) = find_bytes(text, b" ask=") else {
         return false;
     };
-    let network = text[kind_at..].starts_with(b" ask=network");
+    if text[kind_at..].starts_with(b" ask=network") {
+        return false;
+    }
     let Some(name) = field(text, b"name=") else {
         return false;
     };
@@ -613,11 +615,7 @@ fn answer_card(cap: Cap) -> bool {
         return false;
     }
     write_console(name);
-    if network {
-        write_console(b" wants the network\n");
-    } else {
-        write_console(b" wants storage\n");
-    }
+    write_console(b" wants storage\n");
     let yes = read_yes();
     let result = if yes {
         grant(path, rights, name)

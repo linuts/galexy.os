@@ -213,7 +213,7 @@ fn main() -> i32 {
 
     note_omissions();
     ensure_net_record();
-    ensure_cards();
+    ensure_policy();
     for (i, svc) in SERVICES.iter().enumerate() {
         if svc.autostart && !OMIT[i].load(Ordering::Acquire) {
             let _ = spawn_svc(i);
@@ -221,6 +221,10 @@ fn main() -> i32 {
     }
     if find(b"net").is_some() {
         let _ = grant(b"/net", TOKEN_READ | TOKEN_WRITE, b"net");
+        let _ = grant(b"/policy", TOKEN_READ, b"net");
+    }
+    if find(b"usb").is_some() {
+        let _ = grant(b"/policy", TOKEN_READ, b"usb");
     }
     // `stamp` still holds a process Cap, so the sixteenth autostart
     // (`ssh`) did not fit. Wait it out, then start what missed.
@@ -458,6 +462,7 @@ fn handle(msg: &[u8]) {
         | galexy_abi::INIT_OP_EVERY
         | galexy_abi::INIT_OP_DATE_SET
         | galexy_abi::INIT_OP_AT
+        | galexy_abi::INIT_OP_SEC
             if !admin =>
         {
             reply(b"access denied\n")
@@ -469,6 +474,7 @@ fn handle(msg: &[u8]) {
         galexy_abi::INIT_OP_DROP => drop_notice(name),
         galexy_abi::INIT_OP_EVERY => every_svc(name, payload_u64(msg, start + name_len)),
         galexy_abi::INIT_OP_DATE_SET => date_set_cmd(name),
+        galexy_abi::INIT_OP_SEC => sec_line(name),
         galexy_abi::INIT_OP_AT => {
             let at = start + name_len;
             let Some(hour) = msg.get(at).copied() else {
@@ -525,45 +531,86 @@ fn line_eq(snap: &[u8], name: &[u8]) -> bool {
     false
 }
 
-/// Marks rows whose program is absent. A failed or empty snapshot keeps
-/// every row, so a query glitch does not drop the seats.
-/// Creates `/net` once. A record that is already there keeps its lease
-/// and directory across a restart of this task.
-/// `/card` holds one object per network name, plus `ping`. `/usb`
-/// holds one object per listed port. Init does not grant them.
-fn ensure_cards() {
-    let _ = create(b"/card/");
-    // One object per program. Init creates the directory and does not
-    // grant it. Read on `/card/out/<program>` is that program's dial.
-    let _ = create(b"/card/out/");
-    let ping = create(b"/card/ping");
-    if ping.ok {
-        let _ = close(Cap::from_bits(ping.value));
-    }
-    // Write accepts a session. Read opens one. Init does not grant it.
-    let ssh = create(b"/card/ssh");
-    if ssh.ok {
-        let _ = close(Cap::from_bits(ssh.value));
-    }
-    let _ = create(b"/usb/");
-    // Ports 1..=16 are the bits in the usb list header. The objects
-    // exist so admin's root covers them. Init does not grant them.
-    for port in 1u8..=16 {
-        let mut path = [0u8; 8];
-        path[..5].copy_from_slice(b"/usb/");
-        let end = if port >= 10 {
-            path[5] = b'0' + port / 10;
-            path[6] = b'0' + port % 10;
-            7
-        } else {
-            path[5] = b'0' + port;
-            6
-        };
-        let made = create(&path[..end]);
-        if made.ok {
-            let _ = close(Cap::from_bits(made.value));
+/// `/policy` is the sec table. The listen line for the guest SSH
+/// service is written once. A later boot keeps what is there.
+fn ensure_policy() {
+    let existing = open(b"/policy");
+    let cap = if existing.ok {
+        Cap::from_bits(existing.value)
+    } else {
+        let made = create(b"/policy");
+        if !made.ok {
+            return;
         }
+        Cap::from_bits(made.value)
+    };
+    let mut buf = [0u8; 64];
+    let got = read(cap, &mut buf);
+    if !got.ok || got.value == 0 {
+        let _ = write(cap, b"net listen *:4598 name ssh\n");
     }
+    let _ = close(cap);
+}
+
+fn sec_line(line: &[u8]) {
+    let line = trim_line(line);
+    if !galexy_sec::valid_line(line) {
+        reply(b"bad value\n");
+        return;
+    }
+    let got = open(b"/policy");
+    if !got.ok {
+        reply(b"access denied\n");
+        return;
+    }
+    let cap = Cap::from_bits(got.value);
+    let mut buf = [0u8; 4096];
+    let n = read(cap, &mut buf);
+    let len = if n.ok {
+        (n.value as usize).min(buf.len())
+    } else {
+        0
+    };
+    if line_present(&buf[..len], line) {
+        let _ = close(cap);
+        reply(b"ok\n");
+        return;
+    }
+    if len + line.len() + 1 > buf.len() {
+        let _ = close(cap);
+        reply(b"full\n");
+        return;
+    }
+    let _ = write(cap, line);
+    let _ = write(cap, b"\n");
+    let _ = close(cap);
+    reply(b"ok\n");
+}
+
+fn trim_line(mut text: &[u8]) -> &[u8] {
+    while text.first() == Some(&b' ') {
+        text = &text[1..];
+    }
+    while text.last() == Some(&b' ') || text.last() == Some(&b'\n') {
+        text = &text[..text.len() - 1];
+    }
+    text
+}
+
+fn line_present(text: &[u8], line: &[u8]) -> bool {
+    let mut rest = text;
+    while !rest.is_empty() {
+        let end = rest.iter().position(|b| *b == b'\n').unwrap_or(rest.len());
+        if trim_line(&rest[..end]) == line {
+            return true;
+        }
+        rest = if end == rest.len() {
+            b""
+        } else {
+            &rest[end + 1..]
+        };
+    }
+    false
 }
 
 fn ensure_net_record() {

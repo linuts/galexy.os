@@ -15,9 +15,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use galexy_abi::{
-    Cap, SysError, INIT_RPC_HDR, NET_HELD_OUT, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DGRAM,
-    NET_OP_DIAL, NET_OP_GRANT, NET_OP_LINK, NET_OP_LISTEN, NET_OP_PIN, NET_OP_PING, NET_OP_RECV,
-    NET_OP_RESOLVE, NET_OP_REVOKE, NET_OP_SERVE, NET_OP_STREAM, PING_LOOKUP,
+    Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DGRAM, NET_OP_DIAL, NET_OP_LINK,
+    NET_OP_LISTEN, NET_OP_PIN, NET_OP_PING, NET_OP_RECV, NET_OP_RESOLVE, NET_OP_SERVE,
+    NET_OP_STREAM, PING_LOOKUP,
 };
 use galexy_net::Engine;
 use galexy_netcfg::{
@@ -28,6 +28,7 @@ use galexy_rt::{
     chan_recv_poll, chan_send, channel, clock_ms, close, lane_pair, open, read, read_poll, seek,
     sleep_ms, truncate, wire_read, wire_write, write, write_console, write_poll,
 };
+use galexy_sec::Stamp;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{verify_tls13_signature, CryptoProvider};
 use rustls::pki_types::{CertificateDer, IpAddr, Ipv4Addr, PrivateKeyDer, ServerName, UnixTime};
@@ -170,6 +171,92 @@ struct Gate {
     pending: Vec<u8>,
 }
 
+fn stamp_of(msg: &[u8]) -> Stamp {
+    Stamp::from_header(msg).unwrap_or(Stamp {
+        entry: galexy_sec::NO_OBJECT,
+        parent: galexy_sec::NO_OBJECT,
+        name: [0; galexy_abi::SEC_NAME_MAX],
+        name_len: 0,
+    })
+}
+
+fn policy_text() -> Vec<u8> {
+    let got = open(b"/policy");
+    if !got.ok {
+        return Vec::new();
+    }
+    let cap = Cap::from_bits(got.value);
+    let mut buf = vec![0u8; 4096];
+    let n = read(cap, &mut buf);
+    let _ = close(cap);
+    if !n.ok {
+        return Vec::new();
+    }
+    let len = (n.value as usize).min(buf.len());
+    buf.truncate(len);
+    buf
+}
+
+fn rule_allows(stamp: &Stamp, verb: u8, object: &[u8]) -> bool {
+    let text = policy_text();
+    galexy_sec::allows(&text, stamp, verb, object)
+}
+
+fn dotted_port(ip: [u8; 4], port: u16) -> String {
+    format!("{}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], port)
+}
+
+fn ip_dial_ok(stamp: &Stamp, ip: [u8; 4], port: u16) -> bool {
+    let numeric = dotted_port(ip, port);
+    rule_allows(stamp, galexy_sec::VERB_DIAL, numeric.as_bytes())
+}
+
+fn name_dial_ok(stamp: &Stamp, name: &[u8], port: u16) -> bool {
+    if rule_allows(stamp, galexy_sec::VERB_DIAL, name) {
+        return true;
+    }
+    let Ok(host) = core::str::from_utf8(name) else {
+        return false;
+    };
+    if host.contains(':') {
+        return false;
+    }
+    let named = format!("{host}:{port}");
+    rule_allows(stamp, galexy_sec::VERB_DIAL, named.as_bytes())
+}
+
+fn host_port(name: &[u8]) -> Option<(&[u8], u16)> {
+    let colon = name.iter().rposition(|b| *b == b':')?;
+    if colon == 0 || colon + 1 >= name.len() {
+        return None;
+    }
+    let port = core::str::from_utf8(&name[colon + 1..])
+        .ok()?
+        .parse()
+        .ok()?;
+    if port == 0 {
+        return None;
+    }
+    Some((&name[..colon], port))
+}
+
+fn listen_ok(stamp: &Stamp, port: u16) -> bool {
+    let any = format!("*:{port}");
+    rule_allows(stamp, galexy_sec::VERB_LISTEN, any.as_bytes())
+}
+
+fn icmp_ok(stamp: &Stamp, object: &[u8]) -> bool {
+    rule_allows(stamp, galexy_sec::VERB_ICMP, object)
+}
+
+fn shell_stamp(stamp: &Stamp) -> bool {
+    let name = &stamp.name[..stamp.name_len as usize];
+    name == b"shell"
+        || (name.starts_with(b"shell")
+            && name.len() > 5
+            && name[5..].iter().all(|b| b.is_ascii_digit()))
+}
+
 fn handle(
     msg: &[u8],
     rx: Cap,
@@ -188,8 +275,9 @@ fn handle(
     }
     let admin = msg[0] == 1;
     let mut id_bytes = [0u8; 8];
-    id_bytes.copy_from_slice(&msg[4..12]);
+    id_bytes.copy_from_slice(&msg[12..20]);
     let actor_id = u64::from_le_bytes(id_bytes);
+    let stamp = stamp_of(msg);
     let body = &msg[INIT_RPC_HDR..];
     let op = body[0];
     let rest = &body[1..];
@@ -213,26 +301,22 @@ fn handle(
             }
         }
         NET_OP_DIAL => dial(
-            rx, engine, record, admin, actor_id, msg[2], rest, now, plains,
+            rx, engine, record, admin, actor_id, &stamp, rest, now, plains,
         ),
-        NET_OP_RESOLVE => resolve(rx, engine, record, actor_id, msg[2], rest, now),
+        NET_OP_RESOLVE => resolve(rx, engine, record, actor_id, &stamp, rest, now),
         NET_OP_PIN if admin => pin(rx, engine, record, rest, now),
         NET_OP_PIN => reply(rx, b"not admin\n", 0),
-        NET_OP_BIND => bind_local(rx, engine, record, msg[2], rest),
-        NET_OP_LISTEN => listen(rx, engine, record, msg[2], actor_id, gates, rest),
-        NET_OP_DGRAM => datagram(rx, engine, record, msg[2], rest),
-        NET_OP_RECV => datagram_recv(rx, engine, record, msg[2], rest),
+        NET_OP_BIND => bind_local(rx, engine, record, admin, rest),
+        NET_OP_LISTEN => listen(rx, engine, record, &stamp, actor_id, gates, rest),
+        NET_OP_DGRAM => datagram(rx, engine, record, &stamp, rest),
+        NET_OP_RECV => datagram_recv(rx, engine, record, &stamp, rest),
         NET_OP_ALLOW if admin => allow(rx, record, rest),
-        NET_OP_GRANT if admin => grant_op(rx, record, rest, true),
-        NET_OP_REVOKE if admin => grant_op(rx, record, rest, false),
-        NET_OP_SERVE if admin => serve(rx, engine, record, msg[2], actor_id, gates, rest),
-        NET_OP_PING => ping(rx, engine, record, msg[2], rest, now),
+        NET_OP_SERVE if admin => serve(rx, engine, record, &stamp, actor_id, gates, rest),
+        NET_OP_PING => ping(rx, engine, record, &stamp, rest, now),
         NET_OP_STREAM => stream(
-            rx, engine, record, msg[2], actor_id, gates, rest, lives, seen,
+            rx, engine, record, &stamp, actor_id, gates, rest, lives, seen,
         ),
-        NET_OP_ALLOW | NET_OP_GRANT | NET_OP_REVOKE | NET_OP_SERVE => {
-            reply(rx, b"access denied\n", 0);
-        }
+        NET_OP_ALLOW | NET_OP_SERVE => reply(rx, b"access denied\n", 0),
         _ => reply(rx, b"bad\n", 0),
     }
 }
@@ -243,7 +327,7 @@ fn dial(
     record: &Record,
     _admin: bool,
     actor_id: u64,
-    held: u8,
+    stamp: &Stamp,
     rest: &[u8],
     now: u64,
     plains: &mut Vec<Plain>,
@@ -252,16 +336,15 @@ fn dial(
         reply(rx, b"bad\n", 0);
         return;
     };
-    // Read on the card is dial. The check is the held bit from the
-    // kernel. A passed address is not a directory name. The outbound
-    // bit dials a name or an address without that name's card.
+    // An address matches an address rule. A name matches a name rule.
+    // The pin, when one is stored, still chooses TLS.
     if let Some((ip, passed_port)) = parse_passed(name) {
         dial_passed(
             rx,
             engine,
             record,
             actor_id,
-            held,
+            stamp,
             ip,
             passed_port,
             now,
@@ -269,49 +352,49 @@ fn dial(
         );
         return;
     }
-    let Some(entry) = record.find(name) else {
+    if let Some(entry) = record.find(name) {
+        let (ip, port, key) = match entry.kind {
+            KIND_IPV4 => {
+                let ip = [entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]];
+                (ip, entry.port, entry.key)
+            }
+            KIND_DNS => match lookup_dns(engine, record, name, now) {
+                Ok(ip) => (ip, entry.port, entry.key),
+                Err(why) => {
+                    reply_lookup(rx, why);
+                    return;
+                }
+            },
+            _ => {
+                reply(rx, b"unsupported\n", 0);
+                return;
+            }
+        };
+        if port == 0 || ip == [0, 0, 0, 0] || !name_dial_ok(stamp, name, port) {
+            audit(actor_id, name, &key, "denied");
+            reply(rx, b"access denied\n", 0);
+            return;
+        }
+        open_client(
+            rx, engine, actor_id, name, ip, port, &key, now, true, plains,
+        );
+        return;
+    }
+    let Some((host, port)) = host_port(name) else {
         audit(actor_id, name, &[0; 32], "missing");
         reply(rx, b"access denied\n", 0);
         return;
     };
-    if held & 1 == 0 {
-        audit(actor_id, name, &entry.key, "denied");
+    if !name_dial_ok(stamp, name, port) {
         reply(rx, b"access denied\n", 0);
         return;
     }
-    let (ip, port, key) = match entry.kind {
-        KIND_IPV4 => {
-            let ip = [entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]];
-            (ip, entry.port, entry.key)
-        }
-        KIND_DNS => match lookup_dns(engine, record, name, now) {
-            Ok(ip) => (ip, entry.port, entry.key),
-            Err(why) => {
-                reply_lookup(rx, why);
-                return;
-            }
-        },
-        _ => {
-            reply(rx, b"unsupported\n", 0);
-            return;
-        }
-    };
-    if port == 0 || ip == [0, 0, 0, 0] {
-        reply(rx, b"access denied\n", 0);
-        return;
+    match lookup_dns(engine, record, host, now) {
+        Ok(ip) => open_client(
+            rx, engine, actor_id, name, ip, port, &[0; 32], now, true, plains,
+        ),
+        Err(why) => reply_lookup(rx, why),
     }
-    open_client(
-        rx,
-        engine,
-        actor_id,
-        name,
-        ip,
-        port,
-        &key,
-        now,
-        held & NET_HELD_OUT != 0,
-        plains,
-    );
 }
 
 fn dial_passed(
@@ -319,64 +402,35 @@ fn dial_passed(
     engine: &mut Engine,
     record: &Record,
     actor_id: u64,
-    held: u8,
+    stamp: &Stamp,
     ip: [u8; 4],
     passed_port: Option<u16>,
     now: u64,
     plains: &mut Vec<Plain>,
 ) {
-    let outbound = held & NET_HELD_OUT != 0;
-    if held & 1 == 0 || ip == [0, 0, 0, 0] {
+    if ip == [0, 0, 0, 0] {
         reply(rx, b"access denied\n", 0);
         return;
     }
     let stored = find_kind(record, KIND_ADDR, ip, None);
-    if outbound {
-        // A stored address keeps its pin. The port in the dial does
-        // not need a second card. An address that is not stored is
-        // plaintext on the port the program passed.
-        let port = if let Some(port) = passed_port {
-            port
-        } else if let Some(addr) = stored {
-            addr.port
-        } else {
-            reply(rx, b"access denied\n", 0);
-            return;
-        };
-        if port == 0 {
-            reply(rx, b"access denied\n", 0);
-            return;
-        }
-        let key = stored.map(|addr| addr.key).unwrap_or([0; 32]);
-        let label = stored
-            .map(|addr| addr.name_bytes().to_vec())
-            .unwrap_or_default();
-        open_client(
-            rx, engine, actor_id, &label, ip, port, &key, now, true, plains,
-        );
-        return;
-    }
-    let Some(addr) = stored else {
-        reply(rx, b"access denied\n", 0);
-        return;
-    };
     let port = if let Some(port) = passed_port {
-        if find_kind(record, KIND_PORT, ip, Some(port)).is_none() {
-            reply(rx, b"access denied\n", 0);
-            return;
-        }
         port
-    } else {
+    } else if let Some(addr) = stored {
         addr.port
+    } else {
+        reply(rx, b"access denied\n", 0);
+        return;
     };
-    if port == 0 {
+    if port == 0 || !ip_dial_ok(stamp, ip, port) {
         reply(rx, b"access denied\n", 0);
         return;
     }
-    let key = addr.key;
-    let label = addr.name_bytes().to_vec();
+    let key = stored.map(|addr| addr.key).unwrap_or([0; 32]);
+    let label = stored
+        .map(|addr| addr.name_bytes().to_vec())
+        .unwrap_or_else(|| dotted_port(ip, port).into_bytes());
     open_client(
-        rx, engine, actor_id, &label, ip, port, &key, now, false, plains,
+        rx, engine, actor_id, &label, ip, port, &key, now, true, plains,
     );
 }
 
@@ -712,7 +766,7 @@ fn resolve(
     engine: &mut Engine,
     record: &Record,
     _actor_id: u64,
-    held: u8,
+    stamp: &Stamp,
     rest: &[u8],
     now: u64,
 ) {
@@ -720,7 +774,7 @@ fn resolve(
         reply(rx, b"bad\n", 0);
         return;
     };
-    if held & 1 == 0 || record.find(name).is_none_or(|entry| entry.kind != KIND_DNS) {
+    if !shell_stamp(stamp) && !name_dial_ok(stamp, name, 853) {
         reply(rx, b"access denied\n", 0);
         return;
     }
@@ -785,12 +839,12 @@ fn pin(rx: Cap, engine: &mut Engine, record: &mut Record, rest: &[u8], now: u64)
     reply(rx, b"ok\n", 0);
 }
 
-fn bind_local(rx: Cap, engine: &mut Engine, record: &Record, held: u8, rest: &[u8]) {
+fn bind_local(rx: Cap, engine: &mut Engine, record: &Record, admin: bool, rest: &[u8]) {
     let Some(name) = one_name(rest) else {
         reply(rx, b"bad\n", 0);
         return;
     };
-    if held & 2 == 0 {
+    if !admin {
         reply(rx, b"access denied\n", 0);
         return;
     }
@@ -1392,29 +1446,11 @@ fn allow(rx: Cap, record: &mut Record, rest: &[u8]) {
     reply(rx, b"ok\n", 0);
 }
 
-fn grant_op(rx: Cap, record: &mut Record, rest: &[u8], grant: bool) {
-    let Some((name, actor)) = two_fields(rest) else {
-        reply(rx, b"bad\n", 0);
-        return;
-    };
-    let result = if grant {
-        record.grant(name, actor)
-    } else {
-        record.revoke(name, actor)
-    };
-    if result.is_err() {
-        reply(rx, b"missing\n", 0);
-        return;
-    }
-    save_record(record);
-    reply(rx, b"ok\n", 0);
-}
-
 fn serve(
     rx: Cap,
     engine: &mut Engine,
     record: &Record,
-    held: u8,
+    stamp: &Stamp,
     actor_id: u64,
     gates: &mut Vec<Gate>,
     rest: &[u8],
@@ -1424,8 +1460,7 @@ fn serve(
         reply(rx, b"missing\n", 0);
         return;
     };
-    // Write on the name's object is accept. No token, no listener.
-    if held & 2 == 0 {
+    if !listen_ok(stamp, entry.port) {
         reply(rx, b"access denied\n", 0);
         return;
     }
@@ -1438,7 +1473,7 @@ fn listen(
     rx: Cap,
     engine: &mut Engine,
     record: &Record,
-    held: u8,
+    stamp: &Stamp,
     actor_id: u64,
     gates: &mut Vec<Gate>,
     rest: &[u8],
@@ -1447,14 +1482,14 @@ fn listen(
         reply(rx, b"bad\n", 0);
         return;
     };
-    if held & 2 == 0 {
-        reply(rx, b"access denied\n", 0);
-        return;
-    }
     let Some(port) = parse_port(name) else {
         reply(rx, b"access denied\n", 0);
         return;
     };
+    if !listen_ok(stamp, port) {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
     let Some(entry) = record.find(name) else {
         reply(rx, b"access denied\n", 0);
         return;
@@ -1502,7 +1537,7 @@ fn hand_gate(
         return;
     }
     let start = clock_ms();
-    let id = match next_inbound(engine, gates, port, start) {
+    let id = match next_inbound(engine, gates, port, true) {
         Ok(id) => id,
         Err(why) => {
             audit(actor_id, name, &key, why);
@@ -1549,12 +1584,16 @@ fn next_inbound(
     engine: &mut Engine,
     gates: &mut Vec<Gate>,
     port: u16,
-    start: u64,
+    wait: bool,
 ) -> Result<u8, &'static str> {
+    let start = clock_ms();
     loop {
         enqueue_accepted(engine, gates);
         if let Some(id) = take_pending(gates, port) {
             return Ok(id);
+        }
+        if !wait {
+            return Err("idle");
         }
         if clock_ms().saturating_sub(start) >= HANDSHAKE_MS.saturating_mul(3) {
             return Err("deadline");
@@ -1651,13 +1690,13 @@ fn two_fields(rest: &[u8]) -> Option<(&[u8], &[u8])> {
     Some((name, actor))
 }
 
-fn datagram(rx: Cap, engine: &mut Engine, record: &Record, held: u8, rest: &[u8]) {
+fn datagram(rx: Cap, engine: &mut Engine, record: &Record, stamp: &Stamp, rest: &[u8]) {
     let Some((name, payload)) = name_and_body(rest) else {
         reply(rx, b"bad\n", 0);
         return;
     };
     // Read sends. Write does not capture, and it does not send.
-    let Some((ip, port)) = dgram_peer(record, held, name) else {
+    let Some((ip, port)) = dgram_peer(record, stamp, name) else {
         reply(rx, b"access denied\n", 0);
         return;
     };
@@ -1683,13 +1722,13 @@ fn datagram(rx: Cap, engine: &mut Engine, record: &Record, held: u8, rest: &[u8]
     reply(rx, b"ok\n", 0);
 }
 
-fn datagram_recv(rx: Cap, engine: &mut Engine, record: &Record, held: u8, rest: &[u8]) {
+fn datagram_recv(rx: Cap, engine: &mut Engine, record: &Record, stamp: &Stamp, rest: &[u8]) {
     let Some(name) = one_name(rest) else {
         reply(rx, b"bad\n", 0);
         return;
     };
     // Read receives from the stored peer. Write does not capture.
-    let Some((ip, port)) = dgram_peer(record, held, name) else {
+    let Some((ip, port)) = dgram_peer(record, stamp, name) else {
         reply(rx, b"access denied\n", 0);
         return;
     };
@@ -1720,16 +1759,16 @@ fn datagram_recv(rx: Cap, engine: &mut Engine, record: &Record, held: u8, rest: 
 }
 
 /// Read on a datagram card names one peer. Port 53 is not that peer.
-fn dgram_peer(record: &Record, held: u8, name: &[u8]) -> Option<([u8; 4], u16)> {
-    if held & 1 == 0 {
-        return None;
-    }
+fn dgram_peer(record: &Record, stamp: &Stamp, name: &[u8]) -> Option<([u8; 4], u16)> {
     let entry = record.find(name)?;
     if entry.kind != KIND_DGRAM || entry.port == 0 || entry.port == 53 {
         return None;
     }
     let ip = [entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]];
     if ip == [0, 0, 0, 0] || ip == [255, 255, 255, 255] {
+        return None;
+    }
+    if !ip_dial_ok(stamp, ip, entry.port) && !name_dial_ok(stamp, name, entry.port) {
         return None;
     }
     Some((ip, entry.port))
@@ -1748,8 +1787,17 @@ fn name_and_body(rest: &[u8]) -> Option<(&[u8], &[u8])> {
     Some((name, &rest[at + 1..at + 1 + plen]))
 }
 
-fn ping(rx: Cap, engine: &mut Engine, record: &Record, held: u8, rest: &[u8], now: u64) {
-    if held & 1 == 0 {
+fn ping(rx: Cap, engine: &mut Engine, record: &Record, stamp: &Stamp, rest: &[u8], now: u64) {
+    let owned;
+    let object: &[u8] = if rest.len() == 4 {
+        owned = format!("{}.{}.{}.{}", rest[0], rest[1], rest[2], rest[3]);
+        owned.as_bytes()
+    } else if rest.first() == Some(&PING_LOOKUP) {
+        one_name(&rest[1..]).unwrap_or(b"*")
+    } else {
+        dns_rest(rest).unwrap_or(b"*")
+    };
+    if !icmp_ok(stamp, object) {
         reply(rx, b"access denied\n", 0);
         return;
     }
@@ -1979,11 +2027,21 @@ struct Live {
     wire: Vec<u8>,
 }
 
+fn stream_target(name: &[u8]) -> Option<([u8; 4], u16)> {
+    let (ip, port) = parse_passed(name)?;
+    let port = port.unwrap_or(22);
+    if port == 0 {
+        None
+    } else {
+        Some((ip, port))
+    }
+}
+
 fn stream(
     rx: Cap,
     engine: &mut Engine,
     record: &mut Record,
-    held: u8,
+    stamp: &Stamp,
     actor_id: u64,
     gates: &mut Vec<Gate>,
     rest: &[u8],
@@ -1996,12 +2054,27 @@ fn stream(
     }
     let dir = rest[0];
     let name = &rest[1..];
+    if dir == 1 {
+        if let Some((ip, port)) = stream_target(name) {
+            if !ip_dial_ok(stamp, ip, port) {
+                reply(rx, b"access denied\n", 0);
+                return;
+            }
+            let key = find_kind(record, KIND_ADDR, ip, None)
+                .or_else(|| find_kind(record, KIND_IPV4, ip, None))
+                .map(|entry| entry.key)
+                .unwrap_or([0; 32]);
+            live_dial(rx, engine, actor_id, name, ip, port, key, lives, seen);
+            return;
+        }
+    }
     if name.is_empty() || parse_passed(name).is_some() {
         reply(rx, b"bad\n", 0);
         return;
     }
     if dir == 3 || dir == 4 {
-        if held & 1 == 0 {
+        let who = &stamp.name[..stamp.name_len as usize];
+        if who != b"ssh-open" && !shell_stamp(stamp) {
             reply(rx, b"access denied\n", 0);
             return;
         }
@@ -2028,7 +2101,7 @@ fn stream(
         return;
     };
     if dir == 2 {
-        if held & 2 == 0 {
+        if !listen_ok(stamp, entry.port) {
             reply(rx, b"access denied\n", 0);
             return;
         }
@@ -2036,7 +2109,8 @@ fn stream(
             rx, engine, actor_id, gates, name, entry.port, entry.key, lives,
         );
     } else if dir == 1 {
-        if held & 1 == 0 {
+        let ip = [entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]];
+        if !ip_dial_ok(stamp, ip, entry.port) && !name_dial_ok(stamp, name, entry.port) {
             reply(rx, b"access denied\n", 0);
             return;
         }
@@ -2044,7 +2118,6 @@ fn stream(
             reply(rx, b"unsupported\n", 0);
             return;
         }
-        let ip = [entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]];
         live_dial(
             rx, engine, actor_id, name, ip, entry.port, entry.key, lives, seen,
         );
@@ -2093,9 +2166,12 @@ fn live_accept(
         reply(rx, b"attached\n", 0);
         return;
     }
-    let start = clock_ms();
-    let id = match next_inbound(engine, gates, port, start) {
+    let id = match next_inbound(engine, gates, port, false) {
         Ok(id) => id,
+        Err("idle") => {
+            reply(rx, b"idle\n", 0);
+            return;
+        }
         Err(why) => {
             audit(actor_id, name, &key, why);
             reply(rx, b"timed out\n", 0);

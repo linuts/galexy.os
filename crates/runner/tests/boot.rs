@@ -1161,32 +1161,6 @@ fn share_disk_persists_across_reboot() {
         best.shares.iter().any(|s| s.used),
         "host decode must see a used share slot"
     );
-    let dial = best.objects.iter().position(|obj| {
-        obj.kind == galexy_galf::KIND_FILE && &obj.name[..obj.name_len as usize] == b"dial"
-    });
-    let Some(dial) = dial else {
-        panic!("sealed slot has no /card/out/dial object");
-    };
-    let out = best.objects[dial].parent as usize;
-    assert!(
-        out < best.objects.len()
-            && best.objects[out].kind == galexy_galf::KIND_DIR
-            && &best.objects[out].name[..best.objects[out].name_len as usize] == b"out",
-        "dial's parent is the out directory"
-    );
-    let card = best.objects[out].parent as usize;
-    assert!(
-        card < best.objects.len()
-            && best.objects[card].kind == galexy_galf::KIND_DIR
-            && &best.objects[card].name[..best.objects[card].name_len as usize] == b"card",
-        "out's parent is the card directory"
-    );
-    assert!(
-        best.shares
-            .iter()
-            .any(|share| { share.used && share.object == dial as u32 && share.rights & 1 != 0 }),
-        "host decode must see the outbound share"
-    );
 }
 
 #[test]
@@ -6693,10 +6667,8 @@ fn resolver_pin_still_wins() {
     );
 }
 
-/// Milestone 84, after 105: admin's root card covers a name once `net
-/// allow` creates it, so `fetch` connects. A different key still
-/// handshakes and is refused. A seat with no card is
-/// [`cards_and_asks_typing_e2e`].
+/// A `sec` dial rule lets `fetch` connect. A different key still
+/// handshakes and is refused. No rule is `access denied`.
 #[test]
 fn fetch_grant_typing_e2e() {
     let (cert_der, key_der, pin) = host_echo_cert();
@@ -6710,12 +6682,12 @@ fn fetch_grant_typing_e2e() {
         &[
             (save_pin.as_str(), "admin@galexy>"),
             ("net allow echo 10.0.2.2:4582 k", "ok"),
-            ("fetch echo", "lane ok"),
-            ("net grant echo admin", "ok"),
+            ("fetch echo", "access denied"),
+            ("sec net dial echo:4582 fetch", "ok"),
             ("fetch echo", "lane ok"),
             (save_wrong.as_str(), "admin@galexy>"),
             ("net allow bad 10.0.2.2:4582 b", "ok"),
-            ("net grant bad admin", "ok"),
+            ("sec net dial bad:4582 fetch", "ok"),
             ("fetch bad", "access denied"),
         ],
         "access denied",
@@ -6736,15 +6708,13 @@ fn fetch_grant_typing_e2e() {
     );
     let n = hits.load(Ordering::Relaxed);
     assert_eq!(
-        n, 3,
-        "admin's two echo dials and the wrong-key dial; got {n}; serial:\n{serial}"
+        n, 2,
+        "the allowed echo dial and the wrong-key dial; got {n}; serial:\n{serial}"
     );
 }
 
-/// Milestone 105–107: a seat without the card cannot dial, ping, or
-/// accept. `dial` and `cat` park until the seat answers. No is
-/// `AccessDenied` and the program stays up. Yes installs a token for
-/// that run only. A second ask in the same run does not print.
+/// A program dials only when a `sec` rule names it. No rule is
+/// `access denied` and `dial` stays up. Storage asks are unchanged.
 #[test]
 fn cards_and_asks_typing_e2e() {
     let (cert_der, key_der, pin) = host_echo_cert();
@@ -6758,7 +6728,8 @@ fn cards_and_asks_typing_e2e() {
         .collect();
     owned.extend(type_line(save_pin.as_str(), "admin@galexy>"));
     owned.extend(type_line("net allow echo 10.0.2.2:4584 k", "ok"));
-    // Admin holds the root card. This run does not ask.
+    owned.extend(type_line("dial echo", "still up"));
+    owned.extend(type_line("sec net dial echo:4584 dial", "ok"));
     owned.extend(type_line("dial echo", "lane ok"));
     owned.extend(type_line("useradd eve", "Password: "));
     owned.extend([
@@ -6778,10 +6749,7 @@ fn cards_and_asks_typing_e2e() {
     owned.extend(type_line("fetch echo", "access denied"));
     owned.extend(type_line("ping 10.0.2.2", "access denied"));
     owned.extend(type_line("net serve echo", "access denied"));
-    owned.extend(type_line("dial echo", "wants the network"));
-    owned.extend(type_line("no", "still up"));
-    owned.extend(type_line("dial echo", "wants the network"));
-    owned.extend(type_line("yes", "lane ok"));
+    owned.extend(type_line("dial echo", "lane ok"));
     owned.push(("f1".to_string(), "[tty] 1".to_string()));
     owned.extend(type_line("cd Desktop", "admin@galexy:/Desktop> "));
     owned.extend(type_line("echo hi > note", "admin@galexy:/Desktop> "));
@@ -6813,13 +6781,8 @@ fn cards_and_asks_typing_e2e() {
     );
     let eve = serial.find("eve@galexy>").expect("eve never logged in");
     assert!(
-        !serial[..eve].contains("wants the network"),
-        "admin's dial asked; serial:\n{serial}"
-    );
-    assert_eq!(
-        serial.matches("wants the network").count(),
-        2,
-        "one prompt per dial run; serial:\n{serial}"
+        serial[..eve].contains("access denied"),
+        "a dial with no rule was allowed; serial:\n{serial}"
     );
     assert_eq!(
         serial.matches("wants storage").count(),
@@ -6852,10 +6815,9 @@ fn cards_and_asks_typing_e2e() {
     );
 }
 
-/// Milestone 108: `connect` is `TcpStream::connect`. A name asks, then
-/// dials. UDP and a timeout stay `unsupported`. An address or a bind
-/// with no card is `access denied` and opens no TCP. No leaves the
-/// program up. Yes reads the lane.
+/// `connect` is `TcpStream::connect`. A `sec` rule names the program.
+/// UDP and a timeout stay `unsupported`. An address with no rule is
+/// `access denied` and the program stays up.
 #[test]
 fn connect_asks_then_dials() {
     let (cert_der, key_der, pin) = host_echo_cert();
@@ -6869,6 +6831,7 @@ fn connect_asks_then_dials() {
         .collect();
     owned.extend(type_line(save_pin.as_str(), "admin@galexy>"));
     owned.extend(type_line("net allow echo 10.0.2.2:4586 k", "ok"));
+    owned.extend(type_line("sec net dial echo:4586 connect", "ok"));
     owned.extend(type_line("useradd eve", "Password: "));
     owned.extend([
         ("e".to_string(), "*".to_string()),
@@ -6888,10 +6851,7 @@ fn connect_asks_then_dials() {
     owned.extend(type_line("connect --udp", "unsupported"));
     owned.extend(type_line("connect --timeout", "unsupported"));
     owned.extend(type_line("connect 10.0.2.2:9", "access denied"));
-    owned.extend(type_line("connect echo", "wants the network"));
-    owned.extend(type_line("no", "still up"));
-    owned.extend(type_line("connect echo", "wants the network"));
-    owned.extend(type_line("yes", "lane ok"));
+    owned.extend(type_line("connect echo", "lane ok"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
         .map(|(code, echo)| (code.as_str(), echo.as_str()))
@@ -6915,13 +6875,8 @@ fn connect_asks_then_dials() {
     );
     let eve = serial.find("eve@galexy>").expect("eve never logged in");
     assert!(
-        !serial[..eve].contains("wants the network"),
-        "the seat was asked before eve ran connect; serial:\n{serial}"
-    );
-    assert_eq!(
-        serial.matches("wants the network").count(),
-        2,
-        "one prompt per connect run; serial:\n{serial}"
+        !serial[..eve].contains("lane ok"),
+        "connect dialed before its rule was used; serial:\n{serial}"
     );
     assert!(
         serial.matches("unsupported").count() >= 2,
@@ -6933,16 +6888,15 @@ fn connect_asks_then_dials() {
     );
     assert!(
         serial.contains("still up"),
-        "no must leave the program up; serial:\n{serial}"
+        "a refusal must leave the program up; serial:\n{serial}"
     );
     assert!(
         !serial.contains("task 'connect' killed"),
-        "a no must not kill the program; serial:\n{serial}"
+        "a refusal must not kill the program; serial:\n{serial}"
     );
-    let yes_at = serial.rfind("wants the network").expect("yes prompt");
     assert!(
-        serial[yes_at..].contains("lane ok"),
-        "yes did not read the lane; serial:\n{serial}"
+        serial.contains("lane ok"),
+        "the ruled dial did not read the lane; serial:\n{serial}"
     );
     assert_eq!(
         hits.load(Ordering::Relaxed),
@@ -6951,9 +6905,8 @@ fn connect_asks_then_dials() {
     );
 }
 
-/// Milestone 103: `lane.read` dials a granted name and prints the body.
-/// Milestone 109: `socket.connect` on a seat without the card asks.
-/// No is `OSError` and opens no TCP. Yes prints the same body.
+/// `lane.read` dials when a `sec` rule names the script file.
+/// `socket.connect` on a script with no rule raises `OSError`.
 #[test]
 fn python_lane_typing_e2e() {
     if env!("GALEXY_HAVE_PYTHON") != "1" || env!("GALEXY_HAVE_DESK") != "1" {
@@ -6971,11 +6924,11 @@ fn python_lane_typing_e2e() {
         .collect();
     owned.extend(type_line(save_pin.as_str(), "admin@galexy>"));
     owned.extend(type_line("net allow echo 10.0.2.2:4582 k", "ok"));
-    owned.extend(type_line("net grant echo admin", "ok"));
     owned.extend(type_line(
         "echo print(lane.read(\"echo\")) > lane.py",
         "admin@galexy>",
     ));
+    owned.extend(type_line("sec net dial echo:4582 /lane.py", "ok"));
     owned.extend(type_line("python lane.py", "lane ok"));
     owned.extend(type_line("useradd eve", "Password: "));
     owned.extend([
@@ -6996,10 +6949,7 @@ fn python_lane_typing_e2e() {
         "echo import socket; print(socket.connect(\"echo\")) > sock.py",
         "eve@galexy>",
     ));
-    owned.extend(type_line("python sock.py", "wants the network"));
-    owned.extend(type_line("no", "OSError"));
-    owned.extend(type_line("python sock.py", "wants the network"));
-    owned.extend(type_line("yes", "lane ok"));
+    owned.extend(type_line("python sock.py", "OSError"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
         .map(|(code, echo)| (code.as_str(), echo.as_str()))
@@ -7008,7 +6958,7 @@ fn python_lane_typing_e2e() {
         &image("galexy-os-desk"),
         &keys,
         "[boot] main loop ready",
-        "lane ok",
+        "OSError",
         Duration::from_millis(30),
         Duration::from_secs(900),
     );
@@ -7027,31 +6977,17 @@ fn python_lane_typing_e2e() {
         "admin's lane.read did not print the body; serial:\n{serial}"
     );
     assert!(
-        !serial[..eve].contains("wants the network"),
-        "admin's lane.read asked; serial:\n{serial}"
-    );
-    assert_eq!(
-        serial.matches("wants the network").count(),
-        2,
-        "one prompt per socket.connect; serial:\n{serial}"
-    );
-    assert!(
         serial.contains("OSError"),
-        "a denied connect was not OSError; serial:\n{serial}"
+        "a script with no rule was not OSError; serial:\n{serial}"
     );
     assert!(
         !serial.contains("task 'python' killed"),
-        "a no must not kill the interpreter; serial:\n{serial}"
-    );
-    let yes_at = serial.rfind("wants the network").expect("yes prompt");
-    assert!(
-        serial[yes_at..].contains("lane ok"),
-        "yes did not read the lane; serial:\n{serial}"
+        "a refusal must not kill the interpreter; serial:\n{serial}"
     );
     assert_eq!(
         hits.load(Ordering::Relaxed),
-        2,
-        "admin's lane and eve's yes are the only connections; serial:\n{serial}"
+        1,
+        "only the ruled script opens TCP; serial:\n{serial}"
     );
 }
 
@@ -7070,6 +7006,8 @@ fn serve_hands_the_lane_to_its_listener() {
         .collect();
     owned.extend(type_line(save_pin.as_str(), "admin@galexy>"));
     owned.extend(type_line("net allow echo 10.0.2.2:4591 k", "ok"));
+    owned.extend(type_line("sec net listen *:4591 shell", "ok"));
+    owned.extend(type_line("sec net listen *:4591 shell2", "ok"));
     owned.extend(type_line("net serve echo", "attached"));
     owned.push(("f2".to_string(), "[tty] 2".to_string()));
     owned.extend(type_line("admin", "Password: "));
@@ -7364,20 +7302,19 @@ fn milestones_110_through_114() {
         ("e".into(), "*".into()),
         ("ret".into(), "eve@galexy> ".into()),
     ]);
-    owned.extend(type_line("connect --resolve docs", "wants the network"));
-    owned.extend(type_line("no", "access denied"));
+    owned.extend(type_line("connect --resolve docs", "access denied"));
     owned.push(("f1".into(), "[tty] 1".into()));
+    owned.extend(type_line("sec net dial docs:4594 connect", "ok"));
+    owned.extend(type_line("sec net dial 172.30.0.2:4594 connect", "ok"));
     owned.extend(type_line("connect docs", "lane ok"));
     owned.push(("f2".into(), "[tty] 2".into()));
-    owned.extend(type_line("connect docs", "wants the network"));
-    owned.extend(type_line("no", "still up"));
+    owned.extend(type_line("connect docs", "lane ok"));
     owned.push(("f1".into(), "[tty] 1".into()));
     owned.extend(type_line("net addr 172.30.0.2 4594 /k", "ok"));
     owned.extend(type_line("connect 172.30.0.2", "lane ok"));
     owned.extend(type_line("connect 10.9.9.9", "access denied"));
     owned.push(("f2".into(), "[tty] 2".into()));
-    owned.extend(type_line("connect 172.30.0.2", "wants the network"));
-    owned.extend(type_line("no", "still up"));
+    owned.extend(type_line("connect 172.30.0.2", "lane ok"));
     owned.push(("f1".into(), "[tty] 1".into()));
     owned.extend(type_line("net port 4594 172.30.0.2", "ok"));
     owned.extend(type_line("connect 172.30.0.2:4594", "lane ok"));
@@ -7390,13 +7327,7 @@ fn milestones_110_through_114() {
         "[net] bound 10.0.2.15",
     ));
     owned.push(("f2".into(), "[tty] 2".into()));
-    owned.extend(type_line("connect --bind 10.0.2.15", "wants the network"));
-    owned.extend(type_line("no", "access denied"));
-    owned.push(("f1".into(), "[tty] 1".into()));
-    owned.extend(type_line("net grant 10.0.2.15 shell2", "ok"));
-    owned.push(("f2".into(), "[tty] 2".into()));
-    owned.extend(type_line("connect --bind 10.0.2.15", "wants the network"));
-    owned.extend(type_line("no", "access denied"));
+    owned.extend(type_line("connect --bind 10.0.2.15", "access denied"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
         .map(|(code, echo)| (code.as_str(), echo.as_str()))
@@ -7448,7 +7379,7 @@ fn milestones_110_through_114() {
     );
     assert_eq!(
         echo_hits.load(Ordering::Relaxed),
-        3,
+        5,
         "peer handshakes; serial:\n{serial}"
     );
 }
@@ -7496,11 +7427,11 @@ fn milestones_115_and_116() {
         ("e".into(), "*".into()),
         ("ret".into(), "eve@galexy> ".into()),
     ]);
-    owned.extend(type_line("connect --listen 4596", "wants the network"));
-    owned.extend(type_line("no", "access denied"));
+    owned.extend(type_line("connect --listen 4596", "access denied"));
     owned.push(("f1".into(), "[tty] 1".into()));
+    owned.extend(type_line("sec net listen *:4596 shell", "ok"));
+    owned.extend(type_line("sec net listen *:4596 connect", "ok"));
     owned.extend(type_line("net listen 4596", "attached"));
-    owned.extend(type_line("grant w /card/4596 shell2", "admin@galexy> "));
     owned.push(("f2".into(), "[tty] 2".into()));
     owned.extend(type_line("connect --listen 4596", "held"));
     owned.push(("f1".into(), "[tty] 1".into()));
@@ -7508,14 +7439,11 @@ fn milestones_115_and_116() {
     let peer_cmd = format!("net peer peer {peer_text} 4597");
     owned.extend(type_line(&peer_cmd, "ok"));
     owned.push(("f2".into(), "[tty] 2".into()));
-    owned.extend(type_line("connect --send peer", "wants the network"));
-    owned.extend(type_line("no", "access denied"));
+    owned.extend(type_line("connect --send peer", "access denied"));
     owned.push(("f1".into(), "[tty] 1".into()));
-    owned.extend(type_line("grant w /card/peer shell2", "admin@galexy> "));
+    let send_rule = format!("sec net dial {peer_text}:4597 connect");
+    owned.extend(type_line(&send_rule, "ok"));
     owned.push(("f2".into(), "[tty] 2".into()));
-    owned.extend(type_line("connect --send peer", "wants the network"));
-    owned.extend(type_line("no", "access denied"));
-    owned.push(("f1".into(), "[tty] 1".into()));
     owned.extend(type_line("connect --send peer", "sent"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
@@ -7686,28 +7614,19 @@ fn socket_compat_cards() {
         ("e".into(), "*".into()),
         ("ret".into(), "eve@galexy> ".into()),
     ]);
+    owned.push(("f1".into(), "[tty] 1".into()));
+    let dial_rule = format!("sec net dial {peer_text}:4604 connect");
+    let dgram_rule = format!("sec net dial {peer_text}:4602 connect");
+    owned.extend(type_line(&dial_rule, "ok"));
+    owned.extend(type_line(&dgram_rule, "ok"));
+    owned.extend(type_line("sec net listen *:4601 connect", "ok"));
+    owned.push(("f2".into(), "[tty] 2".into()));
     let dial = format!("connect {peer_text}:4604");
-    owned.extend(type_line(&dial, "wants the network"));
-    owned.extend(type_line("no", "still up"));
-    owned.extend(type_line(&dial, "wants the network"));
-    owned.extend(type_line("yes", "wants the network"));
-    owned.extend(type_line("yes", "lane ok"));
-    owned.extend(type_line("connect --bind 10.0.2.15", "wants the network"));
-    owned.extend(type_line("no", "access denied"));
-    owned.extend(type_line("connect --bind 10.0.2.15", "wants the network"));
-    owned.extend(type_line("yes", "[net] bound 10.0.2.15"));
-    owned.extend(type_line(
-        "connect --accept 10.0.2.15:4601",
-        "wants the network",
-    ));
-    owned.extend(type_line("yes", "[net] bound 10.0.2.15"));
-    owned.extend(type_line("yes", "outside-lane"));
-    owned.extend(type_line("connect --send peer", "wants the network"));
-    owned.extend(type_line("no", "access denied"));
-    owned.extend(type_line("connect --send peer", "wants the network"));
-    owned.extend(type_line("yes", "sent"));
-    owned.extend(type_line("connect --recv peer", "wants the network"));
-    owned.extend(type_line("yes", "card-back"));
+    owned.extend(type_line(&dial, "lane ok"));
+    owned.extend(type_line("connect --bind 10.0.2.15", "access denied"));
+    owned.extend(type_line("connect --accept 10.0.2.15:4601", "outside-lane"));
+    owned.extend(type_line("connect --send peer", "sent"));
+    owned.extend(type_line("connect --recv peer", "card-back"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
         .map(|(code, echo)| (code.as_str(), echo.as_str()))
@@ -7780,8 +7699,8 @@ fn socket_compat_cards() {
         "the peer did not see the datagram; serial:\n{serial}"
     );
     assert!(
-        serial.matches("wants the network").count() >= 10,
-        "each missing card should ask; serial:\n{serial}"
+        serial.contains("access denied"),
+        "a bind from a non-admin seat was allowed; serial:\n{serial}"
     );
 }
 
@@ -7849,33 +7768,40 @@ fn python_socket_cards() {
         "echo import socket; print(socket.bind(\"10.0.2.15\")) > deny.py",
         "eve@galexy>",
     ));
-    owned.extend(type_line("python deny.py", "wants the network"));
-    owned.extend(type_line("no", "OSError"));
-    owned.extend(type_line("python deny.py", "wants the network"));
-    owned.extend(type_line("yes", "ok"));
+    owned.extend(type_line("python deny.py", "OSError"));
     let dial = format!("echo import socket; print(socket.connect(\"{peer_text}:4607\")) > dial.py");
     owned.extend(type_line(&dial, "eve@galexy>"));
-    owned.extend(type_line("python dial.py", "wants the network"));
-    owned.extend(type_line("yes", "wants the network"));
-    owned.extend(type_line("yes", "lane ok"));
+    owned.push(("f1".into(), "[tty] 1".into()));
+    let dial_rule = format!("sec net dial {peer_text}:4607 /eve@dial.py");
+    owned.extend(type_line(&dial_rule, "ok"));
+    owned.push(("f2".into(), "[tty] 2".into()));
+    owned.extend(type_line("python dial.py", "lane ok"));
     owned.extend(type_line(
         "echo import socket; print(socket.send(\"peer\",\"card-datagram\")) > send.py",
         "eve@galexy>",
     ));
-    owned.extend(type_line("python send.py", "wants the network"));
-    owned.extend(type_line("yes", "ok"));
+    owned.push(("f1".into(), "[tty] 1".into()));
+    let send_rule = format!("sec net dial {peer_text}:4606 /eve@send.py");
+    owned.extend(type_line(&send_rule, "ok"));
+    owned.push(("f2".into(), "[tty] 2".into()));
+    owned.extend(type_line("python send.py", "ok"));
     owned.extend(type_line(
         "echo import socket; print(socket.recv(\"peer\")) > recv.py",
         "eve@galexy>",
     ));
-    owned.extend(type_line("python recv.py", "wants the network"));
-    owned.extend(type_line("yes", "card-back"));
+    owned.push(("f1".into(), "[tty] 1".into()));
+    let recv_rule = format!("sec net dial {peer_text}:4606 /eve@recv.py");
+    owned.extend(type_line(&recv_rule, "ok"));
+    owned.push(("f2".into(), "[tty] 2".into()));
+    owned.extend(type_line("python recv.py", "card-back"));
     owned.extend(type_line(
         "echo import socket;a=socket.listen;print(a(\"4605\"));print(a(\"4605\")) > a",
         "eve@galexy>",
     ));
-    owned.extend(type_line("python a", "wants the network"));
-    owned.extend(type_line("yes", "attached"));
+    owned.push(("f1".into(), "[tty] 1".into()));
+    owned.extend(type_line("sec net listen *:4605 /eve@a", "ok"));
+    owned.push(("f2".into(), "[tty] 2".into()));
+    owned.extend(type_line("python a", "attached"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
         .map(|(code, echo)| (code.as_str(), echo.as_str()))
@@ -8147,12 +8073,8 @@ fn host_echo_cert() -> (Vec<u8>, Vec<u8>, String) {
     (der, key_der, pin)
 }
 
-/// Milestone 118: read on `/card/out/connect` dials two names and reads
-/// each HTTP body with no seat prompt. A program without that card
-/// still asks. Listen stays refused.
-///
-/// Milestone 119 is [`share_disk_persists_across_reboot`]: the same
-/// share is in the sealed slot after the reboot path.
+/// A `sec` rule on `connect` dials the names and the address. `dial`
+/// has no rule, so it is refused and stays up. Listen stays refused.
 #[test]
 fn outbound_card_dials_two_names() {
     let alpha = std::thread::spawn(|| host_http_serve(4610, b"alpha-body"));
@@ -8165,7 +8087,10 @@ fn outbound_card_dials_two_names() {
     owned.extend(type_line("net allow img.alpha 10.0.2.2:4610", "ok"));
     owned.extend(type_line("net allow beta 10.0.2.2:4611", "ok"));
     owned.extend(type_line("net allow echo 10.0.2.2:4612", "ok"));
-    owned.extend(type_line("touch /card/out/connect", "admin@galexy>"));
+    owned.extend(type_line("sec net dial alpha:4610 connect", "ok"));
+    owned.extend(type_line("sec net dial *.alpha:4610 connect", "ok"));
+    owned.extend(type_line("sec net dial beta:4611 connect", "ok"));
+    owned.extend(type_line("sec net dial 10.0.2.2:4610 connect", "ok"));
     owned.extend(type_line("useradd eve", "Password: "));
     owned.extend([
         ("e".to_string(), "*".to_string()),
@@ -8173,7 +8098,6 @@ fn outbound_card_dials_two_names() {
         ("e".to_string(), "*".to_string()),
         ("ret".to_string(), "admin@galexy> ".to_string()),
     ]);
-    owned.extend(type_line("share r /card/out/connect eve", "admin@galexy>"));
     owned.extend([("f2".to_string(), "[tty] 2".to_string())]);
     owned.extend(type_line("eve", "Password: "));
     owned.extend([
@@ -8187,8 +8111,7 @@ fn outbound_card_dials_two_names() {
     owned.extend(type_line("connect --http beta", "beta-body"));
     owned.extend(type_line("connect --http 10.0.2.2:4610", "alpha-body"));
     owned.extend(type_line("connect --listen 4613", "access denied"));
-    owned.extend(type_line("dial echo", "wants the network"));
-    owned.extend(type_line("no", "still up"));
+    owned.extend(type_line("dial echo", "still up"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
         .map(|(code, echo)| (code.as_str(), echo.as_str()))
@@ -8210,13 +8133,8 @@ fn outbound_card_dials_two_names() {
     let eve = serial.find("eve@galexy>").expect("eve never logged in");
     let after = &serial[eve..];
     assert!(
-        !serial[..eve].contains("wants the network"),
-        "the seat was asked before eve dialed; serial:\n{serial}"
-    );
-    assert_eq!(
-        after.matches("wants the network").count(),
-        1,
-        "only the program without the card asks; serial:\n{serial}"
+        after.contains("access denied"),
+        "dial without a rule was allowed; serial:\n{serial}"
     );
     assert!(
         after.matches("alpha-body").count() >= 3 && after.contains("beta-body"),
@@ -8224,7 +8142,7 @@ fn outbound_card_dials_two_names() {
     );
     assert!(
         !after.contains("attached"),
-        "the outbound card accepted a listen; serial:\n{serial}"
+        "a dial rule accepted a listen; serial:\n{serial}"
     );
     assert!(
         after.contains("still up"),
@@ -8436,9 +8354,9 @@ fn dns_a_response(query: &[u8], answer: [u8; 4]) -> Vec<u8> {
     wire
 }
 
-/// Milestone 117: one session from the host reads a file, a local
-/// program with read on `/card/ssh` opens a session, a refused
-/// algorithm fails, and nothing is accepted before the card is granted.
+/// One session from the host reads a file. `ssh-open` dials when a
+/// `sec` rule names it. A refused algorithm fails. Init installs the
+/// listen rule, so the service accepts without a grant.
 #[test]
 fn milestone_117_ssh_reads_a_file() {
     let guest_port = 4598u16;
@@ -8464,7 +8382,7 @@ fn milestone_117_ssh_reads_a_file() {
         .collect();
     owned.extend(type_line("echo hi > note", "admin@galexy> "));
     owned.extend(type_line("net allow ssh 10.0.2.2:4598", "ok"));
-    owned.extend(type_line("grant w /card/ssh ssh", "ssh: attached"));
+    owned.extend(type_line("sec net dial 10.0.2.2:4598 ssh-open", "ok"));
     owned.extend(type_line("echo hold", "ssh: file"));
     owned.extend(type_line(
         "ssh-open",
@@ -8501,8 +8419,8 @@ fn milestone_117_ssh_reads_a_file() {
         "kernel panicked; serial:\n{serial}"
     );
     assert!(
-        serial.contains("ssh: denied") && serial.find("ssh: denied") < serial.find("ssh: attached"),
-        "the card was not required; serial:\n{serial}"
+        serial.contains("ssh: attached"),
+        "the listen rule did not attach; serial:\n{serial}"
     );
     let got = file.lock().unwrap().clone();
     assert_eq!(

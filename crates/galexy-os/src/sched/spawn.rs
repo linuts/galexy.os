@@ -210,11 +210,6 @@ pub(crate) fn task_spawn(
                 tokens: [galfs::Token::empty(); galfs::TOKEN_SLOTS],
             }
         };
-        // The outbound card is this program's share, not the parent's
-        // token and not a card the shell holds after login.
-        if !seat {
-            galfs::install_outbound_card(pending.fs.root, &mut pending.fs.tokens, name);
-        }
         pending.armed = true;
         // 0 = waiting for load; drain installs Cap then either wakes or
         // sets wait_child_slot to the new child for exit wait.
@@ -264,6 +259,63 @@ pub fn read_spawn_file(
     }
     loader::validate_elf(&buf)?;
     Ok(buf)
+}
+
+/// A path the caller can read. An ELF runs as itself. Anything else runs
+/// under the system `python`, and the stamp stays the file.
+struct Executed {
+    bytes: alloc::vec::Vec<u8>,
+    entry: u32,
+    parent: u32,
+    /// Launch name. A script uses its basename so the interpreter's name
+    /// does not become the stamp.
+    name: [u8; 64],
+    name_len: usize,
+    arg: alloc::vec::Vec<u8>,
+}
+
+fn load_executed(
+    root: u32,
+    tokens: &[galfs::Token; galfs::TOKEN_SLOTS],
+    name: &str,
+    arg: &[u8],
+) -> Result<Executed, SysError> {
+    let (entry, parent) = galfs::path_object(root, tokens, name)?;
+    match read_spawn_file(root, tokens, name) {
+        Ok(bytes) => {
+            let mut raw = [0u8; 64];
+            let n = name.len().min(raw.len());
+            raw[..n].copy_from_slice(&name.as_bytes()[..n]);
+            Ok(Executed {
+                bytes,
+                entry,
+                parent,
+                name: raw,
+                name_len: n,
+                arg: arg.to_vec(),
+            })
+        }
+        Err(SysError::Unsupported) => {
+            let Some(python) = ramdisk::find("python") else {
+                return Err(SysError::Unsupported);
+            };
+            let base = name.rsplit('/').next().unwrap_or(name);
+            let mut raw = [0u8; 64];
+            let n = base.len().min(raw.len());
+            raw[..n].copy_from_slice(&base.as_bytes()[..n]);
+            let mut script = alloc::vec![0u8; name.len() + 1];
+            script[..name.len()].copy_from_slice(name.as_bytes());
+            Ok(Executed {
+                bytes: python.to_vec(),
+                entry,
+                parent,
+                name: raw,
+                name_len: n,
+                arg: script,
+            })
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Loads a queued program, if the shell has asked for one.
@@ -383,28 +435,39 @@ pub fn drain_spawn() {
     // program to completion in the gap; the exit then wakes nobody and
     // the parent parks forever (`test-soak`'s `hello`).
     let path_bytes = if name.contains('/') && !ramdisk::is_testing_path(name) {
-        Some(read_spawn_file(load_fs.root, &load_fs.tokens, name))
+        Some(load_executed(
+            load_fs.root,
+            &load_fs.tokens,
+            name,
+            &arg[..arg_len],
+        ))
     } else {
         None
     };
+    let mut identity = (galfs::NO_OBJECT, galfs::NO_OBJECT);
     let child_slot = if let Some(loaded) = path_bytes {
         match loaded {
-            Ok(bytes) => match loader::spawn_launched(
-                name,
-                &bytes,
-                grants,
-                &arg[..arg_len],
-                tty,
-                fs,
-                waiter_slot,
-                true,
-            ) {
-                Ok(slot) => Some(Ok(slot)),
-                Err(err) => {
-                    serial_println!("[sched] spawn '{}' refused ({:?})", name, err);
-                    Some(Err(err))
+            Ok(executed) => {
+                identity = (executed.entry, executed.parent);
+                let launch =
+                    core::str::from_utf8(&executed.name[..executed.name_len]).unwrap_or(name);
+                match loader::spawn_launched(
+                    launch,
+                    &executed.bytes,
+                    grants,
+                    &executed.arg,
+                    tty,
+                    fs,
+                    waiter_slot,
+                    true,
+                ) {
+                    Ok(slot) => Some(Ok(slot)),
+                    Err(err) => {
+                        serial_println!("[sched] spawn '{}' refused ({:?})", name, err);
+                        Some(Err(err))
+                    }
                 }
-            },
+            }
             Err(err) => {
                 serial_println!("[sched] spawn '{}' path refused ({:?})", name, err);
                 Some(Err(err))
@@ -467,8 +530,10 @@ pub fn drain_spawn() {
                 return;
             }
         };
-        if must_change {
-            if let Some(child) = threads.get_mut(child_slot as usize - 1) {
+        if let Some(child) = threads.get_mut(child_slot as usize - 1) {
+            child.entry_object = identity.0;
+            child.entry_parent = identity.1;
+            if must_change {
                 child.must_change = true;
             }
         }
@@ -967,6 +1032,12 @@ pub fn spawn_init() -> bool {
         return true;
     }
     loader::spawn_init(bytes).expect("ramdisk init");
+    interrupts::without_interrupts(|| {
+        let mut threads = THREADS.lock();
+        if let Some(thread) = threads.iter_mut().find(|thread| thread.is_init) {
+            galfs::install_policy_token(&mut thread.fs_tokens);
+        }
+    });
     serial_println!("[sched] init loaded (orphan root)");
     true
 }
