@@ -167,8 +167,9 @@ default password. The first user is the administrator. A fresh disk
 does not create `owner`. Setup runs once. Later boots of a sealed
 disk ask `Volume passphrase:` and then login. A packet leaves only
 for a command the user typed, or for a service they started. DHCP
-starts only from `net up`. A static address and IPv6 are that same
-verb and are not built. Skip sends nothing. After
+starts only from bare `net up` on an empty list, for IPv4 and IPv6.
+`net up <ip>/<prefix> via <gateway>` is the static form and sends
+nothing. Skip sends nothing. After
 login a fastfetch-style **command center** dashboard
 prints (OS / TTY / user / uptime / heap / galfs / tasks), then the
 prompt is `ada@galexy> `.

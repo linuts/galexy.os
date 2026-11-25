@@ -325,20 +325,26 @@ fn prompt_resolver(kbd: Cap) {
             write_console(b"\nLookups stay refused until net dns.\n");
             return;
         }
-        let Some(ip) = builtins::parse_ip(&line[..n]) else {
+        let Some(ip) = galexy_core::parse_ip(&line[..n]) else {
             write_console(b"\nbad\n");
             continue;
         };
-        if ip == [10, 0, 2, 2] || ip == [10, 0, 2, 3] {
+        if matches!(
+            ip,
+            galexy_core::Ip::V4([10, 0, 2, 2]) | galexy_core::Ip::V4([10, 0, 2, 3])
+        ) {
             write_console(b"\naccess denied\n");
             continue;
         }
         write_console(b"\n");
-        let mut payload = [0u8; 5];
+        let mut payload = [0u8; 80];
         payload[0] = NET_OP_DNS;
-        payload[1..5].copy_from_slice(&ip);
+        let Some(naddr) = galexy_core::encode_ip_arg(ip, &mut payload[1..]) else {
+            write_console(b"bad\n");
+            continue;
+        };
         let mut reply = [0u8; 128];
-        let got = net_rpc(&payload, &mut reply);
+        let got = net_rpc(&payload[..1 + naddr], &mut reply);
         if !got.ok || got.value <= 8 {
             write_console(b"down\n");
             return;

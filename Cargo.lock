@@ -545,12 +545,16 @@ dependencies = [
 name = "galexy-net"
 version = "0.1.0"
 dependencies = [
+ "galexy-core",
  "galexy-crypto",
 ]
 
 [[package]]
 name = "galexy-netcfg"
 version = "0.1.0"
+dependencies = [
+ "galexy-core",
+]
 
 [[package]]
 name = "galexy-os"
@@ -584,6 +588,7 @@ name = "galexy-sec"
 version = "0.1.0"
 dependencies = [
  "galexy-abi",
+ "galexy-core",
 ]
 
 [[package]]

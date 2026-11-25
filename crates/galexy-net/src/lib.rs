@@ -8,9 +8,15 @@
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 
+mod v6;
+
 use alloc::vec;
 use alloc::vec::Vec;
+use galexy_core::{link_local_from_mac, prefix_contains, prefix_ok, same_family, Ip};
 use galexy_crypto::sha256;
+
+/// Addresses stored for one family.
+const PER_FAMILY: usize = 4;
 
 const UDP_PROOF_PORT: u16 = 4580;
 const TCP_PROOF_PORT: u16 = 4581;
@@ -42,16 +48,47 @@ enum TcpState {
 }
 
 struct ArpEnt {
-    ip: [u8; 4],
+    ip: Ip,
     mac: [u8; 6],
     used: bool,
+}
+
+struct Slot {
+    ip: Ip,
+    prefix: u8,
+    expiry: u32,
+    /// Generated link-local. The status line has no gateway.
+    auto: bool,
+}
+
+impl Slot {
+    const fn blank() -> Self {
+        Self {
+            ip: Ip::V4([0, 0, 0, 0]),
+            prefix: 0,
+            expiry: 0,
+            auto: false,
+        }
+    }
+}
+
+/// Why a static address was refused. Nothing was sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StaticErr {
+    /// The address and the gateway are different families, or the prefix
+    /// does not fit.
+    Bad,
+    /// This family already has four addresses.
+    Full,
+    /// This family already has a different gateway.
+    OneGateway,
 }
 
 struct Conn {
     state: TcpState,
     local: u16,
     remote: u16,
-    dst: [u8; 4],
+    dst: Ip,
     snd_una: u32,
     snd_nxt: u32,
     rcv_nxt: u32,
@@ -73,7 +110,7 @@ impl Conn {
             state: TcpState::Free,
             local: 0,
             remote: 0,
-            dst: [0; 4],
+            dst: Ip::V4([0, 0, 0, 0]),
             snd_una: 0,
             snd_nxt: 0,
             rcv_nxt: 0,
@@ -94,9 +131,21 @@ impl Conn {
 pub struct Engine {
     mac: [u8; 6],
     ask: bool,
-    addr: Option<[u8; 4]>,
-    prefix: u8,
-    gateway: Option<[u8; 4]>,
+    v4: [Slot; PER_FAMILY],
+    v4n: u8,
+    v4_gw: Option<Ip>,
+    v6: [Slot; PER_FAMILY],
+    v6n: u8,
+    v6_gw: Option<Ip>,
+    learn: bool,
+    dad_sent: bool,
+    rs_sent: bool,
+    v6_dhcp: Dhcp,
+    v6_ms: u64,
+    v6_xid: [u8; 3],
+    v6_req: [u8; 3],
+    v6_server: Vec<u8>,
+    v6_offer: Option<[u8; 16]>,
     arp: [ArpEnt; ARP_SLOTS],
     dhcp: Dhcp,
     xid: u32,
@@ -115,11 +164,11 @@ pub struct Engine {
     echo_seq: u16,
     pending_icmp: Option<PendingIcmp>,
     await_echo: Option<AwaitEcho>,
-    echo_from: Option<[u8; 4]>,
+    echo_from: Option<Ip>,
 }
 
 struct PendingUdp {
-    dst: [u8; 4],
+    dst: Ip,
     dport: u16,
     sport: u16,
     payload: Vec<u8>,
@@ -127,21 +176,21 @@ struct PendingUdp {
 
 /// One datagram the card is willing to take. Anything else is dropped.
 struct UdpInbox {
-    peer: [u8; 4],
+    peer: Ip,
     peer_port: u16,
     local_port: u16,
     payload: Option<Vec<u8>>,
 }
 
 struct PendingIcmp {
-    dst: [u8; 4],
+    dst: Ip,
     id: u16,
     seq: u16,
     payload: Vec<u8>,
 }
 
 struct AwaitEcho {
-    dst: [u8; 4],
+    dst: Ip,
     id: u16,
     seq: u16,
 }
@@ -152,12 +201,24 @@ impl Engine {
         Self {
             mac,
             ask,
-            addr: None,
-            prefix: 0,
-            gateway: None,
+            v4: [const { Slot::blank() }; PER_FAMILY],
+            v4n: 0,
+            v4_gw: None,
+            v6: [const { Slot::blank() }; PER_FAMILY],
+            v6n: 0,
+            v6_gw: None,
+            learn: false,
+            dad_sent: false,
+            rs_sent: false,
+            v6_dhcp: Dhcp::Bound,
+            v6_ms: 0,
+            v6_xid: [0x67, 0x61, 0x6c],
+            v6_req: [0, 0, 0],
+            v6_server: Vec::new(),
+            v6_offer: None,
             arp: [const {
                 ArpEnt {
-                    ip: [0; 4],
+                    ip: Ip::V4([0, 0, 0, 0]),
                     mac: [0; 6],
                     used: false,
                 }
@@ -183,33 +244,213 @@ impl Engine {
         }
     }
 
-    /// Ask DHCP for an IPv4 address. No packet until the next [`Self::poll`].
-    ///
-    /// A locator that is already known is left alone. A discover that is
-    /// already in flight is not restarted.
+    /// Ask for an address on an empty list. No packet until the next
+    /// [`Self::poll`]. Installs the link-local address, then DHCPv4,
+    /// one router solicitation, and DHCPv6. A list that already holds
+    /// an address is left alone.
     pub fn start_dhcp(&mut self) {
-        if self.locator().is_some() {
+        if !self.is_empty() {
             return;
         }
+        self.install_link_local();
         self.ask = true;
-        if !matches!(self.dhcp, Dhcp::WaitOffer | Dhcp::WaitAck) {
-            self.dhcp = Dhcp::Idle;
-            self.dhcp_ms = 0;
-        }
+        self.learn = true;
+        self.dad_sent = false;
+        self.rs_sent = false;
+        self.dhcp = Dhcp::Idle;
+        self.dhcp_ms = 0;
+        self.v6_dhcp = Dhcp::Idle;
+        self.v6_ms = 0;
     }
 
-    /// Fixed mode locator. Does not send DHCP.
+    /// True when neither family has an address.
+    pub fn is_empty(&self) -> bool {
+        self.v4n == 0 && self.v6n == 0
+    }
+
+    /// Fixed IPv4 locator. Does not send DHCP and does not add IPv6.
     pub fn set_fixed(&mut self, addr: [u8; 4], prefix: u8, gateway: [u8; 4]) {
         self.ask = false;
-        self.addr = Some(addr);
-        self.prefix = prefix;
-        self.gateway = Some(gateway);
+        self.learn = false;
+        self.v4n = 1;
+        self.v4[0] = Slot {
+            ip: Ip::V4(addr),
+            prefix,
+            expiry: 0,
+            auto: false,
+        };
+        self.v4_gw = Some(Ip::V4(gateway));
         self.dhcp = Dhcp::Bound;
     }
 
-    /// Our address, prefix, and gateway once known.
+    /// Installs one static address and that family's gateway.
+    ///
+    /// A global IPv6 address also installs the MAC link-local. A
+    /// link-local address does not. The same gateway adds the address.
+    /// A different gateway is [`StaticErr::OneGateway`]. Nothing is sent.
+    pub fn add_static(&mut self, addr: Ip, prefix: u8, gateway: Ip) -> Result<(), StaticErr> {
+        if !same_family(addr, gateway) || !prefix_ok(addr, prefix) {
+            return Err(StaticErr::Bad);
+        }
+        if let Ip::V6(octets) = addr {
+            if !Ip::V6(octets).is_link_local() {
+                self.install_link_local();
+            }
+        }
+        self.insert(addr, prefix, gateway, 0, false)
+    }
+
+    /// The first IPv4 address, its prefix, and the IPv4 gateway.
     pub fn locator(&self) -> Option<([u8; 4], u8, [u8; 4])> {
-        Some((self.addr?, self.prefix, self.gateway?))
+        let slot = self.v4_slots().first()?;
+        let Ip::V4(addr) = slot.ip else {
+            return None;
+        };
+        let Ip::V4(gw) = self.v4_gw? else {
+            return None;
+        };
+        Some((addr, slot.prefix, gw))
+    }
+
+    /// Every address, its prefix, and the gateway to print. Generated
+    /// link-local has no gateway in the line.
+    pub fn each_addr(&self, mut f: impl FnMut(Ip, u8, Option<Ip>, u32)) {
+        for slot in self.v4_slots() {
+            f(slot.ip, slot.prefix, self.v4_gw, slot.expiry);
+        }
+        for slot in self.v6_slots() {
+            let via = if slot.auto { None } else { self.v6_gw };
+            f(slot.ip, slot.prefix, via, slot.expiry);
+        }
+    }
+
+    /// True when DHCPv4 has a lease, DHCPv6 has a routed address, and
+    /// the v6 gateway is known.
+    pub fn learn_ready(&self) -> bool {
+        self.locator().is_some() && self.v6_gw.is_some() && self.v6_slots().iter().any(|s| !s.auto)
+    }
+
+    fn v4_slots(&self) -> &[Slot] {
+        &self.v4[..self.v4n as usize]
+    }
+
+    fn v6_slots(&self) -> &[Slot] {
+        &self.v6[..self.v6n as usize]
+    }
+
+    fn install_link_local(&mut self) {
+        let ip = link_local_from_mac(self.mac);
+        if self.v6_slots().iter().any(|s| s.ip == ip) {
+            return;
+        }
+        if self.v6n as usize >= PER_FAMILY {
+            return;
+        }
+        self.v6[self.v6n as usize] = Slot {
+            ip,
+            prefix: 64,
+            expiry: 0,
+            auto: true,
+        };
+        self.v6n += 1;
+    }
+
+    fn insert(
+        &mut self,
+        addr: Ip,
+        prefix: u8,
+        gateway: Ip,
+        expiry: u32,
+        auto: bool,
+    ) -> Result<(), StaticErr> {
+        let (n, slots, gw) = match addr {
+            Ip::V4(_) => (&mut self.v4n, &mut self.v4, &mut self.v4_gw),
+            Ip::V6(_) => (&mut self.v6n, &mut self.v6, &mut self.v6_gw),
+        };
+        if let Some(have) = *gw {
+            if have != gateway {
+                return Err(StaticErr::OneGateway);
+            }
+        } else {
+            *gw = Some(gateway);
+        }
+        if slots[..*n as usize].iter().any(|s| s.ip == addr) {
+            return Ok(());
+        }
+        if *n as usize >= PER_FAMILY {
+            return Err(StaticErr::Full);
+        }
+        slots[*n as usize] = Slot {
+            ip: addr,
+            prefix,
+            expiry,
+            auto,
+        };
+        *n += 1;
+        Ok(())
+    }
+
+    fn source_for(&self, dst: Ip) -> Option<Ip> {
+        match dst {
+            Ip::V4(_) => self
+                .v4_slots()
+                .iter()
+                .find(|s| prefix_contains(s.ip, s.prefix, dst))
+                .map(|s| s.ip)
+                .or_else(|| self.v4_slots().first().map(|s| s.ip)),
+            Ip::V6(d) => {
+                let dest = Ip::V6(d);
+                if dest.is_link_local() || dest.is_multicast() {
+                    return self
+                        .v6_slots()
+                        .iter()
+                        .find(|s| s.ip.is_link_local())
+                        .map(|s| s.ip);
+                }
+                self.v6_slots()
+                    .iter()
+                    .find(|s| !s.auto && prefix_contains(s.ip, s.prefix, dst))
+                    .map(|s| s.ip)
+                    .or_else(|| self.v6_slots().iter().find(|s| !s.auto).map(|s| s.ip))
+                    .or_else(|| {
+                        self.v6_slots()
+                            .iter()
+                            .find(|s| s.ip.is_link_local())
+                            .map(|s| s.ip)
+                    })
+            }
+        }
+    }
+
+    fn on_link(&self, dst: Ip) -> bool {
+        match dst {
+            Ip::V4(_) => self
+                .v4_slots()
+                .iter()
+                .any(|s| prefix_contains(s.ip, s.prefix, dst)),
+            Ip::V6(d) => {
+                let dest = Ip::V6(d);
+                dest.is_link_local()
+                    || self
+                        .v6_slots()
+                        .iter()
+                        .any(|s| prefix_contains(s.ip, s.prefix, dst))
+            }
+        }
+    }
+
+    pub fn holds(&self, dst: Ip) -> bool {
+        match dst {
+            Ip::V4(_) => self.v4_slots().iter().any(|s| s.ip == dst),
+            Ip::V6(_) => self.v6_slots().iter().any(|s| s.ip == dst),
+        }
+    }
+
+    fn link_local(&self) -> Option<[u8; 16]> {
+        self.v6_slots().iter().find_map(|s| match s.ip {
+            Ip::V6(a) if s.ip.is_link_local() => Some(a),
+            _ => None,
+        })
     }
 
     /// DHCP option 51, in seconds. `0` when the ack did not carry one.
@@ -240,9 +481,10 @@ impl Engine {
             self.dhcp = Dhcp::Idle;
             self.dhcp_ms = now_ms;
         }
+        self.poll_v6(now_ms);
         self.flush_pending();
         if self.locator().is_some() && !self.udp_sent {
-            if let Some(gw) = self.gateway {
+            if let Some(gw) = self.v4_gw {
                 if self
                     .udp_send(gw, UDP_PROOF_PORT, UDP_PROOF_PORT, b"galexy")
                     .is_ok()
@@ -253,7 +495,7 @@ impl Engine {
             }
         }
         if self.udp_sent && !self.tcp_proof {
-            if let Some(gw) = self.gateway {
+            if let Some(gw) = self.v4_gw {
                 if self.tcp_connect(gw, TCP_PROOF_PORT).is_ok() {
                     self.tcp_proof = true;
                 }
@@ -291,6 +533,8 @@ impl Engine {
             self.ingest_arp(frame);
         } else if eth == 0x0800 {
             self.ingest_ip(frame);
+        } else if eth == 0x86dd {
+            self.ingest_ip6(frame);
         }
     }
 
@@ -308,31 +552,24 @@ impl Engine {
     /// An off-subnet peer is reached through the gateway. The IP
     /// destination stays `dst`. A broadcast is not a next hop.
     #[allow(clippy::result_unit_err)]
-    pub fn udp_send(
-        &mut self,
-        dst: [u8; 4],
-        dport: u16,
-        sport: u16,
-        payload: &[u8],
-    ) -> Result<(), ()> {
-        let Some(src) = self.addr else {
+    pub fn udp_send(&mut self, dst: Ip, dport: u16, sport: u16, payload: &[u8]) -> Result<(), ()> {
+        let Some(src) = self.source_for(dst) else {
             return Err(());
         };
-        let broadcast = dst == [255, 255, 255, 255];
+        let broadcast = dst == Ip::V4([255, 255, 255, 255]);
         let hop = if broadcast { dst } else { self.next_hop(dst) };
-        if !broadcast && self.lookup(hop).is_none() {
+        if !broadcast && self.lookup(hop).is_none() && !hop.is_multicast() {
             self.pending_udp = Some(PendingUdp {
                 dst,
                 dport,
                 sport,
                 payload: payload.to_vec(),
             });
-            self.send_arp(hop);
+            self.solicit(hop);
             return Ok(());
         }
-        let mac = self.lookup(hop).unwrap_or([0xff; 6]);
-        self.egress
-            .push(udp_frame(self.mac, mac, src, dst, sport, dport, payload));
+        let mac = self.mac_for(hop);
+        self.emit_udp(src, dst, mac, sport, dport, payload);
         Ok(())
     }
 
@@ -343,9 +580,9 @@ impl Engine {
 
     /// Arm a receive for one stored peer. Port 53 is refused. A later
     /// datagram from any other address or port is not queued.
-    pub fn udp_arm(&mut self, peer: [u8; 4], peer_port: u16, local_port: u16) -> bool {
-        if peer == [0, 0, 0, 0]
-            || peer == [255, 255, 255, 255]
+    pub fn udp_arm(&mut self, peer: Ip, peer_port: u16, local_port: u16) -> bool {
+        if peer == Ip::V4([0, 0, 0, 0])
+            || peer == Ip::V4([255, 255, 255, 255])
             || peer_port == 0
             || peer_port == 53
             || local_port == 0
@@ -383,8 +620,8 @@ impl Engine {
     /// neighbor of that next hop is ARP, and the request leaves on the
     /// next poll. One request is outstanding.
     #[allow(clippy::result_unit_err)]
-    pub fn icmp_echo(&mut self, dst: [u8; 4], payload: &[u8]) -> Result<(), ()> {
-        if self.addr.is_none() || payload.len() > 64 {
+    pub fn icmp_echo(&mut self, dst: Ip, payload: &[u8]) -> Result<(), ()> {
+        if self.source_for(dst).is_none() || payload.len() > 64 {
             return Err(());
         }
         self.echo_seq = self.echo_seq.wrapping_add(1).max(1);
@@ -393,14 +630,14 @@ impl Engine {
         self.await_echo = Some(AwaitEcho { dst, id, seq });
         self.echo_from = None;
         let hop = self.next_hop(dst);
-        if self.lookup(hop).is_none() {
+        if self.lookup(hop).is_none() && !hop.is_multicast() {
             self.pending_icmp = Some(PendingIcmp {
                 dst,
                 id,
                 seq,
                 payload: payload.to_vec(),
             });
-            self.send_arp(hop);
+            self.solicit(hop);
             return Ok(());
         }
         self.pending_icmp = None;
@@ -409,14 +646,14 @@ impl Engine {
     }
 
     /// The source of an echo reply that matched the outstanding request.
-    pub fn take_echo(&mut self) -> Option<[u8; 4]> {
+    pub fn take_echo(&mut self) -> Option<Ip> {
         self.echo_from.take()
     }
 
     /// Active open. Returns a connection id.
     #[allow(clippy::result_unit_err)]
-    pub fn tcp_connect(&mut self, dst: [u8; 4], dport: u16) -> Result<u8, ()> {
-        if self.addr.is_none() {
+    pub fn tcp_connect(&mut self, dst: Ip, dport: u16) -> Result<u8, ()> {
+        if self.source_for(dst).is_none() {
             return Err(());
         }
         let id = self.alloc_conn()?;
@@ -543,12 +780,12 @@ impl Engine {
 
     fn flush_pending(&mut self) {
         if self.pending_udp.as_ref().is_some_and(|p| {
-            let hop = if p.dst == [255, 255, 255, 255] {
+            let hop = if p.dst == Ip::V4([255, 255, 255, 255]) {
                 p.dst
             } else {
                 self.next_hop(p.dst)
             };
-            self.lookup(hop).is_some()
+            self.lookup(hop).is_some() || hop.is_multicast()
         }) {
             let p = self.pending_udp.take().unwrap();
             let _ = self.udp_send(p.dst, p.dport, p.sport, &p.payload);
@@ -560,60 +797,53 @@ impl Engine {
         let Some(p) = self.pending_icmp.as_ref() else {
             return;
         };
-        if self.lookup(self.next_hop(p.dst)).is_none() {
+        let hop = self.next_hop(p.dst);
+        if self.lookup(hop).is_none() && !hop.is_multicast() {
             return;
         }
         let p = self.pending_icmp.take().unwrap();
         self.emit_echo(p.dst, p.id, p.seq, &p.payload);
     }
 
-    fn emit_echo(&mut self, dst: [u8; 4], id: u16, seq: u16, payload: &[u8]) {
-        let Some(src) = self.addr else {
+    fn emit_echo(&mut self, dst: Ip, id: u16, seq: u16, payload: &[u8]) {
+        let Some(src) = self.source_for(dst) else {
             return;
         };
-        let Some(mac) = self.lookup(self.next_hop(dst)) else {
-            return;
-        };
-        let icmp = echo_message(8, id, seq, payload);
-        self.egress
-            .push(ipv4_frame(self.mac, mac, src, dst, 1, &icmp));
-    }
-
-    /// On-link addresses resolve themselves. Anything else uses the gateway
-    /// as the next hop. The IP destination stays the address the caller passed.
-    fn next_hop(&self, ip: [u8; 4]) -> [u8; 4] {
-        let Some(src) = self.addr else {
-            return ip;
-        };
-        let Some(gw) = self.gateway else {
-            return ip;
-        };
-        let bits = u32::from(self.prefix.min(32));
-        if bits == 0 {
-            return gw;
-        }
-        let mask = if bits >= 32 {
-            u32::MAX
-        } else {
-            u32::MAX << (32 - bits)
-        };
-        let local = u32::from_be_bytes(src) & mask;
-        let dest = u32::from_be_bytes(ip) & mask;
-        if local == dest {
-            ip
-        } else {
-            gw
+        let hop = self.next_hop(dst);
+        let mac = self.mac_for(hop);
+        match (src, dst) {
+            (Ip::V4(s), Ip::V4(d)) => {
+                let icmp = echo_message(8, id, seq, payload);
+                self.egress.push(ipv4_frame(self.mac, mac, s, d, 1, &icmp));
+            }
+            (Ip::V6(s), Ip::V6(d)) => {
+                self.egress
+                    .push(v6::echo(self.mac, mac, s, d, 128, id, seq, payload));
+            }
+            _ => {}
         }
     }
 
-    fn lookup(&self, ip: [u8; 4]) -> Option<[u8; 6]> {
+    /// On-link addresses resolve themselves. Anything else uses that
+    /// family's one gateway.
+    fn next_hop(&self, ip: Ip) -> Ip {
+        if self.on_link(ip) {
+            return ip;
+        }
+        match ip {
+            Ip::V4(_) => self.v4_gw.unwrap_or(ip),
+            Ip::V6(_) => self.v6_gw.unwrap_or(ip),
+        }
+    }
+
+    fn lookup(&self, ip: Ip) -> Option<[u8; 6]> {
         self.arp
             .iter()
             .find(|e| e.used && e.ip == ip)
             .map(|e| e.mac)
     }
 
-    fn learn(&mut self, ip: [u8; 4], mac: [u8; 6]) {
+    fn learn(&mut self, ip: Ip, mac: [u8; 6]) {
         if let Some(e) = self.arp.iter_mut().find(|e| e.used && e.ip == ip) {
             e.mac = mac;
             return;
@@ -633,8 +863,51 @@ impl Engine {
         };
     }
 
+    fn solicit(&mut self, hop: Ip) {
+        match hop {
+            Ip::V4(ip) => self.send_arp(ip),
+            Ip::V6(ip) => {
+                let Some(src) = self.link_local().or_else(|| match self.source_for(hop) {
+                    Some(Ip::V6(a)) => Some(a),
+                    _ => None,
+                }) else {
+                    return;
+                };
+                self.egress.push(v6::neighbor_solicit(self.mac, src, ip));
+            }
+        }
+    }
+
+    fn mac_for(&self, hop: Ip) -> [u8; 6] {
+        if let Some(mac) = self.lookup(hop) {
+            return mac;
+        }
+        match hop {
+            Ip::V6(ip) if hop.is_multicast() => v6::multicast_mac(&ip),
+            Ip::V4([255, 255, 255, 255]) => [0xff; 6],
+            _ => [0xff; 6],
+        }
+    }
+
+    fn emit_udp(&mut self, src: Ip, dst: Ip, mac: [u8; 6], sport: u16, dport: u16, payload: &[u8]) {
+        match (src, dst) {
+            (Ip::V4(s), Ip::V4(d)) => {
+                self.egress
+                    .push(udp_frame(self.mac, mac, s, d, sport, dport, payload));
+            }
+            (Ip::V6(s), Ip::V6(d)) => {
+                self.egress
+                    .push(v6::udp(self.mac, mac, s, d, sport, dport, payload));
+            }
+            _ => {}
+        }
+    }
+
     fn send_arp(&mut self, target: [u8; 4]) {
-        let Some(src) = self.addr else {
+        let Some(src) = self.source_for(Ip::V4(target)).and_then(|ip| match ip {
+            Ip::V4(a) => Some(a),
+            Ip::V6(_) => None,
+        }) else {
             return;
         };
         let mut f = vec![0xff; 6];
@@ -659,8 +932,8 @@ impl Engine {
         smac.copy_from_slice(&frame[22..28]);
         sip.copy_from_slice(&frame[28..32]);
         tip.copy_from_slice(&frame[38..42]);
-        self.learn(sip, smac);
-        if op == 1 && self.addr == Some(tip) {
+        self.learn(Ip::V4(sip), smac);
+        if op == 1 && self.holds(Ip::V4(tip)) {
             let mut f = Vec::with_capacity(42);
             f.extend_from_slice(&smac);
             f.extend_from_slice(&self.mac);
@@ -704,7 +977,13 @@ impl Engine {
         let frame = udp_frame(
             self.mac,
             [0xff; 6],
-            self.addr.unwrap_or([0; 4]),
+            self.v4_slots()
+                .first()
+                .and_then(|s| match s.ip {
+                    Ip::V4(a) => Some(a),
+                    Ip::V6(_) => None,
+                })
+                .unwrap_or([0; 4]),
             [255, 255, 255, 255],
             68,
             67,
@@ -740,32 +1019,39 @@ impl Engine {
             let mut smac = [0u8; 6];
             smac.copy_from_slice(&frame[6..12]);
             if smac != [0, 0, 0, 0, 0, 0] && smac != [0xff, 0xff, 0xff, 0xff, 0xff, 0xff] {
-                self.learn(src, smac);
+                self.learn(Ip::V4(src), smac);
             }
         }
-        if let Some(ours) = self.addr {
-            if dst != ours && dst != [255, 255, 255, 255] {
-                return;
-            }
+        if self.v4n > 0 && !self.holds(Ip::V4(dst)) && dst != [255, 255, 255, 255] {
+            return;
         }
         let proto = ip[9];
         let body = &ip[ihl..];
+        let src_ip = Ip::V4(src);
         if proto == 1 {
-            self.ingest_icmp(src, body);
+            self.ingest_icmp(src_ip, body);
         } else if proto == 17 {
-            self.ingest_udp(src, body);
+            self.ingest_udp(src_ip, body);
         } else if proto == 6 {
-            self.ingest_tcp(src, body);
+            self.ingest_tcp(src_ip, body);
         }
     }
 
-    fn ingest_icmp(&mut self, src: [u8; 4], body: &[u8]) {
-        if body.len() < 8 || body.len() > 512 || checksum(body) != 0 || body[1] != 0 {
+    fn ingest_icmp(&mut self, src: Ip, body: &[u8]) {
+        if body.len() < 8 || body.len() > 512 || body[1] != 0 {
             return;
         }
-        if body[0] == 8 {
+        let request = match src {
+            Ip::V4(_) => body[0] == 8 && checksum(body) == 0,
+            Ip::V6(_) => body[0] == 128,
+        };
+        let reply = match src {
+            Ip::V4(_) => body[0] == 0 && checksum(body) == 0,
+            Ip::V6(_) => body[0] == 129,
+        };
+        if request {
             self.reply_echo(src, body);
-        } else if body[0] == 0 {
+        } else if reply {
             let id = u16::from_be_bytes([body[4], body[5]]);
             let seq = u16::from_be_bytes([body[6], body[7]]);
             let matched = self
@@ -779,25 +1065,40 @@ impl Engine {
         }
     }
 
-    fn reply_echo(&mut self, dst: [u8; 4], request: &[u8]) {
-        let Some(src) = self.addr else {
+    fn reply_echo(&mut self, dst: Ip, request: &[u8]) {
+        let Some(src) = self.source_for(dst) else {
             return;
         };
         let Some(mac) = self.lookup(dst) else {
             return;
         };
-        let mut icmp = request.to_vec();
-        icmp[0] = 0;
-        icmp[2] = 0;
-        icmp[3] = 0;
-        let sum = checksum(&icmp);
-        icmp[2] = (sum >> 8) as u8;
-        icmp[3] = sum as u8;
-        self.egress
-            .push(ipv4_frame(self.mac, mac, src, dst, 1, &icmp));
+        match (src, dst) {
+            (Ip::V4(s), Ip::V4(d)) => {
+                let mut icmp = request.to_vec();
+                icmp[0] = 0;
+                icmp[2] = 0;
+                icmp[3] = 0;
+                let sum = checksum(&icmp);
+                icmp[2] = (sum >> 8) as u8;
+                icmp[3] = sum as u8;
+                self.egress.push(ipv4_frame(self.mac, mac, s, d, 1, &icmp));
+            }
+            (Ip::V6(s), Ip::V6(d)) => {
+                let payload = if request.len() > 8 {
+                    &request[8..]
+                } else {
+                    &[]
+                };
+                let id = u16::from_be_bytes([request[4], request[5]]);
+                let seq = u16::from_be_bytes([request[6], request[7]]);
+                self.egress
+                    .push(v6::echo(self.mac, mac, s, d, 129, id, seq, payload));
+            }
+            _ => {}
+        }
     }
 
-    fn ingest_udp(&mut self, src: [u8; 4], body: &[u8]) {
+    fn ingest_udp(&mut self, src: Ip, body: &[u8]) {
         if body.len() < 8 {
             return;
         }
@@ -824,7 +1125,7 @@ impl Engine {
         wait.payload = Some(payload.to_vec());
     }
 
-    fn ingest_dhcp(&mut self, _src: [u8; 4], p: &[u8]) {
+    fn ingest_dhcp(&mut self, _src: Ip, p: &[u8]) {
         if p.len() < 240 || p[236..240] != [0x63, 0x82, 0x53, 0x63] {
             return;
         }
@@ -870,16 +1171,16 @@ impl Engine {
             self.send_dhcp(3, Some(yi), Some(server));
             self.dhcp = Dhcp::WaitAck;
         } else if msg == 5 && self.dhcp == Dhcp::WaitAck {
-            self.addr = Some(yi);
-            self.prefix = mask.map(prefix_of).unwrap_or(24);
-            self.gateway = router.or(Some(server));
+            let prefix = mask.map(prefix_of).unwrap_or(24);
+            let gateway = router.unwrap_or(server);
             self.lease_secs = lease_secs;
             self.dhcp = Dhcp::Bound;
             self.ask = false;
+            let _ = self.insert(Ip::V4(yi), prefix, Ip::V4(gateway), lease_secs, false);
         }
     }
 
-    fn ingest_tcp(&mut self, src: [u8; 4], seg: &[u8]) {
+    fn ingest_tcp(&mut self, src: Ip, seg: &[u8]) {
         if seg.len() < 20 {
             return;
         }
@@ -904,7 +1205,7 @@ impl Engine {
         }
     }
 
-    fn find_conn(&self, local: u16, remote: u16, dst: [u8; 4]) -> Option<u8> {
+    fn find_conn(&self, local: u16, remote: u16, dst: Ip) -> Option<u8> {
         self.conns
             .iter()
             .position(|c| {
@@ -924,7 +1225,7 @@ impl Engine {
             .map(|i| i as u8)
     }
 
-    fn accept_syn(&mut self, listen: u8, src: [u8; 4], sport: u16, seq: u32) {
+    fn accept_syn(&mut self, listen: u8, src: Ip, sport: u16, seq: u32) {
         let Ok(id) = self.alloc_conn() else {
             return;
         };
@@ -1074,18 +1375,21 @@ impl Engine {
     }
 
     fn emit_tcp(&mut self, id: u8, flags: u8, payload: &[u8]) {
-        let Some(src_ip) = self.addr else {
-            return;
-        };
         let (seq, ack, src_port, dst_port, dst) = {
             let c = &self.conns[id as usize];
             (c.snd_nxt, c.rcv_nxt, c.local, c.remote, c.dst)
         };
+        let Some(src_ip) = self.source_for(dst) else {
+            return;
+        };
         let hop = self.next_hop(dst);
-        let dst_mac = self.lookup(hop).unwrap_or([0xff; 6]);
-        // MSS 1460. A larger segment does not fit one virtio receive
-        // buffer, so the flight never arrives.
-        let mss = [2u8, 4, 0x05, 0xb4];
+        let dst_mac = self.mac_for(hop);
+        // MSS 1460 on IPv4, 1440 on IPv6. A larger segment does not fit
+        // one virtio receive buffer, so the flight never arrives.
+        let mss = match dst {
+            Ip::V4(_) => [2u8, 4, 0x05, 0xb4],
+            Ip::V6(_) => [2u8, 4, 0x05, 0xa0],
+        };
         let opts: &[u8] = if flags & 0x02 != 0 { &mss } else { &[] };
         let hdr = 20 + opts.len();
         let mut tcp = Vec::with_capacity(hdr + payload.len());
@@ -1099,10 +1403,224 @@ impl Engine {
         tcp.extend_from_slice(&[0, 0, 0, 0]);
         tcp.extend_from_slice(opts);
         tcp.extend_from_slice(payload);
-        stamp_tcp(&mut tcp, src_ip, dst);
-        let frame = ipv4_frame(self.mac, dst_mac, src_ip, dst, 6, &tcp);
-        self.egress.push(frame);
+        match (src_ip, dst) {
+            (Ip::V4(s), Ip::V4(d)) => {
+                stamp_tcp(&mut tcp, s, d);
+                let frame = ipv4_frame(self.mac, dst_mac, s, d, 6, &tcp);
+                self.egress.push(frame);
+            }
+            (Ip::V6(s), Ip::V6(d)) => {
+                let sum = v6::transport_sum(&s, &d, 6, &tcp);
+                tcp[16] = (sum >> 8) as u8;
+                tcp[17] = sum as u8;
+                self.egress.push(v6::tcp(self.mac, dst_mac, s, d, &tcp));
+            }
+            _ => return,
+        }
         self.conns[id as usize].last_tx_ms = 0;
+    }
+
+    fn poll_v6(&mut self, now_ms: u64) {
+        if !self.learn {
+            return;
+        }
+        if !self.dad_sent {
+            if let Some(ll) = self.link_local() {
+                self.egress.push(v6::dad(self.mac, ll));
+            }
+            self.dad_sent = true;
+        }
+        if !self.rs_sent {
+            if let Some(ll) = self.link_local() {
+                self.egress.push(v6::router_solicit(self.mac, ll));
+            }
+            self.rs_sent = true;
+        }
+        if self.v6_dhcp == Dhcp::Idle && now_ms.saturating_sub(self.v6_ms) >= 200 {
+            if let Some(ll) = self.link_local() {
+                self.v6_xid = xid_bytes(now_ms);
+                self.egress.push(v6::solicit(self.mac, ll, self.v6_xid));
+                self.v6_dhcp = Dhcp::WaitOffer;
+                self.v6_ms = now_ms;
+            }
+        } else if matches!(self.v6_dhcp, Dhcp::WaitOffer | Dhcp::WaitAck)
+            && now_ms.saturating_sub(self.v6_ms) >= 1000
+        {
+            self.v6_dhcp = Dhcp::Idle;
+            self.v6_ms = now_ms;
+        }
+    }
+
+    fn ingest_ip6(&mut self, frame: &[u8]) {
+        let Some(pkt) = v6::parse(frame) else {
+            return;
+        };
+        if pkt.src != [0u8; 16] && !Ip::V6(pkt.src).is_multicast() {
+            let smac = pkt.smac;
+            if smac != [0; 6] && smac != [0xff; 6] {
+                self.learn(Ip::V6(pkt.src), smac);
+            }
+        }
+        if pkt.next == 58 {
+            self.ingest_icmp6(&pkt);
+            return;
+        }
+        if pkt.next != 17 && pkt.next != 6 {
+            return;
+        }
+        let dst = Ip::V6(pkt.dst);
+        let mine = self.holds(dst) || self.solicited(pkt.dst) || pkt.dst == v6::all_dhcp();
+        if !mine {
+            return;
+        }
+        let src = Ip::V6(pkt.src);
+        if pkt.next == 17 {
+            if let Some(msg) = v6::dhcp6_reply(&pkt, self.dhcp6_xid()) {
+                self.take_dhcp6(msg);
+                return;
+            }
+            self.ingest_udp(src, pkt.body);
+        } else if pkt.next == 6 {
+            self.ingest_tcp(src, pkt.body);
+        }
+    }
+
+    fn dhcp6_xid(&self) -> [u8; 3] {
+        if self.v6_dhcp == Dhcp::WaitAck {
+            self.v6_req
+        } else {
+            self.v6_xid
+        }
+    }
+
+    fn solicited(&self, dst: [u8; 16]) -> bool {
+        self.v6_slots().iter().any(|s| match s.ip {
+            Ip::V6(a) => v6::solicited_node(&a) == dst,
+            Ip::V4(_) => false,
+        })
+    }
+
+    fn ingest_icmp6(&mut self, pkt: &v6::Packet<'_>) {
+        if !v6::icmp_ok(pkt) || pkt.body.is_empty() {
+            return;
+        }
+        if let Some(gw) = v6::router_advert_from(pkt) {
+            if self.v6_gw.is_none() && self.v6n > 0 {
+                self.v6_gw = Some(Ip::V6(gw));
+            }
+            return;
+        }
+        let kind = pkt.body[0];
+        if kind == 136 {
+            self.learn_na(pkt);
+            self.flush_pending();
+            return;
+        }
+        if kind == 135 && pkt.body.len() >= 24 {
+            let mut target = [0u8; 16];
+            target.copy_from_slice(&pkt.body[8..24]);
+            if self.holds(Ip::V6(target)) {
+                self.reply_ns(pkt, target);
+            }
+            return;
+        }
+        if kind == 128 || kind == 129 {
+            self.ingest_icmp(Ip::V6(pkt.src), pkt.body);
+        }
+    }
+
+    fn learn_na(&mut self, pkt: &v6::Packet<'_>) {
+        if pkt.body.len() < 24 {
+            return;
+        }
+        let mut target = [0u8; 16];
+        target.copy_from_slice(&pkt.body[8..24]);
+        let mut mac = pkt.smac;
+        let mut i = 24usize;
+        while i + 2 <= pkt.body.len() {
+            let t = pkt.body[i];
+            let len = pkt.body[i + 1] as usize * 8;
+            if len < 2 || i + len > pkt.body.len() {
+                break;
+            }
+            if t == 2 && len >= 8 {
+                mac.copy_from_slice(&pkt.body[i + 2..i + 8]);
+            }
+            i += len;
+        }
+        self.learn(Ip::V6(target), mac);
+    }
+
+    fn reply_ns(&mut self, pkt: &v6::Packet<'_>, target: [u8; 16]) {
+        let dst = if pkt.src == [0u8; 16] {
+            let mut all = [0u8; 16];
+            all[0] = 0xff;
+            all[1] = 0x02;
+            all[15] = 0x01;
+            all
+        } else {
+            pkt.src
+        };
+        let dmac = if pkt.src == [0u8; 16] {
+            v6::multicast_mac(&dst)
+        } else {
+            pkt.smac
+        };
+        self.egress.push(v6::neighbor_advert(
+            self.mac,
+            target,
+            dmac,
+            dst,
+            target,
+            pkt.src != [0u8; 16],
+        ));
+    }
+
+    fn take_dhcp6(&mut self, msg: v6::Dhcp6) {
+        if msg.kind == 2 && self.v6_dhcp == Dhcp::WaitOffer {
+            self.v6_server = msg.server;
+            self.v6_offer = Some(msg.addr);
+            self.v6_req = [
+                self.v6_xid[0].wrapping_add(1),
+                self.v6_xid[1],
+                self.v6_xid[2],
+            ];
+            if let Some(ll) = self.link_local() {
+                self.egress.push(v6::request(
+                    self.mac,
+                    ll,
+                    self.v6_req,
+                    &self.v6_server,
+                    msg.addr,
+                ));
+            }
+            self.v6_dhcp = Dhcp::WaitAck;
+            return;
+        }
+        if msg.kind == 7 && matches!(self.v6_dhcp, Dhcp::WaitOffer | Dhcp::WaitAck) {
+            self.push_addr(Ip::V6(msg.addr), 64, msg.valid, false);
+            self.v6_dhcp = Dhcp::Bound;
+        }
+    }
+
+    fn push_addr(&mut self, addr: Ip, prefix: u8, expiry: u32, auto: bool) {
+        let (n, slots) = match addr {
+            Ip::V4(_) => (&mut self.v4n, &mut self.v4),
+            Ip::V6(_) => (&mut self.v6n, &mut self.v6),
+        };
+        if slots[..*n as usize].iter().any(|s| s.ip == addr) {
+            return;
+        }
+        if *n as usize >= PER_FAMILY {
+            return;
+        }
+        slots[*n as usize] = Slot {
+            ip: addr,
+            prefix,
+            expiry,
+            auto,
+        };
+        *n += 1;
     }
 
     fn retransmit(&mut self, now_ms: u64) {
@@ -1127,6 +1645,11 @@ impl Engine {
             c.last_tx_ms = now_ms;
         }
     }
+}
+
+fn xid_bytes(now: u64) -> [u8; 3] {
+    let n = now as u32;
+    [0x67, (n >> 8) as u8, n as u8]
 }
 
 fn seq_lt(a: u32, b: u32) -> bool {
@@ -1445,11 +1968,12 @@ mod tests {
     fn udp_off_subnet_keeps_the_peer_address() {
         let mut e = Engine::new([1; 6], false);
         e.set_fixed([10, 0, 2, 15], 24, [10, 0, 2, 2]);
-        e.udp_send([172, 30, 0, 2], 4597, 4598, b"card").unwrap();
+        e.udp_send(Ip::V4([172, 30, 0, 2]), 4597, 4598, b"card")
+            .unwrap();
         let arp = e.pop().unwrap();
         assert_eq!(&arp[12..14], &[0x08, 0x06]);
         assert_eq!(&arp[38..42], &[10, 0, 2, 2]);
-        e.learn([10, 0, 2, 2], [9; 6]);
+        e.learn(Ip::V4([10, 0, 2, 2]), [9; 6]);
         e.poll(1);
         let udp = e.pop().unwrap();
         assert_eq!(&udp[..6], &[9; 6]);
@@ -1462,8 +1986,8 @@ mod tests {
     fn udp_arm_takes_only_the_stored_peer() {
         let mut e = Engine::new([1; 6], false);
         e.set_fixed([10, 0, 2, 15], 24, [10, 0, 2, 2]);
-        assert!(!e.udp_arm([172, 30, 0, 2], 53, 4598));
-        assert!(e.udp_arm([172, 30, 0, 2], 4602, 4598));
+        assert!(!e.udp_arm(Ip::V4([172, 30, 0, 2]), 53, 4598));
+        assert!(e.udp_arm(Ip::V4([172, 30, 0, 2]), 4602, 4598));
         let other = udp_frame(
             [9; 6],
             [1; 6],
@@ -1508,7 +2032,7 @@ mod tests {
         let query = ntp_request(nonce);
         assert_eq!(query[0], 0x23);
         assert_eq!(&query[40..48], &nonce);
-        assert!(e.udp_arm([10, 0, 2, 2], NTP_PORT, 4123));
+        assert!(e.udp_arm(Ip::V4([10, 0, 2, 2]), NTP_PORT, 4123));
         let mut reply = [0u8; 48];
         reply[0] = 0x24;
         reply[1] = 1;
@@ -1568,12 +2092,12 @@ mod tests {
     fn tcp_handshake_between_two_engines() {
         let mut a = Engine::new([1; 6], false);
         a.set_fixed([10, 0, 0, 1], 24, [10, 0, 0, 2]);
-        a.learn([10, 0, 0, 2], [2; 6]);
+        a.learn(Ip::V4([10, 0, 0, 2]), [2; 6]);
         let mut b = Engine::new([2; 6], false);
         b.set_fixed([10, 0, 0, 2], 24, [10, 0, 0, 1]);
-        b.learn([10, 0, 0, 1], [1; 6]);
+        b.learn(Ip::V4([10, 0, 0, 1]), [1; 6]);
         b.tcp_listen(4590).unwrap();
-        a.tcp_connect([10, 0, 0, 2], 4590).unwrap();
+        a.tcp_connect(Ip::V4([10, 0, 0, 2]), 4590).unwrap();
         for _ in 0..6 {
             while let Some(f) = a.pop() {
                 b.ingest(&f);
@@ -1603,11 +2127,11 @@ mod tests {
     fn icmp_off_subnet_keeps_the_peer_address() {
         let mut e = Engine::new([1; 6], false);
         e.set_fixed([10, 0, 2, 15], 24, [10, 0, 2, 2]);
-        e.icmp_echo([172, 30, 0, 2], b"galexy").unwrap();
+        e.icmp_echo(Ip::V4([172, 30, 0, 2]), b"galexy").unwrap();
         let arp = e.pop().unwrap();
         assert_eq!(&arp[12..14], &[0x08, 0x06]);
         assert_eq!(&arp[38..42], &[10, 0, 2, 2]);
-        e.learn([10, 0, 2, 2], [9; 6]);
+        e.learn(Ip::V4([10, 0, 2, 2]), [9; 6]);
         e.poll(1);
         let echo = e.pop().unwrap();
         assert_eq!(&echo[..6], &[9; 6]);
@@ -1620,10 +2144,10 @@ mod tests {
     fn icmp_echo_round_trip() {
         let mut a = Engine::new([1; 6], false);
         a.set_fixed([10, 0, 2, 15], 24, [10, 0, 2, 2]);
-        a.learn([10, 0, 2, 2], [2; 6]);
+        a.learn(Ip::V4([10, 0, 2, 2]), [2; 6]);
         let mut b = Engine::new([2; 6], false);
         b.set_fixed([10, 0, 2, 2], 24, [10, 0, 2, 15]);
-        a.icmp_echo([10, 0, 2, 2], b"galexy").unwrap();
+        a.icmp_echo(Ip::V4([10, 0, 2, 2]), b"galexy").unwrap();
         let req = a.pop().unwrap();
         assert_eq!(req[23], 1);
         assert_eq!(req[34], 8);
@@ -1634,15 +2158,15 @@ mod tests {
         assert_eq!(rep[34], 0);
         assert!(rep.ends_with(b"galexy"));
         a.ingest(&rep);
-        assert_eq!(a.take_echo(), Some([10, 0, 2, 2]));
+        assert_eq!(a.take_echo(), Some(Ip::V4([10, 0, 2, 2])));
     }
 
     #[test]
     fn icmp_bad_reply_is_ignored() {
         let mut a = Engine::new([1; 6], false);
         a.set_fixed([10, 0, 2, 15], 24, [10, 0, 2, 2]);
-        a.learn([10, 0, 2, 2], [2; 6]);
-        a.icmp_echo([10, 0, 2, 2], b"galexy").unwrap();
+        a.learn(Ip::V4([10, 0, 2, 2]), [2; 6]);
+        a.icmp_echo(Ip::V4([10, 0, 2, 2]), b"galexy").unwrap();
         let req = a.pop().unwrap();
         let mut bad = req.clone();
         bad[34] = 0;
@@ -1653,10 +2177,10 @@ mod tests {
         short[34] = 0;
         a.ingest(&short);
         assert!(a.take_echo().is_none());
-        a.icmp_echo([10, 0, 2, 2], b"nope").unwrap();
-        assert!(a.icmp_echo([10, 0, 2, 2], &[0; 65]).is_err());
+        a.icmp_echo(Ip::V4([10, 0, 2, 2]), b"nope").unwrap();
+        assert!(a.icmp_echo(Ip::V4([10, 0, 2, 2]), &[0; 65]).is_err());
         assert!(Engine::new([1; 6], true)
-            .icmp_echo([10, 0, 2, 2], b"x")
+            .icmp_echo(Ip::V4([10, 0, 2, 2]), b"x")
             .is_err());
     }
 
@@ -1701,8 +2225,8 @@ mod tests {
     fn dial_dot() -> Dot {
         let mut engine = Engine::new([1; 6], false);
         engine.set_fixed([10, 0, 2, 15], 24, [10, 0, 2, 2]);
-        engine.learn([10, 0, 2, 2], [9; 6]);
-        let id = engine.tcp_connect([1, 1, 1, 1], 853).unwrap();
+        engine.learn(Ip::V4([10, 0, 2, 2]), [9; 6]);
+        let id = engine.tcp_connect(Ip::V4([1, 1, 1, 1]), 853).unwrap();
         let syn = engine.pop().unwrap();
         assert_eq!(syn[46] >> 4, 6, "syn carries mss");
         assert_eq!(&syn[54..58], &[2, 4, 0x05, 0xb4]);
@@ -1838,6 +2362,137 @@ mod tests {
         let got = recv_all(&mut dot.engine, dot.id);
         assert_eq!(&got[..4], &[0x16, 0x03, 0x03, 0x00]);
         assert_eq!(got, flight[..180]);
+    }
+
+    #[test]
+    fn learn_keeps_link_local_and_dhcp6() {
+        let mac = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
+        let mut engine = Engine::new(mac, false);
+        assert!(engine.is_empty());
+        engine.poll(1_000);
+        assert!(engine.pop().is_none());
+        engine.start_dhcp();
+        engine.poll(1_000);
+        let mut saw_v4 = false;
+        let mut saw_v6 = false;
+        while let Some(frame) = engine.pop() {
+            if frame.len() > 14 && frame[12] == 0x08 && frame[13] == 0x00 {
+                saw_v4 = true;
+            }
+            if frame.len() > 14 && frame[12] == 0x86 && frame[13] == 0xdd {
+                saw_v6 = true;
+            }
+        }
+        assert!(saw_v4 && saw_v6);
+        engine.poll(1_100);
+        assert!(engine.pop().is_none());
+
+        let galexy_core::Ip::V6(ll) = galexy_core::link_local_from_mac(mac) else {
+            panic!("link-local");
+        };
+        let router = {
+            let mut a = [0u8; 16];
+            a[0] = 0xfe;
+            a[1] = 0x80;
+            a[15] = 2;
+            a
+        };
+        engine.ingest(&v6::router_advert(
+            [0x52, 0x55, 0x00, 0x12, 0x34, 0x02],
+            router,
+        ));
+        let leased = {
+            let mut a = ll;
+            a[0] = 0xfe;
+            a[1] = 0xc0;
+            a
+        };
+        let xid = [0x67, (1_000u32 >> 8) as u8, 1_000u32 as u8];
+        let adv = dhcp6_msg(2, xid, mac, leased);
+        engine.ingest(&v6::udp(
+            [0x52, 0x55, 0x00, 0x12, 0x34, 0x02],
+            mac,
+            router,
+            ll,
+            547,
+            546,
+            &adv,
+        ));
+        let req_xid = [xid[0].wrapping_add(1), xid[1], xid[2]];
+        let reply = dhcp6_msg(7, req_xid, mac, leased);
+        engine.ingest(&v6::udp(
+            [0x52, 0x55, 0x00, 0x12, 0x34, 0x02],
+            mac,
+            router,
+            ll,
+            547,
+            546,
+            &reply,
+        ));
+        let mut lines = Vec::new();
+        engine.each_addr(|ip, prefix, via, _| {
+            let mut buf = [0u8; 64];
+            let n = galexy_core::format_ip(ip, &mut buf).unwrap();
+            let text = core::str::from_utf8(&buf[..n]).unwrap().to_string();
+            let gw = via.map(|gw| {
+                let mut g = [0u8; 64];
+                let n = galexy_core::format_ip(gw, &mut g).unwrap();
+                core::str::from_utf8(&g[..n]).unwrap().to_string()
+            });
+            lines.push((text, prefix, gw));
+        });
+        assert!(lines.iter().any(|(ip, prefix, via)| {
+            ip == "fe80::5054:ff:fe12:3456" && *prefix == 64 && via.is_none()
+        }));
+        assert!(lines.iter().any(|(ip, prefix, via)| {
+            ip == "fec0::5054:ff:fe12:3456" && *prefix == 64 && via.as_deref() == Some("fe80::2")
+        }));
+    }
+
+    #[test]
+    fn static_address_sends_nothing_and_keeps_one_gateway() {
+        let mut engine = Engine::new([1, 2, 3, 4, 5, 6], false);
+        let local = galexy_core::parse_ip(b"fe80::1").unwrap();
+        engine.add_static(local, 64, local).unwrap();
+        engine.poll(1_000);
+        assert!(engine.pop().is_none());
+        let other = galexy_core::parse_ip(b"fe80::3").unwrap();
+        let gw = galexy_core::parse_ip(b"fe80::2").unwrap();
+        assert_eq!(engine.add_static(other, 64, gw), Err(StaticErr::OneGateway));
+        let global = galexy_core::parse_ip(b"2001:db8::1").unwrap();
+        assert_eq!(
+            engine.add_static(global, 64, gw),
+            Err(StaticErr::OneGateway)
+        );
+        let v4 = galexy_core::parse_ip(b"10.0.2.15").unwrap();
+        assert_eq!(engine.add_static(v4, 24, local), Err(StaticErr::Bad));
+        assert_eq!(engine.add_static(global, 64, local), Ok(()));
+        let mut n = 0;
+        engine.each_addr(|_, _, _, _| n += 1);
+        assert_eq!(n, 3);
+    }
+
+    fn dhcp6_msg(kind: u8, xid: [u8; 3], mac: [u8; 6], addr: [u8; 16]) -> Vec<u8> {
+        let mut msg = Vec::new();
+        msg.push(kind);
+        msg.extend_from_slice(&xid);
+        let mut duid = vec![0, 3, 0, 1];
+        duid.extend_from_slice(&mac);
+        push_dhcp_opt(&mut msg, 2, &duid);
+        let mut ia = vec![0u8; 12];
+        ia[..4].copy_from_slice(&1u32.to_be_bytes());
+        let mut iaaddr = [0u8; 24];
+        iaaddr[..16].copy_from_slice(&addr);
+        iaaddr[16..20].copy_from_slice(&3600u32.to_be_bytes());
+        push_dhcp_opt(&mut ia, 5, &iaaddr);
+        push_dhcp_opt(&mut msg, 3, &ia);
+        msg
+    }
+
+    fn push_dhcp_opt(out: &mut Vec<u8>, code: u16, val: &[u8]) {
+        out.extend_from_slice(&code.to_be_bytes());
+        out.extend_from_slice(&(val.len() as u16).to_be_bytes());
+        out.extend_from_slice(val);
     }
 
     impl Engine {

@@ -1650,7 +1650,7 @@ fn sealed_volume_date_pin_shutdown() {
     owned.extend(type_line("cd Desktop", "owner@galexy:/Desktop> "));
     owned.extend(type_line("cat note", "hello"));
     owned.extend(type_line("svc date", " utc"));
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
     owned.extend(type_line("net dns 1.1.1.1", "ok "));
     owned.extend(type_line("shutdown", "[init] power"));
     let keys: Vec<(&str, &str)> = owned
@@ -6616,7 +6616,7 @@ fn net_lines(lines: &[(&str, &str)], final_marker: &str, timeout: Duration) -> S
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
     for (line, marker) in lines {
         owned.extend(type_line(line, marker));
     }
@@ -6779,15 +6779,7 @@ fn net_udp_and_tcp_reach_the_host() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
-    owned.extend(type_line(
-        "net up 10.0.2.15/24 via 10.0.2.2",
-        "static address is not built",
-    ));
-    owned.extend(type_line(
-        "net up fe80::1/64 via fe80::1",
-        "ipv6 is not built",
-    ));
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
         .map(|(code, echo)| (code.as_str(), echo.as_str()))
@@ -6814,19 +6806,81 @@ fn net_udp_and_tcp_reach_the_host() {
         serial.contains("[net] link up mac=52:54:00:12:34:56"),
         "link log missing; serial:\n{serial}"
     );
-    let refused = serial
-        .find("static address is not built")
-        .expect("static form was not recognized");
-    let v6 = serial
-        .find("ipv6 is not built")
-        .expect("ipv6 form was not recognized");
     let addr = serial
         .find("[net] addr 10.0.2.15/24")
         .expect("dhcp did not log an address");
-    assert!(
-        refused < v6 && v6 < addr,
-        "dhcp ran before the unbuilt forms; serial:\n{serial}"
+    assert!(addr > 0, "dhcp did not log an address; serial:\n{serial}");
+}
+
+/// A static IPv6 address on an empty link, then a fresh boot that learns
+/// DHCPv4 and DHCPv6 and pins an IPv6 resolver.
+#[test]
+fn net_v6_print_static_and_dns() {
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line(
+        "net up fe80::1/64 via fe80::1",
+        "fe80::1/64 via fe80::1",
+    ));
+    owned.extend(type_line("net", "fe80::1/64 via fe80::1"));
+    owned.extend(type_line("shutdown", "[init] power"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "[init] power",
+        Duration::from_millis(30),
+        Duration::from_secs(180),
     );
+    assert!(
+        serial.contains("fe80::1/64 via fe80::1"),
+        "static v6 was not installed; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("10.0.2.15"),
+        "static v6 started DHCPv4; serial:\n{serial}"
+    );
+
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
+    owned.extend(type_line("net", "fe80::"));
+    owned.extend(type_line("connect --putkey", "wrote"));
+    owned.extend(type_line("net dns fec0::2 /k", "ok"));
+    owned.extend(type_line("shutdown", "[init] power"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "[init] power",
+        Duration::from_millis(30),
+        Duration::from_secs(240),
+    );
+    assert!(
+        serial.contains("fe80::5054:ff:fe12:3456/64"),
+        "link-local missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("10.0.2.15/24 via 10.0.2.2"),
+        "dhcpv4 missing; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("ok"),
+        "net dns did not accept the v6 resolver; serial:\n{serial}"
+    );
+    let _ = std::fs::write("/tmp/net-v6-seat.txt", &serial);
 }
 
 /// Milestone 126: one NTP reply sets civil UTC. A missing rule sends
@@ -6869,8 +6923,8 @@ fn net_time_sets_the_date() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
-    owned.extend(type_line("net link", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
+    owned.extend(type_line("net link", "10.0.2.15/24 via 10.0.2.2"));
     owned.extend(type_line("svc date", "unset"));
     owned.extend(type_line("net dns 10.0.2.2", "access denied"));
     owned.extend(type_line("net dns 10.0.2.3", "access denied"));
@@ -7202,7 +7256,7 @@ fn wait_local_port(port: u16) {
 fn ping_gateway_replies() {
     let serial = net_lines(
         &[
-            ("net link", "up 10.0.2.15/24"),
+            ("net link", "10.0.2.15/24 via 10.0.2.2"),
             ("ping 10.0.2.2", "reply from 10.0.2.2"),
         ],
         "reply from 10.0.2.2",
@@ -7233,8 +7287,8 @@ fn ping_name_resolves() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
-    owned.extend(type_line("net link", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
+    owned.extend(type_line("net link", "10.0.2.15/24 via 10.0.2.2"));
     owned.extend(type_line("connect --putkey", "wrote"));
     owned.extend(type_line("net dns 172.30.0.2 /bad", "ok"));
     owned.extend(type_line("ping google.com", "access denied"));
@@ -7328,8 +7382,8 @@ fn ping_three_echoes_and_nslookup() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
-    owned.extend(type_line("net link", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
+    owned.extend(type_line("net link", "10.0.2.15/24 via 10.0.2.2"));
     owned.extend(type_line("connect --putkey", "wrote"));
     owned.extend(type_line("net dns 172.30.0.2 /k", "ok"));
     owned.extend(type_line("ping google.com", "sent 3"));
@@ -7439,8 +7493,8 @@ fn resolver_pin_still_wins() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
-    owned.extend(type_line("net link", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
+    owned.extend(type_line("net link", "10.0.2.15/24 via 10.0.2.2"));
     owned.extend(type_line("net dns 10.0.2.2", "access denied"));
     owned.extend(type_line("net dns 10.0.2.3", "access denied"));
     owned.extend(type_line("connect --putkey", "wrote"));
@@ -7563,7 +7617,7 @@ fn cards_and_asks_typing_e2e() {
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
     owned.extend(type_line(save_pin.as_str(), "owner@galexy>"));
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
     owned.extend(type_line("net allow echo 10.0.2.2:4584 k", "ok"));
     owned.extend(type_line("dial echo", "still up"));
     owned.extend(type_line("sec net dial echo:4584 dial", "ok"));
@@ -7667,7 +7721,7 @@ fn connect_asks_then_dials() {
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
     owned.extend(type_line(save_pin.as_str(), "owner@galexy>"));
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
     owned.extend(type_line("net allow echo 10.0.2.2:4586 k", "ok"));
     owned.extend(type_line("sec net dial echo:4586 connect", "ok"));
     owned.extend(type_line("useradd eve", "Password: "));
@@ -7761,7 +7815,7 @@ fn python_lane_typing_e2e() {
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
     owned.extend(type_line(save_pin.as_str(), "owner@galexy>"));
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
     owned.extend(type_line("net allow echo 10.0.2.2:4582 k", "ok"));
     owned.extend(type_line(
         "echo print(lane.read(\"echo\")) > lane.py",
@@ -7844,7 +7898,7 @@ fn serve_hands_the_lane_to_its_listener() {
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
     owned.extend(type_line(save_pin.as_str(), "owner@galexy>"));
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
     owned.extend(type_line("net allow echo 10.0.2.2:4591 k", "ok"));
     owned.extend(type_line("sec net listen *:4591 shell", "ok"));
     owned.extend(type_line("sec net listen *:4591 shell2", "ok"));
@@ -7932,7 +7986,7 @@ fn net_flood_deadline_leaves_the_seat() {
     });
     let serial = net_lines(
         &[
-            ("net link", "up 10.0.2.15/24"),
+            ("net link", "10.0.2.15/24 via 10.0.2.2"),
             ("svc status net", "net running"),
             ("svc status shell", "shell running"),
         ],
@@ -8122,7 +8176,7 @@ fn milestones_110_through_114() {
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
     owned.extend(type_line("connect --putkey", "wrote"));
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
     owned.extend(type_line("net dns 172.30.0.2 /bad", "ok"));
     owned.extend(type_line("net allow docs dns:4594 /k", "ok"));
     owned.extend(type_line("net resolve docs", "access denied"));
@@ -8250,7 +8304,7 @@ fn milestones_115_and_116() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
     owned.extend(type_line("net peer nope 0.0.0.0 9", "bad"));
     owned.extend(type_line("net peer nope 172.30.0.2 53", "bad"));
     owned.extend(type_line("net port 4596 10.0.2.15", "ok"));
@@ -8434,7 +8488,7 @@ fn socket_compat_cards() {
     owned.extend(type_line(&addr, "ok"));
     let port = format!("net port 4604 {peer_text}");
     owned.extend(type_line(&port, "ok"));
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
     owned.extend(type_line("net link", "10.0.2.15"));
     owned.extend(type_line("net addr 10.0.2.15 0 /k", "ok"));
     owned.extend(type_line("net port 4601 10.0.2.15", "ok"));
@@ -8587,7 +8641,7 @@ fn python_socket_cards() {
     owned.extend(type_line(&addr, "ok"));
     let port = format!("net port 4607 {peer_text}");
     owned.extend(type_line(&port, "ok"));
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
     owned.extend(type_line("net link", "10.0.2.15"));
     owned.extend(type_line("net addr 10.0.2.15 0 /k", "ok"));
     owned.extend(type_line("net port 4605 10.0.2.15", "ok"));
@@ -8927,7 +8981,7 @@ fn outbound_card_dials_two_names() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
     owned.extend(type_line("net allow alpha 10.0.2.2:4610", "ok"));
     owned.extend(type_line("net allow img.alpha 10.0.2.2:4610", "ok"));
     owned.extend(type_line("net allow beta 10.0.2.2:4611", "ok"));
@@ -9248,7 +9302,7 @@ fn milestone_117_ssh_reads_a_file() {
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
     owned.extend(type_line("echo hi > note", "owner@galexy> "));
-    owned.extend(type_line("net up", "up 10.0.2.15/24"));
+    owned.extend(type_line("net up", "10.0.2.15/24 via 10.0.2.2"));
     owned.extend(type_line("net allow ssh 10.0.2.2:4598", "ok"));
     owned.extend(type_line("sec net dial 10.0.2.2:4598 ssh-open", "ok"));
     owned.extend(type_line("echo hold", "ssh: file"));

@@ -142,9 +142,9 @@ can add one.
 The network stays almost silent. A packet leaves only because the user
 acted, or because a service they started is doing the job they gave it.
 There is no background lookup, ping, time query, or announcement. DHCP
-starts only from `net up`, which starts DHCPv4. The same verb is where
-a static address will go (`net up 10.0.2.15/24 via 10.0.2.2`, and the
-IPv6 form). Those forms are not built. First boot does not run
+starts only from bare `net up` on an empty list, and that starts DHCPv4
+and DHCPv6. `net up <ip>/<prefix> via <gateway>` installs a static
+address for either family and sends nothing. First boot does not run
 `net up`. It sends nothing until the resolver question is answered, and
 skip sends nothing.
 

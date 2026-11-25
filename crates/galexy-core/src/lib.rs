@@ -21,6 +21,7 @@ mod crc32_test;
 mod date;
 #[cfg(test)]
 mod date_test;
+mod ip;
 mod lang;
 #[cfg(test)]
 mod lang_test;
@@ -45,6 +46,10 @@ pub use bitmap::Bitmap;
 pub use console_cut::console_commit_len;
 pub use crc32::crc32;
 pub use date::{civil_to_utc, format_utc, parse_utc, utc_to_civil, Civil, YEAR_MAX, YEAR_MIN};
+pub use ip::{
+    decode_ip_arg, encode_ip_arg, format_ip, link_local_from_mac, parse_ip, prefix_contains,
+    prefix_ok, same_family, Ip,
+};
 pub use lang::{
     complete, diagnose, lang_of, paint_line, Compl, Diag, HiState, Lang, Span, COMPL_LEN,
 };
