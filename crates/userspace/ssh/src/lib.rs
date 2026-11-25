@@ -50,15 +50,22 @@ impl Drop for Lane {
     }
 }
 
-/// Asks `net` for a live lane on the name `ssh`. `dir` is read or write.
-/// The name is the card. No address is passed.
+/// Asks `net` for a live lane. The listener uses the name `ssh`.
+/// A client passes `address` or `address:port`.
 pub fn stream(dir: u8) -> Option<(Vec<u8>, u64)> {
-    let mut payload = [0u8; 5];
+    stream_name(dir, b"ssh")
+}
+
+pub fn stream_name(dir: u8, name: &[u8]) -> Option<(Vec<u8>, u64)> {
+    if name.is_empty() || name.len() + 2 > galexy_abi::INIT_RPC_MAX {
+        return None;
+    }
+    let mut payload = [0u8; galexy_abi::INIT_RPC_MAX];
     payload[0] = galexy_abi::NET_OP_STREAM;
     payload[1] = dir;
-    payload[2..].copy_from_slice(b"ssh");
+    payload[2..2 + name.len()].copy_from_slice(name);
     let mut reply = [0u8; galexy_abi::CHAN_MSG_MAX];
-    let got = galexy_rt::net_rpc(&payload, &mut reply);
+    let got = galexy_rt::net_rpc(&payload[..2 + name.len()], &mut reply);
     if !got.ok || (got.value as usize) < 8 {
         return None;
     }

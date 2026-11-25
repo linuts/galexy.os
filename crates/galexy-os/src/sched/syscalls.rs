@@ -440,27 +440,6 @@ fn syscall_usb_arm(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     }
 }
 
-/// One galfs object per listed port. The name is the port in decimal,
-/// which fits the existing object record. `DISK_VERSION` stays put.
-fn ensure_usb_port(port: u8) -> Result<(), SysError> {
-    let mut raw = [0u8; 3];
-    let n = if port >= 100 {
-        raw[0] = b'0' + port / 100;
-        raw[1] = b'0' + (port / 10) % 10;
-        raw[2] = b'0' + port % 10;
-        3
-    } else if port >= 10 {
-        raw[0] = b'0' + port / 10;
-        raw[1] = b'0' + port % 10;
-        2
-    } else {
-        raw[0] = b'0' + port;
-        1
-    };
-    let name = core::str::from_utf8(&raw[..n]).unwrap_or("");
-    crate::sched::galfs::ensure_card("usb", name).map(|_| ())
-}
-
 fn syscall_usb_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if !cap.rights().contains(CapRights::READ) || !crate::sched::current_is_usb() {
         return SyscallResult::err(SysError::AccessDenied);
@@ -474,9 +453,6 @@ fn syscall_usb_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     match crate::drivers::usb::xhci::read_device(&mut staged[..len as usize]) {
         Ok(0) => SyscallResult::ok(0),
         Ok(n) => {
-            if n > 0 {
-                let _ = ensure_usb_port(staged[0]);
-            }
             // SAFETY: `user_buffer` accepted `len` writable bytes and `n <= len`.
             unsafe {
                 crate::arch::user_copy::copy_to_user(staged.as_ptr(), addr, n);

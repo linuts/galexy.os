@@ -580,6 +580,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "galexy-sec"
+version = "0.1.0"
+dependencies = [
+ "galexy-abi",
+]
+
+[[package]]
 name = "galexy-ssh"
 version = "0.1.0"
 dependencies = [
@@ -739,6 +746,7 @@ dependencies = [
  "galexy-core",
  "galexy-netcfg",
  "galexy-rt",
+ "galexy-sec",
 ]
 
 [[package]]
@@ -884,6 +892,7 @@ dependencies = [
  "galexy-net",
  "galexy-netcfg",
  "galexy-rt",
+ "galexy-sec",
  "getrandom 0.4.3",
  "rustls",
  "rustls-pure",
@@ -1628,6 +1637,7 @@ version = "0.1.0"
 dependencies = [
  "galexy-abi",
  "galexy-rt",
+ "galexy-sec",
  "galexy-usb",
 ]
 

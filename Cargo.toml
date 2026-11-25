@@ -6,6 +6,7 @@ members = [
     "crates/galexy-core",
     "crates/galexy-crypto",
     "crates/galexy-abi",
+    "crates/galexy-sec",
     "crates/galexy-galf",
     "crates/galexy-net",
     "crates/galexy-usb",

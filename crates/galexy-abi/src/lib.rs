@@ -906,28 +906,31 @@ pub const FILES_SNAPSHOT_MAX: usize = 8192;
 /// Bytes one channel message may carry, not counting Caps.
 pub const CHAN_MSG_MAX: usize = 256;
 
-/// Bytes the kernel prepends to an init control message.
+/// Bytes the kernel prepends to an init, net, or usb control message.
 ///
 /// Layout, little-endian, stamped by the kernel (the caller cannot set
 /// these):
 /// - `0`: admin (`1` when the sender's root is the admin actor)
 /// - `1`: sender TTY, 0-based
-/// - `2`: card rights on a net RPC ([`TOKEN_READ`] is dial, [`TOKEN_WRITE`]
-///   is accept). [`NET_HELD_OUT`] is also set when the task holds read
-///   on `/card/out/<task>`. That bit dials. It does not accept. On a
-///   usb RPC, `2..4` is a bit mask of ports 1..=16 the caller may list
-///   (bit 0 is port 1)
-/// - `3`: high byte of that usb mask; zero on a net RPC
-/// - `4..12`: seat debug id (`u64`)
-/// - `12..20`: session generation (`u64`)
+/// - `2`: task-name length, at most [`SEC_NAME_MAX`]
+/// - `3`: reserved
+/// - `4..8`: entry object id (`u32`). [`u32::MAX`] is a ramdisk program
+/// - `8..12`: parent object id (`u32`)
+/// - `12..20`: seat debug id (`u64`)
+/// - `20..28`: session generation (`u64`)
+/// - `28..44`: task name, [`SEC_NAME_MAX`] bytes, of which `2` are live
 ///
 /// The caller's payload starts at this offset. See [`INIT_OP_STATUS`].
-pub const INIT_RPC_HDR: usize = 20;
+pub const INIT_RPC_HDR: usize = 44;
 
-/// Net RPC header byte 2, beside the token rights. The task holds read
-/// on the exact object `/card/out/<its name>`. Dial any name or address.
-/// Not a galfs right, and not accept.
-pub const NET_HELD_OUT: u8 = 0x20;
+/// Bytes of the task name carried in a control header.
+pub const SEC_NAME_MAX: usize = 16;
+/// Offset of the entry object id in a control header.
+pub const STAMP_ENTRY: usize = 4;
+/// Offset of the parent object id in a control header.
+pub const STAMP_PARENT: usize = 8;
+/// Offset of the task name in a control header.
+pub const STAMP_NAME: usize = 28;
 
 /// Largest user payload on an init control `send`.
 pub const INIT_RPC_MAX: usize = CHAN_MSG_MAX - INIT_RPC_HDR;
@@ -965,34 +968,35 @@ pub const INIT_OP_DATE_SET: u8 = 11;
 /// name come `hour` and `minute` (`u8`, UTC). The row must have a
 /// compiled interval. The armed time is forgotten on reboot.
 pub const INIT_OP_AT: u8 = 12;
+/// Init RPC: add one sec rule. Admin only. The payload after the op
+/// byte is the rule line (`net dial …`, `net listen …`, `net icmp …`,
+/// or `usb use …`). Init resolves a path subject to an object id.
+pub const INIT_OP_SEC: u8 = 13;
 
 /// Net control: report `down`, `up`, or `up` plus our locator.
 /// Any logged-in seat. The name is ignored.
 pub const NET_OP_LINK: u8 = 1;
-/// Net control: dial a name this seat was granted. The reply's first
-/// 8 bytes are the lane Cap (little-endian bits), then a short text line.
+/// Net control: dial a host. The reply's first 8 bytes are the lane Cap
+/// (little-endian bits), then a short text line. A `sec net dial` rule
+/// must name the caller and that host.
 pub const NET_OP_DIAL: u8 = 2;
-/// Net control: install a name. Admin only. After the name come a
+/// Net control: install a pinned peer. Admin only. After the name come a
 /// locator (`port` u16 LE, `kind` u8, 16 address bytes) and a 32-byte key.
+/// This stores a key. It does not grant a dial.
 pub const NET_OP_ALLOW: u8 = 3;
-/// Net control: let an actor dial a name. Admin only. After the name
-/// come `actor_len` and the actor bytes.
-pub const NET_OP_GRANT: u8 = 4;
-/// Net control: drop that dial right. Same payload shape as [`NET_OP_GRANT`].
-pub const NET_OP_REVOKE: u8 = 5;
 /// Net control: attach a gate for a name to the calling task. Admin only.
-pub const NET_OP_SERVE: u8 = 6;
-/// Net control: ICMP echo. Any logged-in seat that holds the ping
-/// card. Four payload bytes are an IPv4 address. A longer payload is
-/// a length-prefixed DNS name. `net` resolves that name over the
-/// pinned DNS-over-TLS resolver and then sends three ICMP echoes.
-/// The reply lists each round-trip time, then how many were sent,
-/// how many came back, and those times. A payload longer than four
-/// bytes whose first byte is [`PING_LOOKUP`], then a length-prefixed
-/// name, resolves and does not echo. That reply is one address per
-/// line. It is not a lane and not a socket. A missing card sends no
-/// query.
-pub const NET_OP_PING: u8 = 7;
+/// A `sec net listen` rule must name the caller and the port.
+pub const NET_OP_SERVE: u8 = 4;
+/// Net control: ICMP echo. The caller must match `sec net icmp`. Four
+/// payload bytes are an IPv4 address. A longer payload is a
+/// length-prefixed DNS name. `net` resolves that name over the pinned
+/// DNS-over-TLS resolver and then sends three ICMP echoes. The reply
+/// lists each round-trip time, then how many were sent, how many came
+/// back, and those times. A payload longer than four bytes whose first
+/// byte is [`PING_LOOKUP`], then a length-prefixed name, resolves and
+/// does not echo. That reply is one address per line. It is not a lane
+/// and not a socket. A missing rule sends no query.
+pub const NET_OP_PING: u8 = 5;
 /// First byte of a [`NET_OP_PING`] payload that resolves a name and
 /// does not echo. The following bytes are a length-prefixed DNS name.
 /// Four address bytes are still an echo, even when the first is zero.
@@ -1000,43 +1004,44 @@ pub const PING_LOOKUP: u8 = 0;
 /// Net control: resolve a name over DNS-over-TLS. The payload is the
 /// name, then `whoami`. The reply text is the address. The lane Cap is
 /// zero. The resolver key is not in the reply.
-pub const NET_OP_RESOLVE: u8 = 8;
+pub const NET_OP_RESOLVE: u8 = 6;
 /// Net control: pin the DNS-over-TLS resolver. Admin only. Four address
 /// bytes trust the bundle in the image. A following 32-byte key is that
 /// pin, and the bundle is not consulted. `10.0.2.2` and `10.0.2.3` are
 /// refused.
-pub const NET_OP_PIN: u8 = 9;
-/// Net control: bind the stored local address. Write on that address
-/// card. The payload is the address text. The reply is `ok` or
-/// `access denied`. This opcode does not listen.
-pub const NET_OP_BIND: u8 = 10;
-/// Net control: listen on the stored port. Write on that port card.
-/// The payload is the port text. The first reply is `attached`. The
-/// next reply from that same listener carries the inbound lane. A
-/// second listener is `held` and receives no lane.
-pub const NET_OP_LISTEN: u8 = 11;
-/// Net control: send one datagram to the peer stored on the card.
-/// Read on that card. The payload is the name, then the bytes. Write
-/// does not send and does not capture. Port 53 is refused.
-pub const NET_OP_DGRAM: u8 = 12;
-/// Net control: receive one datagram from the peer stored on the card.
-/// Read on that same card. The payload is the name. The reply is the
-/// datagram bytes and the lane Cap is zero. Write does not capture.
-/// Port 53 is refused. A packet from any other peer is ignored.
-pub const NET_OP_RECV: u8 = 13;
-/// Net control: a live TLS 1.3 lane for the named card.
+pub const NET_OP_PIN: u8 = 7;
+/// Net control: bind the stored local address. A listen rule must name
+/// the caller and the port. The payload is the address text. The reply
+/// is `ok` or `access denied`. This opcode does not listen.
+pub const NET_OP_BIND: u8 = 8;
+/// Net control: listen on the stored port. A listen rule must name the
+/// caller and the port. The payload is the port text. The first reply
+/// is `attached`. The next reply from that same listener carries the
+/// inbound lane. A second listener is `held` and receives no lane.
+pub const NET_OP_LISTEN: u8 = 9;
+/// Net control: send one datagram to the stored peer. A dial rule must
+/// name the caller and that peer. The payload is the name, then the
+/// bytes. Port 53 is refused.
+pub const NET_OP_DGRAM: u8 = 10;
+/// Net control: receive one datagram from the stored peer. A dial rule
+/// must name the caller and that peer. The payload is the name. The
+/// reply is the datagram bytes and the lane Cap is zero. Port 53 is
+/// refused. A packet from any other peer is ignored.
+pub const NET_OP_RECV: u8 = 11;
+/// Net control: a live TLS 1.3 lane for the named peer.
 ///
-/// **Experimental** (Milestone 117). The payload is one direction byte
-/// (`TOKEN_READ` dials, `TOKEN_WRITE` accepts) and then the name. The
-/// program passes no address. `read` on the card dials the stored
-/// locator. `write` accepts one inbound connection on the stored port.
-/// An empty pin does not open a lane: the reply is `unseen` and the
-/// peer key. Direction `3` stores that key after the seat says yes.
+/// The payload is one direction byte (`TOKEN_READ` dials,
+/// `TOKEN_WRITE` accepts) and then the name. The program passes no
+/// address. Dial requires a `sec net dial` rule for the stored locator.
+/// Accept requires a `sec net listen` rule for the stored port. An
+/// empty pin does not open a lane: the reply is `unseen` and the peer
+/// key. Direction `3` stores that key after the seat says yes.
 /// Direction `4` drops it. A pin that is already stored has to match,
 /// and a different key is `changed`. The reply's lane stays open and
 /// `net` copies the TLS plaintext both ways. A second acceptor is
-/// `held`. This is not a new syscall.
-pub const NET_OP_STREAM: u8 = 14;
+/// `held`. An accept with nothing queued returns `idle` and does not
+/// hold the call. This is not a new syscall.
+pub const NET_OP_STREAM: u8 = 12;
 
 /// USB control: list enumerated devices, one per line. The reply is
 /// plain text. It does not begin with a lane capability.
@@ -1115,7 +1120,10 @@ pub const STAT_DIR: u8 = 2;
 /// - `9..41`: owner name bytes (padded)
 /// - `41..44`: reserved
 /// - `44..48`: size high 32 bits (files over 4 GiB; zero below that)
-pub const STAT_LEN: usize = 48;
+/// - `48..52`: object id (`u32`). A sec rule stores this, not the path
+pub const STAT_LEN: usize = 52;
+/// Offset of the object id in a [`STAT_LEN`] buffer.
+pub const STAT_ID: usize = 48;
 
 /// Maximum syscall number (upper bound for a u64 dispatch table).
 pub const MAX_SYSCALL: u64 = SYSCALLS.len() as u64 - 1;

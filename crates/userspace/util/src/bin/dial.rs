@@ -1,7 +1,6 @@
 //! dial — ask `net` for a name, twice, in one run.
 //!
-//! The shell Cap-waits. A missing card parks until the seat answers.
-//! The second call is the same task, so a repeated ask does not print.
+//! A missing sec rule is `access denied`. The program stays up.
 
 #![no_std]
 #![no_main]
@@ -82,7 +81,12 @@ fn once(name: &[u8]) -> i32 {
         let _ = close(cap);
         let _ = write_console(b"\n");
     } else if n > 8 {
-        let _ = write_console(&reply[8..n]);
+        let text = &reply[8..n];
+        let _ = write_console(text);
+        if text.starts_with(b"access denied") {
+            let _ = write_console(b"still up\n");
+            return 1;
+        }
     }
     0
 }

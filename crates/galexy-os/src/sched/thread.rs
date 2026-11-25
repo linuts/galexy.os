@@ -372,6 +372,11 @@ pub(in crate::sched) struct Thread {
     pub(in crate::sched) fs_root: u32,
     /// Tokens that authorize galfs paths. Utilities inherit; bare spawns do not.
     pub(in crate::sched) fs_tokens: [galfs::Token; galfs::TOKEN_SLOTS],
+    /// galfs object this task was executed as. [`galfs::NO_OBJECT`] for a
+    /// ramdisk program. A script stamps the script, not the interpreter.
+    pub(in crate::sched) entry_object: u32,
+    /// Parent of [`Thread::entry_object`]. A folder rule matches this.
+    pub(in crate::sched) entry_parent: u32,
     /// Set when the task was created as admin. Survives [`task_su`] so the
     /// seat can return to admin after switching to another actor.
     pub(in crate::sched) born_admin: bool,
@@ -1075,6 +1080,8 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
             heap_pages: 0,
             io_extra: AtomicU64::new(0),
             ask_buf: [0; 96],
+            entry_object: galfs::NO_OBJECT,
+            entry_parent: galfs::NO_OBJECT,
             ask_len: 0,
             ask_arg: [0; 96],
             ask_arg_len: 0,
@@ -1218,6 +1225,8 @@ pub(in crate::sched) fn register_thread(leader: &LeaderSnapshot, kstack: Vec<u8>
             heap_pages: 0,
             io_extra: AtomicU64::new(0),
             ask_buf: [0; 96],
+            entry_object: galfs::NO_OBJECT,
+            entry_parent: galfs::NO_OBJECT,
             ask_len: 0,
             ask_arg: [0; 96],
             ask_arg_len: 0,
@@ -1302,6 +1311,8 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             heap_pages: 0,
             io_extra: AtomicU64::new(0),
             ask_buf: [0; 96],
+            entry_object: galfs::NO_OBJECT,
+            entry_parent: galfs::NO_OBJECT,
             ask_len: 0,
             ask_arg: [0; 96],
             ask_arg_len: 0,
@@ -1638,6 +1649,8 @@ pub(crate) fn spawn_user_with_grants(
             heap_pages: 0,
             io_extra: AtomicU64::new(0),
             ask_buf: [0; 96],
+            entry_object: galfs::NO_OBJECT,
+            entry_parent: galfs::NO_OBJECT,
             ask_len: 0,
             ask_arg: [0; 96],
             ask_arg_len: 0,

@@ -1,12 +1,13 @@
-//! Local SSH client. Read on `/card/ssh` opens one session. The name
-//! is the card. No address is passed, and the password is not an argument.
+//! Local SSH client. `ssh user@address` dials that address when a
+//! `sec` rule names `ssh-open`. The password is typed, not an argument.
 //!
 //! An empty pin asks once. Yes stores the peer key. A later dial has to
 //! present that same key.
 
 use galexy_abi::{Cap, TOKEN_READ, USER_WHOAMI};
 use galexy_rt::{
-    close, create, create_replace, keyboard_cap, open, read, user, write, write_console, yield_now,
+    arg, close, create, create_replace, keyboard_cap, open, read, user, write, write_console,
+    yield_now,
 };
 use galexy_ssh::{fingerprint, unseen_key, wipe, Session};
 use ssh::Lane;
@@ -15,14 +16,36 @@ const KNOWN: &[u8] = b"ssh.known";
 
 fn main() {
     ssh::touch();
+    let typed = trim_arg(arg());
     let mut name = [0u8; 32];
-    let who = user(&mut name, USER_WHOAMI);
-    if !who.ok || who.value == 0 {
-        write_console(b"access denied\n");
-        return;
-    }
-    let user_len = (who.value as usize).min(name.len());
-    let Some(lane) = open_lane() else {
+    let (user_name, dial) = if typed.is_empty() {
+        let who = user(&mut name, USER_WHOAMI);
+        if !who.ok || who.value == 0 {
+            write_console(b"access denied\n");
+            return;
+        }
+        let user_len = (who.value as usize).min(name.len());
+        (
+            core::str::from_utf8(&name[..user_len]).unwrap_or(""),
+            &b"ssh"[..],
+        )
+    } else {
+        let Some(at) = typed.iter().position(|b| *b == b'@') else {
+            write_console(b"ssh <user>@<address>\n");
+            return;
+        };
+        if at == 0 || at + 1 >= typed.len() {
+            write_console(b"ssh <user>@<address>\n");
+            return;
+        }
+        let user_len = at.min(name.len());
+        name[..user_len].copy_from_slice(&typed[..user_len]);
+        (
+            core::str::from_utf8(&name[..user_len]).unwrap_or(""),
+            &typed[at + 1..],
+        )
+    };
+    let Some(lane) = open_lane(dial) else {
         return;
     };
     write_console(b"Password: ");
@@ -41,7 +64,6 @@ fn main() {
             return;
         }
     };
-    let user_name = core::str::from_utf8(&name[..user_len]).unwrap_or("");
     let mut owned = password[..plen].to_vec();
     wipe(&mut password);
     let ok = session.login(user_name, &mut owned).is_ok();
@@ -55,25 +77,35 @@ fn main() {
 
 /// Dials the stored peer. An unseen key asks, and yes is the only
 /// answer that stores it. A changed key stops here.
-fn open_lane() -> Option<u64> {
-    let (text, lane) = ssh::stream(TOKEN_READ as u8)?;
+fn trim_arg(mut text: &[u8]) -> &[u8] {
+    while text.first() == Some(&0) || text.first() == Some(&b' ') {
+        text = &text[1..];
+    }
+    while text.last() == Some(&0) || text.last() == Some(&b' ') || text.last() == Some(&b'\n') {
+        text = &text[..text.len() - 1];
+    }
+    text
+}
+
+fn open_lane(name: &[u8]) -> Option<u64> {
+    let (text, lane) = ssh::stream_name(TOKEN_READ as u8, name)?;
     if text.starts_with(b"changed") {
         write_console(b"The host key has changed. The connection is closed.\n");
         return None;
     }
     if let Some(key) = unseen_key(&text) {
         if !confirm(&key) {
-            let _ = ssh::stream(4);
+            let _ = ssh::stream_name(4, name);
             write_console(b"access denied\n");
             return None;
         }
-        let (answer, _) = ssh::stream(3)?;
+        let (answer, _) = ssh::stream_name(3, name)?;
         if !answer.starts_with(b"ok") {
             write_console(b"access denied\n");
             return None;
         }
         store_known(&key);
-        let (again, lane) = ssh::stream(TOKEN_READ as u8)?;
+        let (again, lane) = ssh::stream_name(TOKEN_READ as u8, name)?;
         if again.starts_with(b"changed") || lane == 0 {
             write_console(b"access denied\n");
             return None;

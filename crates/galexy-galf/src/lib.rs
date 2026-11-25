@@ -32,7 +32,7 @@ pub const DISK_SLOT_COUNT: usize = 2;
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
 /// Inodes live in the pool. A sealed slot holds actors, shares, and the
 /// inode map. Older images are refused.
-pub const DISK_VERSION: u16 = 17;
+pub const DISK_VERSION: u16 = 18;
 
 pub use volume::{
     inode_address, map_address, map_ptr_offset, payload_len, read_actor, read_free,
@@ -1175,7 +1175,7 @@ mod tests {
         assert_eq!(OBJECT_ON_DISK, 192);
         assert_eq!(SHARE_ON_DISK, 8);
         assert_eq!(SHARE_SLOTS, 32);
-        assert_eq!(DISK_VERSION, 17);
+        assert_eq!(DISK_VERSION, 18);
         assert_eq!(DESK_COMPILE_FILES, 41);
         assert!(
             volume_limits(MIN_DISK_BYTES as u64).inode_slots >= DESK_COMPILE_FILES,

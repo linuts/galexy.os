@@ -363,6 +363,7 @@ pub(crate) fn task_create(name: &str, replace: bool) -> Result<Cap, SysError> {
                     offset: 0,
                     rights,
                 });
+                galfs::claim_policy_path(name, obj, &mut thread.fs_tokens);
                 Ok(Cap::new(galexy_abi::FILE_CAP_BASE + index as u64, rights))
             }
         }
@@ -725,6 +726,30 @@ pub(crate) fn task_send(cap: Cap, bytes: &[u8], cap0: u64, cap1: u64) -> Result<
     Ok(bytes.len())
 }
 
+/// Writes the identity stamp. The caller cannot set these bytes.
+fn fill_stamp(
+    msg: &mut [u8],
+    admin: u8,
+    tty: u8,
+    name: &[u8],
+    entry: u32,
+    parent: u32,
+    debug_id: u64,
+    session_gen: u64,
+) {
+    msg[0] = admin;
+    msg[1] = tty;
+    let n = name.len().min(galexy_abi::SEC_NAME_MAX);
+    msg[2] = n as u8;
+    msg[3] = 0;
+    msg[galexy_abi::STAMP_ENTRY..galexy_abi::STAMP_ENTRY + 4].copy_from_slice(&entry.to_le_bytes());
+    msg[galexy_abi::STAMP_PARENT..galexy_abi::STAMP_PARENT + 4]
+        .copy_from_slice(&parent.to_le_bytes());
+    msg[12..20].copy_from_slice(&debug_id.to_le_bytes());
+    msg[20..28].copy_from_slice(&session_gen.to_le_bytes());
+    msg[galexy_abi::STAMP_NAME..galexy_abi::STAMP_NAME + n].copy_from_slice(&name[..n]);
+}
+
 /// One init control RPC is in flight. `Ok(())` means the caller is parked.
 pub(crate) fn task_init_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(), SysError> {
     if bytes.len() > galexy_abi::INIT_RPC_MAX || reply_len as usize > galexy_abi::CHAN_MSG_MAX {
@@ -740,14 +765,26 @@ pub(crate) fn task_init_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let (admin, tty, debug_id, session_gen) = {
+        let (admin, tty, debug_id, session_gen, entry, parent, name_raw, name_len) = {
             let owner = running_proc_index(&threads, slot)?;
             let thread = &threads[owner];
             if thread.fs_root == galfs::NO_OBJECT {
                 return Err(SysError::AccessDenied);
             }
             let admin = u8::from(galfs::is_admin_root(thread.fs_root));
-            (admin, thread.tty, thread.debug_id, thread.session_gen)
+            let n = thread.name_len as usize;
+            let mut raw = [0u8; NAME_CAP];
+            raw[..n].copy_from_slice(&thread.name_bytes[..n]);
+            (
+                admin,
+                thread.tty,
+                thread.debug_id,
+                thread.session_gen,
+                thread.entry_object,
+                thread.entry_parent,
+                raw,
+                n,
+            )
         };
         if threads.iter().any(|t| {
             t.state.load(Ordering::Acquire) == STATE_WAITING
@@ -757,10 +794,16 @@ pub(crate) fn task_init_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<
         }
         let mut msg = [0u8; galexy_abi::CHAN_MSG_MAX];
         let n = galexy_abi::INIT_RPC_HDR + bytes.len();
-        msg[0] = admin;
-        msg[1] = tty;
-        msg[4..12].copy_from_slice(&debug_id.to_le_bytes());
-        msg[12..20].copy_from_slice(&session_gen.to_le_bytes());
+        fill_stamp(
+            &mut msg,
+            admin,
+            tty,
+            &name_raw[..name_len],
+            entry,
+            parent,
+            debug_id,
+            session_gen,
+        );
         msg[galexy_abi::INIT_RPC_HDR..n].copy_from_slice(bytes);
         channel::enqueue(ctrl, 1, &msg[..n], [None, None])?;
         park_io(&mut threads, slot, IO_INIT_RPC, ctrl, reply, reply_len, 0);
@@ -948,7 +991,7 @@ pub(crate) fn task_net_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
         let mut name_raw = [0u8; NAME_CAP];
-        let (admin, tty, debug_id, session_gen, root, tokens, name_len) = {
+        let (admin, tty, debug_id, session_gen, entry, parent, name_len) = {
             let owner = running_proc_index(&threads, slot)?;
             let thread = &threads[owner];
             // A logged-out seat is denied before the service is consulted,
@@ -967,42 +1010,29 @@ pub(crate) fn task_net_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(
                 thread.tty,
                 thread.debug_id,
                 thread.session_gen,
-                thread.fs_root,
-                thread.fs_tokens,
+                thread.entry_object,
+                thread.entry_parent,
                 n,
             )
         };
-        let task = core::str::from_utf8(&name_raw[..name_len]).unwrap_or("");
         if threads.iter().any(|t| {
             t.state.load(Ordering::Acquire) == STATE_WAITING
                 && t.io_kind.load(Ordering::Acquire) == IO_NET_RPC
         }) {
             return Err(SysError::NoResource);
         }
-        let (held, need, ask_path) = net_card(&tokens, root, bytes, task);
-        if need != 0
-            && held & need == 0
-            && net_card_denied(root, &tokens, &ask_path)
-            && park_card_ask(
-                &mut threads,
-                slot,
-                ASK_NETWORK,
-                need,
-                ask_path.as_str(),
-                bytes,
-                reply,
-                reply_len,
-            )
-        {
-            return Ok(());
-        }
         let mut msg = [0u8; galexy_abi::CHAN_MSG_MAX];
         let n = galexy_abi::INIT_RPC_HDR + bytes.len();
-        msg[0] = admin;
-        msg[1] = tty;
-        msg[2] = held;
-        msg[4..12].copy_from_slice(&debug_id.to_le_bytes());
-        msg[12..20].copy_from_slice(&session_gen.to_le_bytes());
+        fill_stamp(
+            &mut msg,
+            admin,
+            tty,
+            &name_raw[..name_len],
+            entry,
+            parent,
+            debug_id,
+            session_gen,
+        );
         msg[galexy_abi::INIT_RPC_HDR..n].copy_from_slice(bytes);
         channel::enqueue(ctrl, 1, &msg[..n], [None, None])?;
         park_io(&mut threads, slot, IO_NET_RPC, ctrl, reply, reply_len, 0);
@@ -1028,15 +1058,25 @@ pub(crate) fn task_usb_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(
     }
     interrupts::without_interrupts(|| {
         let mut threads = THREADS.lock();
-        let (admin, tty, debug_id, session_gen, mask) = {
+        let mut name_raw = [0u8; NAME_CAP];
+        let (admin, tty, debug_id, session_gen, entry, parent, name_len) = {
             let owner = running_proc_index(&threads, slot)?;
             let thread = &threads[owner];
             if thread.fs_root == galfs::NO_OBJECT {
                 return Err(SysError::AccessDenied);
             }
             let admin = u8::from(galfs::is_admin_root(thread.fs_root));
-            let mask = usb_mask(thread.fs_root, &thread.fs_tokens);
-            (admin, thread.tty, thread.debug_id, thread.session_gen, mask)
+            let n = thread.name_len as usize;
+            name_raw[..n].copy_from_slice(&thread.name_bytes[..n]);
+            (
+                admin,
+                thread.tty,
+                thread.debug_id,
+                thread.session_gen,
+                thread.entry_object,
+                thread.entry_parent,
+                n,
+            )
         };
         if threads.iter().any(|t| {
             t.state.load(Ordering::Acquire) == STATE_WAITING
@@ -1046,13 +1086,16 @@ pub(crate) fn task_usb_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(
         }
         let mut msg = [0u8; galexy_abi::CHAN_MSG_MAX];
         let n = galexy_abi::INIT_RPC_HDR + bytes.len();
-        msg[0] = admin;
-        msg[1] = tty;
-        // Ports 1..=16 the caller may list. Bit 0 is port 1.
-        msg[2] = mask as u8;
-        msg[3] = (mask >> 8) as u8;
-        msg[4..12].copy_from_slice(&debug_id.to_le_bytes());
-        msg[12..20].copy_from_slice(&session_gen.to_le_bytes());
+        fill_stamp(
+            &mut msg,
+            admin,
+            tty,
+            &name_raw[..name_len],
+            entry,
+            parent,
+            debug_id,
+            session_gen,
+        );
         msg[galexy_abi::INIT_RPC_HDR..n].copy_from_slice(bytes);
         channel::enqueue(ctrl, 1, &msg[..n], [None, None])?;
         park_io(&mut threads, slot, IO_USB_RPC, ctrl, reply, reply_len, 0);
@@ -1297,7 +1340,6 @@ pub(crate) fn task_close(cap: Cap) -> Result<(), SysError> {
             _ => (None, None, None),
         })
     })?;
-    // Wake outside THREADS — the wake helpers take the same lock.
     if let Some(id) = wake_pipe {
         wake_pipe_waiters(id);
     }
@@ -1308,260 +1350,6 @@ pub(crate) fn task_close(cap: Cap) -> Result<(), SysError> {
         wake_lane_waiters(id);
     }
     Ok(())
-}
-
-struct CardPath {
-    raw: [u8; 80],
-    len: usize,
-}
-
-impl CardPath {
-    const fn empty() -> Self {
-        Self {
-            raw: [0; 80],
-            len: 0,
-        }
-    }
-
-    fn as_str(&self) -> &str {
-        core::str::from_utf8(&self.raw[..self.len]).unwrap_or("")
-    }
-}
-
-fn card_path(prefix: &[u8], name: &[u8]) -> CardPath {
-    let mut out = CardPath::empty();
-    if prefix.len() + name.len() > out.raw.len() || name.is_empty() {
-        return out;
-    }
-    out.raw[..prefix.len()].copy_from_slice(prefix);
-    out.raw[prefix.len()..prefix.len() + name.len()].copy_from_slice(name);
-    out.len = prefix.len() + name.len();
-    out
-}
-
-fn net_name(bytes: &[u8]) -> &[u8] {
-    if bytes.is_empty() {
-        return b"";
-    }
-    match bytes[0] {
-        galexy_abi::NET_OP_DIAL
-        | galexy_abi::NET_OP_RESOLVE
-        | galexy_abi::NET_OP_BIND
-        | galexy_abi::NET_OP_LISTEN
-        | galexy_abi::NET_OP_DGRAM
-        | galexy_abi::NET_OP_RECV => {
-            if bytes.len() < 2 {
-                return b"";
-            }
-            let n = bytes[1] as usize;
-            if bytes.len() < 2 + n {
-                return b"";
-            }
-            &bytes[2..2 + n]
-        }
-        galexy_abi::NET_OP_SERVE => {
-            if bytes.len() < 2 {
-                return b"";
-            }
-            &bytes[1..]
-        }
-        galexy_abi::NET_OP_STREAM => {
-            if bytes.len() < 3 {
-                return b"";
-            }
-            &bytes[2..]
-        }
-        _ => b"",
-    }
-}
-
-fn dotted_v4(text: &[u8]) -> bool {
-    let mut parts = 0usize;
-    let mut val = 0u16;
-    let mut digits = 0usize;
-    for b in text.iter().copied().chain(core::iter::once(b'.')) {
-        if b == b'.' {
-            if digits == 0 || val > 255 || parts == 4 {
-                return false;
-            }
-            parts += 1;
-            val = 0;
-            digits = 0;
-        } else {
-            let d = b.wrapping_sub(b'0');
-            if d > 9 {
-                return false;
-            }
-            // A leading zero is not an octet. `net` refuses it too.
-            if digits > 0 && val == 0 {
-                return false;
-            }
-            val = val.saturating_mul(10).saturating_add(u16::from(d));
-            digits += 1;
-            if digits > 3 {
-                return false;
-            }
-        }
-    }
-    parts == 4
-}
-
-/// `a.b.c.d:port` splits into the address text and the port text.
-///
-/// The same rules as `net`'s parser: no leading zero, and a port in
-/// `1..=65535`. Anything else is a directory name, and that name's
-/// card is the check.
-fn split_v4_port(name: &[u8]) -> Option<(&[u8], &[u8])> {
-    let colon = name.iter().position(|b| *b == b':')?;
-    let host = &name[..colon];
-    let port = &name[colon + 1..];
-    if !dotted_v4(host) || !port_in_range(port) {
-        return None;
-    }
-    Some((host, port))
-}
-
-fn port_in_range(text: &[u8]) -> bool {
-    if text.is_empty() || (text.len() > 1 && text[0] == b'0') {
-        return false;
-    }
-    let mut n = 0u32;
-    for b in text {
-        let d = u32::from(b.wrapping_sub(b'0'));
-        if d > 9 {
-            return false;
-        }
-        n = n.saturating_mul(10).saturating_add(d);
-        if n > 65535 {
-            return false;
-        }
-    }
-    n != 0
-}
-
-fn held_bits(root: u32, tokens: &[galfs::Token; galfs::TOKEN_SLOTS], path: &CardPath) -> u8 {
-    if path.len == 0 {
-        return 0;
-    }
-    let text = path.as_str();
-    let mut held = 0u8;
-    if galfs::resolve_and_check(root, tokens, text, galfs::RIGHT_READ).is_ok() {
-        held |= galfs::RIGHT_READ;
-    }
-    if galfs::resolve_and_check(root, tokens, text, galfs::RIGHT_WRITE).is_ok() {
-        held |= galfs::RIGHT_WRITE;
-    }
-    held
-}
-
-/// `(held bits, needed bit, path)`. Needed bit 0 means this op is not a card.
-fn net_card(
-    tokens: &[galfs::Token; galfs::TOKEN_SLOTS],
-    root: u32,
-    bytes: &[u8],
-    task: &str,
-) -> (u8, u8, CardPath) {
-    if bytes.is_empty() {
-        return (0, 0, CardPath::empty());
-    }
-    let outbound = galfs::holds_outbound(tokens, task);
-    let name = net_name(bytes);
-    let (path, need) = match bytes[0] {
-        galexy_abi::NET_OP_DIAL => {
-            // Read on `/card/out/<task>` dials any name and any address.
-            // The per-name card is not consulted. Listen stays on its port.
-            if outbound {
-                return (
-                    galfs::RIGHT_READ | galexy_abi::NET_HELD_OUT,
-                    galfs::RIGHT_READ,
-                    CardPath::empty(),
-                );
-            }
-            if let Some((host, port)) = split_v4_port(name) {
-                let host_path = card_path(b"/admin@card/", host);
-                let port_path = card_path(b"/admin@card/", port);
-                let host_held = held_bits(root, tokens, &host_path);
-                if host_held & galfs::RIGHT_READ == 0 {
-                    return (0, galfs::RIGHT_READ, host_path);
-                }
-                let port_held = held_bits(root, tokens, &port_path);
-                if port_held & galfs::RIGHT_READ == 0 {
-                    return (0, galfs::RIGHT_READ, port_path);
-                }
-                return (galfs::RIGHT_READ, galfs::RIGHT_READ, host_path);
-            }
-            (card_path(b"/admin@card/", name), galfs::RIGHT_READ)
-        }
-        galexy_abi::NET_OP_RESOLVE => (card_path(b"/admin@card/", name), galfs::RIGHT_READ),
-        galexy_abi::NET_OP_BIND | galexy_abi::NET_OP_LISTEN => {
-            (card_path(b"/admin@card/", name), galfs::RIGHT_WRITE)
-        }
-        galexy_abi::NET_OP_DGRAM | galexy_abi::NET_OP_RECV => {
-            (card_path(b"/admin@card/", name), galfs::RIGHT_READ)
-        }
-        galexy_abi::NET_OP_PING => (card_path(b"/admin@card/", b"ping"), galfs::RIGHT_READ),
-        galexy_abi::NET_OP_SERVE => (card_path(b"/admin@card/", name), galfs::RIGHT_WRITE),
-        galexy_abi::NET_OP_STREAM => {
-            let dir = bytes.get(1).copied();
-            // Direction 1 is a dial. Accept and the pin store stay on
-            // the named card. The outbound card does not accept.
-            if dir == Some(galfs::RIGHT_READ) && outbound {
-                return (
-                    galfs::RIGHT_READ | galexy_abi::NET_HELD_OUT,
-                    galfs::RIGHT_READ,
-                    CardPath::empty(),
-                );
-            }
-            let need = match dir {
-                Some(galfs::RIGHT_READ) | Some(3) | Some(4) => galfs::RIGHT_READ,
-                Some(galfs::RIGHT_WRITE) => galfs::RIGHT_WRITE,
-                _ => return (0, galfs::RIGHT_READ, CardPath::empty()),
-            };
-            (card_path(b"/admin@card/", name), need)
-        }
-        _ => return (0, 0, CardPath::empty()),
-    };
-    if path.len == 0 {
-        return (0, 0, path);
-    }
-    (held_bits(root, tokens, &path), need, path)
-}
-
-fn net_card_denied(
-    root: u32,
-    tokens: &[galfs::Token; galfs::TOKEN_SLOTS],
-    path: &CardPath,
-) -> bool {
-    if root == galfs::NO_OBJECT || path.len == 0 {
-        return false;
-    }
-    matches!(
-        galfs::resolve_and_check(root, tokens, path.as_str(), galfs::RIGHT_READ),
-        Err(SysError::AccessDenied)
-    ) || matches!(
-        galfs::resolve_and_check(root, tokens, path.as_str(), galfs::RIGHT_WRITE),
-        Err(SysError::AccessDenied)
-    )
-}
-
-fn usb_mask(root: u32, tokens: &[galfs::Token; galfs::TOKEN_SLOTS]) -> u16 {
-    let mut mask = 0u16;
-    for port in 1u8..=16 {
-        let mut name = [0u8; 8];
-        let n = if port >= 10 {
-            name[0] = b'0' + port / 10;
-            name[1] = b'0' + port % 10;
-            2
-        } else {
-            name[0] = b'0' + port;
-            1
-        };
-        let path = card_path(b"/admin@usb/", &name[..n]);
-        if galfs::resolve_and_check(root, tokens, path.as_str(), galfs::RIGHT_READ).is_ok() {
-            mask |= 1u16 << (port - 1);
-        }
-    }
-    mask
 }
 
 fn shell_parent(name: &str) -> bool {
@@ -1732,78 +1520,6 @@ fn finish_ask_err(threads: &mut [Thread], index: usize, err: SysError) {
 }
 
 fn finish_network_ask(threads: &mut [Thread], index: usize) {
-    let len = threads[index].ask_arg_len as usize;
-    let mut payload = [0u8; 96];
-    payload[..len].copy_from_slice(&threads[index].ask_arg[..len]);
-    let reply = threads[index].io_addr.load(Ordering::Acquire);
-    let reply_len = threads[index].io_len.load(Ordering::Acquire);
-    let owner = proc_index(threads, index + 1).unwrap_or(index);
-    let root = threads[owner].fs_root;
-    let tokens = threads[owner].fs_tokens;
-    let mut name_raw = [0u8; NAME_CAP];
-    let nlen = threads[owner].name_len as usize;
-    name_raw[..nlen].copy_from_slice(&threads[owner].name_bytes[..nlen]);
-    let task = core::str::from_utf8(&name_raw[..nlen]).unwrap_or("");
-    let (held, need, path) = net_card(&tokens, root, &payload[..len], task);
-    // One call can need two cards, such as an address and a port.
-    // The first yes installs one token. A different missing card asks
-    // again. The same path does not.
-    if need != 0 && held & need == 0 && net_card_denied(root, &tokens, &path) {
-        let prev_len = threads[index].ask_len as usize;
-        let mut prev = [0u8; 96];
-        prev[..prev_len].copy_from_slice(&threads[index].ask_buf[..prev_len]);
-        let next = path.as_str().as_bytes();
-        if !next.is_empty() && next != &prev[..prev_len] {
-            let done = threads[index].ask_done.load(Ordering::Acquire);
-            threads[index]
-                .ask_done
-                .store(done & !ASK_DONE_NETWORK, Ordering::Release);
-            let rights = threads[index].ask_rights;
-            if park_card_ask(
-                threads,
-                index + 1,
-                ASK_NETWORK,
-                if rights == 0 { need } else { rights },
-                path.as_str(),
-                &payload[..len],
-                reply,
-                reply_len,
-            ) {
-                return;
-            }
-            threads[index].ask_done.store(done, Ordering::Release);
-        }
-        finish_ask_err(threads, index, SysError::AccessDenied);
-        return;
-    }
-    let ctrl = NET_CTRL.load(Ordering::Acquire);
-    if ctrl == 0xFF {
-        finish_ask_err(threads, index, SysError::Unsupported);
-        return;
-    }
-    let admin = u8::from(galfs::is_admin_root(root));
-    let tty = threads[index].tty;
-    let debug_id = threads[index].debug_id;
-    let session_gen = threads[index].session_gen;
-    let mut msg = [0u8; galexy_abi::CHAN_MSG_MAX];
-    let n = galexy_abi::INIT_RPC_HDR + len;
-    if n > msg.len() {
-        finish_ask_err(threads, index, SysError::BadValue);
-        return;
-    }
-    msg[0] = admin;
-    msg[1] = tty;
-    msg[2] = held;
-    msg[4..12].copy_from_slice(&debug_id.to_le_bytes());
-    msg[12..20].copy_from_slice(&session_gen.to_le_bytes());
-    msg[galexy_abi::INIT_RPC_HDR..n].copy_from_slice(&payload[..len]);
-    if channel::enqueue(ctrl, 1, &msg[..n], [None, None]).is_err() {
-        finish_ask_err(threads, index, SysError::NoResource);
-        return;
-    }
-    threads[index].io_kind.store(IO_NET_RPC, Ordering::Release);
-    threads[index].io_pipe.store(ctrl, Ordering::Relaxed);
-    threads[index].io_addr.store(reply, Ordering::Relaxed);
-    threads[index].io_len.store(reply_len, Ordering::Relaxed);
-    wake_net_for_control(threads);
+    // Network asks are gone. A missing sec rule is a refusal.
+    finish_ask_denied(threads, index);
 }

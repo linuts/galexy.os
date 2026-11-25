@@ -96,6 +96,18 @@ path = "src/bin/chime.rs"
 name = "dial"
 path = "src/bin/dial.rs"
 
+[[bin]]
+name = "ping"
+path = "src/bin/ping.rs"
+
+[[bin]]
+name = "fetch"
+path = "src/bin/fetch.rs"
+
+[[bin]]
+name = "usb-list"
+path = "src/bin/usb-list.rs"
+
 [dependencies]
 galexy-rt = { path = "../galexy-rt" }
 galexy-abi = { path = "../../galexy-abi" }

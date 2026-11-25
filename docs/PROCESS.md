@@ -242,6 +242,11 @@ second, the same as a monotonic beat. With neither armed, it parks
 on `wait`. If the date is unset, init logs `[init] date unset` once
 and does not fire.
 
+Milestone **126** sets that date from one NTP reply. The
+administrative seat runs `net time <ip>`. There is no poll and
+no timezone. The boxes are open. First boot (Milestone 128) calls
+it when the seat does not skip the network question.
+
 F1–F12 **console switching** stays in the kernel; only task lifecycle
 moves to init.
 
