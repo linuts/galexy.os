@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use galexy_abi::{
-    Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DGRAM, NET_OP_DIAL, NET_OP_LINK,
-    NET_OP_LISTEN, NET_OP_PIN, NET_OP_PING, NET_OP_RECV, NET_OP_RESOLVE, NET_OP_SERVE,
+    Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DGRAM, NET_OP_DIAL, NET_OP_DNS,
+    NET_OP_LINK, NET_OP_LISTEN, NET_OP_PING, NET_OP_RECV, NET_OP_RESOLVE, NET_OP_SERVE,
     NET_OP_STREAM, NET_OP_TIME, PING_LOOKUP,
 };
 use galexy_net::Engine;
@@ -312,8 +312,8 @@ fn handle(
             rx, engine, record, admin, actor_id, &stamp, rest, now, plains,
         ),
         NET_OP_RESOLVE => resolve(rx, engine, record, actor_id, &stamp, rest, now),
-        NET_OP_PIN if admin => pin(rx, engine, record, rest, now),
-        NET_OP_PIN => reply(rx, b"not admin\n", 0),
+        NET_OP_DNS if admin => dns(rx, engine, record, rest, now),
+        NET_OP_DNS => reply(rx, b"not admin\n", 0),
         NET_OP_BIND => bind_local(rx, engine, record, admin, rest),
         NET_OP_LISTEN => listen(rx, engine, record, &stamp, actor_id, gates, rest),
         NET_OP_DGRAM => datagram(rx, engine, record, &stamp, rest),
@@ -686,12 +686,12 @@ fn drive_tls(
     let mut buf = [0u8; 2048];
     let n = engine.tcp_recv(id, &mut buf);
     if n > 0 {
-        note_pin_rx(&buf[..n]);
+        note_dns_rx(&buf[..n]);
         conn.read_tls(&mut &buf[..n]).map_err(|_| "bad")?;
         let _io = conn.process_new_packets().map_err(|err| {
             let text = format!("{err}");
             log(&format!("[net] tls {text}"));
-            note_pin_reason(&text);
+            note_dns_reason(&text);
             if text.contains("pin-mismatch") {
                 "changed"
             } else {
@@ -796,7 +796,7 @@ fn resolve(
     }
 }
 
-fn pin(rx: Cap, engine: &mut Engine, record: &mut Record, rest: &[u8], now: u64) {
+fn dns(rx: Cap, engine: &mut Engine, record: &mut Record, rest: &[u8], now: u64) {
     let key = if rest.len() == 4 {
         None
     } else if rest.len() >= 4 + 32 {
@@ -813,35 +813,35 @@ fn pin(rx: Cap, engine: &mut Engine, record: &mut Record, rest: &[u8], now: u64)
         return;
     }
     if key.is_none() {
-        note_pin_reason("refused");
-        begin_pin_rx();
+        note_dns_reason("refused");
+        begin_dns_rx();
         let name = match probe_domain(engine, addr, now) {
             Ok(name) => name,
             Err(why) => {
-                reply_pin(rx, why);
-                end_pin_rx();
+                reply_dns(rx, why);
+                end_dns_rx();
                 return;
             }
         };
-        if record.pin(addr, None).is_err() || record.pin_domain(&name).is_err() {
-            note_pin_reason("bad name");
-            reply_pin(rx, "denied");
-            end_pin_rx();
+        if record.dns(addr, None).is_err() || record.dns_domain(&name).is_err() {
+            note_dns_reason("bad name");
+            reply_dns(rx, "denied");
+            end_dns_rx();
             return;
         }
-        end_pin_rx();
+        end_dns_rx();
         save_record(record);
         let mut text = Vec::with_capacity(4 + name.len());
         text.extend_from_slice(b"ok ");
         text.extend_from_slice(&name);
         text.push(b'\n');
-        log(&format!("[net] pin {}", String::from_utf8_lossy(&name)));
+        log(&format!("[net] dns {}", String::from_utf8_lossy(&name)));
         reply(rx, &text, 0);
         return;
     }
-    if record.pin(addr, key).is_err() {
-        note_pin_reason("refused");
-        reply_pin(rx, "denied");
+    if record.dns(addr, key).is_err() {
+        note_dns_reason("refused");
+        reply_dns(rx, "denied");
         return;
     }
     save_record(record);
@@ -966,8 +966,8 @@ fn wait_established(engine: &mut Engine, id: u8, start: u64) -> bool {
     false
 }
 
-/// Handshake only. The domain on the certificate is the pin. No query
-/// is written.
+/// Handshake only. The domain on the certificate is the name `net dns`
+/// stores. No query is written.
 fn probe_domain(engine: &mut Engine, addr: [u8; 4], start: u64) -> Result<Vec<u8>, &'static str> {
     let id = engine
         .tcp_connect(addr, galexy_netcfg::DOT_PORT)
@@ -979,12 +979,12 @@ fn probe_domain(engine: &mut Engine, addr: [u8; 4], start: u64) -> Result<Vec<u8
     let result = probe_leaf(engine, id, addr, start);
     engine.tcp_release(id);
     let leaf = result?;
-    let Some(name) = trust::dns_pin_name(&leaf, galexy_netcfg::RESOLVER_NAME_MAX) else {
-        note_pin_reason("no name on certificate");
+    let Some(name) = trust::dns_cert_name(&leaf, galexy_netcfg::RESOLVER_NAME_MAX) else {
+        note_dns_reason("no name on certificate");
         return Err("denied");
     };
     if !trust::name_on_cert(&leaf, &name) {
-        note_pin_reason("name not on certificate");
+        note_dns_reason("name not on certificate");
         return Err("denied");
     }
     Ok(name)
@@ -997,12 +997,12 @@ fn probe_leaf(
     start: u64,
 ) -> Result<Vec<u8>, &'static str> {
     let config = trust::learn_client(trust::bundle_roots(), trust::provider()).map_err(|err| {
-        note_pin_reason(&err.to_string());
+        note_dns_reason(&err.to_string());
         "denied"
     })?;
     let server = ServerName::IpAddress(IpAddr::V4(Ipv4Addr::from(addr)));
     let mut conn = Connection::Client(ClientConnection::new(config, server).map_err(|err| {
-        note_pin_reason(&err.to_string());
+        note_dns_reason(&err.to_string());
         "denied"
     })?);
     let limit = start.saturating_add(HANDSHAKE_MS);
@@ -1024,16 +1024,16 @@ fn probe_leaf(
     {
         Some(der) => Ok(der),
         None => {
-            note_pin_reason("no certificate");
+            note_dns_reason("no certificate");
             Err("denied")
         }
     }
 }
 
-/// One short line for a refused `net pin`. Lookup and dial keep their
-/// own replies; this text is only what `reply_pin` prints.
-fn reply_pin(rx: Cap, why: &str) {
-    let seen = pin_rx_line();
+/// One short line for a refused `net dns`. Lookup and dial keep their
+/// own replies; this text is only what `reply_dns` prints.
+fn reply_dns(rx: Cap, why: &str) {
+    let seen = dns_rx_line();
     if why == "deadline" {
         if seen.is_empty() {
             reply_lookup(rx, "deadline");
@@ -1048,7 +1048,7 @@ fn reply_pin(rx: Cap, why: &str) {
         reply_lookup(rx, "unavailable");
         return;
     }
-    let mut line = pin_reason_line();
+    let mut line = dns_reason_line();
     if line.is_empty() || line.eq_ignore_ascii_case("access denied") {
         line = "refused".to_string();
     }
@@ -1058,30 +1058,30 @@ fn reply_pin(rx: Cap, why: &str) {
     reply(rx, msg.as_bytes(), 0);
 }
 
-/// First bytes of the pin flight. The kernel log is hidden; the seat
-/// only sees what `reply_pin` writes.
-static PIN_RX_ON: AtomicBool = AtomicBool::new(false);
-static PIN_RX: Mutex<String> = Mutex::new(String::new());
+/// First bytes of the dns flight. The kernel log is hidden; the seat
+/// only sees what `reply_dns` writes.
+static DNS_RX_ON: AtomicBool = AtomicBool::new(false);
+static DNS_RX: Mutex<String> = Mutex::new(String::new());
 
-fn begin_pin_rx() {
-    if let Ok(mut slot) = PIN_RX.lock() {
+fn begin_dns_rx() {
+    if let Ok(mut slot) = DNS_RX.lock() {
         slot.clear();
     }
-    PIN_RX_ON.store(true, Ordering::Relaxed);
+    DNS_RX_ON.store(true, Ordering::Relaxed);
 }
 
-fn end_pin_rx() {
-    PIN_RX_ON.store(false, Ordering::Relaxed);
-    if let Ok(mut slot) = PIN_RX.lock() {
+fn end_dns_rx() {
+    DNS_RX_ON.store(false, Ordering::Relaxed);
+    if let Ok(mut slot) = DNS_RX.lock() {
         slot.clear();
     }
 }
 
-fn note_pin_rx(bytes: &[u8]) {
-    if !PIN_RX_ON.load(Ordering::Relaxed) || bytes.is_empty() {
+fn note_dns_rx(bytes: &[u8]) {
+    if !DNS_RX_ON.load(Ordering::Relaxed) || bytes.is_empty() {
         return;
     }
-    let Ok(mut slot) = PIN_RX.lock() else {
+    let Ok(mut slot) = DNS_RX.lock() else {
         return;
     };
     if !slot.is_empty() {
@@ -1097,25 +1097,25 @@ fn note_pin_rx(bytes: &[u8]) {
     *slot = text;
 }
 
-fn pin_rx_line() -> String {
-    match PIN_RX.lock() {
+fn dns_rx_line() -> String {
+    match DNS_RX.lock() {
         Ok(slot) if !slot.is_empty() => format!("rx {}\n", slot.as_str()),
         _ => String::new(),
     }
 }
 
-/// Remembers the reason for the pin attempt in flight.
-static PIN_WHY: Mutex<String> = Mutex::new(String::new());
+/// Remembers the reason for the dns attempt in flight.
+static DNS_WHY: Mutex<String> = Mutex::new(String::new());
 
-fn note_pin_reason(text: &str) {
-    let line = short_pin_reason(text);
-    if let Ok(mut slot) = PIN_WHY.lock() {
+fn note_dns_reason(text: &str) {
+    let line = short_dns_reason(text);
+    if let Ok(mut slot) = DNS_WHY.lock() {
         *slot = line;
     }
 }
 
-fn pin_reason_line() -> String {
-    match PIN_WHY.lock() {
+fn dns_reason_line() -> String {
+    match DNS_WHY.lock() {
         Ok(slot) if !slot.is_empty() => slot.clone(),
         _ => "refused".to_string(),
     }
@@ -1123,7 +1123,7 @@ fn pin_reason_line() -> String {
 
 /// `clock not set`, `certificate not yet valid`, `chain refused`, or
 /// another single line. Never `access denied`.
-fn short_pin_reason(text: &str) -> String {
+fn short_dns_reason(text: &str) -> String {
     let lower = text.to_ascii_lowercase();
     if lower.contains("not valid yet") || lower.contains("notvalidyet") {
         return if clock_anchored() {

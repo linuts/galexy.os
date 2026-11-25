@@ -49,7 +49,7 @@ checked.
 | In-kernel TCP/IP | A parse bug on a packet would be ring 0. The kernel moves frames. The `net` service speaks the protocols. A second stack, a C stack, raw sockets, promiscuous mode, and a v6-only opcode stay out. IPv4 and IPv6 are one address type (Milestones 120–124). |
 | IP addresses and port numbers in the syscall ABI | Ports stay an internal demux. A program does not pass them to a syscall. A program may pass one address or port on the existing net cap, and only when a rule names that caller and that host or port. An app still cannot bind `0.0.0.0`, spoof a source, or race a port it does not hold. |
 | Cleartext as an application right | A stored pin is a TLS 1.3 lane. An empty pin, on a dial the rule allows, is a plaintext TCP lane: the program writes the request and reads the response. There is no raw TCP Cap. A datagram needs a `net dial` rule for that peer. Holding the rule does not capture. |
-| The public WebPKI as the default trust for a lane | A name is pinned to a key. An empty pin on a dial asks the seat, shows the fingerprint, and stores the key only on yes. A different key later is refused. Trust-on-first-use is that question, not a silent accept. The DNS resolver is the exception. The image carries a system CA bundle, the Mozilla roots. `net pin <ip>` reads the certificate at that address, stores the domain on it, and tells the seat. Later lookups trust a certificate that chains to the bundle, is currently valid, and is valid for that domain. The address you typed stays the address. A key file is still the raw key, and then the bundle is not consulted. SSH host keys and `net allow` do not use the bundle. |
+| The public WebPKI as the default trust for a lane | A name is pinned to a key. An empty pin on a dial asks the seat, shows the fingerprint, and stores the key only on yes. A different key later is refused. Trust-on-first-use is that question, not a silent accept. The DNS resolver is the exception. The image carries a system CA bundle, the Mozilla roots. `net dns <ip>` reads the certificate at that address, stores the domain on it, and tells the seat. Later lookups trust a certificate that chains to the bundle, is currently valid, and is valid for that domain. The address you typed stays the address. A key file is still the raw key, and then the bundle is not consulted. SSH host keys and `net allow` do not use the bundle. |
 | TLS before 1.3, renegotiation, compression, 0-RTT | Replay and oracle bugs we do not have to accept. 0-RTT can be a later right. It is off in this phase. |
 | A hand-rolled handshake | The service links a maintained Rust TLS 1.3 implementation (rustls-class) with a pure-Rust crypto provider. No C. If that crate will not link on `x86_64-unknown-galexy`, Milestone 82 fixes the link. It does not replace the handshake. |
 | QUIC as a second API | QUIC is the intended next carrier. It shows up behind the same lane Cap. This phase's carrier is TLS 1.3 over TCP, inside the service. |
@@ -102,7 +102,7 @@ Opcodes on `0x800A`, appended and then stable, same rule as init:
 | 4 `serve` | admin, and a `net listen` rule names the caller and the port | attach a gate for a name to the calling task |
 | 5 `ping` | a `net icmp` rule names the caller | Three ICMP echoes to one address, or to a DNS name resolved once over the pinned DNS-over-TLS resolver. The reply lists each round-trip time, then sent, received, and those times. A payload whose first byte is 0, then a length-prefixed name, resolves and does not echo; the reply is one address per line. No lane Cap. No rule, no query. Today the address is four bytes. Milestones 120–124 make it the one address type, on this opcode |
 | 6 `resolve` | the shell, or a `net dial` rule for that name on port 853 | DNS-over-TLS lookup. The reply is one address. No lane Cap. A key file stays in the record. No key file stores the address and the domain from the certificate, and trusts the bundle for that domain. Milestone 123 may return a v6 value. Until that box is checked, the answer is v4 |
-| 7 `pin` | admin | Pin the DNS-over-TLS resolver. Four address bytes connect, read the domain off the certificate, and trust the bundle for that domain. The reply is `ok` and that domain. A 32-byte key, when one is passed, is that pin and the bundle is not consulted. `10.0.2.2` and `10.0.2.3` are refused. Today the address is four bytes. Milestone 120 makes it the one type. The port stays 853 |
+| 7 `dns` | admin | The seat command is `net dns`. Four address bytes connect, read the domain off the certificate, and trust the bundle for that domain. The reply is `ok` and that domain. A 32-byte key, when one is passed, is that pin and the bundle is not consulted. `10.0.2.2` and `10.0.2.3` are refused. Today the address is four bytes. Milestone 120 makes it the one type. The port stays 853 |
 | 8 `bind` | admin | Bind the stored local address. The payload is that address. `0.0.0.0` is denied. This opcode does not listen |
 | 9 `listen` | a `net listen` rule names the caller and the port | Listen on the stored port. The next reply carries the inbound lane. An empty queue replies `idle` and does not hold the call |
 | 10 `datagram` | a `net dial` rule names the caller and that peer | Send one datagram to the stored peer. Port 53 is refused |
@@ -162,7 +162,7 @@ Names, grants, pinned keys, and the address mode survive a restart of `net`. The
 | Format | Versioned bytes, version 2, defined by `crates/galexy-netcfg`. Version 1 is refused. Magic, version, mode, optional learned lease, the name directory (name, port, kind, address, 32-byte key, actors), then the optional pinned resolver. Tag 0 is absent. Tag 1 is the address and a 32-byte key. Tag 2 is the address and the domain taken from the certificate, and that resolver trusts the bundle for that domain. A tag 2 record with no domain still loads, and lookup fails closed until the seat pins again. An unknown tag is refused. The version stays 2. |
 | Who parses it | The crate. Host tests round-trip a record. `net` links the same crate. A version it does not know is refused: the service logs the version and will not dial until an admin rewrites the file. |
 | Who may read it | `net`, and admin. Init creates an empty version-2 record (mode `ask`, no names, no resolver) when the file is absent, then spawns `net` with one token: `READ` and `WRITE` on that object and on nothing else. Init holds the admin credential, so it can mint that card. The service does not receive the admin root. |
-| Who writes it | `net`, from `allow` and `pin`, and from a finished DHCP lease. The shell does not poke the file. `grant` and `revoke` are not opcodes. Who may dial is `/policy`. |
+| Who writes it | `net`, from `allow` and `dns`, and from a finished DHCP lease. The shell does not poke the file. `grant` and `revoke` are not opcodes. Who may dial is `/policy`. |
 | Disk version | Unchanged by this phase. The record is a file in the sealed table, not a new GALF layout. |
 
 There is no environment block and no `/etc`. Shell history is the other file a program already keeps (`shell.history` in the user's tree). The network record follows that idea and is typed, because a lease and a key are not a line of history.
@@ -205,7 +205,7 @@ and it does not ask QEMU's DNS at `10.0.2.3`. QUIC stays the later
 lane carrier, not this lookup. A name that needs DNS and has no
 pinned resolver fails closed.
 
-`net pin <ip>` stores that address. It connects on port 853, reads
+`net dns <ip>` stores that address. It connects on port 853, reads
 the certificate, and stores the domain name on it. The seat prints
 `ok` and that domain. The certificate must chain to the system CA
 bundle in the image, be currently valid, and be valid for that
@@ -592,7 +592,7 @@ NTS is later, because NTS needs a clock. `net_time_sets_the_date` is
 the run. Opcode 13 on net cap `0x800A` is this query. It is not a v6
 opcode, and it is not a new syscall. Plaintext DNS stays unused.
 
-Milestone 125 is the resolver. `net pin <ip>` is enough. The seat
+Milestone 125 is the resolver. `net dns <ip>` is enough. The seat
 reads the domain off the certificate and prints it. The certificate
 must chain to the Mozilla roots in the image, be currently valid,
 and be valid for that domain. The address you typed stays the

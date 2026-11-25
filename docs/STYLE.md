@@ -255,7 +255,7 @@ Phase 16 (Milestones **108–119**) is the later plan. 108 through
   address or port only when a rule names that caller and that host.
 - **Pinned keys, TLS 1.3 only.** A lane has no WebPKI default. The
   DNS resolver is the exception: the image carries the Mozilla
-  roots. `net pin <ip>` reads the domain off the certificate, tells
+  roots. `net dns <ip>` reads the domain off the certificate, tells
   the seat, and later trusts a certificate that chains to those
   roots, is currently valid, and is valid for that domain. A key
   file replaces that check. SSH host keys and `net allow` do not

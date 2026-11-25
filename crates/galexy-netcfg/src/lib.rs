@@ -30,7 +30,7 @@ pub const KIND_PORT: u8 = 9;
 pub const KIND_DGRAM: u8 = 10;
 /// DNS-over-TLS port. The record does not store another one.
 pub const DOT_PORT: u16 = 853;
-/// Domain taken from the resolver certificate. It fits in a pin reply.
+/// Domain taken from the resolver certificate. It fits in a `net dns` reply.
 pub const RESOLVER_NAME_MAX: usize = 128;
 /// Mode byte: ask DHCP.
 pub const MODE_ASK: u8 = 0;
@@ -113,7 +113,7 @@ impl Name {
     }
 }
 
-/// Pinned DNS-over-TLS resolver. The port is always [`DOT_PORT`].
+/// DNS-over-TLS resolver. The port is always [`DOT_PORT`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Resolver {
     /// Resolver address. Not the QEMU gateway and not `10.0.2.3`.
@@ -140,7 +140,7 @@ pub struct Record {
     pub names: [Name; MAX_NAMES],
     /// Live entries in [`Self::names`].
     pub name_count: u8,
-    /// Pinned resolver. Absent means lookup fails closed.
+    /// DNS resolver. Absent means lookup fails closed.
     pub resolver: Option<Resolver>,
 }
 
@@ -159,9 +159,9 @@ impl Record {
     /// Stores the resolver. `10.0.2.2` and `10.0.2.3` are refused.
     ///
     /// `key` absent trusts the bundle in the image. The domain is stored
-    /// with [`Self::pin_domain`]. `key` present is that raw key, and the
+    /// with [`Self::dns_domain`]. `key` present is that raw key, and the
     /// bundle is not consulted.
-    pub fn pin(&mut self, addr: [u8; 4], key: Option<[u8; 32]>) -> Result<(), CfgError> {
+    pub fn dns(&mut self, addr: [u8; 4], key: Option<[u8; 32]>) -> Result<(), CfgError> {
         if addr == [10, 0, 2, 2] || addr == [10, 0, 2, 3] {
             return Err(CfgError::BadRecord);
         }
@@ -174,9 +174,9 @@ impl Record {
         Ok(())
     }
 
-    /// Stores the domain taken from the certificate. A key pin has no
+    /// Stores the domain taken from the certificate. A key file has no
     /// domain. A wildcard is refused.
-    pub fn pin_domain(&mut self, name: &[u8]) -> Result<(), CfgError> {
+    pub fn dns_domain(&mut self, name: &[u8]) -> Result<(), CfgError> {
         let Some(resolver) = self.resolver.as_mut() else {
             return Err(CfgError::BadRecord);
         };
@@ -580,23 +580,23 @@ mod tests {
         rec.allow(b"docs", 4594, KIND_DNS, [0; 16], [0xCD; 32])
             .unwrap();
         rec.allow(b"peer", 4597, KIND_DGRAM, ip, [0; 32]).unwrap();
-        rec.pin([172, 30, 0, 2], Some([0x11; 32])).unwrap();
-        assert!(rec.pin([10, 0, 2, 2], Some([0x11; 32])).is_err());
-        assert!(rec.pin([10, 0, 2, 3], None).is_err());
+        rec.dns([172, 30, 0, 2], Some([0x11; 32])).unwrap();
+        assert!(rec.dns([10, 0, 2, 2], Some([0x11; 32])).is_err());
+        assert!(rec.dns([10, 0, 2, 3], None).is_err());
         assert_eq!(rec.resolver.unwrap().key, Some([0x11; 32]));
         let mut keyed = [0u8; 1024];
         let kn = encode(&rec, &mut keyed).unwrap();
         assert_eq!(decode(&keyed[..kn]).unwrap(), rec);
-        rec.pin([172, 30, 0, 9], None).unwrap();
+        rec.dns([172, 30, 0, 9], None).unwrap();
         assert!(rec.resolver.unwrap().key.is_none());
         assert_eq!(rec.resolver.unwrap().name_len, 0);
-        rec.pin_domain(b"one.one.one.one").unwrap();
+        rec.dns_domain(b"one.one.one.one").unwrap();
         assert_eq!(
             &rec.resolver.unwrap().name[..rec.resolver.unwrap().name_len as usize],
             b"one.one.one.one"
         );
-        assert!(rec.pin_domain(b"*.evil.test").is_err());
-        assert!(rec.pin_domain(b"localhost").is_err());
+        assert!(rec.dns_domain(b"*.evil.test").is_err());
+        assert!(rec.dns_domain(b"localhost").is_err());
         rec.grant(b"echo", b"admin").unwrap();
         assert!(rec.may_dial(b"echo", b"admin"));
         assert!(!rec.may_dial(b"echo", b"other"));

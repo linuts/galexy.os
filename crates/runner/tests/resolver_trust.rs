@@ -94,16 +94,16 @@ fn resolver_trusts_the_bundle() {
 
     let (ip_leaf, _, _) = chain_named(&["127.0.0.1"], false);
     assert!(
-        trust::dns_pin_name(&ip_leaf, 128).is_none(),
+        trust::dns_cert_name(&ip_leaf, 128).is_none(),
         "an address-only certificate produced a domain"
     );
     let (mixed, _, _) = chain_named(&["*.example.com", "one.one.one.one"], false);
     assert_eq!(
-        trust::dns_pin_name(&mixed, 128).as_deref(),
+        trust::dns_cert_name(&mixed, 128).as_deref(),
         Some(b"one.one.one.one".as_slice())
     );
     assert_eq!(
-        trust::dns_pin_name(&leaf, 128).as_deref(),
+        trust::dns_cert_name(&leaf, 128).as_deref(),
         Some(DOMAIN.as_bytes())
     );
     assert!(trust::name_on_cert(&leaf, DOMAIN.as_bytes()));

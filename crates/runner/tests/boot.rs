@@ -1603,7 +1603,8 @@ fn disk_wait_keeps_the_seat_scheduled() {
 }
 
 /// Second boot of a volume that already has a file. The passphrase path,
-/// then `svc date`, `net pin 1.1.1.1`, `nslookup`, and `shutdown`.
+/// then `svc date`, `net dns 1.1.1.1`, and `shutdown`. A later lookup is
+/// a `/policy` rule, not this command.
 #[test]
 fn sealed_volume_date_pin_shutdown() {
     let disk = common::fresh_galfs_image("sealed-pin");
@@ -1649,8 +1650,7 @@ fn sealed_volume_date_pin_shutdown() {
     owned.extend(type_line("cd Desktop", "owner@galexy:/Desktop> "));
     owned.extend(type_line("cat note", "hello"));
     owned.extend(type_line("svc date", " utc"));
-    owned.extend(type_line("net pin 1.1.1.1", "ok "));
-    owned.extend(type_line("nslookup google.com", "google.com "));
+    owned.extend(type_line("net dns 1.1.1.1", "ok "));
     owned.extend(type_line("shutdown", "[init] power"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
@@ -1683,16 +1683,12 @@ fn sealed_volume_date_pin_shutdown() {
         "svc date did not return a civil time; serial:\n{serial}"
     );
     assert!(
-        serial.lines().any(pin_ok_line),
-        "net pin did not print ok and a domain; serial:\n{serial}"
+        serial.lines().any(dns_ok_line),
+        "net dns did not print ok and a domain; serial:\n{serial}"
     );
     assert!(
         !serial.lines().any(|line| line.trim() == "access denied"),
-        "net pin printed a bare access denied; serial:\n{serial}"
-    );
-    assert!(
-        serial.lines().any(|line| line.contains("google.com ")),
-        "nslookup did not print the name; serial:\n{serial}"
+        "net dns printed a bare access denied; serial:\n{serial}"
     );
     assert!(
         serial.contains("[init] shutdown") && serial.contains("[init] power"),
@@ -1705,7 +1701,7 @@ fn sealed_volume_date_pin_shutdown() {
     );
 }
 
-fn pin_ok_line(line: &str) -> bool {
+fn dns_ok_line(line: &str) -> bool {
     let Some(name) = line.trim().strip_prefix("ok ") else {
         return false;
     };
@@ -6541,9 +6537,9 @@ fn net_time_sets_the_date() {
         .collect();
     owned.extend(type_line("net link", "up 10.0.2.15/24"));
     owned.extend(type_line("svc date", "unset"));
-    owned.extend(type_line("net pin 10.0.2.2", "access denied"));
-    owned.extend(type_line("net pin 10.0.2.3", "access denied"));
-    owned.extend(type_line("net pin 1.1.1.1", "clock not set"));
+    owned.extend(type_line("net dns 10.0.2.2", "access denied"));
+    owned.extend(type_line("net dns 10.0.2.3", "access denied"));
+    owned.extend(type_line("net dns 1.1.1.1", "clock not set"));
     owned.extend(type_line("net time example", "bad"));
     owned.extend(type_line("sec net time time.example shell", "ok"));
     owned.extend(type_line("net time time.example", "access denied"));
@@ -6553,9 +6549,9 @@ fn net_time_sets_the_date() {
     owned.extend(type_line("sec net time 10.0.2.2 shell", "ok"));
     owned.extend(type_line("net time 10.0.2.2", &shown));
     owned.extend(type_line("svc date", &day));
-    owned.extend(type_line("net pin 1.1.1.1", "ok "));
+    owned.extend(type_line("net dns 1.1.1.1", "ok "));
     owned.extend(type_line("connect --putkey", "wrote"));
-    owned.extend(type_line("net pin 172.30.0.2 /k", "ok"));
+    owned.extend(type_line("net dns 172.30.0.2 /k", "ok"));
     owned.extend(type_line("sec net time cloudflare-dns.com shell", "ok"));
     owned.extend(type_line("net time cloudflare-dns.com", &shown));
     owned.extend(type_line("sec net time 10.0.2.2 shell2", "ok"));
@@ -6612,11 +6608,11 @@ fn net_time_sets_the_date() {
     );
     assert!(
         serial.contains("clock not set"),
-        "an unset clock did not refuse the pin; serial:\n{serial}"
+        "an unset clock did not refuse net dns; serial:\n{serial}"
     );
     assert!(
-        serial.lines().any(pin_ok_line),
-        "the pin did not proceed after the clock was set; serial:\n{serial}"
+        serial.lines().any(dns_ok_line),
+        "net dns did not proceed after the clock was set; serial:\n{serial}"
     );
     assert_eq!(
         hits, 2,
@@ -6904,9 +6900,9 @@ fn ping_name_resolves() {
         .collect();
     owned.extend(type_line("net link", "up 10.0.2.15/24"));
     owned.extend(type_line("connect --putkey", "wrote"));
-    owned.extend(type_line("net pin 172.30.0.2 /bad", "ok"));
+    owned.extend(type_line("net dns 172.30.0.2 /bad", "ok"));
     owned.extend(type_line("ping google.com", "access denied"));
-    owned.extend(type_line("net pin 172.30.0.2 /k", "ok"));
+    owned.extend(type_line("net dns 172.30.0.2 /k", "ok"));
     owned.extend(type_line("useradd eve", "Password: "));
     owned.extend([
         ("e".into(), "*".into()),
@@ -6998,7 +6994,7 @@ fn ping_three_echoes_and_nslookup() {
         .collect();
     owned.extend(type_line("net link", "up 10.0.2.15/24"));
     owned.extend(type_line("connect --putkey", "wrote"));
-    owned.extend(type_line("net pin 172.30.0.2 /k", "ok"));
+    owned.extend(type_line("net dns 172.30.0.2 /k", "ok"));
     owned.extend(type_line("ping google.com", "sent 3"));
     owned.extend(type_line("nslookup google.com", "google.com 172.30.0.2"));
     let keys: Vec<(&str, &str)> = owned
@@ -7107,16 +7103,16 @@ fn resolver_pin_still_wins() {
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
     owned.extend(type_line("net link", "up 10.0.2.15/24"));
-    owned.extend(type_line("net pin 10.0.2.2", "access denied"));
-    owned.extend(type_line("net pin 10.0.2.3", "access denied"));
+    owned.extend(type_line("net dns 10.0.2.2", "access denied"));
+    owned.extend(type_line("net dns 10.0.2.3", "access denied"));
     owned.extend(type_line("connect --putkey", "wrote"));
-    owned.extend(type_line("net pin 10.0.2.2 /k", "access denied"));
-    owned.extend(type_line("net pin 10.0.2.3 /k", "access denied"));
-    owned.extend(type_line("net pin 172.30.0.2", "chain refused"));
+    owned.extend(type_line("net dns 10.0.2.2 /k", "access denied"));
+    owned.extend(type_line("net dns 10.0.2.3 /k", "access denied"));
+    owned.extend(type_line("net dns 172.30.0.2", "chain refused"));
     owned.extend(type_line("ping google.com", "access denied"));
-    owned.extend(type_line("net pin 172.30.0.2 /bad", "ok"));
+    owned.extend(type_line("net dns 172.30.0.2 /bad", "ok"));
     owned.extend(type_line("ping google.com", "access denied"));
-    owned.extend(type_line("net pin 172.30.0.2 /k", "ok"));
+    owned.extend(type_line("net dns 172.30.0.2 /k", "ok"));
     owned.extend(type_line("ping google.com", "reply from 172.30.0.2"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
@@ -7784,10 +7780,10 @@ fn milestones_110_through_114() {
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
     owned.extend(type_line("connect --putkey", "wrote"));
-    owned.extend(type_line("net pin 172.30.0.2 /bad", "ok"));
+    owned.extend(type_line("net dns 172.30.0.2 /bad", "ok"));
     owned.extend(type_line("net allow docs dns:4594 /k", "ok"));
     owned.extend(type_line("net resolve docs", "access denied"));
-    owned.extend(type_line("net pin 172.30.0.2 /k", "ok"));
+    owned.extend(type_line("net dns 172.30.0.2 /k", "ok"));
     owned.extend(type_line("net resolve docs", "172.30.0.2"));
     owned.extend(type_line("useradd eve", "Password: "));
     owned.extend([
