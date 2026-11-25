@@ -15,7 +15,7 @@ pub const VERB_DIAL: u8 = 1;
 pub const VERB_LISTEN: u8 = 2;
 pub const VERB_ICMP: u8 = 3;
 pub const VERB_USB: u8 = 4;
-/// One NTP server. The object is `*`, one IPv4 address, or one DNS
+/// One NTP server. The object is `*`, one address, or one DNS
 /// name. The port is 123 and is not written in the line.
 pub const VERB_TIME: u8 = 5;
 
@@ -139,8 +139,8 @@ fn object_shape(verb: u8, object: &[u8]) -> bool {
     match verb {
         VERB_DIAL => dial_shape(object),
         VERB_LISTEN => listen_shape(object),
-        VERB_ICMP => object == b"*" || ipv4(object).is_some(),
-        VERB_TIME => object == b"*" || ipv4(object).is_some() || time_name(object),
+        VERB_ICMP => object == b"*" || galexy_core::parse_ip(object).is_some(),
+        VERB_TIME => object == b"*" || galexy_core::parse_ip(object).is_some() || time_name(object),
         VERB_USB => usb_id(object),
         _ => false,
     }
@@ -163,7 +163,7 @@ fn listen_shape(object: &[u8]) -> bool {
     let Some((host, port)) = split_port(object) else {
         return false;
     };
-    port != 0 && (host == b"*" || ipv4(host).is_some())
+    port != 0 && (host == b"*" || galexy_core::parse_ip(host).is_some())
 }
 
 fn subject_ok(rule: &Rule, stamp: &Stamp) -> bool {
@@ -188,7 +188,7 @@ fn object_ok(rule: &Rule, object: &[u8]) -> bool {
     match rule.verb {
         VERB_DIAL => dial_match(want, object),
         VERB_LISTEN => listen_match(want, object),
-        VERB_ICMP | VERB_TIME => want == b"*" || want == object,
+        VERB_ICMP | VERB_TIME => want == b"*" || want == object || same_addr(want, object),
         VERB_USB => eq_ignore_hex(want, object),
         _ => false,
     }
@@ -215,7 +215,7 @@ fn dial_match(rule: &[u8], object: &[u8]) -> bool {
         };
         return !label.is_empty() && !label.contains(&b'.') && !label.contains(&b'*');
     }
-    rule_host == host
+    same_host(rule_host, host)
 }
 
 fn listen_match(rule: &[u8], object: &[u8]) -> bool {
@@ -230,11 +230,33 @@ fn listen_match(rule: &[u8], object: &[u8]) -> bool {
     if rule_port != port {
         return false;
     }
-    rule_host == b"*" || rule_host == host
+    rule_host == b"*" || same_host(rule_host, host)
+}
+
+fn same_host(rule: &[u8], host: &[u8]) -> bool {
+    rule == host || same_addr(rule, host)
+}
+
+fn same_addr(a: &[u8], b: &[u8]) -> bool {
+    match (galexy_core::parse_ip(a), galexy_core::parse_ip(b)) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
 }
 
 fn split_port(text: &[u8]) -> Option<(&[u8], u16)> {
+    if text.first() == Some(&b'[') {
+        let end = text.iter().position(|b| *b == b']')?;
+        if text.get(end + 1) != Some(&b':') {
+            return None;
+        }
+        let port = parse_u16(&text[end + 2..])?;
+        return Some((&text[1..end], port));
+    }
     let colon = text.iter().rposition(|b| *b == b':')?;
+    if text[..colon].contains(&b':') {
+        return None;
+    }
     let port = parse_u16(&text[colon + 1..])?;
     Some((&text[..colon], port))
 }
@@ -267,38 +289,6 @@ fn time_name(name: &[u8]) -> bool {
         }
     }
     label != 0 && dot
-}
-
-fn ipv4(text: &[u8]) -> Option<[u8; 4]> {
-    let mut out = [0u8; 4];
-    let mut part = 0usize;
-    let mut acc = 0u16;
-    let mut digits = 0u8;
-    for &b in text {
-        if b == b'.' {
-            if digits == 0 || part == 3 {
-                return None;
-            }
-            out[part] = acc as u8;
-            part += 1;
-            acc = 0;
-            digits = 0;
-            continue;
-        }
-        if !b.is_ascii_digit() {
-            return None;
-        }
-        acc = acc.checked_mul(10)?.checked_add((b - b'0') as u16)?;
-        if acc > 255 {
-            return None;
-        }
-        digits += 1;
-    }
-    if part != 3 || digits == 0 {
-        return None;
-    }
-    out[3] = acc as u8;
-    Some(out)
 }
 
 fn usb_id(text: &[u8]) -> bool {

@@ -100,15 +100,15 @@ Opcodes on `0x800A`, appended and then stable, same rule as init:
 | 2 `dial` | a `net dial` rule names the caller and the host | reply carries the app end of a new lane. The actor list is not the check |
 | 3 `allow` | admin | install a name: locator, pinned key. This stores a key. It does not grant a dial |
 | 4 `serve` | admin, and a `net listen` rule names the caller and the port | attach a gate for a name to the calling task |
-| 5 `ping` | a `net icmp` rule names the caller | Three ICMP echoes to one address, or to a DNS name resolved once over the pinned DNS-over-TLS resolver. The reply lists each round-trip time, then sent, received, and those times. A payload whose first byte is 0, then a length-prefixed name, resolves and does not echo; the reply is one address per line. No lane Cap. No rule, no query. Today the address is four bytes. Milestones 120–124 make it the one address type, on this opcode |
+| 5 `ping` | a `net icmp` rule names the caller | Three ICMP echoes to one address, or to a DNS name resolved once over the pinned DNS-over-TLS resolver. The reply lists each round-trip time, then sent, received, and those times. A payload whose first byte is 0, then a length-prefixed name, resolves and does not echo; the reply is one address per line. No lane Cap. No rule, no query. Four payload bytes are an IPv4 address. An IPv6 address is the literal text on this same opcode |
 | 6 `resolve` | the shell, or a `net dial` rule for that name on port 853 | DNS-over-TLS lookup. The reply is one address. No lane Cap. A key file stays in the record. No key file stores the address and the domain from the certificate, and trusts the bundle for that domain. Milestone 123 may return a v6 value. Until that box is checked, the answer is v4 |
-| 7 `dns` | admin | The seat command is `net dns`. Four address bytes connect, read the domain off the certificate, and trust the bundle for that domain. The reply is `ok` and that domain. A 32-byte key, when one is passed, is that pin and the bundle is not consulted. `10.0.2.2` and `10.0.2.3` are refused. Today the address is four bytes. Milestone 120 makes it the one type. The port stays 853 |
+| 7 `dns` | admin | The seat command is `net dns`. Four address bytes connect, read the domain off the certificate, and trust the bundle for that domain. The reply is `ok` and that domain. A 32-byte key, when one is passed, is that pin and the bundle is not consulted. `10.0.2.2` and `10.0.2.3` are refused. Four payload bytes are an IPv4 address. An IPv6 address is the literal text on this same opcode. The port stays 853 |
 | 8 `bind` | admin | Bind the stored local address. The payload is that address. `0.0.0.0` is denied. This opcode does not listen |
 | 9 `listen` | a `net listen` rule names the caller and the port | Listen on the stored port. The next reply carries the inbound lane. An empty queue replies `idle` and does not hold the call |
 | 10 `datagram` | a `net dial` rule names the caller and that peer | Send one datagram to the stored peer. Port 53 is refused |
 | 11 `recv` | a `net dial` rule names the caller and that peer | Receive one datagram from that peer. Port 53 is refused. A packet from any other peer is ignored |
 | 12 `stream` | a `net dial` rule to dial, a `net listen` rule to accept | One direction byte (`TOKEN_READ` dials, `TOKEN_WRITE` accepts) and then the name. The program passes no address. An empty pin replies `unseen` and the peer key. Direction 3 stores that key after the seat answers yes. Direction 4 drops it. A second acceptor is `held` |
-| 13 `time` | admin, and a `net time` rule names the caller and the address or the DNS name | One NTP packet to that IPv4 address on UDP port 123, or to the address from one DNS-over-TLS lookup of that name. The transmit time in the reply sets `Date` and the CMOS chip. The reply is `YYYY-MM-DD HH:MM:SS utc`. A missing rule, or a seat that is not the administrator, replies `access denied` and sends nothing. A name with no pinned resolver prints that same `access denied` and sends nothing. A reply from any other address is ignored. No poll, no NTS, no plaintext DNS. The address is four bytes until Milestone 120 |
+| 13 `time` | admin, and a `net time` rule names the caller and the address or the DNS name | One NTP packet to that IPv4 address on UDP port 123, or to the address from one DNS-over-TLS lookup of that name. The transmit time in the reply sets `Date` and the CMOS chip. The reply is `YYYY-MM-DD HH:MM:SS utc`. A missing rule, or a seat that is not the administrator, replies `access denied` and sends nothing. A name with no pinned resolver prints that same `access denied` and sends nothing. A reply from any other address is ignored. No poll, no NTS, no plaintext DNS. Four payload bytes are an IPv4 address. An IPv6 address is the literal text on this same opcode |
 
 `fetch <name>` is the `fetch` program and dials that name. `ping <ip>`, `ping <name>`, and `nslookup <name>` are the `ping` program on opcode 5. The shell starts them. A rule names `ping` or `fetch`, not the shell. None of them is a syscall.
 `svc status net` still means "is the process up," through init.
@@ -145,7 +145,7 @@ The service has to have an address before it can talk to anyone. Milestone 80 is
 | Mode | The record below. `ask` runs DHCP. `fixed` uses the locator stored in the record and does not ask. |
 | Address, prefix, gateway | DHCP ack when the mode is `ask`. QEMU user networking offers `10.0.2.15/24` from `10.0.2.2`. A `fixed` record uses the bytes the admin stored. |
 | Gateway MAC | ARP for the gateway, before any unicast IP packet. The cache holds 8 entries. IPv6 neighbor solicitation is the same step, covered by host tests. The QEMU smoke is IPv4. Milestone 122 is the reach past that path, on the one address type. |
-| ICMP echo | `ping <ip>` or `ping <name>` when a `net icmp` rule names the `ping` program. An address is four bytes until Milestone 120. A name is resolved over DNS-over-TLS, then one echo goes to that answer. The gateway may be the next hop. QEMU user networking answers `10.0.2.2` directly. The seat does not hold the wire. A missing rule sends no query. Milestone 122 is one echo to a v6 neighbor or gateway that is not `10.0.2.2`, on this same rule. |
+| ICMP echo | `ping <ip>` or `ping <name>` when a `net icmp` rule names the `ping` program. Four payload bytes are an IPv4 address. An IPv6 address is the literal text on this same opcode. A name is resolved over DNS-over-TLS, then one echo goes to that answer. The gateway may be the next hop. QEMU user networking answers `10.0.2.2` directly. The seat does not hold the wire. A missing rule sends no query. Milestone 122 is one echo to a v6 neighbor or gateway that is not `10.0.2.2`, on this same rule. |
 | First packet a peer must answer | After the ack and the ARP reply, one UDP datagram to the gateway. The payload is `galexy`. The host test receives it. That is Milestone 80. It is not a TCP handshake and it is not a lane. |
 
 DHCP here is a client. Discover, offer, request, ack. The first offer wins. Galexy does not serve DHCP in this phase. A lease is learned state: address, prefix, gateway, expiry. On expiry the service asks again. A missing record means mode `ask` and an empty directory, so a fresh QEMU boot still gets an address.
@@ -159,7 +159,7 @@ Names, grants, pinned keys, and the address mode survive a restart of `net`. The
 | | |
 | --- | --- |
 | Path | `/net` in the admin tree. One component, one file. |
-| Format | Versioned bytes, version 2, defined by `crates/galexy-netcfg`. Version 1 is refused. Magic, version, mode, optional learned lease, the name directory (name, port, kind, address, 32-byte key, actors), then the optional pinned resolver. Tag 0 is absent. Tag 1 is the address and a 32-byte key. Tag 2 is the address and the domain taken from the certificate, and that resolver trusts the bundle for that domain. A tag 2 record with no domain still loads, and lookup fails closed until the seat pins again. An unknown tag is refused. The version stays 2. |
+| Format | Versioned bytes, version 3, defined by `crates/galexy-netcfg`. Versions 1 and 2 are refused. Magic, version, mode, a count of addresses (kind, sixteen bytes, prefix, expiry), one optional gateway per family, the name directory, then the optional pinned resolver. The resolver address is the same address type. Tag 0 is absent. Tag 1 is the address and a 32-byte key. Tag 2 is the address and the domain taken from the certificate. A tag 2 record with no domain still loads. An unknown tag is refused. Init writes an empty version-3 record. A disk that already holds version 2 is not read. |
 | Who parses it | The crate. Host tests round-trip a record. `net` links the same crate. A version it does not know is refused: the service logs the version and will not dial until an admin rewrites the file. |
 | Who may read it | `net`, and admin. Init creates an empty version-2 record (mode `ask`, no names, no resolver) when the file is absent, then spawns `net` with one token: `READ` and `WRITE` on that object and on nothing else. Init holds the admin credential, so it can mint that card. The service does not receive the admin root. |
 | Who writes it | `net`, from `allow` and `dns`, and from a finished DHCP lease. The shell does not poke the file. `grant` and `revoke` are not opcodes. Who may dial is `/policy`. |
@@ -191,11 +191,8 @@ the volume MAC (`THREAT.md` still refuses to swap that primitive).
 The address is one type. A v4 value and a v6 value are that type.
 Cards, dial, the reply, bind, listen, datagrams, and the route use
 it. Programs do not branch, and `net` does not grow a second path.
-Today the lease, the resolver, and ping are four bytes, and the
-record still has two locator kinds. Milestones 120–124 close that
-gap. Until those boxes are checked, the QEMU smoke is IPv4, and
-IPv6 packet build and neighbor solicitation stay host tests.
-Happy eyeballs is a second path and stays out. There is no second
+A family holds up to four addresses and one gateway. Bare `net`
+prints every address. Happy eyeballs stays out. There is no second
 stack, no raw socket, no plaintext DNS, and no general browser TLS.
 
 DNS, when a name is not a literal locator, is resolved by `net` over
@@ -205,11 +202,15 @@ and it does not ask QEMU's DNS at `10.0.2.3`. QUIC stays the later
 lane carrier, not this lookup. A name that needs DNS and has no
 pinned resolver fails closed.
 
-`net up` starts DHCPv4. DHCP starts only from that command. A packet
-leaves only because the user acted, or because a service they started
-is doing the job they gave it. `net up <ip>/<prefix> via <gateway>`
-is the static form for IPv4 and for IPv6, and it is not built. First
-boot does not run `net up`. Skip sends nothing.
+Bare `net up` on an empty list starts DHCPv4 and DHCPv6. It installs
+the link-local from the MAC, sends one duplicate-address solicitation,
+one router solicitation, and the two DHCP clients, then stops. DNS
+options inside either DHCP reply are ignored. A second bare `net up`
+prints the list and sends nothing. `net up <ip>/<prefix> via <gateway>`
+installs that static address for IPv4 or IPv6 and sends nothing. One
+gateway per family: a different gateway prints `one gateway`, and a
+fifth address prints `full`. First boot does not run `net up`. Skip
+sends nothing.
 
 `net dns <ip>` stores that address. It connects on port 853, reads
 the certificate, and stores the domain name on it. The seat prints
@@ -492,7 +493,7 @@ Milestone 112 is one address in a `net dial` rule. The rule names
 that address and no other. Milestone 113 is the port on that same
 line. An address rule does not imply a different port. Milestone
 114 binds the stored local address, and only for admin. `0.0.0.0`
-is denied. The record is version 2; version 1 is refused. No new
+is denied. The record is version 3; versions 1 and 2 are refused. No new
 syscall, and no new right bit. `milestones_110_through_114` is
 that run. Milestone 83 hands the next lane to the one listener
 that attached the gate, and only when a listen rule names that

@@ -1,20 +1,23 @@
-//! Version 2 bytes for the `/net` record.
+//! Version 3 bytes for the `/net` record.
 //!
-//! Magic, version, mode, an optional learned lease, the directory, then
-//! the pinned resolver. Tag 0 is absent. Tag 1 is the address and a
-//! 32-byte key. Tag 2 is the address and the domain taken from the
-//! certificate. The resolver trusts the bundle in the image for that
-//! domain. A tag 2 record with no domain still loads. An unknown tag
-//! is refused. A version this
-//! crate does not know is an error. Callers do not guess. Version 1
-//! is refused.
+//! Magic, version, mode, the address list, one optional gateway per
+//! family, the directory, then the pinned resolver. Tag 0 is absent.
+//! Tag 1 is the address and a 32-byte key. Tag 2 is the address and the
+//! domain taken from the certificate. The resolver trusts the bundle in
+//! the image for that domain. A tag 2 record with no domain still loads.
+//! An unknown tag is refused. A version this crate does not know is an
+//! error. Callers do not guess. Version 1 and version 2 are refused.
 
 #![cfg_attr(not(test), no_std)]
 
+use galexy_core::Ip;
+
 /// File magic, ASCII `GNET`.
 pub const MAGIC: &[u8; 4] = b"GNET";
-/// Record version. Unknown versions, including version 1, are refused.
-pub const VERSION: u16 = 2;
+/// Record version. Unknown versions, including version 1 and 2, are refused.
+pub const VERSION: u16 = 3;
+/// Addresses stored on the link. Four per family.
+pub const MAX_ADDRS: usize = 8;
 /// A name resolved over DNS-over-TLS. The address is not stored.
 pub const KIND_DNS: u8 = 1;
 /// IPv4 locator.
@@ -54,17 +57,26 @@ pub enum CfgError {
     Missing,
 }
 
-/// Address learned from DHCP, or stored for fixed mode.
+/// One address on the link. The gateway is stored once per family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Lease {
-    /// IPv4 address.
-    pub addr: [u8; 4],
+pub struct CfgAddr {
+    /// Address.
+    pub ip: Ip,
     /// Prefix length.
     pub prefix: u8,
-    /// Gateway.
-    pub gateway: [u8; 4],
-    /// Seconds since the Unix epoch. `0` means none (fixed mode).
+    /// Lease lifetime in seconds. `0` means none.
     pub expiry: u32,
+}
+
+impl CfgAddr {
+    /// Empty slot. Not part of the live list.
+    pub const fn blank() -> Self {
+        Self {
+            ip: Ip::V4([0, 0, 0, 0]),
+            prefix: 0,
+            expiry: 0,
+        }
+    }
 }
 
 /// One directory entry. The key is the raw 32-byte pin.
@@ -116,8 +128,8 @@ impl Name {
 /// DNS-over-TLS resolver. The port is always [`DOT_PORT`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Resolver {
-    /// Resolver address. Not the QEMU gateway and not `10.0.2.3`.
-    pub addr: [u8; 4],
+    /// Resolver address. `10.0.2.2` and `10.0.2.3` are refused.
+    pub addr: Ip,
     /// Raw key. `None` trusts the bundle in the image for [`Self::name`].
     /// `Some` is that key, and the bundle is not consulted. Callers do
     /// not write these bytes to the console.
@@ -134,8 +146,15 @@ pub struct Resolver {
 pub struct Record {
     /// [`MODE_ASK`] or [`MODE_FIXED`].
     pub mode: u8,
-    /// Learned or configured locator.
-    pub lease: Option<Lease>,
+    /// Learned or configured addresses. Live entries are the prefix of
+    /// length [`Self::addr_count`].
+    pub addrs: [CfgAddr; MAX_ADDRS],
+    /// Live entries in [`Self::addrs`].
+    pub addr_count: u8,
+    /// The one IPv4 gateway, when the link has one.
+    pub v4_gw: Option<Ip>,
+    /// The one IPv6 gateway, when the link has one.
+    pub v6_gw: Option<Ip>,
     /// Directory.
     pub names: [Name; MAX_NAMES],
     /// Live entries in [`Self::names`].
@@ -149,7 +168,10 @@ impl Record {
     pub const fn empty_ask() -> Self {
         Self {
             mode: MODE_ASK,
-            lease: None,
+            addrs: [CfgAddr::blank(); MAX_ADDRS],
+            addr_count: 0,
+            v4_gw: None,
+            v6_gw: None,
             names: [Name::empty(); MAX_NAMES],
             name_count: 0,
             resolver: None,
@@ -161,9 +183,11 @@ impl Record {
     /// `key` absent trusts the bundle in the image. The domain is stored
     /// with [`Self::dns_domain`]. `key` present is that raw key, and the
     /// bundle is not consulted.
-    pub fn dns(&mut self, addr: [u8; 4], key: Option<[u8; 32]>) -> Result<(), CfgError> {
-        if addr == [10, 0, 2, 2] || addr == [10, 0, 2, 3] {
-            return Err(CfgError::BadRecord);
+    pub fn dns(&mut self, addr: Ip, key: Option<[u8; 32]>) -> Result<(), CfgError> {
+        if let Ip::V4(octets) = addr {
+            if octets == [10, 0, 2, 2] || octets == [10, 0, 2, 3] {
+                return Err(CfgError::BadRecord);
+            }
         }
         self.resolver = Some(Resolver {
             addr,
@@ -308,16 +332,15 @@ pub fn encode(record: &Record, out: &mut [u8]) -> Result<usize, CfgError> {
     w.bytes(MAGIC)?;
     w.u16(VERSION)?;
     w.u8(record.mode)?;
-    match record.lease {
-        None => w.u8(0)?,
-        Some(lease) => {
-            w.u8(1)?;
-            w.bytes(&lease.addr)?;
-            w.u8(lease.prefix)?;
-            w.bytes(&lease.gateway)?;
-            w.u32(lease.expiry)?;
-        }
+    w.u8(record.addr_count)?;
+    for addr in &record.addrs[..record.addr_count as usize] {
+        w.u8(addr.ip.kind())?;
+        w.bytes(&addr.ip.octets16())?;
+        w.u8(addr.prefix)?;
+        w.u32(addr.expiry)?;
     }
+    write_gw(&mut w, record.v4_gw)?;
+    write_gw(&mut w, record.v6_gw)?;
     w.u8(record.name_count)?;
     for name in &record.names[..record.name_count as usize] {
         w.u8(name.name_len)?;
@@ -337,12 +360,14 @@ pub fn encode(record: &Record, out: &mut [u8]) -> Result<usize, CfgError> {
         Some(resolver) => match resolver.key {
             Some(key) => {
                 w.u8(1)?;
-                w.bytes(&resolver.addr)?;
+                w.u8(resolver.addr.kind())?;
+                w.bytes(&resolver.addr.octets16())?;
                 w.bytes(&key)?;
             }
             None => {
                 w.u8(2)?;
-                w.bytes(&resolver.addr)?;
+                w.u8(resolver.addr.kind())?;
+                w.bytes(&resolver.addr.octets16())?;
                 w.u8(resolver.name_len)?;
                 w.bytes(&resolver.name[..resolver.name_len as usize])?;
             }
@@ -385,7 +410,42 @@ fn kind_ok(kind: u8) -> bool {
     )
 }
 
-/// Decodes a version-2 record. Any other version is [`CfgError::BadRecord`].
+fn write_gw(w: &mut Writer<'_>, gw: Option<Ip>) -> Result<(), CfgError> {
+    match gw {
+        None => w.u8(0),
+        Some(ip) => {
+            w.u8(1)?;
+            w.u8(ip.kind())?;
+            w.bytes(&ip.octets16())
+        }
+    }
+}
+
+fn read_gw(r: &mut Reader<'_>) -> Result<Option<Ip>, CfgError> {
+    if r.u8()? == 0 {
+        Ok(None)
+    } else {
+        let kind = r.u8()?;
+        let mut octets = [0u8; 16];
+        r.bytes(&mut octets)?;
+        Ip::from_kind(kind, octets)
+            .filter(|ip| match ip {
+                Ip::V4(a) => *a != [0, 0, 0, 0],
+                Ip::V6(a) => *a != [0u8; 16],
+            })
+            .map(Some)
+            .ok_or(CfgError::BadRecord)
+    }
+}
+
+fn read_ip(r: &mut Reader<'_>) -> Result<Ip, CfgError> {
+    let kind = r.u8()?;
+    let mut octets = [0u8; 16];
+    r.bytes(&mut octets)?;
+    Ip::from_kind(kind, octets).ok_or(CfgError::BadRecord)
+}
+
+/// Decodes a version-3 record. Any other version is [`CfgError::BadRecord`].
 pub fn decode(bytes: &[u8]) -> Result<Record, CfgError> {
     let mut r = Reader { buf: bytes, at: 0 };
     let mut magic = [0u8; 4];
@@ -400,22 +460,24 @@ pub fn decode(bytes: &[u8]) -> Result<Record, CfgError> {
     if mode != MODE_ASK && mode != MODE_FIXED {
         return Err(CfgError::BadRecord);
     }
-    let lease = if r.u8()? == 0 {
-        None
-    } else {
-        let mut addr = [0u8; 4];
-        let mut gateway = [0u8; 4];
-        r.bytes(&mut addr)?;
-        let prefix = r.u8()?;
-        r.bytes(&mut gateway)?;
-        let expiry = r.u32()?;
-        Some(Lease {
-            addr,
-            prefix,
-            gateway,
-            expiry,
-        })
-    };
+    let addr_count = r.u8()?;
+    if addr_count as usize > MAX_ADDRS {
+        return Err(CfgError::BadRecord);
+    }
+    let mut addrs = [CfgAddr::blank(); MAX_ADDRS];
+    for addr in addrs.iter_mut().take(addr_count as usize) {
+        addr.ip = read_ip(&mut r)?;
+        addr.prefix = r.u8()?;
+        if !galexy_core::prefix_ok(addr.ip, addr.prefix) {
+            return Err(CfgError::BadRecord);
+        }
+        addr.expiry = r.u32()?;
+    }
+    let v4_gw = read_gw(&mut r)?;
+    let v6_gw = read_gw(&mut r)?;
+    if v4_gw.is_some_and(|ip| !ip.is_v4()) || v6_gw.is_some_and(|ip| ip.is_v4()) {
+        return Err(CfgError::BadRecord);
+    }
     let name_count = r.u8()?;
     if name_count as usize > MAX_NAMES {
         return Err(CfgError::BadRecord);
@@ -451,11 +513,10 @@ pub fn decode(bytes: &[u8]) -> Result<Record, CfgError> {
     let resolver = match r.u8()? {
         0 => None,
         1 => {
-            let mut addr = [0u8; 4];
+            let addr = read_ip(&mut r)?;
             let mut key = [0u8; 32];
-            r.bytes(&mut addr)?;
             r.bytes(&mut key)?;
-            if addr == [10, 0, 2, 2] || addr == [10, 0, 2, 3] {
+            if refused_resolver(addr) {
                 return Err(CfgError::BadRecord);
             }
             Some(Resolver {
@@ -466,9 +527,8 @@ pub fn decode(bytes: &[u8]) -> Result<Record, CfgError> {
             })
         }
         2 => {
-            let mut addr = [0u8; 4];
-            r.bytes(&mut addr)?;
-            if addr == [10, 0, 2, 2] || addr == [10, 0, 2, 3] {
+            let addr = read_ip(&mut r)?;
+            if refused_resolver(addr) {
                 return Err(CfgError::BadRecord);
             }
             let mut name = [0u8; RESOLVER_NAME_MAX];
@@ -498,11 +558,18 @@ pub fn decode(bytes: &[u8]) -> Result<Record, CfgError> {
     }
     Ok(Record {
         mode,
-        lease,
+        addrs,
+        addr_count,
+        v4_gw,
+        v6_gw,
         names,
         name_count,
         resolver,
     })
+}
+
+fn refused_resolver(addr: Ip) -> bool {
+    matches!(addr, Ip::V4([10, 0, 2, 2] | [10, 0, 2, 3]))
 }
 
 struct Writer<'a> {
@@ -568,26 +635,27 @@ mod tests {
     #[test]
     fn round_trip_and_grants() {
         let mut rec = Record::empty_ask();
-        rec.lease = Some(Lease {
-            addr: [10, 0, 2, 15],
+        rec.addrs[0] = CfgAddr {
+            ip: Ip::V4([10, 0, 2, 15]),
             prefix: 24,
-            gateway: [10, 0, 2, 2],
             expiry: 42,
-        });
+        };
+        rec.addr_count = 1;
+        rec.v4_gw = Some(Ip::V4([10, 0, 2, 2]));
         let mut ip = [0u8; 16];
         ip[..4].copy_from_slice(&[10, 0, 2, 2]);
         rec.allow(b"echo", 4582, KIND_IPV4, ip, [0xAB; 32]).unwrap();
         rec.allow(b"docs", 4594, KIND_DNS, [0; 16], [0xCD; 32])
             .unwrap();
         rec.allow(b"peer", 4597, KIND_DGRAM, ip, [0; 32]).unwrap();
-        rec.dns([172, 30, 0, 2], Some([0x11; 32])).unwrap();
-        assert!(rec.dns([10, 0, 2, 2], Some([0x11; 32])).is_err());
-        assert!(rec.dns([10, 0, 2, 3], None).is_err());
+        rec.dns(Ip::V4([172, 30, 0, 2]), Some([0x11; 32])).unwrap();
+        assert!(rec.dns(Ip::V4([10, 0, 2, 2]), Some([0x11; 32])).is_err());
+        assert!(rec.dns(Ip::V4([10, 0, 2, 3]), None).is_err());
         assert_eq!(rec.resolver.unwrap().key, Some([0x11; 32]));
         let mut keyed = [0u8; 1024];
         let kn = encode(&rec, &mut keyed).unwrap();
         assert_eq!(decode(&keyed[..kn]).unwrap(), rec);
-        rec.dns([172, 30, 0, 9], None).unwrap();
+        rec.dns(Ip::V4([172, 30, 0, 9]), None).unwrap();
         assert!(rec.resolver.unwrap().key.is_none());
         assert_eq!(rec.resolver.unwrap().name_len, 0);
         rec.dns_domain(b"one.one.one.one").unwrap();
@@ -609,7 +677,10 @@ mod tests {
         let legacy = &buf[..n - 1 - "one.one.one.one".len()];
         let old = decode(legacy).unwrap();
         assert_eq!(old.resolver.unwrap().name_len, 0);
-        assert_eq!(old.resolver.unwrap().addr, [172, 30, 0, 9]);
+        assert_eq!(old.resolver.unwrap().addr, Ip::V4([172, 30, 0, 9]));
+        buf[4] = 2;
+        buf[5] = 0;
+        assert_eq!(decode(&buf[..n]), Err(CfgError::BadRecord));
     }
 
     #[test]

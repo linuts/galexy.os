@@ -6,3 +6,4 @@ description = "The sec rule table. One verb, one object, one subject."
 
 [dependencies]
 galexy-abi = { path = "../galexy-abi" }
+galexy-core = { path = "../galexy-core" }

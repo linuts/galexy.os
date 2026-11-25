@@ -72,10 +72,7 @@ pub(crate) fn show_help() {
     help_section(b"system");
     help_row(b"fetch", b"dashboard (alias: dashboard)");
     help_row(b"fetch <name>", b"dial a granted name and print");
-    help_row(
-        b"net up",
-        b"DHCPv4; net up <ip>/<prefix> via <gateway> is not built (v4 or v6)",
-    );
+    help_row(b"net up", b"DHCP, or net up <ip>/<prefix> via <gateway>");
     help_row(b"net link", b"address, or down");
     help_row(b"net allow ...", b"name, locator, optional key file");
     help_row(b"net dns <ip> [keyfile]", b"resolver; key file optional");
@@ -2110,38 +2107,36 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
     prompt(cwd);
 }
 
-/// `net up` starts DHCPv4. `net up <ip>/<prefix> via <gateway>` is the
-/// static form, v4 or v6, and it is not built. Nothing is sent for it.
+/// `net up` learns on an empty list. `net up <ip>/<prefix> via <gateway>`
+/// installs that address and sends nothing.
 fn net_up(cwd: &Cwd, tail: &[u8]) {
     let tail = trim(tail);
     if tail.is_empty() {
         finish_net(cwd, &[galexy_abi::NET_OP_UP], false);
         return;
     }
-    if let Some(ipv6) = static_via(tail) {
-        if ipv6 {
-            write_console(b"ipv6 is not built\n");
-        } else {
-            write_console(b"static address is not built\n");
-        }
+    if static_via(tail).is_none() {
+        write_console(b"net up <ip>/<prefix> via <gateway>\n");
         prompt(cwd);
         return;
     }
-    write_console(
-        b"net up starts DHCPv4; net up <ip>/<prefix> via <gateway> is not built (v4 or v6)\n",
-    );
-    prompt(cwd);
+    let mut payload = [0u8; 128];
+    if 1 + tail.len() > payload.len() {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    }
+    payload[0] = galexy_abi::NET_OP_UP;
+    payload[1..1 + tail.len()].copy_from_slice(tail);
+    finish_net(cwd, &payload[..1 + tail.len()], false);
 }
 
-/// `<addr>/<prefix> via <gateway>`. `Some(true)` when either side has `:`.
-fn static_via(tail: &[u8]) -> Option<bool> {
+/// `<addr>/<prefix> via <gateway>`, both sides one address.
+fn static_via(tail: &[u8]) -> Option<()> {
     let via = b" via ";
     let at = tail.windows(via.len()).position(|w| w == via)?;
     let left = trim(&tail[..at]);
     let right = trim(&tail[at + via.len()..]);
-    if left.is_empty() || right.is_empty() {
-        return None;
-    }
     let slash = left.iter().position(|b| *b == b'/')?;
     if slash == 0 || slash + 1 >= left.len() {
         return None;
@@ -2150,7 +2145,9 @@ fn static_via(tail: &[u8]) -> Option<bool> {
     if prefix.is_empty() || !prefix.iter().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    Some(left.contains(&b':') || right.contains(&b':'))
+    galexy_core::parse_ip(&left[..slash])?;
+    galexy_core::parse_ip(right)?;
+    Some(())
 }
 
 fn net_allow(cwd: &Cwd, tail: &[u8]) {
@@ -2192,14 +2189,14 @@ fn net_allow(cwd: &Cwd, tail: &[u8]) {
             prompt(cwd);
             return;
         }
-        ([0u8; 4], port, 1)
+        ([0u8; 16], port, 1)
     } else {
-        let Some((ip, port)) = parse_locator(parts[1]) else {
+        let Some((ip, port, kind)) = parse_locator(parts[1]) else {
             write_console(b"bad locator\n");
             prompt(cwd);
             return;
         };
-        (ip, port, 4)
+        (ip, port, kind)
     };
     let key = if nparts == 3 {
         let Some(key) = read_key(cwd, parts[2]) else {
@@ -2226,7 +2223,7 @@ fn net_allow(cwd: &Cwd, tail: &[u8]) {
     at += 2;
     payload[at] = kind;
     at += 1;
-    payload[at..at + 4].copy_from_slice(&ip);
+    payload[at..at + 16].copy_from_slice(&ip);
     at += 16;
     payload[at..at + 32].copy_from_slice(&key);
     at += 32;
@@ -2240,14 +2237,14 @@ fn net_time(cwd: &Cwd, tail: &[u8]) {
         prompt(cwd);
         return;
     }
-    if let Some(ip) = parse_ip(tail) {
+    if let Some(galexy_core::Ip::V4(ip)) = galexy_core::parse_ip(tail) {
         let mut payload = [0u8; 5];
         payload[0] = galexy_abi::NET_OP_TIME;
         payload[1..5].copy_from_slice(&ip);
         finish_net(cwd, &payload, false);
         return;
     }
-    if !dns_name(tail) {
+    if galexy_core::parse_ip(tail).is_none() && !dns_name(tail) {
         write_console(b"bad\n");
         prompt(cwd);
         return;
@@ -2270,12 +2267,15 @@ fn net_dns(cwd: &Cwd, tail: &[u8]) {
         Some(sp) => (trim(&tail[..sp]), Some(trim(&tail[sp + 1..]))),
         None => (tail, None),
     };
-    let Some(ip) = parse_ip(ip_text) else {
+    let Some(ip) = galexy_core::parse_ip(ip_text) else {
         write_console(b"bad\n");
         prompt(cwd);
         return;
     };
-    if ip == [10, 0, 2, 2] || ip == [10, 0, 2, 3] {
+    if matches!(
+        ip,
+        galexy_core::Ip::V4([10, 0, 2, 2]) | galexy_core::Ip::V4([10, 0, 2, 3])
+    ) {
         write_console(b"access denied\n");
         prompt(cwd);
         return;
@@ -2295,14 +2295,18 @@ fn net_dns(cwd: &Cwd, tail: &[u8]) {
     } else {
         None
     };
-    let mut payload = [0u8; 40];
+    let mut payload = [0u8; 96];
     payload[0] = galexy_abi::NET_OP_DNS;
-    payload[1..5].copy_from_slice(&ip);
+    let Some(n) = galexy_core::encode_ip_arg(ip, &mut payload[1..]) else {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    };
     let n = if let Some(key) = key {
-        payload[5..37].copy_from_slice(&key);
-        37
+        payload[1 + n..1 + n + 32].copy_from_slice(&key);
+        1 + n + 32
     } else {
-        5
+        1 + n
     };
     finish_net(cwd, &payload[..n], false);
 }
@@ -2511,33 +2515,35 @@ fn finish_net(cwd: &Cwd, payload: &[u8], body: bool) {
     prompt(cwd);
 }
 
-fn parse_locator(text: &[u8]) -> Option<([u8; 4], u16)> {
-    let colon = text.iter().position(|b| *b == b':')?;
-    let ip = parse_ip(&text[..colon])?;
+fn parse_locator(text: &[u8]) -> Option<([u8; 16], u16, u8)> {
+    if text.first() == Some(&b'[') {
+        let end = text.iter().position(|b| *b == b']')?;
+        if text.get(end + 1) != Some(&b':') {
+            return None;
+        }
+        let galexy_core::Ip::V6(ip) = galexy_core::parse_ip(&text[1..end])? else {
+            return None;
+        };
+        let port = parse_u16(&text[end + 2..])?;
+        return Some((ip, port, 6));
+    }
+    let colon = text.iter().rposition(|b| *b == b':')?;
+    let galexy_core::Ip::V4(ip) = galexy_core::parse_ip(&text[..colon])? else {
+        return None;
+    };
     let port = parse_u16(&text[colon + 1..])?;
-    Some((ip, port))
+    let mut raw = [0u8; 16];
+    raw[..4].copy_from_slice(&ip);
+    Some((raw, port, 4))
 }
 
-/// A dotted DNS name. Four payload bytes stay an IPv4 address, so a
-/// three-byte name is not a name on this opcode.
+/// Four dotted bytes, or nothing. A leading zero is refused. IPv6 is
+/// not four bytes; callers that accept it use [`galexy_core::parse_ip`].
 pub(crate) fn parse_ip(text: &[u8]) -> Option<[u8; 4]> {
-    let mut ip = [0u8; 4];
-    let mut last = 0usize;
-    for (i, part) in text.split(|b| *b == b'.').enumerate() {
-        if i > 3 {
-            return None;
-        }
-        let n = parse_u16(part)?;
-        if n > 255 {
-            return None;
-        }
-        ip[i] = n as u8;
-        last = i;
+    match galexy_core::parse_ip(text) {
+        Some(galexy_core::Ip::V4(ip)) => Some(ip),
+        _ => None,
     }
-    if last != 3 {
-        return None;
-    }
-    Some(ip)
 }
 
 /// A dotted DNS name. Four payload bytes stay an IPv4 address, so a

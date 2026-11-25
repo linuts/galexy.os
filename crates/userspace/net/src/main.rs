@@ -19,9 +19,11 @@ use galexy_abi::{
     NET_OP_LINK, NET_OP_LISTEN, NET_OP_PING, NET_OP_RECV, NET_OP_RESOLVE, NET_OP_SERVE,
     NET_OP_STREAM, NET_OP_TIME, NET_OP_UP, PING_LOOKUP,
 };
-use galexy_net::Engine;
+use galexy_core::{format_ip, parse_ip as parse_any, Ip};
+use galexy_net::{Engine, StaticErr};
 use galexy_netcfg::{
-    decode, encode, Record, KIND_ADDR, KIND_DGRAM, KIND_DNS, KIND_IPV4, KIND_PORT, NAME_MAX,
+    decode, encode, CfgAddr, Record, KIND_ADDR, KIND_DGRAM, KIND_DNS, KIND_IPV4, KIND_IPV6,
+    KIND_PORT, MAX_ADDRS, NAME_MAX,
 };
 use galexy_rt::{
     chan_recv_poll, chan_send, channel, clock_ms, close, date_set, lane_pair, open, read,
@@ -30,7 +32,9 @@ use galexy_rt::{
 use galexy_sec::Stamp;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{verify_tls13_signature, CryptoProvider};
-use rustls::pki_types::{CertificateDer, IpAddr, Ipv4Addr, PrivateKeyDer, ServerName, UnixTime};
+use rustls::pki_types::{
+    CertificateDer, IpAddr, Ipv4Addr, Ipv6Addr, PrivateKeyDer, ServerName, UnixTime,
+};
 use rustls::{
     ClientConfig, ClientConnection, Connection, DigitallySignedStruct, Error, ServerConfig,
     ServerConnection, SignatureScheme,
@@ -74,7 +78,7 @@ fn main() {
     // the command that may send.
     let mut engine = Engine::new(mac, false);
     let mut gates: Vec<Gate> = Vec::new();
-    let mut logged_addr = false;
+    let mut last_link = String::new();
     let mut logged_udp = false;
     let mut logged_tcp = false;
     let mut flood_at: Option<u64> = None;
@@ -88,21 +92,14 @@ fn main() {
         let now = clock_ms();
         engine.poll(now);
         pump(&mut engine);
-        if !logged_addr {
-            if let Some((addr, prefix, gw)) = engine.locator() {
-                log(&format!(
-                    "[net] addr {}.{}.{}.{}/{} gw {}.{}.{}.{}",
-                    addr[0], addr[1], addr[2], addr[3], prefix, gw[0], gw[1], gw[2], gw[3]
-                ));
-                record.lease = Some(galexy_netcfg::Lease {
-                    addr,
-                    prefix,
-                    gateway: gw,
-                    expiry: engine.lease_secs(),
-                });
-                save_record(&record);
-                logged_addr = true;
+        let status = link_text(&engine);
+        if status != last_link && status != "down\n" {
+            for line in status.lines() {
+                log(&format!("[net] addr {line}"));
             }
+            store_addrs(&mut record, &engine);
+            save_record(&record);
+            last_link = status;
         }
         if engine.udp_sent() && !logged_udp {
             log("[net] udp ok");
@@ -117,7 +114,7 @@ fn main() {
         pump_plains(&mut engine, &mut plains);
         if let Some(start) = flood_at {
             if flood_ids.len() < 4 {
-                if let Some(gw) = engine.locator().map(|(_, _, gw)| gw) {
+                if let Some(gw) = engine.locator().map(|(_, _, gw)| Ip::V4(gw)) {
                     if let Ok(id) = engine.tcp_connect(gw, 4583) {
                         flood_ids.push(id);
                     }
@@ -202,11 +199,59 @@ fn rule_allows(stamp: &Stamp, verb: u8, object: &[u8]) -> bool {
     galexy_sec::allows(&text, stamp, verb, object)
 }
 
-fn dotted_port(ip: [u8; 4], port: u16) -> String {
-    format!("{}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], port)
+fn dotted_port(ip: Ip, port: u16) -> String {
+    match ip {
+        Ip::V4(_) => format!("{}:{port}", text_ip(ip)),
+        Ip::V6(_) => format!("[{}]:{port}", text_ip(ip)),
+    }
 }
 
-fn ip_dial_ok(stamp: &Stamp, ip: [u8; 4], port: u16) -> bool {
+fn text_ip(ip: Ip) -> String {
+    let mut buf = [0u8; 64];
+    let n = format_ip(ip, &mut buf).unwrap_or(0);
+    String::from_utf8_lossy(&buf[..n]).into_owned()
+}
+
+fn blank_ip(ip: Ip) -> bool {
+    match ip {
+        Ip::V4(a) => a == [0, 0, 0, 0],
+        Ip::V6(a) => a == [0; 16],
+    }
+}
+
+fn broadcast_ip(ip: Ip) -> bool {
+    matches!(ip, Ip::V4([255, 255, 255, 255]))
+}
+
+fn stored_matches(entry: &galexy_netcfg::Name, ip: Ip) -> bool {
+    match ip {
+        Ip::V4(a) => entry.kind != KIND_IPV6 && entry.ip[..4] == a,
+        Ip::V6(a) => entry.ip == a,
+    }
+}
+
+fn entry_ip(entry: &galexy_netcfg::Name) -> Ip {
+    if entry.kind == KIND_IPV6 {
+        Ip::V6(entry.ip)
+    } else {
+        Ip::V4([entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]])
+    }
+}
+
+fn server_of(addr: Ip) -> ServerName<'static> {
+    match addr {
+        Ip::V4(a) => ServerName::IpAddress(IpAddr::V4(Ipv4Addr::from(a))),
+        Ip::V6(a) => {
+            let mut hextets = [0u16; 8];
+            for (i, word) in hextets.iter_mut().enumerate() {
+                *word = u16::from_be_bytes([a[i * 2], a[i * 2 + 1]]);
+            }
+            ServerName::IpAddress(IpAddr::V6(Ipv6Addr::from(hextets)))
+        }
+    }
+}
+
+fn ip_dial_ok(stamp: &Stamp, ip: Ip, port: u16) -> bool {
     let numeric = dotted_port(ip, port);
     rule_allows(stamp, galexy_sec::VERB_DIAL, numeric.as_bytes())
 }
@@ -290,19 +335,7 @@ fn handle(
             if flood_at.is_none() {
                 *flood_at = Some(now);
             }
-            if let Some((addr, prefix, _)) = engine.locator() {
-                reply(
-                    rx,
-                    format!(
-                        "up {}.{}.{}.{}/{}\n",
-                        addr[0], addr[1], addr[2], addr[3], prefix
-                    )
-                    .as_bytes(),
-                    0,
-                );
-            } else {
-                reply(rx, b"down\n", 0);
-            }
+            reply(rx, link_text(engine).as_bytes(), 0);
         }
         NET_OP_DIAL => dial(
             rx, engine, record, admin, actor_id, &stamp, rest, now, plains,
@@ -318,7 +351,7 @@ fn handle(
         NET_OP_SERVE if admin => serve(rx, engine, record, &stamp, actor_id, gates, rest),
         NET_OP_PING => ping(rx, engine, record, &stamp, rest, now),
         NET_OP_TIME => time_query(rx, engine, record, &stamp, admin, rest, now),
-        NET_OP_UP if admin => dhcp_up(rx, engine),
+        NET_OP_UP if admin => net_up(rx, engine, rest),
         NET_OP_UP => reply(rx, b"access denied\n", 0),
         NET_OP_STREAM => stream(
             rx, engine, record, &stamp, actor_id, gates, rest, lives, seen,
@@ -361,12 +394,10 @@ fn dial(
     }
     if let Some(entry) = record.find(name) {
         let (ip, port, key) = match entry.kind {
-            KIND_IPV4 => {
-                let ip = [entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]];
-                (ip, entry.port, entry.key)
-            }
+            KIND_IPV4 => (entry_ip(entry), entry.port, entry.key),
+            KIND_IPV6 => (entry_ip(entry), entry.port, entry.key),
             KIND_DNS => match lookup_dns(engine, record, name, now) {
-                Ok(ip) => (ip, entry.port, entry.key),
+                Ok(ip) => (Ip::V4(ip), entry.port, entry.key),
                 Err(why) => {
                     reply_lookup(rx, why);
                     return;
@@ -377,7 +408,7 @@ fn dial(
                 return;
             }
         };
-        if port == 0 || ip == [0, 0, 0, 0] || !name_dial_ok(stamp, name, port) {
+        if port == 0 || blank_ip(ip) || !name_dial_ok(stamp, name, port) {
             audit(actor_id, name, &key, "denied");
             reply(rx, b"access denied\n", 0);
             return;
@@ -398,7 +429,16 @@ fn dial(
     }
     match lookup_dns(engine, record, host, now) {
         Ok(ip) => open_client(
-            rx, engine, actor_id, name, ip, port, &[0; 32], now, true, plains,
+            rx,
+            engine,
+            actor_id,
+            name,
+            Ip::V4(ip),
+            port,
+            &[0; 32],
+            now,
+            true,
+            plains,
         ),
         Err(why) => reply_lookup(rx, why),
     }
@@ -410,12 +450,12 @@ fn dial_passed(
     record: &Record,
     actor_id: u64,
     stamp: &Stamp,
-    ip: [u8; 4],
+    ip: Ip,
     passed_port: Option<u16>,
     now: u64,
     plains: &mut Vec<Plain>,
 ) {
-    if ip == [0, 0, 0, 0] {
+    if blank_ip(ip) {
         reply(rx, b"access denied\n", 0);
         return;
     }
@@ -450,7 +490,7 @@ fn open_client(
     engine: &mut Engine,
     actor_id: u64,
     name: &[u8],
-    ip: [u8; 4],
+    ip: Ip,
     port: u16,
     key: &[u8; 32],
     now: u64,
@@ -478,15 +518,12 @@ fn plain_open(
     engine: &mut Engine,
     actor_id: u64,
     name: &[u8],
-    ip: [u8; 4],
+    ip: Ip,
     port: u16,
     now: u64,
     plains: &mut Vec<Plain>,
 ) {
-    log(&format!(
-        "[net] dial {}.{}.{}.{}",
-        ip[0], ip[1], ip[2], ip[3]
-    ));
+    log(&format!("[net] dial {}", text_ip(ip)));
     let Ok(id) = engine.tcp_connect(ip, port) else {
         audit(actor_id, name, &[0; 32], "unavailable");
         reply(rx, b"unavailable\n", 0);
@@ -573,15 +610,12 @@ fn finish_dial(
     engine: &mut Engine,
     actor_id: u64,
     name: &[u8],
-    ip: [u8; 4],
+    ip: Ip,
     port: u16,
     key: &[u8; 32],
     now: u64,
 ) {
-    log(&format!(
-        "[net] dial {}.{}.{}.{}",
-        ip[0], ip[1], ip[2], ip[3]
-    ));
+    log(&format!("[net] dial {}", text_ip(ip)));
     let Ok(id) = engine.tcp_connect(ip, port) else {
         audit(actor_id, name, key, "unavailable");
         reply(rx, b"unavailable\n", 0);
@@ -795,18 +829,11 @@ fn resolve(
 }
 
 fn dns(rx: Cap, engine: &mut Engine, record: &mut Record, rest: &[u8], now: u64) {
-    let key = if rest.len() == 4 {
-        None
-    } else if rest.len() >= 4 + 32 {
-        let mut key = [0u8; 32];
-        key.copy_from_slice(&rest[4..36]);
-        Some(key)
-    } else {
+    let Some((addr, key)) = decode_dns(rest) else {
         reply(rx, b"bad\n", 0);
         return;
     };
-    let addr = [rest[0], rest[1], rest[2], rest[3]];
-    if addr == [10, 0, 2, 2] || addr == [10, 0, 2, 3] {
+    if matches!(addr, Ip::V4([10, 0, 2, 2]) | Ip::V4([10, 0, 2, 3])) {
         reply(rx, b"access denied\n", 0);
         return;
     }
@@ -855,26 +882,19 @@ fn bind_local(rx: Cap, engine: &mut Engine, record: &Record, admin: bool, rest: 
         reply(rx, b"access denied\n", 0);
         return;
     }
-    let Some(ip) = parse_ip(name) else {
+    let Some(ip) = parse_any(name) else {
         reply(rx, b"access denied\n", 0);
         return;
     };
-    if ip == [0, 0, 0, 0] || find_kind(record, KIND_ADDR, ip, None).is_none() {
+    if blank_ip(ip) || find_kind(record, KIND_ADDR, ip, None).is_none() {
         reply(rx, b"access denied\n", 0);
         return;
     }
-    let Some((ours, _, _)) = engine.locator() else {
-        reply(rx, b"unavailable\n", 0);
-        return;
-    };
-    if ip != ours {
+    if !engine.holds(ip) {
         reply(rx, b"access denied\n", 0);
         return;
     }
-    log(&format!(
-        "[net] bound {}.{}.{}.{}",
-        ip[0], ip[1], ip[2], ip[3]
-    ));
+    log(&format!("[net] bound {}", text_ip(ip)));
     reply(rx, b"ok\n", 0);
 }
 
@@ -966,7 +986,7 @@ fn wait_established(engine: &mut Engine, id: u8, start: u64) -> bool {
 
 /// Handshake only. The domain on the certificate is the name `net dns`
 /// stores. No query is written.
-fn probe_domain(engine: &mut Engine, addr: [u8; 4], start: u64) -> Result<Vec<u8>, &'static str> {
+fn probe_domain(engine: &mut Engine, addr: Ip, start: u64) -> Result<Vec<u8>, &'static str> {
     let id = engine
         .tcp_connect(addr, galexy_netcfg::DOT_PORT)
         .map_err(|_| "unavailable")?;
@@ -988,17 +1008,12 @@ fn probe_domain(engine: &mut Engine, addr: [u8; 4], start: u64) -> Result<Vec<u8
     Ok(name)
 }
 
-fn probe_leaf(
-    engine: &mut Engine,
-    id: u8,
-    addr: [u8; 4],
-    start: u64,
-) -> Result<Vec<u8>, &'static str> {
+fn probe_leaf(engine: &mut Engine, id: u8, addr: Ip, start: u64) -> Result<Vec<u8>, &'static str> {
     let config = trust::learn_client(trust::bundle_roots(), trust::provider()).map_err(|err| {
         note_dns_reason(&err.to_string());
         "denied"
     })?;
-    let server = ServerName::IpAddress(IpAddr::V4(Ipv4Addr::from(addr)));
+    let server = server_of(addr);
     let mut conn = Connection::Client(ClientConnection::new(config, server).map_err(|err| {
         note_dns_reason(&err.to_string());
         "denied"
@@ -1201,16 +1216,13 @@ fn tls_exchange(
     Ok(body)
 }
 
-fn find_kind(
-    record: &Record,
-    kind: u8,
-    ip: [u8; 4],
-    port: Option<u16>,
-) -> Option<&galexy_netcfg::Name> {
+fn find_kind(record: &Record, kind: u8, ip: Ip, port: Option<u16>) -> Option<&galexy_netcfg::Name> {
     record.names[..record.name_count as usize]
         .iter()
         .find(|entry| {
-            entry.kind == kind && entry.ip[..4] == ip && port.is_none_or(|port| entry.port == port)
+            entry.kind == kind
+                && stored_matches(entry, ip)
+                && port.is_none_or(|port| entry.port == port)
         })
 }
 
@@ -1262,13 +1274,27 @@ fn one_name(rest: &[u8]) -> Option<&[u8]> {
     Some(&rest[1..1 + nlen])
 }
 
-fn parse_passed(name: &[u8]) -> Option<([u8; 4], Option<u16>)> {
-    if let Some(colon) = name.iter().position(|b| *b == b':') {
-        let ip = parse_ip(&name[..colon])?;
-        let port = parse_port(&name[colon + 1..])?;
-        return Some((ip, Some(port)));
+fn parse_passed(name: &[u8]) -> Option<(Ip, Option<u16>)> {
+    if name.first() == Some(&b'[') {
+        let end = name.iter().position(|b| *b == b']')?;
+        let ip = parse_any(&name[1..end])?;
+        if end + 1 == name.len() {
+            return Some((ip, None));
+        }
+        if name.get(end + 1) != Some(&b':') {
+            return None;
+        }
+        return Some((ip, Some(parse_port(&name[end + 2..])?)));
     }
-    parse_ip(name).map(|ip| (ip, None))
+    if let Some(ip) = parse_any(name) {
+        return Some((ip, None));
+    }
+    let colon = name.iter().rposition(|b| *b == b':')?;
+    let ip = parse_any(&name[..colon])?;
+    if !ip.is_v4() {
+        return None;
+    }
+    Some((ip, Some(parse_port(&name[colon + 1..])?)))
 }
 
 fn parse_ip(text: &[u8]) -> Option<[u8; 4]> {
@@ -1543,7 +1569,7 @@ fn hand_gate(
         reply(rx, b"attached\n", 0);
         return;
     }
-    let start = clock_ms();
+    let _start = clock_ms();
     let id = match next_inbound(engine, gates, port, true) {
         Ok(id) => id,
         Err(why) => {
@@ -1697,39 +1723,146 @@ fn two_fields(rest: &[u8]) -> Option<(&[u8], &[u8])> {
     Some((name, actor))
 }
 
-/// DHCPv4. The administrative seat asks. No payload. The reply is
-/// `up` and the locator, or `timed out`. A static address is the same
-/// opcode later; this handler does not read one.
-fn dhcp_up(rx: Cap, engine: &mut Engine) {
-    if let Some((addr, prefix, _)) = engine.locator() {
-        reply_up(rx, addr, prefix);
+/// Bare `net up` learns only when the list is empty. A second one
+/// prints the list and sends nothing. `net up <ip>/<prefix> via <gateway>`
+/// installs a static address and sends nothing.
+fn net_up(rx: Cap, engine: &mut Engine, rest: &[u8]) {
+    if rest.is_empty() {
+        if engine.is_empty() {
+            engine.start_dhcp();
+            let start = clock_ms();
+            while clock_ms().saturating_sub(start) < UP_WAIT_MS {
+                pump(engine);
+                engine.poll(clock_ms());
+                pump(engine);
+                if engine.learn_ready() {
+                    break;
+                }
+                let _ = sleep_ms(20);
+            }
+        }
+        reply(rx, link_text(engine).as_bytes(), 0);
         return;
     }
-    engine.start_dhcp();
-    let start = clock_ms();
-    while clock_ms().saturating_sub(start) < UP_WAIT_MS {
-        pump(engine);
-        engine.poll(clock_ms());
-        pump(engine);
-        if let Some((addr, prefix, _)) = engine.locator() {
-            reply_up(rx, addr, prefix);
-            return;
-        }
-        let _ = sleep_ms(20);
+    let Ok((addr, prefix, gateway)) = parse_static(rest) else {
+        reply(rx, b"bad\n", 0);
+        return;
+    };
+    match engine.add_static(addr, prefix, gateway) {
+        Ok(()) => reply(rx, link_text(engine).as_bytes(), 0),
+        Err(StaticErr::Full) => reply(rx, b"full\n", 0),
+        Err(StaticErr::OneGateway) => reply(rx, b"one gateway\n", 0),
+        Err(StaticErr::Bad) => reply(rx, b"bad\n", 0),
     }
-    reply(rx, b"timed out\n", 0);
 }
 
-fn reply_up(rx: Cap, addr: [u8; 4], prefix: u8) {
-    reply(
-        rx,
-        format!(
-            "up {}.{}.{}.{}/{}\n",
-            addr[0], addr[1], addr[2], addr[3], prefix
-        )
-        .as_bytes(),
-        0,
-    );
+fn parse_static(rest: &[u8]) -> Result<(Ip, u8, Ip), ()> {
+    let text = core::str::from_utf8(rest).map_err(|_| ())?;
+    let (left, right) = text.split_once(" via ").ok_or(())?;
+    let (addr_text, prefix_text) = left.split_once('/').ok_or(())?;
+    let prefix: u8 = prefix_text.parse().map_err(|_| ())?;
+    let addr = parse_any(addr_text.as_bytes()).ok_or(())?;
+    let gateway = parse_any(right.as_bytes()).ok_or(())?;
+    Ok((addr, prefix, gateway))
+}
+
+fn link_text(engine: &Engine) -> String {
+    if engine.is_empty() {
+        return "down\n".into();
+    }
+    let mut out = String::new();
+    engine.each_addr(|ip, prefix, via, _expiry| {
+        out.push_str(&text_ip(ip));
+        out.push('/');
+        out.push_str(&prefix.to_string());
+        if let Some(gw) = via {
+            out.push_str(" via ");
+            out.push_str(&text_ip(gw));
+        }
+        out.push('\n');
+    });
+    out
+}
+
+fn store_addrs(record: &mut Record, engine: &Engine) {
+    record.addr_count = 0;
+    record.v4_gw = None;
+    record.v6_gw = None;
+    engine.each_addr(|ip, prefix, via, expiry| {
+        let i = record.addr_count as usize;
+        if i >= MAX_ADDRS {
+            return;
+        }
+        record.addrs[i] = CfgAddr { ip, prefix, expiry };
+        record.addr_count += 1;
+        match ip {
+            Ip::V4(_) if via.is_some() => record.v4_gw = via,
+            Ip::V6(_) if via.is_some() => record.v6_gw = via,
+            _ => {}
+        }
+    });
+}
+
+fn decode_dns(rest: &[u8]) -> Option<(Ip, Option<[u8; 32]>)> {
+    if rest.first() == Some(&6) && rest.len() >= 5 {
+        let n = rest[1] as usize;
+        if 2 + n <= rest.len() {
+            if let Some(ip @ Ip::V6(_)) = parse_any(&rest[2..2 + n]) {
+                let tail = &rest[2 + n..];
+                if tail.is_empty() || tail.len() >= 32 {
+                    return Some((ip, optional_key(tail)?));
+                }
+            }
+        }
+    }
+    if rest.len() < 4 {
+        return None;
+    }
+    let ip = parse_any(&rest[..4])?;
+    if !ip.is_v4() {
+        return None;
+    }
+    let tail = &rest[4..];
+    if !tail.is_empty() && tail.len() < 32 {
+        return None;
+    }
+    Some((ip, optional_key(tail)?))
+}
+
+enum Target<'a> {
+    Addr(Ip),
+    Name(&'a [u8]),
+}
+
+fn take_target(rest: &[u8]) -> Option<Target<'_>> {
+    if rest.len() == 4 {
+        let ip = Ip::V4([rest[0], rest[1], rest[2], rest[3]]);
+        if blank_ip(ip) || broadcast_ip(ip) {
+            return None;
+        }
+        return Some(Target::Addr(ip));
+    }
+    let name = dns_rest(rest)?;
+    if let Some(ip) = parse_any(name) {
+        if blank_ip(ip) {
+            return None;
+        }
+        Some(Target::Addr(ip))
+    } else {
+        Some(Target::Name(name))
+    }
+}
+
+fn optional_key(rest: &[u8]) -> Option<Option<[u8; 32]>> {
+    if rest.is_empty() {
+        Some(None)
+    } else if rest.len() >= 32 {
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&rest[..32]);
+        Some(Some(key))
+    } else {
+        None
+    }
 }
 
 /// One NTP query. The administrative seat asks. A `net time` line in
@@ -1750,45 +1883,43 @@ fn time_query(
         reply(rx, b"access denied\n", 0);
         return;
     }
-    let (ip, object) = if rest.len() == 4 {
-        let ip = [rest[0], rest[1], rest[2], rest[3]];
-        if ip == [0, 0, 0, 0] || ip == [255, 255, 255, 255] {
-            reply(rx, b"bad\n", 0);
-            return;
-        }
-        let object = format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
-        if !time_ok(stamp, object.as_bytes()) {
-            reply(rx, b"access denied\n", 0);
-            return;
-        }
-        (ip, object)
-    } else {
-        let Some(name) = dns_rest(rest) else {
-            reply(rx, b"bad\n", 0);
-            return;
-        };
-        if !time_ok(stamp, name) {
-            reply(rx, b"access denied\n", 0);
-            return;
-        }
-        let ip = match lookup_dns(engine, record, name, now) {
-            Ok(ip) => ip,
-            Err(why) => {
-                reply_lookup(rx, why);
+    let Some(target) = take_target(rest) else {
+        reply(rx, b"bad\n", 0);
+        return;
+    };
+    let (ip, object) = match target {
+        Target::Addr(ip) => {
+            let object = text_ip(ip);
+            if !time_ok(stamp, object.as_bytes()) {
+                reply(rx, b"access denied\n", 0);
                 return;
             }
-        };
-        if ip == [0, 0, 0, 0] || ip == [255, 255, 255, 255] {
-            reply(rx, b"bad\n", 0);
-            return;
+            (ip, object)
         }
-        let Ok(object) = core::str::from_utf8(name) else {
-            reply(rx, b"bad\n", 0);
-            return;
-        };
-        (ip, object.to_string())
+        Target::Name(name) => {
+            if !time_ok(stamp, name) {
+                reply(rx, b"access denied\n", 0);
+                return;
+            }
+            let ip = match lookup_dns(engine, record, name, now) {
+                Ok(ip) => Ip::V4(ip),
+                Err(why) => {
+                    reply_lookup(rx, why);
+                    return;
+                }
+            };
+            if blank_ip(ip) || broadcast_ip(ip) {
+                reply(rx, b"bad\n", 0);
+                return;
+            }
+            let Ok(object) = core::str::from_utf8(name) else {
+                reply(rx, b"bad\n", 0);
+                return;
+            };
+            (ip, object.to_string())
+        }
     };
-    if engine.locator().is_none() {
+    if engine.is_empty() {
         reply(rx, b"down\n", 0);
         return;
     }
@@ -1871,10 +2002,7 @@ fn datagram(rx: Cap, engine: &mut Engine, record: &Record, stamp: &Stamp, rest: 
         reply(rx, b"timed out\n", 0);
         return;
     }
-    log(&format!(
-        "[net] dgram {}.{}.{}.{} {}",
-        ip[0], ip[1], ip[2], ip[3], port
-    ));
+    log(&format!("[net] dgram {} {port}", text_ip(ip)));
     reply(rx, b"ok\n", 0);
 }
 
@@ -1903,10 +2031,7 @@ fn datagram_recv(rx: Cap, engine: &mut Engine, record: &Record, stamp: &Stamp, r
         engine.poll(now);
         pump(engine);
         if let Some(payload) = engine.udp_take() {
-            log(&format!(
-                "[net] dgram in {}.{}.{}.{} {}",
-                ip[0], ip[1], ip[2], ip[3], port
-            ));
+            log(&format!("[net] dgram in {} {port}", text_ip(ip)));
             reply(rx, &payload, 0);
             return;
         }
@@ -1915,13 +2040,13 @@ fn datagram_recv(rx: Cap, engine: &mut Engine, record: &Record, stamp: &Stamp, r
 }
 
 /// Read on a datagram card names one peer. Port 53 is not that peer.
-fn dgram_peer(record: &Record, stamp: &Stamp, name: &[u8]) -> Option<([u8; 4], u16)> {
+fn dgram_peer(record: &Record, stamp: &Stamp, name: &[u8]) -> Option<(Ip, u16)> {
     let entry = record.find(name)?;
     if entry.kind != KIND_DGRAM || entry.port == 0 || entry.port == 53 {
         return None;
     }
-    let ip = [entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]];
-    if ip == [0, 0, 0, 0] || ip == [255, 255, 255, 255] {
+    let ip = entry_ip(entry);
+    if blank_ip(ip) || broadcast_ip(ip) {
         return None;
     }
     if !ip_dial_ok(stamp, ip, entry.port) && !name_dial_ok(stamp, name, entry.port) {
@@ -1946,12 +2071,19 @@ fn name_and_body(rest: &[u8]) -> Option<(&[u8], &[u8])> {
 fn ping(rx: Cap, engine: &mut Engine, record: &Record, stamp: &Stamp, rest: &[u8], now: u64) {
     let owned;
     let object: &[u8] = if rest.len() == 4 {
-        owned = format!("{}.{}.{}.{}", rest[0], rest[1], rest[2], rest[3]);
+        owned = text_ip(Ip::V4([rest[0], rest[1], rest[2], rest[3]]));
         owned.as_bytes()
     } else if rest.first() == Some(&PING_LOOKUP) {
         one_name(&rest[1..]).unwrap_or(b"*")
+    } else if let Some(name) = dns_rest(rest) {
+        if let Some(ip) = parse_any(name) {
+            owned = text_ip(ip);
+            owned.as_bytes()
+        } else {
+            name
+        }
     } else {
-        dns_rest(rest).unwrap_or(b"*")
+        b"*"
     };
     if !icmp_ok(stamp, object) {
         reply(rx, b"access denied\n", 0);
@@ -1961,19 +2093,18 @@ fn ping(rx: Cap, engine: &mut Engine, record: &Record, stamp: &Stamp, rest: &[u8
         lookup_only(rx, engine, record, rest, now);
         return;
     }
-    let dst = if rest.len() == 4 {
-        [rest[0], rest[1], rest[2], rest[3]]
-    } else {
-        let Some(name) = dns_rest(rest) else {
-            reply(rx, b"bad\n", 0);
-            return;
-        };
-        match lookup_dns(engine, record, name, now) {
-            Ok(ip) => ip,
+    let dst = match take_target(rest) {
+        Some(Target::Addr(ip)) => ip,
+        Some(Target::Name(name)) => match lookup_dns(engine, record, name, now) {
+            Ok(ip) => Ip::V4(ip),
             Err(why) => {
                 reply_lookup(rx, why);
                 return;
             }
+        },
+        None => {
+            reply(rx, b"bad\n", 0);
+            return;
         }
     };
     reply(rx, &echoes(engine, dst), 0);
@@ -1981,7 +2112,7 @@ fn ping(rx: Cap, engine: &mut Engine, record: &Record, stamp: &Stamp, rest: &[u8
 
 /// Three ICMP echoes on this one call. The net slot admits one RPC, so
 /// the echoes stay here instead of coming back as three more calls.
-fn echoes(engine: &mut Engine, dst: [u8; 4]) -> Vec<u8> {
+fn echoes(engine: &mut Engine, dst: Ip) -> Vec<u8> {
     const N: usize = 3;
     let mut times = [0u64; N];
     let mut ok = [false; N];
@@ -1995,7 +2126,7 @@ fn echoes(engine: &mut Engine, dst: [u8; 4]) -> Vec<u8> {
             break;
         }
         let start = clock_ms();
-        let mut got: Option<[u8; 4]> = None;
+        let mut got: Option<Ip> = None;
         loop {
             let now = clock_ms();
             if now.saturating_sub(start) >= 3_000 {
@@ -2015,8 +2146,9 @@ fn echoes(engine: &mut Engine, dst: [u8; 4]) -> Vec<u8> {
         if let Some(addr) = got {
             ok[i] = true;
             text.push_str(&format!(
-                "reply from {}.{}.{}.{} time {} ms\n",
-                addr[0], addr[1], addr[2], addr[3], times[i]
+                "reply from {} time {} ms\n",
+                text_ip(addr),
+                times[i]
             ));
         } else {
             text.push_str("timeout\n");
@@ -2185,9 +2317,9 @@ struct Live {
 
 /// The pin for this dial. The address string wins when yes stored it.
 /// A named locator for the same address is the fallback.
-fn address_key(record: &Record, name: &[u8], ip: [u8; 4]) -> [u8; 32] {
+fn address_key(record: &Record, name: &[u8], ip: Ip) -> [u8; 32] {
     if let Some(entry) = record.find(name) {
-        if entry.ip[..4] == ip {
+        if stored_matches(entry, ip) {
             return entry.key;
         }
     }
@@ -2202,18 +2334,24 @@ fn address_key(record: &Record, name: &[u8], ip: [u8; 4]) -> [u8; 32] {
 fn remember_pin(record: &mut Record, name: &[u8], key: [u8; 32]) -> bool {
     if let Some((ip, port)) = parse_passed(name) {
         let port = port.unwrap_or(22);
-        let known = record.find(name).map(|entry| entry.ip[..4] == ip);
+        let known = record.find(name).map(|entry| stored_matches(entry, ip));
         if let Some(same) = known {
             return same && record.remember_key(name, key).is_ok();
         }
-        let mut wide = [0u8; 16];
-        wide[..4].copy_from_slice(&ip);
-        return record.allow(name, port, KIND_IPV4, wide, key).is_ok();
+        let (wide, kind) = match ip {
+            Ip::V4(a) => {
+                let mut wide = [0u8; 16];
+                wide[..4].copy_from_slice(&a);
+                (wide, KIND_IPV4)
+            }
+            Ip::V6(a) => (a, KIND_IPV6),
+        };
+        return record.allow(name, port, kind, wide, key).is_ok();
     }
     record.remember_key(name, key).is_ok()
 }
 
-fn stream_target(name: &[u8]) -> Option<([u8; 4], u16)> {
+fn stream_target(name: &[u8]) -> Option<(Ip, u16)> {
     let (ip, port) = parse_passed(name)?;
     let port = port.unwrap_or(22);
     if port == 0 {
@@ -2292,12 +2430,12 @@ fn stream(
             rx, engine, actor_id, gates, name, entry.port, entry.key, lives,
         );
     } else if dir == 1 {
-        let ip = [entry.ip[0], entry.ip[1], entry.ip[2], entry.ip[3]];
+        let ip = entry_ip(entry);
         if !ip_dial_ok(stamp, ip, entry.port) && !name_dial_ok(stamp, name, entry.port) {
             reply(rx, b"access denied\n", 0);
             return;
         }
-        if entry.kind != KIND_IPV4 {
+        if entry.kind != KIND_IPV4 && entry.kind != KIND_IPV6 {
             reply(rx, b"unsupported\n", 0);
             return;
         }
@@ -2380,13 +2518,13 @@ fn live_dial(
     engine: &mut Engine,
     actor_id: u64,
     name: &[u8],
-    ip: [u8; 4],
+    ip: Ip,
     port: u16,
     key: [u8; 32],
     lives: &mut Vec<Live>,
     seen: &mut Option<Seen>,
 ) {
-    if port == 0 || ip == [0, 0, 0, 0] {
+    if port == 0 || blank_ip(ip) {
         reply(rx, b"access denied\n", 0);
         return;
     }
@@ -2394,10 +2532,7 @@ fn live_dial(
         learn_pin(rx, engine, actor_id, name, ip, port, seen);
         return;
     }
-    log(&format!(
-        "[net] dial {}.{}.{}.{}",
-        ip[0], ip[1], ip[2], ip[3]
-    ));
+    log(&format!("[net] dial {}", text_ip(ip)));
     let Ok(id) = engine.tcp_connect(ip, port) else {
         reply(rx, b"unavailable\n", 0);
         return;
@@ -2433,14 +2568,11 @@ fn learn_pin(
     engine: &mut Engine,
     actor_id: u64,
     name: &[u8],
-    ip: [u8; 4],
+    ip: Ip,
     port: u16,
     seen: &mut Option<Seen>,
 ) {
-    log(&format!(
-        "[net] dial {}.{}.{}.{}",
-        ip[0], ip[1], ip[2], ip[3]
-    ));
+    log(&format!("[net] dial {}", text_ip(ip)));
     let Ok(id) = engine.tcp_connect(ip, port) else {
         reply(rx, b"unavailable\n", 0);
         return;
