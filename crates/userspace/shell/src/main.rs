@@ -41,10 +41,11 @@
 
 extern crate alloc;
 
-use galexy_abi::{Cap, SysError};
+use galexy_abi::{Cap, SysError, NET_OP_DNS};
 use galexy_rt::{
-    arg, entry, keyboard_cap, read, stats_cap, tasks_cap, user, user_login, user_unlock,
-    user_unlock_new, user_unlock_session, volume_query, write_console, yield_now,
+    arg, disk_choose, disk_list, entry, keyboard_cap, net_rpc, read, stats_cap, tasks_cap, user,
+    user_login, user_unlock, user_unlock_new, user_unlock_session, volume_query, write_console,
+    yield_now,
 };
 
 mod builtins;
@@ -212,21 +213,142 @@ fn lock_screen(kbd: Cap, tty: u8) {
     }
 }
 
-/// Ask for the volume passphrase when the disk is locked.
+/// One setup, top down. A later question is another step in this
+/// function, not a second installer.
 ///
-/// A disk with no passphrase yet asks the operator to choose one and
-/// confirm it. An existing seal asks for that passphrase. Login does
-/// not start until the volume is open. An empty line asks again.
-/// Returns whether this call sealed a new volume, so the login screen
-/// can say what to do next.
+/// A disk that is not yet the system volume is chosen first. Formatting
+/// that disk is the install. Then the passphrase, the account, and the
+/// resolver. First boot does not run `net up`. Skip sends nothing.
+/// An existing seal asks for that passphrase and skips the rest.
+/// Returns whether this call sealed a new volume.
 fn prompt_volume(kbd: Cap) -> bool {
-    match volume_query() {
+    if volume_query() == 3 && !prompt_disk(kbd) {
+        return false;
+    }
+    let fresh = match volume_query() {
         2 => prompt_new_volume(kbd),
         1 => {
             prompt_existing_volume(kbd);
             false
         }
         _ => false,
+    };
+    if fresh {
+        prompt_resolver(kbd);
+    }
+    fresh
+}
+
+/// The disk to format. An empty line asks again. If another seat already
+/// finished the choice, an empty line leaves this prompt.
+fn prompt_disk(kbd: Cap) -> bool {
+    loop {
+        if volume_query() != 3 {
+            return true;
+        }
+        write_console(b"This disk is not the system volume.\n");
+        write_console(b"Choose a disk. Formatting it installs the system.\n");
+        let mut list = [0u8; 256];
+        let got = disk_list(&mut list);
+        if got.ok && got.value > 0 {
+            let n = (got.value as usize).min(list.len());
+            write_console(&list[..n]);
+        }
+        write_console(b"Disk: ");
+        let mut line = [0u8; 16];
+        match read_line(kbd, &mut line, false) {
+            LineRead::Denied => return false,
+            LineRead::Cancel | LineRead::Overlong => continue,
+            LineRead::Line(0) => {
+                if volume_query() != 3 {
+                    write_console(b"\n");
+                    return true;
+                }
+                write_console(b"\nA disk is required.\n");
+            }
+            LineRead::Line(n) => {
+                if volume_query() != 3 {
+                    write_console(b"\n");
+                    return true;
+                }
+                let Some(index) = parse_disk_index(&line[..n]) else {
+                    write_console(b"\nThat disk is not in the list.\n");
+                    continue;
+                };
+                if disk_choose(index).ok {
+                    write_console(b"\n");
+                    return true;
+                }
+                write_console(b"\nThat disk is not in the list.\n");
+            }
+        }
+    }
+}
+
+fn parse_disk_index(text: &[u8]) -> Option<u64> {
+    if text.is_empty() || text.len() > 3 {
+        return None;
+    }
+    let mut n = 0u64;
+    for byte in text {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        n = n * 10 + u64::from(byte - b'0');
+    }
+    if n == 0 || n > 255 {
+        None
+    } else {
+        Some(n)
+    }
+}
+
+/// Resolver, or skip. Skip does not call `net`. `10.0.2.2` and
+/// `10.0.2.3` are refused before any call. There is no `net up` here.
+fn prompt_resolver(kbd: Cap) {
+    loop {
+        write_console(b"Resolver address, or skip: ");
+        let mut line = [0u8; 64];
+        let n = match read_line(kbd, &mut line, false) {
+            LineRead::Denied | LineRead::Cancel => return,
+            LineRead::Overlong => {
+                write_console(b"\nbad\n");
+                continue;
+            }
+            LineRead::Line(0) => {
+                write_console(b"\nA resolver address or skip is required.\n");
+                continue;
+            }
+            LineRead::Line(n) => n,
+        };
+        if &line[..n] == b"skip" {
+            write_console(b"\nLookups stay refused until net dns.\n");
+            return;
+        }
+        let Some(ip) = builtins::parse_ip(&line[..n]) else {
+            write_console(b"\nbad\n");
+            continue;
+        };
+        if ip == [10, 0, 2, 2] || ip == [10, 0, 2, 3] {
+            write_console(b"\naccess denied\n");
+            continue;
+        }
+        write_console(b"\n");
+        let mut payload = [0u8; 5];
+        payload[0] = NET_OP_DNS;
+        payload[1..5].copy_from_slice(&ip);
+        let mut reply = [0u8; 128];
+        let got = net_rpc(&payload, &mut reply);
+        if !got.ok || got.value <= 8 {
+            write_console(b"down\n");
+            return;
+        }
+        let text = &reply[8..(got.value as usize).min(reply.len())];
+        write_console(text);
+        if text.last() != Some(&b'\n') {
+            write_console(b"\n");
+        }
+        return;
     }
 }
 

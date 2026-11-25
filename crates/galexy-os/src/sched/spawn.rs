@@ -1985,7 +1985,7 @@ pub(crate) fn task_login(name: &str, password: &[u8]) -> Result<(), SysError> {
     }
     // The seat has not named an account yet. A session on the pending
     // root would start with nothing committed to disk.
-    if galfs::volume_locked() {
+    if galfs::volume_query() == 3 || galfs::volume_locked() {
         return Err(SysError::AccessDenied);
     }
     let tty = current_tty();
@@ -1994,7 +1994,11 @@ pub(crate) fn task_login(name: &str, password: &[u8]) -> Result<(), SysError> {
         return Err(SysError::Locked);
     }
     match galfs::verify_password(name, password) {
-        Ok(true) => {}
+        Ok(true) => {
+            // The resolver question is over. A logged-out seat cannot
+            // send `net dns` again.
+            galfs::clear_setup_dns();
+        }
         Ok(false) => {
             lockout::record_failure(name, tty, true);
             return Err(SysError::AccessDenied);

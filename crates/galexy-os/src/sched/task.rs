@@ -995,14 +995,22 @@ pub(crate) fn task_net_rpc(bytes: &[u8], reply: u64, reply_len: u32) -> Result<(
             let owner = running_proc_index(&threads, slot)?;
             let thread = &threads[owner];
             // A logged-out seat is denied before the service is consulted,
-            // including when `net` has not registered yet.
-            if thread.fs_root == galfs::NO_OBJECT {
+            // including when `net` has not registered yet. The one
+            // exception is `net dns` in the fresh-format window.
+            let setup_dns = thread.fs_root == galfs::NO_OBJECT
+                && galfs::setup_dns_open()
+                && bytes.first() == Some(&galexy_abi::NET_OP_DNS);
+            if thread.fs_root == galfs::NO_OBJECT && !setup_dns {
                 return Err(SysError::AccessDenied);
             }
             if ctrl == 0xFF {
                 return Err(SysError::Unsupported);
             }
-            let admin = u8::from(galfs::is_admin_root(thread.fs_root));
+            let admin = if setup_dns {
+                1
+            } else {
+                u8::from(galfs::is_admin_root(thread.fs_root))
+            };
             let n = thread.name_len as usize;
             name_raw[..n].copy_from_slice(&thread.name_bytes[..n]);
             (

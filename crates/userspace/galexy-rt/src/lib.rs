@@ -268,7 +268,7 @@ pub fn session_locked() -> bool {
 }
 
 /// Volume query: `0` open or no disk, `1` sealed and locked, `2` no
-/// passphrase yet.
+/// passphrase yet, `3` choose a disk.
 pub fn volume_query() -> u64 {
     let got = user_name_pass(&[], &[], galexy_abi::USER_UNLOCK);
     if got.ok {
@@ -280,7 +280,26 @@ pub fn volume_query() -> u64 {
 
 /// True when the disk volume is locked and waiting for [`user_unlock`].
 pub fn volume_locked() -> bool {
-    volume_query() != 0
+    let state = volume_query();
+    state == 1 || state == 2
+}
+
+/// Text list of disks the seat may format. One line each.
+pub fn disk_list(buf: &mut [u8]) -> SyscallResult {
+    user(buf, galexy_abi::USER_DISKS)
+}
+
+/// Choose disk `index` (1-based) as the volume to format or unlock.
+pub fn disk_choose(index: u64) -> SyscallResult {
+    raw_syscall(
+        Syscall::User as u64,
+        0,
+        0,
+        galexy_abi::USER_DISKS,
+        0,
+        index,
+        0,
+    )
 }
 
 /// Mount the sealed volume, or format an empty disk under `passphrase`.

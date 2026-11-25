@@ -1201,6 +1201,30 @@ fn syscall_user(frame: &Context) -> SyscallResult {
                 Err(err) => SyscallResult::err(err),
             }
         }
+        galexy_abi::USER_DISKS => {
+            if frame.r9 == 0 {
+                if len == 0 || len > MAX_READ {
+                    return SyscallResult::err(SysError::BadValue);
+                }
+                if user_buffer(addr, len, true).is_err() {
+                    return SyscallResult::err(SysError::BadBuffer);
+                }
+                let mut staged = [0u8; MAX_READ as usize];
+                let n = crate::sched::galfs::disk_list(&mut staged[..len as usize]);
+                // SAFETY: `user_buffer` accepted this writable range.
+                unsafe {
+                    crate::arch::user_copy::copy_to_user(staged.as_ptr(), addr, n);
+                }
+                SyscallResult::ok(n as u64)
+            } else if frame.r9 > 255 {
+                SyscallResult::err(SysError::BadValue)
+            } else {
+                match crate::sched::galfs::choose_disk(frame.r9 as u8) {
+                    Ok(()) => SyscallResult::ok(0),
+                    Err(err) => SyscallResult::err(err),
+                }
+            }
+        }
         _ => SyscallResult::err(SysError::BadValue),
     }
 }

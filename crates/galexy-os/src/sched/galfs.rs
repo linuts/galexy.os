@@ -17,15 +17,16 @@
 //! Mutates mark the table dirty; a coalesced sync (changed blocks, then
 //! the inactive metadata slot, then flush) runs on the 1 Hz main-loop
 //! tick, on `Syscall::Sync`, and before power-off. Without a usable disk
-//! the table stays RAM-only. Backends: virtio-blk (preferred when
-//! present), else ATA primary slave.
+//! the table stays RAM-only. A production boot lists virtio-blk and
+//! the ATA primary slave when each is large enough. One sealed disk
+//! is that volume. An empty disk waits until the seat chooses it.
 //!
 //! Device I/O never runs while this CPU holds `THREADS` or a galfs
 //! [`IoMutex`] (`TABLE`, the pool, the cache, `DISK_BUF`, the volume key).
 //! [`volume_guard`] is taken before `THREADS` and stays held across the
 //! transfer so a metadata update cannot race the gap.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 
 use crate::sync::{IoMutex, Mutex};
 
@@ -598,6 +599,21 @@ static AUTO_UNLOCK: AtomicBool = AtomicBool::new(true);
 /// A locked disk with no GALF magic. The login screen asks the operator
 /// to choose a passphrase. Cleared once that passphrase seals the disk.
 static VOLUME_FRESH: AtomicBool = AtomicBool::new(false);
+/// `DISK_VIRTIO` or `DISK_ATA` once that device is the volume. `0` is none.
+static CHOSEN: AtomicU8 = AtomicU8::new(0);
+/// The seat still has to pick a disk. [`volume_query`] returns 3.
+static ASK_DISK: AtomicBool = AtomicBool::new(false);
+/// [`choose_disk`] finished for this boot.
+static DISK_CONFIRMED: AtomicBool = AtomicBool::new(false);
+/// The chosen disk replaces the placeholder RAM table.
+static NEED_REBUILD: AtomicBool = AtomicBool::new(false);
+/// After a fresh format, a logged-out seat may send one `net dns`.
+static SETUP_DNS: AtomicBool = AtomicBool::new(false);
+
+/// virtio-blk in the seat's disk list.
+const DISK_VIRTIO: u8 = 1;
+/// ATA primary slave in the seat's disk list.
+const DISK_ATA: u8 = 2;
 
 /// Production boot calls this before [`init`]. Test kernels leave the default.
 pub fn set_auto_unlock(on: bool) {
@@ -622,15 +638,111 @@ fn slot_lba(slot: u32) -> u32 {
     disk_lba_base().saturating_add(slot.saturating_mul(DISK_SECTORS as u32))
 }
 
+#[derive(Clone, Copy)]
+struct Offer {
+    kind: u8,
+    sectors: u64,
+}
+
+/// No sectors. A production boot uses this until a disk is bound so a
+/// probe of the boot image, or of an unchosen sibling, does not format it.
+struct NoDisk;
+
+impl BlockDevice for NoDisk {
+    fn present(&self) -> bool {
+        false
+    }
+
+    fn capacity_sectors(&self) -> u64 {
+        0
+    }
+
+    fn read_sectors(&self, _lba: u32, _dst: &mut [[u8; block::SECTOR]]) -> Result<(), SysError> {
+        Err(SysError::Unsupported)
+    }
+
+    fn write_sectors(&self, _lba: u32, _src: &[[u8; block::SECTOR]]) -> Result<(), SysError> {
+        Err(SysError::Unsupported)
+    }
+
+    fn flush(&self) -> Result<(), SysError> {
+        Err(SysError::Unsupported)
+    }
+}
+
+static NO_DISK: NoDisk = NoDisk;
+
+fn device(kind: u8) -> &'static dyn BlockDevice {
+    match kind {
+        DISK_VIRTIO => &VirtioBlk,
+        DISK_ATA => &PrimarySlave,
+        _ => &NO_DISK,
+    }
+}
+
+fn collect_offers(out: &mut [Offer]) -> usize {
+    let need = u64::from(disk_lba_base()) + DISK_MIN_SECTORS;
+    let mut n = 0usize;
+    if n < out.len() {
+        if VirtioBlk.present() {
+            let sectors = VirtioBlk.capacity_sectors();
+            if sectors >= need {
+                out[n] = Offer {
+                    kind: DISK_VIRTIO,
+                    sectors,
+                };
+                n += 1;
+            }
+        }
+    }
+    if n < out.len() {
+        if let Some(sectors) = crate::drivers::ata::capacity_if_attached() {
+            if sectors >= need {
+                out[n] = Offer {
+                    kind: DISK_ATA,
+                    sectors,
+                };
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// True when `dev` already carries GALF magic. The absence of a slave
+/// is not logged here.
+fn device_has_seal(dev: &dyn BlockDevice) -> bool {
+    if !dev.present() {
+        return false;
+    }
+    for slot in 0..DISK_SLOT_COUNT as u32 {
+        let lba = disk_lba_base().saturating_add(slot.saturating_mul(DISK_SECTORS as u32));
+        let mut sector = [[0u8; block::SECTOR]];
+        if dev.read_sectors(lba, &mut sector).is_ok() && sector[0][0..4] == DISK_MAGIC {
+            return true;
+        }
+    }
+    false
+}
+
 /// The block device galfs uses for durable slots.
 ///
-/// Prefers virtio-blk when QEMU attached one; otherwise the ATA primary
-/// slave. Probe order is fixed so IDE-only boots stay unchanged.
+/// A bound disk wins. A production boot that has not bound one stays
+/// off the wire of either disk. An auto-unlock boot still prefers
+/// virtio-blk, then the ATA primary slave.
 fn disk() -> &'static dyn BlockDevice {
-    if VirtioBlk.present() {
-        &VirtioBlk
-    } else {
-        &PrimarySlave
+    match CHOSEN.load(Ordering::Acquire) {
+        DISK_VIRTIO => &VirtioBlk,
+        DISK_ATA => &PrimarySlave,
+        _ => {
+            if ASK_DISK.load(Ordering::Acquire) || NEED_REBUILD.load(Ordering::Acquire) {
+                &NO_DISK
+            } else if VirtioBlk.present() {
+                &VirtioBlk
+            } else {
+                &PrimarySlave
+            }
+        }
     }
 }
 
@@ -710,20 +822,49 @@ pub fn init() {
             need,
             disk_lba_base(),
         );
-    } else if disk_usable() && !auto_unlock() {
-        format_ram_table();
-        // Init needs a root to create `/policy` before the seat names
-        // the account. The name stays empty until that unlock, so the
-        // sealed disk does not contain `admin` or the harness account.
-        install_pending_actor();
-        let fresh = !disk_has_seal();
-        VOLUME_FRESH.store(fresh, Ordering::Release);
-        if fresh {
-            crate::serial_println!("[galfs] volume locked; choose a passphrase");
-        } else {
-            crate::serial_println!("[galfs] volume locked; passphrase required");
+    } else if !auto_unlock() {
+        let mut offers = [Offer {
+            kind: 0,
+            sectors: 0,
+        }; 2];
+        let n = collect_offers(&mut offers);
+        if n > 0 {
+            let mut sealed_n = 0usize;
+            let mut sealed_kind = 0u8;
+            for offer in offers.iter().take(n) {
+                if device_has_seal(device(offer.kind)) {
+                    sealed_n += 1;
+                    sealed_kind = offer.kind;
+                }
+            }
+            // One sealed disk is the volume. The seat types that
+            // passphrase and is not asked to format a sibling.
+            if sealed_n == 1 {
+                CHOSEN.store(sealed_kind, Ordering::Release);
+                format_ram_table();
+                install_pending_actor();
+                VOLUME_FRESH.store(false, Ordering::Release);
+                crate::serial_println!("[galfs] volume locked; passphrase required");
+                return;
+            }
+            // One empty disk is still a choice. The table is sized for
+            // it now so init can write `/policy` before the seal.
+            if n == 1 {
+                CHOSEN.store(offers[0].kind, Ordering::Release);
+                format_ram_table();
+                install_pending_actor();
+                VOLUME_FRESH.store(true, Ordering::Release);
+                ASK_DISK.store(true, Ordering::Release);
+                crate::serial_println!("[galfs] volume locked; choose a disk");
+                return;
+            }
+            ASK_DISK.store(true, Ordering::Release);
+            NEED_REBUILD.store(true, Ordering::Release);
+            format_ram_table();
+            install_pending_actor();
+            crate::serial_println!("[galfs] volume locked; choose a disk");
+            return;
         }
-        return;
     } else if disk_usable() {
         match load_from_disk(VOLUME_PASSPHRASE) {
             DiskLoad::Loaded { recovered } => {
@@ -923,8 +1064,12 @@ pub fn volume_locked() -> bool {
     disk_usable() && !disk_corrupt() && VOLUME_KEY.lock().is_none()
 }
 
-/// `0` open or no disk, `1` sealed and locked, `2` no passphrase yet.
+/// `0` open or no disk, `1` sealed and locked, `2` no passphrase yet,
+/// `3` the seat still has to choose a disk.
 pub fn volume_query() -> u64 {
+    if ASK_DISK.load(Ordering::Acquire) && !DISK_CONFIRMED.load(Ordering::Acquire) {
+        return 3;
+    }
     if !volume_locked() {
         0
     } else if VOLUME_FRESH.load(Ordering::Acquire) {
@@ -932,6 +1077,121 @@ pub fn volume_query() -> u64 {
     } else {
         1
     }
+}
+
+/// One line per disk the seat may format. `1 virtio <sectors> sectors`.
+pub fn disk_list(out: &mut [u8]) -> usize {
+    let mut offers = [Offer {
+        kind: 0,
+        sectors: 0,
+    }; 2];
+    let n = collect_offers(&mut offers);
+    let mut at = 0usize;
+    for (i, offer) in offers.iter().take(n).enumerate() {
+        let label: &[u8] = if offer.kind == DISK_VIRTIO {
+            b"virtio"
+        } else {
+            b"ata"
+        };
+        if !push_disk(out, &mut at, &[(i as u8 + 1 + b'0')]) {
+            break;
+        }
+        if !push_disk(out, &mut at, b" ")
+            || !push_disk(out, &mut at, label)
+            || !push_disk(out, &mut at, b" ")
+            || !push_disk_u64(out, &mut at, offer.sectors)
+            || !push_disk(out, &mut at, b" sectors\n")
+        {
+            break;
+        }
+    }
+    at
+}
+
+fn push_disk(out: &mut [u8], at: &mut usize, bytes: &[u8]) -> bool {
+    if at.saturating_add(bytes.len()) > out.len() {
+        return false;
+    }
+    out[*at..*at + bytes.len()].copy_from_slice(bytes);
+    *at += bytes.len();
+    true
+}
+
+fn push_disk_u64(out: &mut [u8], at: &mut usize, mut n: u64) -> bool {
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    if n == 0 {
+        i -= 1;
+        buf[i] = b'0';
+    } else {
+        while n > 0 {
+            i -= 1;
+            buf[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+    }
+    push_disk(out, at, &buf[i..])
+}
+
+/// Bind disk `index` (1-based, the line [`disk_list`] printed).
+pub fn choose_disk(index: u8) -> Result<(), SysError> {
+    if !ASK_DISK.load(Ordering::Acquire) || DISK_CONFIRMED.load(Ordering::Acquire) {
+        return Err(SysError::BadValue);
+    }
+    let mut offers = [Offer {
+        kind: 0,
+        sectors: 0,
+    }; 2];
+    let n = collect_offers(&mut offers);
+    let i = index as usize;
+    if i == 0 || i > n {
+        return Err(SysError::BadValue);
+    }
+    let kind = offers[i - 1].kind;
+    let fresh = !device_has_seal(device(kind));
+    if NEED_REBUILD.load(Ordering::Acquire) {
+        CHOSEN.store(kind, Ordering::Release);
+        {
+            let mut table = TABLE.lock();
+            for actor in &mut table.actors {
+                *actor = Actor::empty();
+            }
+        }
+        format_ram_table();
+        install_pending_actor();
+        if fresh {
+            seed_default_policy();
+        }
+        VOLUME_FRESH.store(fresh, Ordering::Release);
+    } else if CHOSEN.load(Ordering::Acquire) != kind {
+        return Err(SysError::BadValue);
+    }
+    DISK_CONFIRMED.store(true, Ordering::Release);
+    Ok(())
+}
+
+/// The listen line init would have written, for a disk that was not
+/// bound until the seat chose it. `/net` stays absent; `net` uses an
+/// empty record until it saves one.
+fn seed_default_policy() {
+    let root = ADMIN_ROOT.load(Ordering::Acquire);
+    if root == NO_OBJECT {
+        return;
+    }
+    let Ok(file) = create_file_under(root, "policy") else {
+        return;
+    };
+    let text = b"net listen *:4598 name ssh\nusb use 0627:0001 name usb-list\n";
+    let _ = write_at(file, 0, text);
+}
+
+/// A logged-out seat may send `net dns` and nothing else.
+pub fn setup_dns_open() -> bool {
+    SETUP_DNS.load(Ordering::Acquire)
+}
+
+pub fn clear_setup_dns() {
+    SETUP_DNS.store(false, Ordering::Release);
 }
 
 /// True when a locked disk has no GALF header yet.
@@ -1037,6 +1297,7 @@ pub fn unlock_with(passphrase: &[u8], account: Option<SetupUser<'_>>) -> Result<
             wipe_bytes(&mut vk);
             if sync_to_disk() {
                 VOLUME_FRESH.store(false, Ordering::Release);
+                SETUP_DNS.store(true, Ordering::Release);
                 crate::serial_println!(
                     "[galfs] formatted sealed disk (LBA base {})",
                     disk_lba_base()
@@ -1115,22 +1376,6 @@ fn passphrase_matches(pass: &[u8]) -> bool {
         diff |= a ^ b;
     }
     diff == 0
-}
-
-/// True when either slot starts with the GALF magic. A foreign version
-/// still counts: unlock refuses it instead of offering a new passphrase.
-fn disk_has_seal() -> bool {
-    let _vol = volume_guard();
-    for slot in 0..DISK_SLOT_COUNT as u32 {
-        if !read_disk_buf(slot_lba(slot)) {
-            continue;
-        }
-        let buf = DISK_BUF.lock();
-        if buf[0][0..4] == DISK_MAGIC {
-            return true;
-        }
-    }
-    false
 }
 
 /// Flush a dirty unlocked volume, then zero the key and passphrase.

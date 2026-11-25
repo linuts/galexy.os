@@ -124,6 +124,22 @@ BIOS/UEFI
   covers the whole physical address space from boot (ACPI tables, LAPIC/IO
   APIC discovery, frame access all rely on it).
 
+## One system
+
+Galexy is one system. It owns install, accounts, and policy. The seat
+asks and the user answers. An application does not bring its own setup.
+A later question is another step in that same setup, not a second
+installer.
+
+The network stays almost silent. A packet leaves only because the user
+acted, or because a service they started is doing the job they gave it.
+There is no background lookup, ping, time query, or announcement. DHCP
+does not start on boot. `net up` starts DHCPv4. The same verb is where
+a static address will go (`net up 10.0.2.15/24 via 10.0.2.2`, and the
+IPv6 form). Those forms are not built. First boot does not run
+`net up`. It sends nothing until the resolver question is answered, and
+skip sends nothing.
+
 ## Module contracts
 
 ### screen — "the screen" (`drivers/`)
