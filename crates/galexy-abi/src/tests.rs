@@ -112,7 +112,7 @@ fn reserved_caps_have_permanent_indexes() {
     assert_eq!(NET_OP_PING, 5);
     assert_eq!(PING_LOOKUP, 0);
     assert_eq!(NET_OP_RESOLVE, 6);
-    assert_eq!(NET_OP_PIN, 7);
+    assert_eq!(NET_OP_DNS, 7);
     assert_eq!(NET_OP_BIND, 8);
     assert_eq!(NET_OP_LISTEN, 9);
     assert_eq!(NET_OP_DGRAM, 10);

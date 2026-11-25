@@ -102,7 +102,7 @@ pub fn learn_client(
 
 /// First concrete DNS name on `der`, skipping a wildcard. `None` when
 /// the certificate has no such name, or the name is longer than `max`.
-pub fn dns_pin_name(der: &[u8], max: usize) -> Option<Vec<u8>> {
+pub fn dns_cert_name(der: &[u8], max: usize) -> Option<Vec<u8>> {
     let body = san_body(der)?;
     let mut at = 0usize;
     while at < body.len() {

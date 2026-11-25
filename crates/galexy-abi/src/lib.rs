@@ -1005,11 +1005,10 @@ pub const PING_LOOKUP: u8 = 0;
 /// name, then `whoami`. The reply text is the address. The lane Cap is
 /// zero. The resolver key is not in the reply.
 pub const NET_OP_RESOLVE: u8 = 6;
-/// Net control: pin the DNS-over-TLS resolver. Admin only. Four address
-/// bytes trust the bundle in the image. A following 32-byte key is that
-/// pin, and the bundle is not consulted. `10.0.2.2` and `10.0.2.3` are
-/// refused.
-pub const NET_OP_PIN: u8 = 7;
+/// Net control: `net dns`. Admin only. Four address bytes trust the
+/// bundle in the image. A following 32-byte key is that key, and the
+/// bundle is not consulted. `10.0.2.2` and `10.0.2.3` are refused.
+pub const NET_OP_DNS: u8 = 7;
 /// Net control: bind the stored local address. A listen rule must name
 /// the caller and the port. The payload is the address text. The reply
 /// is `ok` or `access denied`. This opcode does not listen.

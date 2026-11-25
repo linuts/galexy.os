@@ -2231,7 +2231,7 @@ fn net_dns(cwd: &Cwd, tail: &[u8]) {
         None
     };
     let mut payload = [0u8; 40];
-    payload[0] = galexy_abi::NET_OP_PIN;
+    payload[0] = galexy_abi::NET_OP_DNS;
     payload[1..5].copy_from_slice(&ip);
     let n = if let Some(key) = key {
         payload[5..37].copy_from_slice(&key);

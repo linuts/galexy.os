@@ -1683,7 +1683,7 @@ fn sealed_volume_date_pin_shutdown() {
         "svc date did not return a civil time; serial:\n{serial}"
     );
     assert!(
-        serial.lines().any(pin_ok_line),
+        serial.lines().any(dns_ok_line),
         "net dns did not print ok and a domain; serial:\n{serial}"
     );
     assert!(
@@ -1701,7 +1701,7 @@ fn sealed_volume_date_pin_shutdown() {
     );
 }
 
-fn pin_ok_line(line: &str) -> bool {
+fn dns_ok_line(line: &str) -> bool {
     let Some(name) = line.trim().strip_prefix("ok ") else {
         return false;
     };
