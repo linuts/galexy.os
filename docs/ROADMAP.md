@@ -745,7 +745,9 @@ to the peer a dial rule names.
 
 Milestone 117 is one ring-3 Rust service on that stack.
 `net listen *:4598 name ssh` accepts. A dial rule lets a local
-program open a session. No new syscall. No OpenSSH, no libssh,
+program open a session with `ssh user@address`, or
+`ssh user@address:port` when the port is not 22. The password is
+the peer account's password. No new syscall. No OpenSSH, no libssh,
 no C, and no crates.io SSH library. Strict key exchange,
 Curve25519, Ed25519 host keys, ChaCha20-Poly1305. Auth is the
 existing password hash. SFTP is a subsystem and uses the galfs
