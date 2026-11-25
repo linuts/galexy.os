@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use galexy_abi::{
     Cap, SysError, INIT_RPC_HDR, NET_OP_ALLOW, NET_OP_BIND, NET_OP_DGRAM, NET_OP_DIAL, NET_OP_LINK,
     NET_OP_LISTEN, NET_OP_PIN, NET_OP_PING, NET_OP_RECV, NET_OP_RESOLVE, NET_OP_SERVE,
-    NET_OP_STREAM, PING_LOOKUP,
+    NET_OP_STREAM, NET_OP_TIME, PING_LOOKUP,
 };
 use galexy_net::Engine;
 use galexy_netcfg::{
@@ -25,8 +25,8 @@ use galexy_netcfg::{
     NAME_MAX,
 };
 use galexy_rt::{
-    chan_recv_poll, chan_send, channel, clock_ms, close, lane_pair, open, read, read_poll, seek,
-    sleep_ms, truncate, wire_read, wire_write, write, write_console, write_poll,
+    chan_recv_poll, chan_send, channel, clock_ms, close, date_set, lane_pair, open, read,
+    read_poll, seek, sleep_ms, truncate, wire_read, wire_write, write, write_console, write_poll,
 };
 use galexy_sec::Stamp;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -47,6 +47,10 @@ const MAX_GATES: usize = 8;
 const PENDING: usize = 4;
 /// Source port for a card datagram. Not 53, and not a program argument.
 const DGRAM_SPORT: u16 = 4598;
+/// Source port for one NTP query. The destination is [`galexy_net::NTP_PORT`].
+/// Not 53.
+const TIME_SPORT: u16 = 4123;
+const TIME_WAIT_MS: u64 = 3_000;
 
 fn main() {
     fill_random_once();
@@ -249,6 +253,10 @@ fn icmp_ok(stamp: &Stamp, object: &[u8]) -> bool {
     rule_allows(stamp, galexy_sec::VERB_ICMP, object)
 }
 
+fn time_ok(stamp: &Stamp, object: &[u8]) -> bool {
+    rule_allows(stamp, galexy_sec::VERB_TIME, object)
+}
+
 fn shell_stamp(stamp: &Stamp) -> bool {
     let name = &stamp.name[..stamp.name_len as usize];
     name == b"shell"
@@ -313,6 +321,7 @@ fn handle(
         NET_OP_ALLOW if admin => allow(rx, record, rest),
         NET_OP_SERVE if admin => serve(rx, engine, record, &stamp, actor_id, gates, rest),
         NET_OP_PING => ping(rx, engine, record, &stamp, rest, now),
+        NET_OP_TIME => time_query(rx, engine, &stamp, admin, rest),
         NET_OP_STREAM => stream(
             rx, engine, record, &stamp, actor_id, gates, rest, lives, seen,
         ),
@@ -1688,6 +1697,85 @@ fn two_fields(rest: &[u8]) -> Option<(&[u8], &[u8])> {
     }
     let actor = &rest[2 + nlen..2 + nlen + alen];
     Some((name, actor))
+}
+
+/// One NTP query. The administrative seat asks. A `net time` line in
+/// `/policy` names that seat and the address. No name, no poll, no NTS.
+fn time_query(rx: Cap, engine: &mut Engine, stamp: &Stamp, admin: bool, rest: &[u8]) {
+    if !admin {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    if rest.len() != 4 {
+        reply(rx, b"bad\n", 0);
+        return;
+    }
+    let ip = [rest[0], rest[1], rest[2], rest[3]];
+    if ip == [0, 0, 0, 0] || ip == [255, 255, 255, 255] {
+        reply(rx, b"bad\n", 0);
+        return;
+    }
+    let object = format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
+    if !time_ok(stamp, object.as_bytes()) {
+        reply(rx, b"access denied\n", 0);
+        return;
+    }
+    if engine.locator().is_none() {
+        reply(rx, b"down\n", 0);
+        return;
+    }
+    let mut nonce = clock_ms().to_be_bytes();
+    if nonce == [0; 8] {
+        nonce[7] = 1;
+    }
+    let packet = galexy_net::ntp_request(nonce);
+    if !engine.udp_arm(ip, galexy_net::NTP_PORT, TIME_SPORT) {
+        reply(rx, b"bad\n", 0);
+        return;
+    }
+    if engine
+        .udp_send(ip, galexy_net::NTP_PORT, TIME_SPORT, &packet)
+        .is_err()
+    {
+        engine.udp_disarm();
+        reply(rx, b"down\n", 0);
+        return;
+    }
+    let start = clock_ms();
+    let mut payload = None;
+    while clock_ms().saturating_sub(start) < TIME_WAIT_MS {
+        pump(engine);
+        engine.poll(clock_ms());
+        pump(engine);
+        if let Some(got) = engine.udp_take() {
+            payload = Some(got);
+            break;
+        }
+        let _ = sleep_ms(20);
+    }
+    engine.udp_disarm();
+    let Some(payload) = payload else {
+        reply(rx, b"timed out\n", 0);
+        return;
+    };
+    let Some(secs) = galexy_net::ntp_unix(&payload, &nonce) else {
+        reply(rx, b"bad\n", 0);
+        return;
+    };
+    if !date_set(secs).ok {
+        reply(rx, b"bad\n", 0);
+        return;
+    }
+    let mut text = [0u8; 19];
+    if galexy_core::format_utc(secs, &mut text) != Some(19) {
+        reply(rx, b"bad\n", 0);
+        return;
+    }
+    let mut line = [0u8; 24];
+    line[..19].copy_from_slice(&text);
+    line[19..24].copy_from_slice(b" utc\n");
+    log(&format!("[net] time {object}"));
+    reply(rx, &line, 0);
 }
 
 fn datagram(rx: Cap, engine: &mut Engine, record: &Record, stamp: &Stamp, rest: &[u8]) {

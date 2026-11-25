@@ -243,9 +243,11 @@ on `wait`. If the date is unset, init logs `[init] date unset` once
 and does not fire.
 
 Milestone **126** sets that date from one NTP reply. The
-administrative seat runs `net time <ip>`. There is no poll and
-no timezone. The boxes are open. First boot (Milestone 128) calls
-it when the seat does not skip the network question.
+administrative seat runs `net time <ip>`. A `net time` line in
+`/policy` names that seat and the address. There is no poll and
+no timezone. `net_time_sets_the_date` is the run. First boot
+(Milestone 128) will call it when the seat does not skip the
+network question. That screen is not this row.
 
 F1–F12 **console switching** stays in the kernel; only task lifecycle
 moves to init.

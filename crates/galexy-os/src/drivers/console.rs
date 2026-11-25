@@ -13,8 +13,7 @@ pub const BEL: u8 = 0x07;
 
 /// The bootloader may have left a partial line on COM1. The first mirror
 /// starts its own line so that text is not glued to the passphrase prompt.
-static HOST_LINE_DIRTY: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(true);
+static HOST_LINE_DIRTY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
 
 /// Writes one character to TTY 0 (screen, and COM1 when TTY 0 is visible).
 pub fn out_char(c: char) {

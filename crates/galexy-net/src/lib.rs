@@ -357,6 +357,11 @@ impl Engine {
         self.udp_inbox.take().and_then(|w| w.payload)
     }
 
+    /// Drop a receive arm. A late datagram is not delivered later.
+    pub fn udp_disarm(&mut self) {
+        self.udp_inbox = None;
+    }
+
     /// Queue an ICMP echo request. `Err` when we have no address, or the
     /// payload is longer than 64 bytes. An off-subnet peer is reached
     /// through the gateway. The IP destination stays `dst`. A missing
@@ -1293,6 +1298,55 @@ pub fn lookup_name(_name: &str) -> Result<(), ()> {
     Err(())
 }
 
+/// UDP port of one Network Time Protocol query. Not 53.
+pub const NTP_PORT: u16 = 123;
+
+/// Seconds from 1900-01-01 to 1970-01-01. There is no leap smear.
+const NTP_UNIX: u64 = 2_208_988_800;
+
+/// One client query. `nonce` is the transmit timestamp and must come
+/// back as the origin timestamp. It is not a key and not civil time.
+pub fn ntp_request(nonce: [u8; 8]) -> [u8; 48] {
+    let mut pkt = [0u8; 48];
+    // LI = 0, version 4, mode 3 (client).
+    pkt[0] = 0x23;
+    pkt[40..48].copy_from_slice(&nonce);
+    pkt
+}
+
+/// Unix seconds from one server reply, or `None` when it is not that reply.
+///
+/// The mode is server, the version is 3 or 4, the stratum is not a
+/// kiss-of-death, the leap indicator is synchronized, and the origin
+/// timestamp is `nonce`. A transmit field of zero is not a time. A field
+/// from before 1970 is the next 32-bit era, which starts in 2036. The
+/// caller still refuses a year outside 1970..=2099.
+pub fn ntp_unix(packet: &[u8], nonce: &[u8; 8]) -> Option<u64> {
+    if packet.len() < 48 || nonce == &[0; 8] {
+        return None;
+    }
+    let li_vn_mode = packet[0];
+    let mode = li_vn_mode & 0x07;
+    let version = (li_vn_mode >> 3) & 0x07;
+    let leap = li_vn_mode >> 6;
+    if mode != 4 || (version != 3 && version != 4) || leap == 3 {
+        return None;
+    }
+    if packet[1] == 0 || &packet[24..32] != nonce {
+        return None;
+    }
+    let secs = u32::from_be_bytes([packet[40], packet[41], packet[42], packet[43]]);
+    if secs == 0 {
+        return None;
+    }
+    let ntp = u64::from(secs);
+    if ntp >= NTP_UNIX {
+        Some(ntp - NTP_UNIX)
+    } else {
+        Some(ntp + (1u64 << 32) - NTP_UNIX)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1413,6 +1467,70 @@ mod tests {
         );
         e.ingest(&frame);
         assert_eq!(e.udp_take().as_deref(), Some(&b"card-back"[..]));
+        assert!(e.udp_take().is_none());
+    }
+
+    #[test]
+    fn ntp_reply_from_another_address_is_ignored() {
+        let mut e = Engine::new([1; 6], false);
+        e.set_fixed([10, 0, 2, 15], 24, [10, 0, 2, 2]);
+        let nonce = [9, 8, 7, 6, 5, 4, 3, 2];
+        let query = ntp_request(nonce);
+        assert_eq!(query[0], 0x23);
+        assert_eq!(&query[40..48], &nonce);
+        assert!(e.udp_arm([10, 0, 2, 2], NTP_PORT, 4123));
+        let mut reply = [0u8; 48];
+        reply[0] = 0x24;
+        reply[1] = 1;
+        reply[24..32].copy_from_slice(&nonce);
+        let unix = 1_781_524_800u64;
+        let ntp = (unix + 2_208_988_800) as u32;
+        reply[40..44].copy_from_slice(&ntp.to_be_bytes());
+        let other = udp_frame(
+            [9; 6],
+            [1; 6],
+            [9, 9, 9, 9],
+            [10, 0, 2, 15],
+            NTP_PORT,
+            4123,
+            &reply,
+        );
+        e.ingest(&other);
+        assert!(e.udp_take().is_none());
+        assert!(ntp_unix(&reply, &nonce).is_some());
+        let dns = udp_frame(
+            [9; 6],
+            [1; 6],
+            [10, 0, 2, 2],
+            [10, 0, 2, 15],
+            53,
+            4123,
+            &reply,
+        );
+        e.ingest(&dns);
+        assert!(e.udp_take().is_none());
+        let frame = udp_frame(
+            [9; 6],
+            [1; 6],
+            [10, 0, 2, 2],
+            [10, 0, 2, 15],
+            NTP_PORT,
+            4123,
+            &reply,
+        );
+        e.ingest(&frame);
+        let got = e.udp_take().expect("reply from the queried address");
+        assert_eq!(ntp_unix(&got, &nonce), Some(unix));
+        assert!(ntp_unix(&got, &[1; 8]).is_none());
+        let mut kiss = reply;
+        kiss[1] = 0;
+        assert!(ntp_unix(&kiss, &nonce).is_none());
+        // 2036-02-07 06:28:17 UTC is the second after the 32-bit wrap.
+        let mut wrapped = reply;
+        wrapped[40..44].copy_from_slice(&1u32.to_be_bytes());
+        assert_eq!(ntp_unix(&wrapped, &nonce), Some(2_085_978_497));
+        e.udp_disarm();
+        e.ingest(&frame);
         assert!(e.udp_take().is_none());
     }
 

@@ -4,14 +4,14 @@
 mod common;
 
 use common::{
-    boot, boot_and_type, boot_and_type_fwd, boot_and_type_ps2, boot_and_type_ssh,
-    boot_and_type_uefi, boot_and_type_usb, boot_for, boot_galfs_once, boot_galfs_once_virtio,
-    boot_liveness_until, boot_quiet_until, boot_status_terminal, boot_uefi, boot_uefi_rng,
-    boot_uefi_until, boot_with_galfs, boot_with_galfs_both_corrupt, boot_with_galfs_cache,
-    boot_with_galfs_crash, boot_with_galfs_part, boot_with_galfs_recover, boot_with_galfs_torn,
-    boot_with_galfs_virtio, boot_with_galfs_virtio_legacy, boot_with_tpm, boot_xhci, image,
-    strip_host_chrome, uart_login_serial, use_kvm, GalfsDiskCache, GALFS_PART_BYTE_OFF,
-    QEMU_EXIT_SUCCESS,
+    boot, boot_and_type, boot_and_type_fwd, boot_and_type_ps2, boot_and_type_rtc,
+    boot_and_type_ssh, boot_and_type_uefi, boot_and_type_usb, boot_for, boot_galfs_once,
+    boot_galfs_once_virtio, boot_liveness_until, boot_quiet_until, boot_status_terminal, boot_uefi,
+    boot_uefi_rng, boot_uefi_until, boot_with_galfs, boot_with_galfs_both_corrupt,
+    boot_with_galfs_cache, boot_with_galfs_crash, boot_with_galfs_part, boot_with_galfs_recover,
+    boot_with_galfs_torn, boot_with_galfs_virtio, boot_with_galfs_virtio_legacy, boot_with_tpm,
+    boot_xhci, image, strip_host_chrome, uart_login_serial, use_kvm, GalfsDiskCache,
+    GALFS_PART_BYTE_OFF, QEMU_EXIT_SUCCESS,
 };
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -6363,6 +6363,216 @@ fn net_udp_and_tcp_reach_the_host() {
         serial.contains("[net] udp ok") && serial.contains("[net] tcp ok"),
         "guest did not finish the proofs; serial:\n{serial}"
     );
+}
+
+/// Milestone 126: one NTP reply sets civil UTC. A missing rule sends
+/// nothing. `10.0.2.2` and `10.0.2.3` stay refused as resolvers.
+#[test]
+fn net_time_sets_the_date() {
+    let unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs();
+    let mut buf = [0u8; 19];
+    let n = galexy_core::format_utc(unix, &mut buf).expect("civil");
+    let when = std::str::from_utf8(&buf[..n]).expect("utf8").to_string();
+    let shown = format!("{when} utc");
+    let day = when[..10].to_string();
+    let ntp = start_fixed_ntp(unix);
+    let mut owned: Vec<(String, String)> = with_login(&[])
+        .into_iter()
+        .map(|(code, echo)| (code.to_string(), echo.to_string()))
+        .collect();
+    owned.extend(type_line("net link", "up 10.0.2.15/24"));
+    owned.extend(type_line("svc date", "unset"));
+    owned.extend(type_line("net pin 10.0.2.2", "access denied"));
+    owned.extend(type_line("net pin 10.0.2.3", "access denied"));
+    owned.extend(type_line("net pin 1.1.1.1", "clock not set"));
+    owned.extend(type_line("net time time.example", "bad"));
+    owned.extend(type_line("net time 10.0.2.2", "access denied"));
+    owned.extend(type_line("sec net time 1.2.3.4 shell", "ok"));
+    owned.extend(type_line("net time 10.0.2.2", "access denied"));
+    owned.extend(type_line("sec net time 10.0.2.2 shell", "ok"));
+    owned.extend(type_line("net time 10.0.2.2", &shown));
+    owned.extend(type_line("svc date", &day));
+    owned.extend(type_line("net pin 1.1.1.1", "ok "));
+    owned.extend(type_line("sec net time 10.0.2.2 shell2", "ok"));
+    owned.extend(type_line("useradd eve", "Password: "));
+    owned.extend([
+        ("e".into(), "*".into()),
+        ("v".into(), "*".into()),
+        ("e".into(), "*".into()),
+        ("ret".into(), "admin@galexy> ".into()),
+        ("f2".into(), "[tty] 2".into()),
+    ]);
+    owned.extend(type_line("eve", "Password: "));
+    owned.extend([
+        ("e".into(), "*".into()),
+        ("v".into(), "*".into()),
+        ("e".into(), "*".into()),
+        ("ret".into(), "eve@galexy> ".into()),
+    ]);
+    owned.extend(type_line("net time 10.0.2.2", "access denied"));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = boot_and_type_rtc(
+        &image("galexy-os"),
+        &keys,
+        "[boot] main loop ready",
+        "eve@galexy>",
+        Duration::from_millis(30),
+        Duration::from_secs(360),
+        "base=1990-01-01,clock=vm",
+    );
+    let hits = ntp.hits();
+    drop(ntp);
+    assert!(
+        !serial.contains("[PANIC]") && !serial.contains("double fault"),
+        "kernel panicked; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[date] unset"),
+        "the 1990 chip should not seed Date; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains(&format!("[date] set {shown}")),
+        "the transmit time did not set Date; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains(&shown),
+        "net time did not print the civil time; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("clock not set"),
+        "an unset clock did not refuse the pin; serial:\n{serial}"
+    );
+    assert!(
+        serial.lines().any(pin_ok_line),
+        "the pin did not proceed after the clock was set; serial:\n{serial}"
+    );
+    assert_eq!(
+        hits, 1,
+        "a refused query must not send, and the allowed query sends once; serial:\n{serial}"
+    );
+    assert!(
+        !serial.contains("udp/53") && !serial.contains("port 53"),
+        "plaintext DNS showed up; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("access denied"),
+        "a refusal did not print access denied; serial:\n{serial}"
+    );
+}
+
+struct NtpServer {
+    child: std::process::Child,
+    hits_path: std::path::PathBuf,
+    script: std::path::PathBuf,
+    pid_path: std::path::PathBuf,
+}
+
+impl NtpServer {
+    fn hits(&self) -> usize {
+        std::fs::read_to_string(&self.hits_path)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+            .unwrap_or(0)
+    }
+}
+
+impl Drop for NtpServer {
+    fn drop(&mut self) {
+        if let Ok(pid) = std::fs::read_to_string(&self.pid_path) {
+            let _ = std::process::Command::new("sudo")
+                .args(["-n", "kill", "-TERM", pid.trim()])
+                .status();
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.script);
+        let _ = std::fs::remove_file(&self.hits_path);
+        let _ = std::fs::remove_file(&self.pid_path);
+    }
+}
+
+/// One NTP server on UDP 123. The guest reaches it at `10.0.2.2`.
+/// The reply's transmit time is `unix`. Port 123 is privileged, so the
+/// process is started with `sudo -n`.
+fn start_fixed_ntp(unix: u64) -> NtpServer {
+    let id = std::process::id();
+    let dir = std::env::temp_dir();
+    let hits_path = dir.join(format!("galexy-ntp-{id}.hits"));
+    let pid_path = dir.join(format!("galexy-ntp-{id}.pid"));
+    let script = dir.join(format!("galexy-ntp-{id}.py"));
+    let src = r#"import os, socket, struct, sys, time
+hits_path, pid_path, unix = sys.argv[1], sys.argv[2], int(sys.argv[3])
+ntp = (unix + 2208988800) & 0xFFFFFFFF
+open(pid_path, "w").write(str(os.getpid()))
+os.chmod(pid_path, 0o644)
+hits = 0
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind(("0.0.0.0", 123))
+s.settimeout(0.2)
+def publish():
+    with open(hits_path, "w") as out:
+        out.write(str(hits))
+    os.chmod(hits_path, 0o644)
+publish()
+end = time.time() + 500
+while time.time() < end:
+    try:
+        data, addr = s.recvfrom(128)
+    except socket.timeout:
+        continue
+    if len(data) < 48 or (data[0] & 7) != 3:
+        continue
+    hits += 1
+    publish()
+    reply = bytearray(48)
+    reply[0] = 0x24
+    reply[1] = 1
+    reply[24:32] = data[40:48]
+    reply[40:44] = struct.pack("!I", ntp)
+    s.sendto(reply, addr)
+"#;
+    std::fs::write(&script, src).expect("write ntp helper");
+    let mut child = std::process::Command::new("sudo")
+        .args([
+            "-n",
+            "python3",
+            script.to_str().expect("script path"),
+            hits_path.to_str().expect("hits path"),
+            pid_path.to_str().expect("pid path"),
+            &unix.to_string(),
+        ])
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("sudo python3 for the NTP helper");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if std::fs::read_to_string(&hits_path).is_ok() {
+            break;
+        }
+        if let Some(status) = child.try_wait().expect("ntp wait") {
+            let mut err = String::new();
+            if let Some(stderr) = child.stderr.as_mut() {
+                let _ = std::io::Read::read_to_string(stderr, &mut err);
+            }
+            panic!("ntp helper exited {status}: {err}");
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("ntp helper did not bind UDP 123");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    NtpServer {
+        child,
+        hits_path,
+        script,
+        pid_path,
+    }
 }
 
 /// A logged-in seat pings the QEMU user-net gateway and prints the echo reply.

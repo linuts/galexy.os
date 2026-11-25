@@ -3668,29 +3668,29 @@ one Network Time Protocol server. It does not wait on Milestones
 civil clock from Milestone 90. There is no timezone and no leap
 smear.
 
-- [ ] **One query**: `net` sends one NTP packet to one address on
+- [x] **One query**: `net` sends one NTP packet to one address on
       UDP port 123 and reads one reply from that address. The
       transmit time in the reply sets `Date` and the CMOS chip.
       A reply from any other address is ignored. The wire must be
       up. No name is resolved: the clock is why a name cannot be
       looked up yet. The address is four bytes until Milestone 120
-- [ ] **Who asks**: the administrative seat. The command is
+- [x] **Who asks**: the administrative seat. The command is
       `net time <ip>`. No new syscall. Opcode 13 on net cap
       `0x800A` appends. A logged-out seat is `AccessDenied`. A
       program that is not the administrative user is refused.
       Port 53 stays unused
-- [ ] **What it does not do**: no second stack, no pool, no
+- [x] **What it does not do**: no second stack, no pool, no
       background poll, no NTS. NTS needs a clock to check a
       certificate, and this row is the clock. One shot, then
       elapsed monotonic time carries `Date` the way a manual set
       does. A chip that already holds a year in 2000..=2099 still
       seeds the anchor at boot. This query replaces it
-- [ ] **Proof**: an unset date becomes `svc date` in UTC after one
+- [x] **Proof**: an unset date becomes `svc date` in UTC after one
       reply, and a certificate pin that was `clock not set` then
       proceeds. A reply from a different address does not move the
       clock. Serial does not carry a key. The `v1.0` tag stays
       unapplied
-- [ ] **Out of this milestone**: NTS, a server pool, a timezone,
+- [x] **Out of this milestone**: NTS, a server pool, a timezone,
       a leap second, a poll loop, a v6 address, a new syscall,
       the first-boot screen (128), and the KVM rows
 

@@ -15,6 +15,9 @@ pub const VERB_DIAL: u8 = 1;
 pub const VERB_LISTEN: u8 = 2;
 pub const VERB_ICMP: u8 = 3;
 pub const VERB_USB: u8 = 4;
+/// One NTP server. The object is `*` or one IPv4 address. The port is
+/// 123 and is not written in the line.
+pub const VERB_TIME: u8 = 5;
 
 const SUB_ID: u8 = 1;
 const SUB_PARENT: u8 = 2;
@@ -99,6 +102,7 @@ fn parse_line(line: &[u8]) -> Option<Rule> {
         (b"net", b"dial") => VERB_DIAL,
         (b"net", b"listen") => VERB_LISTEN,
         (b"net", b"icmp") => VERB_ICMP,
+        (b"net", b"time") => VERB_TIME,
         (b"usb", b"use") => VERB_USB,
         _ => return None,
     };
@@ -135,7 +139,7 @@ fn object_shape(verb: u8, object: &[u8]) -> bool {
     match verb {
         VERB_DIAL => dial_shape(object),
         VERB_LISTEN => listen_shape(object),
-        VERB_ICMP => object == b"*" || ipv4(object).is_some(),
+        VERB_ICMP | VERB_TIME => object == b"*" || ipv4(object).is_some(),
         VERB_USB => usb_id(object),
         _ => false,
     }
@@ -183,7 +187,7 @@ fn object_ok(rule: &Rule, object: &[u8]) -> bool {
     match rule.verb {
         VERB_DIAL => dial_match(want, object),
         VERB_LISTEN => listen_match(want, object),
-        VERB_ICMP => want == b"*" || want == object,
+        VERB_ICMP | VERB_TIME => want == b"*" || want == object,
         VERB_USB => eq_ignore_hex(want, object),
         _ => false,
     }
@@ -383,6 +387,18 @@ mod tests {
         assert!(allows(text, &stamp, VERB_DIAL, b"10.0.2.2:22"));
         stamp.parent = 8;
         assert!(!allows(text, &stamp, VERB_DIAL, b"10.0.2.2:22"));
+    }
+
+    #[test]
+    fn time_names_one_address() {
+        let text = b"net time 10.0.2.2 name shell\nnet time * name shell2\n";
+        assert!(allows(text, &stamp_name("shell"), VERB_TIME, b"10.0.2.2"));
+        assert!(!allows(text, &stamp_name("shell"), VERB_TIME, b"1.2.3.4"));
+        assert!(!allows(text, &stamp_name("ping"), VERB_TIME, b"10.0.2.2"));
+        assert!(allows(text, &stamp_name("shell2"), VERB_TIME, b"9.9.9.9"));
+        assert!(valid_line(b"net time * name shell"));
+        assert!(!valid_line(b"net time *:123 name shell"));
+        assert!(!valid_line(b"net time time.example name shell"));
     }
 
     #[test]

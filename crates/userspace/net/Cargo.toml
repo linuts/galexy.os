@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 galexy-rt = { path = "../galexy-rt", features = ["std"] }
 galexy-abi = { path = "../../galexy-abi" }
+galexy-core = { path = "../../galexy-core" }
 galexy-net = { path = "../../galexy-net" }
 galexy-netcfg = { path = "../../galexy-netcfg" }
 galexy-sec = { path = "../../galexy-sec" }
