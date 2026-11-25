@@ -2,8 +2,11 @@
 //!
 //! Each actor has one root directory. `/Desktop` is that actor's child
 //! named Desktop. `/dan@Desktop` is dan's. A token names an object and a
-//! set of rights; the path is only a lookup. Boot creates one immortal
-//! actor, [`ADMIN_NAME`]. Lock order: [`THREADS`] then this table.
+//! set of rights; the path is only a lookup. The first actor is the
+//! administrator: a fresh production disk takes that name from the seat,
+//! and a test kernel or a diskless boot formats [`HARNESS_ACTOR`].
+//! `THREADS` is not held across a galfs lock that
+//! the disk wait must drop, and the disk wait does not take `THREADS`.
 //!
 //! When a [`BlockDevice`] large enough for both metadata slots and the
 //! data region is present, the table is loaded from a GALF v15 image or
@@ -16,10 +19,15 @@
 //! tick, on `Syscall::Sync`, and before power-off. Without a usable disk
 //! the table stays RAM-only. Backends: virtio-blk (preferred when
 //! present), else ATA primary slave.
+//!
+//! Device I/O never runs while this CPU holds `THREADS` or a galfs
+//! [`IoMutex`] (`TABLE`, the pool, the cache, `DISK_BUF`, the volume key).
+//! [`volume_guard`] is taken before `THREADS` and stays held across the
+//! transfer so a metadata update cannot race the gap.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use crate::sync::Mutex;
+use crate::sync::{IoMutex, Mutex};
 
 use galexy_abi::SysError;
 use galexy_core::{crc32, HASH_LEN, SALT_LEN};
@@ -167,12 +175,10 @@ impl Actor {
         self.salt = cred.salt;
         self.kdf_iters = cred.iters;
         self.pass_hash = cred.hash;
-        // Default admin password keeps the must-change flag across reboot.
-        if self.name_is(ADMIN_NAME) && password == ADMIN_DEFAULT_PASSWORD.as_bytes() {
-            self.max_objects |= MUST_CHANGE_BIT;
-        } else {
-            self.max_objects &= !MUST_CHANGE_BIT;
-        }
+        // The format pair `admin`/`admin` is not written, so the
+        // must-change flag has nothing to set. `passwd` still clears it.
+        let _ = password;
+        self.max_objects &= !MUST_CHANGE_BIT;
     }
 
     /// The stored salt/cost/hash, for a check that runs after the table
@@ -417,10 +423,10 @@ const fn empty_table() -> Table {
     }
 }
 
-static TABLE: Mutex<Table> = Mutex::new(empty_table());
+static TABLE: IoMutex<Table> = IoMutex::new(empty_table());
 /// Scratch tables for disk load — must not live on the kernel stack.
-static LOAD_BEST: Mutex<Table> = Mutex::new(empty_table());
-static LOAD_CAND: Mutex<Table> = Mutex::new(empty_table());
+static LOAD_BEST: IoMutex<Table> = IoMutex::new(empty_table());
+static LOAD_CAND: IoMutex<Table> = IoMutex::new(empty_table());
 
 static BOOTED: AtomicBool = AtomicBool::new(false);
 /// True when the ATA slave accepted a load or format write.
@@ -434,8 +440,14 @@ static ACTIVE_GEN: AtomicU64 = AtomicU64::new(0);
 /// Times this boot loaded an older slot because a newer one failed checks.
 static RECOVERIES: AtomicU64 = AtomicU64::new(0);
 
-/// Name of the immortal boot actor.
-pub const ADMIN_NAME: &str = "admin";
+/// Name format and `useradd` refuse. The administrator is not this string.
+pub const RESERVED_ACTOR_NAME: &str = "admin";
+
+/// Account a test kernel or a diskless boot formats so the suite can log in.
+///
+/// A fresh production disk does not contain this account. The seat types
+/// the name when that disk is sealed.
+pub const HARNESS_ACTOR: &str = "owner";
 
 /// Admin's root object. Valid after [`init`].
 static ADMIN_ROOT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(NO_OBJECT);
@@ -451,7 +463,7 @@ pub const DISK_MAGIC: [u8; 4] = *b"GALF";
 /// Older images are refused with a serial line; there is no silent migrate.
 /// Milestone 99 records the desk-compile file count in the geometry and
 /// moves this with `galexy-galf`. The slot layout stays two 64 KiB seals.
-pub const DISK_VERSION: u16 = 17;
+pub const DISK_VERSION: u16 = 18;
 /// Sectors per metadata slot (64 KiB).
 pub const DISK_SECTORS: usize = 128;
 pub const DISK_SLOT_COUNT: usize = 2;
@@ -477,8 +489,8 @@ const PAYLOAD_LEN: usize = galexy_galf::PAYLOAD_LEN;
 const _: () = assert!(DISK_HEADER + PAYLOAD_LEN <= DISK_SECTORS * block::SECTOR);
 /// Sectors a volume needs past the LBA base (8 MiB).
 const DISK_MIN_SECTORS: u64 = (galexy_galf::MIN_DISK_BYTES / block::SECTOR) as u64;
-/// Default password for the immortal admin account at format.
-pub const ADMIN_DEFAULT_PASSWORD: &str = "admin";
+/// Password of [`HARNESS_ACTOR`]. Not written onto a fresh production disk.
+pub const HARNESS_PASSWORD: &[u8] = b"testpass";
 /// Bring-up volume passphrase (wraps the disk key). Test kernels and the
 /// disk harness auto-unlock with this. Production `galexy-os` prompts.
 pub const VOLUME_PASSPHRASE: &[u8] = b"galfs";
@@ -508,7 +520,7 @@ impl core::ops::DerefMut for SectorBuf {
     }
 }
 
-static DISK_BUF: Mutex<SectorBuf> = Mutex::new(SectorBuf([[0u8; block::SECTOR]; DISK_SECTORS]));
+static DISK_BUF: IoMutex<SectorBuf> = IoMutex::new(SectorBuf([[0u8; block::SECTOR]; DISK_SECTORS]));
 
 /// Allocation state for the data pool. File bytes are not stored here.
 /// Per-block arrays are sized to the live disk in [`bind_pool`], not to
@@ -533,7 +545,7 @@ static BLOCK_SEEN: Mutex<alloc::vec::Vec<u64>> = Mutex::new(alloc::vec::Vec::new
 /// Scratch for directory-list checks. Sized when the inode table is.
 static DIR_SEEN: Mutex<alloc::vec::Vec<u64>> = Mutex::new(alloc::vec::Vec::new());
 
-static POOL: Mutex<Pool> = Mutex::new(Pool {
+static POOL: IoMutex<Pool> = IoMutex::new(Pool {
     blocks: 0,
     disk: false,
     bitmap: alloc::vec::Vec::new(),
@@ -552,7 +564,7 @@ struct BlockCache {
     data: [[u8; BLOCK_SIZE]; CACHE_SLOTS],
 }
 
-static CACHE: Mutex<BlockCache> = Mutex::new(BlockCache {
+static CACHE: IoMutex<BlockCache> = IoMutex::new(BlockCache {
     index: [u32::MAX; CACHE_SLOTS],
     data: [[0u8; BLOCK_SIZE]; CACHE_SLOTS],
 });
@@ -563,20 +575,20 @@ struct RamPool {
     blocks: [[u8; BLOCK_SIZE]; DISKLESS_BLOCKS],
 }
 
-static RAM_POOL: Mutex<RamPool> = Mutex::new(RamPool {
+static RAM_POOL: IoMutex<RamPool> = IoMutex::new(RamPool {
     blocks: [[0u8; BLOCK_SIZE]; DISKLESS_BLOCKS],
 });
 const _: () = assert!(core::mem::align_of::<SectorBuf>() == 4096);
 /// First LBA of slot 0 (partition offset). Default 0; set before [`init`].
 static LBA_BASE: AtomicU32 = AtomicU32::new(0);
 /// Unwrapped volume key while the disk is mounted. `None` when locked.
-static VOLUME_KEY: Mutex<Option<[u8; KEY_LEN]>> = Mutex::new(None);
+static VOLUME_KEY: IoMutex<Option<[u8; KEY_LEN]>> = IoMutex::new(None);
 /// Passphrase that wraps the volume key on the next seal. Wiped with the key.
 struct VolumePass {
     bytes: [u8; PASSPHRASE_MAX],
     len: usize,
 }
-static VOLUME_PASS: Mutex<VolumePass> = Mutex::new(VolumePass {
+static VOLUME_PASS: IoMutex<VolumePass> = IoMutex::new(VolumePass {
     bytes: [0; PASSPHRASE_MAX],
     len: 0,
 });
@@ -679,8 +691,9 @@ pub fn is_dirty() -> bool {
     DIRTY.load(Ordering::Acquire)
 }
 
-/// Builds actor [`ADMIN_NAME`] with an empty Desktop, or loads the newest
-/// valid GALF slot from the block device. Call once.
+/// Builds the harness account, or loads the newest valid GALF slot.
+/// A production disk with no passphrase yet stays empty until the seat
+/// names the administrator. Call once.
 ///
 /// Sync policy: mutates call [`mark_dirty`]; the main loop's 1 Hz tick,
 /// [`sync_explicit`], and power-off call [`sync_if_dirty`] / [`sync`]
@@ -699,6 +712,10 @@ pub fn init() {
         );
     } else if disk_usable() && !auto_unlock() {
         format_ram_table();
+        // Init needs a root to create `/policy` before the seat names
+        // the account. The name stays empty until that unlock, so the
+        // sealed disk does not contain `admin` or the harness account.
+        install_pending_actor();
         let fresh = !disk_has_seal();
         VOLUME_FRESH.store(fresh, Ordering::Release);
         if fresh {
@@ -793,25 +810,62 @@ fn install_live_table(table: &mut Table, on_disk: bool, objects: ObjectTable) {
     }
 }
 
+/// Empty-named root for a locked production disk. [`unlock_with`] writes
+/// the seat's name onto this actor before the first seal.
+fn install_pending_actor() {
+    let mut table = TABLE.lock();
+    if table.actors.iter().any(|actor| actor.used) {
+        return;
+    }
+    let (max_objects, max_bytes) = admin_quota_of(&table);
+    let Some(oi) = free_object(&table) else {
+        return;
+    };
+    let actor = &mut table.actors[0];
+    *actor = Actor::empty();
+    actor.used = true;
+    actor.root = oi as u32;
+    actor.max_objects = max_objects;
+    actor.max_bytes = max_bytes;
+    let obj = &mut table.objects[oi];
+    *obj = Object::empty();
+    obj.kind = KIND_DIR;
+    obj.parent = NO_PARENT;
+    obj.actor = 0;
+    let root = oi as u32;
+    let _ = mkdir_locked(&mut table, root, "Desktop");
+    drop(table);
+    ADMIN_ROOT.store(root, Ordering::Relaxed);
+}
+
 fn format_ram_table() {
     let on_disk = disk_usable();
     bind_pool(on_disk);
     let objects = prepare_live_storage(on_disk);
-    let default = ADMIN_DEFAULT_PASSWORD.as_bytes();
-    let cred = PasswordCred::derive(default);
-    let mut table = TABLE.lock();
-    install_live_table(&mut table, on_disk, objects);
-    let admin = add_actor(&mut table, ADMIN_NAME, default, &cred).expect("galfs: admin");
-    ADMIN_ROOT.store(admin, Ordering::Relaxed);
-    mkdir_locked(&mut table, admin, "Desktop").expect("galfs: admin Desktop");
-    drop(table);
+    {
+        let mut table = TABLE.lock();
+        install_live_table(&mut table, on_disk, objects);
+    }
+    ADMIN_ROOT.store(NO_OBJECT, Ordering::Relaxed);
     ACTIVE_SLOT.store(0, Ordering::Relaxed);
     ACTIVE_GEN.store(0, Ordering::Relaxed);
     DISK_CORRUPT.store(false, Ordering::Release);
 }
 
+/// The known account for a test kernel or a diskless boot.
+fn install_harness_actor() {
+    let password = HARNESS_PASSWORD;
+    let mut cred = PasswordCred::derive(password);
+    let mut table = TABLE.lock();
+    let root = add_actor(&mut table, HARNESS_ACTOR, password, &cred).expect("galfs: harness");
+    mkdir_locked(&mut table, root, "Desktop").expect("galfs: harness Desktop");
+    drop(table);
+    cred.wipe();
+}
+
 fn format_fresh() {
     format_ram_table();
+    install_harness_actor();
     // Fresh volume key for a sealed format (bring-up passphrase).
     let mut vk = [0u8; KEY_LEN];
     crate::arch::rand::fill_bytes(&mut vk);
@@ -894,14 +948,27 @@ pub fn unlock_volume(passphrase: &[u8]) -> Result<(), SysError> {
     unlock_with(passphrase, None)
 }
 
-/// Like [`unlock_volume`], and on a fresh disk installs `admin_password`
-/// before the first seal. The format default is not written to the image.
-pub fn unlock_with(passphrase: &[u8], admin_password: Option<&[u8]>) -> Result<(), SysError> {
+/// The account the seat typed while sealing a fresh disk.
+pub struct SetupUser<'a> {
+    /// Actor name. [`RESERVED_ACTOR_NAME`] and an empty name are refused.
+    pub name: &'a str,
+    /// Password. The seat has already confirmed it.
+    pub password: &'a [u8],
+}
+
+/// Like [`unlock_volume`], and on a fresh disk creates `account` as the
+/// administrator before the first seal. The name `admin` is not written.
+pub fn unlock_with(passphrase: &[u8], account: Option<SetupUser<'_>>) -> Result<(), SysError> {
     if passphrase.is_empty() || passphrase.len() > PASSPHRASE_MAX {
         return Err(SysError::BadValue);
     }
-    if let Some(password) = admin_password {
-        if !password_ok(password) || password == ADMIN_DEFAULT_PASSWORD.as_bytes() {
+    if let Some(user) = account.as_ref() {
+        if user.name.is_empty()
+            || user.name.len() > ACTOR_NAME
+            || user.name == RESERVED_ACTOR_NAME
+            || !component_ok(user.name)
+            || !password_ok(user.password)
+        {
             return Err(SysError::BadValue);
         }
     }
@@ -933,9 +1000,36 @@ pub fn unlock_with(passphrase: &[u8], admin_password: Option<&[u8]>) -> Result<(
             Ok(())
         }
         DiskLoad::Empty => {
-            if let Some(password) = admin_password {
-                set_password(ADMIN_NAME, password)?;
-            }
+            let Some(user) = account else {
+                return Err(SysError::BadValue);
+            };
+            let mut cred = PasswordCred::derive(user.password);
+            let created = {
+                let mut table = TABLE.lock();
+                let pending = table
+                    .actors
+                    .iter()
+                    .position(|actor| actor.used && actor.name_len == 0);
+                if let Some(ai) = pending {
+                    let actor = &mut table.actors[ai];
+                    actor.name = [0; ACTOR_NAME];
+                    let bytes = user.name.as_bytes();
+                    actor.name[..bytes.len()].copy_from_slice(bytes);
+                    actor.name_len = bytes.len() as u8;
+                    actor.install_password(&cred, user.password);
+                    let root = actor.root;
+                    if find_child(&table, root, "Desktop").is_none() {
+                        let _ = mkdir_locked(&mut table, root, "Desktop");
+                    }
+                    ADMIN_ROOT.store(root, Ordering::Relaxed);
+                    Ok(root)
+                } else {
+                    add_actor(&mut table, user.name, user.password, &cred)
+                        .and_then(|root| mkdir_locked(&mut table, root, "Desktop").map(|_| root))
+                }
+            };
+            cred.wipe();
+            created?;
             store_passphrase(passphrase);
             let mut vk = [0u8; KEY_LEN];
             crate::arch::rand::fill_bytes(&mut vk);
@@ -1026,11 +1120,12 @@ fn passphrase_matches(pass: &[u8]) -> bool {
 /// True when either slot starts with the GALF magic. A foreign version
 /// still counts: unlock refuses it instead of offering a new passphrase.
 fn disk_has_seal() -> bool {
-    let mut buf = DISK_BUF.lock();
+    let _vol = volume_guard();
     for slot in 0..DISK_SLOT_COUNT as u32 {
-        if disk().read_sectors(slot_lba(slot), &mut buf.0).is_err() {
+        if !read_disk_buf(slot_lba(slot)) {
             continue;
         }
+        let buf = DISK_BUF.lock();
         if buf[0][0..4] == DISK_MAGIC {
             return true;
         }
@@ -1125,40 +1220,116 @@ pub fn sync_explicit() -> Result<(), SysError> {
     }
 }
 
-/// Commits the table: encode under `DISK_BUF` + `TABLE`, then write and
-/// flush the inactive slot.
+/// Serializes metadata against the gap where device I/O runs with the
+/// galfs locks dropped. Taken before `THREADS`. Re-entrant on this CPU.
+static VOL: Mutex<()> = Mutex::new(());
+static VOL_DEPTH: [AtomicUsize; crate::arch::cpu::MAX_CPUS] =
+    [const { AtomicUsize::new(0) }; crate::arch::cpu::MAX_CPUS];
+
+pub(crate) struct VolumeGuard {
+    cpu: usize,
+    guard: Option<crate::sync::MutexGuard<'static, ()>>,
+}
+
+pub(crate) fn volume_guard() -> VolumeGuard {
+    let cpu = crate::arch::cpu::try_current_index().unwrap_or(0);
+    let cpu = cpu.min(crate::arch::cpu::MAX_CPUS - 1);
+    let prev = VOL_DEPTH[cpu].fetch_add(1, Ordering::AcqRel);
+    if prev == 0 {
+        assert!(
+            !super::thread::threads_held_here(),
+            "galfs volume lock taken while THREADS is held"
+        );
+        VolumeGuard {
+            cpu,
+            guard: Some(VOL.lock()),
+        }
+    } else {
+        VolumeGuard { cpu, guard: None }
+    }
+}
+
+impl Drop for VolumeGuard {
+    fn drop(&mut self) {
+        let left = VOL_DEPTH[self.cpu].fetch_sub(1, Ordering::AcqRel);
+        if left == 1 {
+            self.guard.take();
+        }
+    }
+}
+
+fn vol_held_here() -> bool {
+    match crate::arch::cpu::try_current_index() {
+        Some(cpu) if cpu < crate::arch::cpu::MAX_CPUS => VOL_DEPTH[cpu].load(Ordering::Acquire) > 0,
+        _ => false,
+    }
+}
+
+/// Reads into [`DISK_BUF`] with the mutex released. Caller holds [`VOL`].
+fn read_disk_buf(lba: u32) -> bool {
+    debug_assert!(vol_held_here());
+    let mut guard = DISK_BUF.lock();
+    let ptr = guard.0.as_mut_ptr();
+    let len = guard.0.len();
+    drop(guard);
+    debug_assert!(
+        !crate::sync::io_lock_held(),
+        "disk read while a timer lock is held"
+    );
+    // SAFETY: `VOL` excludes every other `DISK_BUF` user. The static
+    // outlives this call, and `read_sectors` does not lock it.
+    let slice = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
+    disk().read_sectors(lba, slice).is_ok()
+}
+
+/// Writes [`DISK_BUF`] with the mutex released. Caller holds [`VOL`].
+fn write_disk_buf(lba: u32) -> bool {
+    debug_assert!(vol_held_here());
+    let guard = DISK_BUF.lock();
+    let ptr = guard.0.as_ptr();
+    let len = guard.0.len();
+    drop(guard);
+    debug_assert!(
+        !crate::sync::io_lock_held(),
+        "disk write while a timer lock is held"
+    );
+    // SAFETY: same exclusion as [`read_disk_buf`]. The bytes stay put
+    // until `VOL` is dropped.
+    let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
+    disk().write_sectors(lba, slice).is_ok()
+}
+
+/// Commits the table: encode under `DISK_BUF` + `TABLE`, drop both, then
+/// write and flush the inactive slot.
 ///
-/// IRQ-gated as a whole (galexy.os#86, second hang). The BSP main loop
-/// calls this with IF=1 once a second when the table is dirty. Holding
-/// `TABLE` / `DISK_BUF` preemptibly broke the lock-audit rule: the timer
-/// switched the preempted main loop out for the shell thread on the same
-/// CPU, whose next galfs syscall (the prompt's `whoami`, or `sync`) spun
-/// IF=0 on a lock only the parked main loop could release. With the gate,
-/// the encode runs to completion; the block I/O below re-enables
-/// interrupts for its halt-wait on its own terms (`XFER_CPU` pins the CPU
-/// to the holder), then returns with the gate intact.
+/// The BSP main loop calls this with interrupts on once a second. The
+/// encode stays interrupt-gated. The device wait runs only after `TABLE`,
+/// `DISK_BUF`, and the block locks are dropped, so the timer can take
+/// `THREADS`. `VOL` stays held so the slot bytes are not rewritten, and
+/// `XFER_CPU` keeps this CPU on the virtio device lock.
 fn sync_to_disk() -> bool {
     x86_64::instructions::interrupts::without_interrupts(sync_to_disk_gated)
 }
 
 fn sync_to_disk_gated() -> bool {
+    let _vol = volume_guard();
     if !disk_usable() || DISK_CORRUPT.load(Ordering::Acquire) {
         return false;
     }
     let next_gen = ACTIVE_GEN.load(Ordering::Relaxed).wrapping_add(1);
     let next_slot = 1 - ACTIVE_SLOT.load(Ordering::Relaxed);
     let lba = slot_lba(next_slot);
-    let mut buf = DISK_BUF.lock();
+    if !seal_dirty_blocks() {
+        crate::serial_println!("[galfs] disk data write failed");
+        return false;
+    }
+    if !flush_inodes() {
+        crate::serial_println!("[galfs] inode write failed");
+        return false;
+    }
     {
-        let mut table = TABLE.lock();
-        if !seal_dirty_blocks() {
-            crate::serial_println!("[galfs] disk data write failed");
-            return false;
-        }
-        if !flush_inodes(&mut table) {
-            crate::serial_println!("[galfs] inode write failed");
-            return false;
-        }
+        let mut buf = DISK_BUF.lock();
+        let table = TABLE.lock();
         if !encode_table(&table, next_gen, &mut buf.0) {
             // A dirty RAM table on a locked volume stays dirty (nothing
             // can seal it) and the 1 Hz tick retries forever. Say so once
@@ -1173,15 +1344,15 @@ fn sync_to_disk_gated() -> bool {
     }
     LOCKED_SKIP_LOGGED.store(false, Ordering::Release);
     crate::serial_println!("[galfs] committing slot {}", next_slot);
-    let d = disk();
     let reqs_before = crate::drivers::virtio_blk::requests();
     let t0 = crate::arch::timer_ticks();
-    if d.write_sectors(lba, &buf.0).is_err() {
+    if !write_disk_buf(lba) {
         crate::serial_println!("[galfs] disk sync write failed");
         return false;
     }
     let data_reqs = crate::drivers::virtio_blk::requests().saturating_sub(reqs_before);
-    if d.flush().is_err() {
+    debug_assert!(!crate::sync::io_lock_held());
+    if disk().flush().is_err() {
         crate::serial_println!("[galfs] disk flush failed");
         return false;
     }
@@ -1268,22 +1439,51 @@ fn block_lba(index: u32) -> u32 {
         .saturating_add(index.saturating_mul(galexy_galf::BLOCK_STRIDE as u32))
 }
 
+/// A 4 KiB block on the heap. User-task kernel stacks are 32 KiB; a block
+/// array on that stack, under the virtio frame, overflows into the next
+/// heap object and the next `iretq` fetches address 0.
+fn heap_block() -> alloc::vec::Vec<u8> {
+    let mut buf = alloc::vec::Vec::with_capacity(BLOCK_SIZE);
+    buf.resize(BLOCK_SIZE, 0);
+    buf
+}
+
+/// Eight data sectors on the heap. Same reason as [`heap_block`].
+fn heap_sectors() -> alloc::vec::Vec<[u8; block::SECTOR]> {
+    let mut buf = alloc::vec::Vec::with_capacity(8);
+    buf.resize(8, [0u8; block::SECTOR]);
+    buf
+}
+
 /// Writes one dirty block's ciphertext. A diskless pool copies into RAM.
-fn store_block(pool: &mut Pool, index: u32, plain: &[u8; BLOCK_SIZE], domain: u8) -> bool {
+///
+/// The device transfer runs with the pool and the volume key released.
+fn store_block(index: u32, plain: &[u8], domain: u8) -> bool {
     let i = index as usize;
-    if i >= pool.blocks as usize {
+    let gen = {
+        let pool = POOL.lock();
+        if i >= pool.blocks as usize {
+            return false;
+        }
+        if !pool.disk {
+            drop(pool);
+            if plain.len() != BLOCK_SIZE {
+                return false;
+            }
+            RAM_POOL.lock().blocks[i].copy_from_slice(plain);
+            POOL.lock().sealed[i] = true;
+            return true;
+        }
+        pool.gen[i]
+    };
+    if plain.len() != BLOCK_SIZE {
         return false;
-    }
-    if !pool.disk {
-        RAM_POOL.lock().blocks[i] = *plain;
-        pool.sealed[i] = true;
-        return true;
     }
     let Some(vk) = *VOLUME_KEY.lock() else {
         return false;
     };
-    let gen = pool.gen[i];
-    let mut cipher = *plain;
+    let mut cipher = heap_block();
+    cipher.copy_from_slice(plain);
     let mut tag = [0u8; TAG_LEN];
     let ok = galexy_galf::seal_block(&vk, domain, i, gen, &mut cipher, &mut tag);
     let mut key = vk;
@@ -1294,12 +1494,13 @@ fn store_block(pool: &mut Pool, index: u32, plain: &[u8; BLOCK_SIZE], domain: u8
     let mut tag_sector = [0u8; block::SECTOR];
     tag_sector[0..4].copy_from_slice(&gen.to_le_bytes());
     tag_sector[4..4 + TAG_LEN].copy_from_slice(&tag);
-    let mut data = [[0u8; block::SECTOR]; 8];
+    let mut data = heap_sectors();
     for (n, sector) in data.iter_mut().enumerate() {
         let off = n * block::SECTOR;
         sector.copy_from_slice(&cipher[off..off + block::SECTOR]);
     }
     let lba = block_lba(index);
+    debug_assert!(!crate::sync::io_lock_held());
     let dev = disk();
     if dev.write_sectors(lba, &[tag_sector]).is_err() {
         return false;
@@ -1307,25 +1508,36 @@ fn store_block(pool: &mut Pool, index: u32, plain: &[u8; BLOCK_SIZE], domain: u8
     if dev.write_sectors(lba + 1, &data).is_err() {
         return false;
     }
-    pool.sealed[i] = true;
+    POOL.lock().sealed[i] = true;
     true
 }
 
-fn load_block_bytes(pool: &Pool, index: u32, dst: &mut [u8; BLOCK_SIZE]) -> bool {
+fn load_block_bytes(index: u32, dst: &mut [u8]) -> bool {
     let i = index as usize;
-    if i >= pool.blocks as usize || pool.gen[i] == 0 {
+    let expect_gen = {
+        let pool = POOL.lock();
+        if i >= pool.blocks as usize || pool.gen[i] == 0 {
+            return false;
+        }
+        if !pool.disk {
+            if dst.len() != BLOCK_SIZE {
+                return false;
+            }
+            dst.copy_from_slice(&RAM_POOL.lock().blocks[i]);
+            return true;
+        }
+        pool.gen[i]
+    };
+    if dst.len() != BLOCK_SIZE {
         return false;
-    }
-    if !pool.disk {
-        *dst = RAM_POOL.lock().blocks[i];
-        return true;
     }
     let Some(vk) = *VOLUME_KEY.lock() else {
         return false;
     };
     let mut tag_sector = [[0u8; block::SECTOR]; 1];
-    let mut data = [[0u8; block::SECTOR]; 8];
+    let mut data = heap_sectors();
     let lba = block_lba(index);
+    debug_assert!(!crate::sync::io_lock_held());
     let dev = disk();
     if dev.read_sectors(lba, &mut tag_sector).is_err()
         || dev.read_sectors(lba + 1, &mut data).is_err()
@@ -1346,73 +1558,138 @@ fn load_block_bytes(pool: &Pool, index: u32, dst: &mut [u8; BLOCK_SIZE]) -> bool
         let off = n * block::SECTOR;
         dst[off..off + block::SECTOR].copy_from_slice(sector);
     }
-    let ok = gen == pool.gen[i]
+    let ok = gen == expect_gen
         && galexy_galf::open_block(&vk, galexy_galf::DOMAIN_DATA, i, gen, dst, &tag);
     let mut key = vk;
     wipe_bytes(&mut key);
     ok
 }
 
-fn cache_drop(cache: &mut BlockCache, slot: usize, pool: &mut Pool) -> bool {
-    let index = cache.index[slot];
-    if index == u32::MAX {
-        return true;
-    }
-    let i = index as usize;
-    if i < pool.dirty.len()
-        && pool.dirty[i]
-        && !pool.sealed[i]
-        && !store_block(pool, index, &cache.data[slot], galexy_galf::DOMAIN_DATA)
-    {
-        return false;
-    }
-    cache.index[slot] = u32::MAX;
-    true
+fn cache_slot(cache: &BlockCache, index: u32) -> Option<usize> {
+    cache.index.iter().position(|i| *i == index)
 }
 
-fn cache_get(cache: &mut BlockCache, pool: &mut Pool, index: u32) -> Option<usize> {
-    if let Some(slot) = cache.index.iter().position(|i| *i == index) {
-        return Some(slot);
-    }
-    let slot = (0..CACHE_SLOTS)
-        .find(|s| cache.index[*s] == u32::MAX)
-        .unwrap_or(0);
-    if !cache_drop(cache, slot, pool) {
-        return None;
-    }
+fn install_cached(cache: &mut BlockCache, pool: &Pool, slot: usize, index: u32) -> StepHack {
     let i = index as usize;
+    if i >= pool.gen.len() {
+        return StepHack::Load;
+    }
     if pool.gen[i] == 0 || (pool.dirty[i] && !pool.sealed[i]) {
         cache.data[slot] = [0; BLOCK_SIZE];
-    } else if !load_block_bytes(pool, index, &mut cache.data[slot]) {
-        return None;
+        cache.index[slot] = index;
+        StepHack::Ready
+    } else {
+        StepHack::Load
     }
-    cache.index[slot] = index;
-    Some(slot)
+}
+
+enum StepHack {
+    Ready,
+    Load,
+}
+
+fn fill_cache(index: u32) -> bool {
+    loop {
+        let step = {
+            let pool = POOL.lock();
+            let mut cache = CACHE.lock();
+            if cache_slot(&cache, index).is_some() {
+                return true;
+            }
+            let slot = (0..CACHE_SLOTS)
+                .find(|s| cache.index[*s] == u32::MAX)
+                .unwrap_or(0);
+            let victim = cache.index[slot];
+            if victim != u32::MAX {
+                let vi = victim as usize;
+                if vi < pool.dirty.len() && pool.dirty[vi] && !pool.sealed[vi] {
+                    let mut plain = heap_block();
+                    plain.copy_from_slice(&cache.data[slot]);
+                    Some((victim, plain))
+                } else {
+                    cache.index[slot] = u32::MAX;
+                    match install_cached(&mut cache, &pool, slot, index) {
+                        StepHack::Ready => return true,
+                        StepHack::Load => None,
+                    }
+                }
+            } else {
+                match install_cached(&mut cache, &pool, slot, index) {
+                    StepHack::Ready => return true,
+                    StepHack::Load => None,
+                }
+            }
+        };
+        if let Some((victim, plain)) = step {
+            if !store_block(victim, &plain, galexy_galf::DOMAIN_DATA) {
+                return false;
+            }
+            let mut cache = CACHE.lock();
+            for line in &mut cache.index {
+                if *line == victim {
+                    *line = u32::MAX;
+                }
+            }
+            continue;
+        }
+        let mut plain = heap_block();
+        if !load_block_bytes(index, &mut plain) {
+            return false;
+        }
+        let pool = POOL.lock();
+        let mut cache = CACHE.lock();
+        if cache_slot(&cache, index).is_some() {
+            return true;
+        }
+        let slot = (0..CACHE_SLOTS)
+            .find(|s| cache.index[*s] == u32::MAX)
+            .unwrap_or(0);
+        let victim = cache.index[slot];
+        if victim != u32::MAX {
+            let vi = victim as usize;
+            if vi < pool.dirty.len() && pool.dirty[vi] && !pool.sealed[vi] {
+                // Lost the race with our own eviction decision. Retry.
+                continue;
+            }
+            cache.index[slot] = u32::MAX;
+        }
+        cache.data[slot].copy_from_slice(&plain);
+        cache.index[slot] = index;
+        let _ = pool;
+        return true;
+    }
 }
 
 fn seal_dirty_blocks() -> bool {
-    let mut pool = POOL.lock();
-    if !pool.disk {
+    if !POOL.lock().disk {
         return true;
     }
-    let cache = CACHE.lock();
-    for i in 0..pool.blocks as usize {
-        if !pool.dirty[i] || pool.sealed[i] {
-            continue;
-        }
-        let Some(slot) = (0..CACHE_SLOTS).find(|s| cache.index[*s] == i as u32) else {
-            return false;
+    loop {
+        let job = {
+            let pool = POOL.lock();
+            let cache = CACHE.lock();
+            let mut found = None;
+            for i in 0..pool.blocks as usize {
+                if !pool.dirty[i] || pool.sealed[i] {
+                    continue;
+                }
+                let Some(slot) = cache_slot(&cache, i as u32) else {
+                    return false;
+                };
+                let mut plain = heap_block();
+                plain.copy_from_slice(&cache.data[slot]);
+                found = Some((i as u32, plain));
+                break;
+            }
+            found
         };
-        if !store_block(
-            &mut pool,
-            i as u32,
-            &cache.data[slot],
-            galexy_galf::DOMAIN_DATA,
-        ) {
+        let Some((index, plain)) = job else {
+            return true;
+        };
+        if !store_block(index, &plain, galexy_galf::DOMAIN_DATA) {
             return false;
         }
     }
-    true
 }
 
 fn publish_stable() {
@@ -1434,6 +1711,7 @@ pub fn pool_blocks() -> usize {
 }
 
 fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
+    let _vol = volume_guard();
     let mut best_gen = 0u64;
     let mut best_slot: Option<u32> = None;
     // True when a slot had GALF magic but failed decode, or the version
@@ -1443,14 +1721,13 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
     let mut winner_key: Option<[u8; KEY_LEN]> = None;
     let mut sibling: Option<alloc::vec::Vec<u8>> = None;
     let mut clock = 1u32;
-    let mut buf = DISK_BUF.lock();
-    let mut best = LOAD_BEST.lock();
-    let mut cand = LOAD_CAND.lock();
     for slot in 0..DISK_SLOT_COUNT as u32 {
-        let lba = slot_lba(slot);
-        if disk().read_sectors(lba, &mut buf.0).is_err() {
+        if !read_disk_buf(slot_lba(slot)) {
             continue;
         }
+        let mut buf = DISK_BUF.lock();
+        let best = LOAD_BEST.lock();
+        let mut cand = LOAD_CAND.lock();
         let magic = buf[0][0..4] == DISK_MAGIC;
         let version = if magic {
             u16::from_le_bytes([buf[0][4], buf[0][5]])
@@ -1475,6 +1752,29 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
             }
             continue;
         };
+        drop(buf);
+        drop(best);
+        drop(cand);
+        let loaded = {
+            debug_assert!(vol_held_here());
+            let mut guard = LOAD_CAND.lock();
+            let ptr = (&mut *guard) as *mut Table;
+            drop(guard);
+            debug_assert!(!crate::sync::io_lock_held());
+            // SAFETY: `VOL` excludes every other `LOAD_CAND` user. The static
+            // outlives this call. Inode reads do not lock it.
+            unsafe { load_inode_blocks(&mut *ptr, &key) }
+        };
+        if !loaded {
+            let mut key = key;
+            wipe_bytes(&mut key);
+            saw_corrupt_current = true;
+            bad_with_magic += 1;
+            crate::serial_println!("[galfs] slot {} rejected (inodes)", slot);
+            continue;
+        }
+        let mut best = LOAD_BEST.lock();
+        let cand = LOAD_CAND.lock();
         if !verify_slot_blocks(&cand, &key) {
             let mut key = key;
             wipe_bytes(&mut key);
@@ -1523,17 +1823,33 @@ fn load_from_disk(passphrase: &[u8]) -> DiskLoad {
     if let Some(key) = winner_key {
         *VOLUME_KEY.lock() = Some(key);
     }
-    let mut table = TABLE.lock();
-    copy_table(&best, &mut table);
-    install_pool(&table, sibling.as_deref(), clock);
-    if let Some(key) = VOLUME_KEY.lock().as_ref().copied() {
-        let _ = load_inode_blocks(&mut table, &key);
+    {
+        let best = LOAD_BEST.lock();
+        let mut table = TABLE.lock();
+        copy_table(&best, &mut table);
+        install_pool(&table, sibling.as_deref(), clock);
+    }
+    // The copy is its own statement. An `if let` scrutinee keeps the
+    // `VOLUME_KEY` guard alive for the whole body, and the inode re-read
+    // below waits on the disk.
+    let key_copy = VOLUME_KEY.lock().as_ref().copied();
+    if let Some(key) = key_copy {
+        // Objects are already in `TABLE` (copied from the winning slot).
+        // This pass only records where those inode blocks live, and it
+        // does not lock `TABLE`: other CPUs take `TABLE` without `VOL`.
+        let (map_len, map_at, map_gen) = {
+            let table = TABLE.lock();
+            (table.geo.map_len, table.geo.map_at, table.geo.map_gen)
+        };
+        let _ = remember_inode_locs(map_len as usize, &map_at, &map_gen, &key);
         let mut wipe = key;
         wipe_bytes(&mut wipe);
     }
-    pin_meta_blocks(&table);
-    refresh_roots(&table);
-    drop(table);
+    {
+        let table = TABLE.lock();
+        pin_meta_blocks(&table);
+        refresh_roots(&table);
+    }
     // The pre-unlock import, if any, addressed the RAM table. Those
     // indexes now name whatever the sealed image stored.
     super::large::reset();
@@ -1572,13 +1888,12 @@ fn password_kdf_iters() -> u32 {
 }
 
 fn refresh_roots(table: &Table) {
-    let mut admin = NO_OBJECT;
-    for actor in &table.actors {
-        if actor.used && actor.name_is(ADMIN_NAME) {
-            admin = actor.root;
-            break;
-        }
-    }
+    let admin = table
+        .actors
+        .iter()
+        .find(|actor| actor.used)
+        .map(|actor| actor.root)
+        .unwrap_or(NO_OBJECT);
     ADMIN_ROOT.store(admin, Ordering::Relaxed);
 }
 
@@ -1657,24 +1972,22 @@ struct MetaLoc {
     inode_gen: alloc::vec::Vec<u32>,
 }
 
-static META_LOC: Mutex<MetaLoc> = Mutex::new(MetaLoc {
+static META_LOC: IoMutex<MetaLoc> = IoMutex::new(MetaLoc {
     inode_at: alloc::vec::Vec::new(),
     inode_gen: alloc::vec::Vec::new(),
 });
 
-fn read_pool_plain(
-    index: u32,
-    gen: u32,
-    domain: u8,
-    key: &[u8; KEY_LEN],
-) -> Option<[u8; BLOCK_SIZE]> {
+fn read_pool_plain(index: u32, gen: u32, domain: u8, key: &[u8; KEY_LEN], dst: &mut [u8]) -> bool {
+    if dst.len() != BLOCK_SIZE {
+        return false;
+    }
     let mut tag_sector = [[0u8; block::SECTOR]; 1];
-    let mut data = [[0u8; block::SECTOR]; 8];
+    let mut data = heap_sectors();
     let lba = block_lba(index);
     if disk().read_sectors(lba, &mut tag_sector).is_err()
         || disk().read_sectors(lba + 1, &mut data).is_err()
     {
-        return None;
+        return false;
     }
     let stored = u32::from_le_bytes([
         tag_sector[0][0],
@@ -1683,19 +1996,15 @@ fn read_pool_plain(
         tag_sector[0][3],
     ]);
     if stored != gen {
-        return None;
+        return false;
     }
     let mut tag = [0u8; TAG_LEN];
     tag.copy_from_slice(&tag_sector[0][4..4 + TAG_LEN]);
-    let mut block = [0u8; BLOCK_SIZE];
     for (n, sector) in data.iter().enumerate() {
         let off = n * block::SECTOR;
-        block[off..off + block::SECTOR].copy_from_slice(sector);
+        dst[off..off + block::SECTOR].copy_from_slice(sector);
     }
-    if !galexy_galf::open_block(key, domain, index as usize, gen, &mut block, &tag) {
-        return None;
-    }
-    Some(block)
+    galexy_galf::open_block(key, domain, index as usize, gen, dst, &tag)
 }
 
 fn load_inode_blocks(table: &mut Table, key: &[u8; KEY_LEN]) -> bool {
@@ -1704,39 +2013,50 @@ fn load_inode_blocks(table: &mut Table, key: &[u8; KEY_LEN]) -> bool {
         return false;
     }
     table.objects.resize(slots, Object::empty());
-    let mut loc = META_LOC.lock();
-    loc.inode_at.clear();
-    loc.inode_gen.clear();
-    let map_len = table.geo.map_len as usize;
+    let (map_len, map_at, map_gen) = (
+        table.geo.map_len as usize,
+        table.geo.map_at,
+        table.geo.map_gen,
+    );
+    {
+        let mut loc = META_LOC.lock();
+        loc.inode_at.clear();
+        loc.inode_gen.clear();
+    }
     if map_len == 0 {
         return true;
     }
     for m in 0..map_len.min(galexy_galf::MAP_POINTERS) {
-        let gen = table.geo.map_gen[m];
-        let index = table.geo.map_at[m];
+        let gen = map_gen[m];
+        let index = map_at[m];
         if gen == 0 {
             continue;
         }
-        let Some(map_plain) = read_pool_plain(index, gen, galexy_galf::DOMAIN_MAP, key) else {
+        let mut map_plain = heap_block();
+        if !read_pool_plain(index, gen, galexy_galf::DOMAIN_MAP, key, &mut map_plain) {
             return false;
-        };
+        }
         for e in 0..galexy_galf::MAP_PER_BLOCK {
             let ib = m * galexy_galf::MAP_PER_BLOCK + e;
             let off = e * 8;
             let at = u32::from_le_bytes(map_plain[off..off + 4].try_into().unwrap_or([0; 4]));
             let igen = u32::from_le_bytes(map_plain[off + 4..off + 8].try_into().unwrap_or([0; 4]));
-            if loc.inode_at.len() <= ib {
-                loc.inode_at.resize(ib + 1, 0);
-                loc.inode_gen.resize(ib + 1, 0);
+            {
+                let mut loc = META_LOC.lock();
+                if loc.inode_at.len() <= ib {
+                    loc.inode_at.resize(ib + 1, 0);
+                    loc.inode_gen.resize(ib + 1, 0);
+                }
+                loc.inode_at[ib] = at;
+                loc.inode_gen[ib] = igen;
             }
-            loc.inode_at[ib] = at;
-            loc.inode_gen[ib] = igen;
             if igen == 0 {
                 continue;
             }
-            let Some(plain) = read_pool_plain(at, igen, galexy_galf::DOMAIN_INODE, key) else {
+            let mut plain = heap_block();
+            if !read_pool_plain(at, igen, galexy_galf::DOMAIN_INODE, key, &mut plain) {
                 return false;
-            };
+            }
             for n in 0..galexy_galf::INODES_PER_BLOCK {
                 let id = ib * galexy_galf::INODES_PER_BLOCK + n;
                 if id >= slots {
@@ -1748,6 +2068,49 @@ fn load_inode_blocks(table: &mut Table, key: &[u8; KEY_LEN]) -> bool {
                 };
                 table.objects[id] = import_object(obj);
             }
+        }
+    }
+    true
+}
+
+/// Records inode-block locations for the winning slot. Objects are already
+/// installed; this must not lock `TABLE` across a device read.
+fn remember_inode_locs(
+    map_len: usize,
+    map_at: &[u32; galexy_galf::MAP_POINTERS],
+    map_gen: &[u32; galexy_galf::MAP_POINTERS],
+    key: &[u8; KEY_LEN],
+) -> bool {
+    {
+        let mut loc = META_LOC.lock();
+        loc.inode_at.clear();
+        loc.inode_gen.clear();
+    }
+    if map_len == 0 {
+        return true;
+    }
+    for m in 0..map_len.min(galexy_galf::MAP_POINTERS) {
+        let gen = map_gen[m];
+        let index = map_at[m];
+        if gen == 0 {
+            continue;
+        }
+        let mut map_plain = heap_block();
+        if !read_pool_plain(index, gen, galexy_galf::DOMAIN_MAP, key, &mut map_plain) {
+            return false;
+        }
+        for e in 0..galexy_galf::MAP_PER_BLOCK {
+            let ib = m * galexy_galf::MAP_PER_BLOCK + e;
+            let off = e * 8;
+            let at = u32::from_le_bytes(map_plain[off..off + 4].try_into().unwrap_or([0; 4]));
+            let igen = u32::from_le_bytes(map_plain[off + 4..off + 8].try_into().unwrap_or([0; 4]));
+            let mut loc = META_LOC.lock();
+            if loc.inode_at.len() <= ib {
+                loc.inode_at.resize(ib + 1, 0);
+                loc.inode_gen.resize(ib + 1, 0);
+            }
+            loc.inode_at[ib] = at;
+            loc.inode_gen[ib] = igen;
         }
     }
     true
@@ -1769,28 +2132,51 @@ fn drop_cache_line(index: u32) {
 }
 
 /// Writes inode blocks that hold a live name, then the map block they live in.
-fn flush_inodes(table: &mut Table) -> bool {
+///
+/// `TABLE` is held only while the plaintext is copied. Allocation and the
+/// device write run after it drops.
+fn flush_inodes() -> bool {
     if !POOL.lock().disk {
         return true;
     }
-    let slots = table.objects.len();
+    let (slots, blocks, mut map_at, mut map_gen, old_len) = {
+        let table = TABLE.lock();
+        let slots = table.objects.len();
+        let per = galexy_galf::INODES_PER_BLOCK;
+        (
+            slots,
+            slots.div_ceil(per),
+            table.geo.map_at,
+            table.geo.map_gen,
+            table.geo.map_len as usize,
+        )
+    };
     let per = galexy_galf::INODES_PER_BLOCK;
-    let blocks = slots.div_ceil(per);
     let mut any = false;
     for ib in 0..blocks {
         let base = ib * per;
-        let live = (0..per).any(|n| base + n < slots && table.objects[base + n].kind != KIND_EMPTY);
+        let mut plain = heap_block();
+        let live = {
+            let table = TABLE.lock();
+            let live =
+                (0..per).any(|n| base + n < slots && table.objects[base + n].kind != KIND_EMPTY);
+            if live {
+                for n in 0..per {
+                    let id = base + n;
+                    if id >= slots {
+                        break;
+                    }
+                    let exported = export_object(&table.objects[id]);
+                    galexy_galf::write_inode(
+                        &mut plain[n * galexy_galf::INODE_ON_DISK..],
+                        &exported,
+                    );
+                }
+            }
+            live
+        };
         if !live {
             continue;
-        }
-        let mut plain = [0u8; BLOCK_SIZE];
-        for n in 0..per {
-            let id = base + n;
-            if id >= slots {
-                break;
-            }
-            let exported = export_object(&table.objects[id]);
-            galexy_galf::write_inode(&mut plain[n * galexy_galf::INODE_ON_DISK..], &exported);
         }
         let (old_at, old_gen) = {
             let loc = META_LOC.lock();
@@ -1821,11 +2207,8 @@ fn flush_inodes(table: &mut Table) -> bool {
         if gen == 0 {
             return false;
         }
-        {
-            let mut pool = POOL.lock();
-            if !store_block(&mut pool, index, &plain, galexy_galf::DOMAIN_INODE) {
-                return false;
-            }
+        if !store_block(index, &plain, galexy_galf::DOMAIN_INODE) {
+            return false;
         }
         drop_cache_line(index);
         {
@@ -1846,9 +2229,8 @@ fn flush_inodes(table: &mut Table) -> bool {
     if blocks > span {
         return false;
     }
-    let old_at = table.geo.map_at;
-    let old_gen = table.geo.map_gen;
-    let old_len = table.geo.map_len as usize;
+    let old_at = map_at;
+    let old_gen = map_gen;
     let mut highest = 0usize;
     {
         let loc = META_LOC.lock();
@@ -1860,7 +2242,7 @@ fn flush_inodes(table: &mut Table) -> bool {
     }
     let map_count = highest.min(galexy_galf::MAP_POINTERS);
     for m in 0..map_count {
-        let mut map = [0u8; BLOCK_SIZE];
+        let mut map = heap_block();
         {
             let loc = META_LOC.lock();
             for e in 0..galexy_galf::MAP_PER_BLOCK {
@@ -1896,24 +2278,26 @@ fn flush_inodes(table: &mut Table) -> bool {
         if gen == 0 {
             return false;
         }
-        {
-            let mut pool = POOL.lock();
-            if !store_block(&mut pool, index, &map, galexy_galf::DOMAIN_MAP) {
-                return false;
-            }
+        if !store_block(index, &map, galexy_galf::DOMAIN_MAP) {
+            return false;
         }
         drop_cache_line(index);
-        table.geo.map_at[m] = index;
-        table.geo.map_gen[m] = gen;
+        map_at[m] = index;
+        map_gen[m] = gen;
     }
     for m in map_count..old_len.min(galexy_galf::MAP_POINTERS) {
         if old_gen[m] != 0 {
             free_block(old_at[m]);
         }
-        table.geo.map_at[m] = 0;
-        table.geo.map_gen[m] = 0;
+        map_at[m] = 0;
+        map_gen[m] = 0;
     }
-    table.geo.map_len = map_count as u32;
+    {
+        let mut table = TABLE.lock();
+        table.geo.map_at = map_at;
+        table.geo.map_gen = map_gen;
+        table.geo.map_len = map_count as u32;
+    }
     true
 }
 
@@ -2119,11 +2503,6 @@ fn decode_table(
     table
         .objects
         .resize(table.geo.inode_slots as usize, Object::empty());
-    if !load_inode_blocks(table, &vk) {
-        let mut gone = vk;
-        wipe_bytes(&mut gone);
-        return None;
-    }
     Some((generation, vk))
 }
 
@@ -2226,12 +2605,15 @@ fn install_pool(table: &Table, sibling: Option<&[u8]>, clock: u32) {
 /// Structural checks after CRC so a bit-flipped-but-checksum-ok image cannot
 /// take the kernel into undefined object walks.
 fn validate_table(table: &Table) -> bool {
-    let mut saw_admin = false;
+    let mut saw_actor = false;
     for (ai, actor) in table.actors.iter().enumerate() {
         if !actor.used {
             continue;
         }
         if actor.name_len == 0 || actor.name_len as usize > ACTOR_NAME {
+            return false;
+        }
+        if actor.name_is(RESERVED_ACTOR_NAME) {
             return false;
         }
         let root = actor.root as usize;
@@ -2242,11 +2624,9 @@ fn validate_table(table: &Table) -> bool {
         if obj.kind != KIND_DIR || obj.parent != NO_PARENT || obj.actor != ai as u8 {
             return false;
         }
-        if actor.name_is(ADMIN_NAME) {
-            saw_admin = true;
-        }
+        saw_actor = true;
     }
-    if !saw_admin {
+    if !saw_actor {
         return false;
     }
     for share in &table.shares {
@@ -2467,58 +2847,24 @@ pub fn admin_root() -> u32 {
     ADMIN_ROOT.load(Ordering::Relaxed)
 }
 
-/// Creates `dir/name` under the admin root when it is missing.
-///
-/// A network name and a USB port both fit the existing object name
-/// (`NAME_CAP` is 64). This does not change `DISK_VERSION`.
-pub(crate) fn ensure_card(dir: &str, name: &str) -> Result<u32, SysError> {
-    if !component_ok(dir) || !component_ok(name) {
-        return Err(SysError::BadValue);
-    }
-    let mut table = TABLE.lock();
-    let root = admin_root();
-    if root == NO_OBJECT || (root as usize) >= table.objects.len() {
-        return Err(SysError::NotFound);
-    }
-    let dir_index = match find_child(&table, root, dir) {
-        Some(i) => {
-            if table.objects[i].kind != KIND_DIR {
-                return Err(SysError::Unsupported);
+/// Gives init the exact token on `/policy` when the file already exists.
+pub(crate) fn install_policy_token(tokens: &mut [Token; TOKEN_SLOTS]) {
+    let mut id = POLICY.load(Ordering::Acquire);
+    if id == NO_OBJECT {
+        let table = TABLE.lock();
+        let root = admin_root();
+        if root != NO_OBJECT {
+            if let Some(found) = find_child(&table, root, "policy") {
+                if table.objects[found].kind == KIND_FILE {
+                    id = found as u32;
+                    POLICY.store(id, Ordering::Release);
+                }
             }
-            i as u32
         }
-        None => make_child(&mut table, root, dir, KIND_DIR)?,
-    };
-    let file = match find_child(&table, dir_index, name) {
-        Some(i) => {
-            if table.objects[i].kind != KIND_FILE {
-                return Err(SysError::Unsupported);
-            }
-            i as u32
-        }
-        None => make_child(&mut table, dir_index, name, KIND_FILE)?,
-    };
-    drop(table);
-    mark_dirty();
-    Ok(file)
-}
-
-fn make_child(table: &mut Table, parent: u32, name: &str, kind: u8) -> Result<u32, SysError> {
-    let actor = table.objects[parent as usize].actor as usize;
-    if !can_add_object(table, actor) {
-        return Err(SysError::NoResource);
     }
-    let Some(oi) = free_object(table) else {
-        return Err(SysError::NoResource);
-    };
-    let obj = &mut table.objects[oi];
-    *obj = Object::empty();
-    obj.kind = kind;
-    obj.parent = parent;
-    obj.actor = actor as u8;
-    place_name(obj, name);
-    link_child(table, parent, oi as u32);
-    Ok(oi as u32)
+    if id != NO_OBJECT {
+        let _ = galexy_galf::cards::push_token(tokens, id, RIGHT_READ | RIGHT_WRITE);
+    }
 }
 
 /// Whether `root` is the immortal admin actor root.
@@ -2567,7 +2913,7 @@ pub fn root_named(name: &str) -> Result<u32, SysError> {
 
 /// Creates an actor and an empty Desktop. Returns the new root.
 pub fn add_user(name: &str, password: &[u8]) -> Result<u32, SysError> {
-    if name == ADMIN_NAME {
+    if name == RESERVED_ACTOR_NAME {
         return Err(SysError::Unsupported);
     }
     if !password_ok(password) {
@@ -2644,9 +2990,10 @@ fn password_ok(password: &[u8]) -> bool {
 
 /// Deletes an actor whose tree is only an empty root (and optional empty Desktop).
 ///
-/// Refuses [`ADMIN_NAME`]. Caller must ensure no live task still uses this root.
+/// Refuses the administrator and [`RESERVED_ACTOR_NAME`].
+/// Caller must ensure no live task still uses this root.
 pub fn remove_user(name: &str) -> Result<(), SysError> {
-    if name == ADMIN_NAME {
+    if name == RESERVED_ACTOR_NAME {
         return Err(SysError::Unsupported);
     }
     let mut table = TABLE.lock();
@@ -2654,6 +3001,14 @@ pub fn remove_user(name: &str) -> Result<(), SysError> {
         return Err(SysError::NotFound);
     };
     let root = table.actors[ai].root;
+    let admin = table
+        .actors
+        .iter()
+        .find(|actor| actor.used)
+        .map(|actor| actor.root);
+    if Some(root) == admin {
+        return Err(SysError::Unsupported);
+    }
     let mut desktop: Option<usize> = None;
     for (i, obj) in table.objects.iter().enumerate() {
         if obj.kind == KIND_EMPTY || obj.parent != root {
@@ -2856,11 +3211,7 @@ fn admin_quota_limits() -> (u32, u64) {
 pub fn raise_admin_quota_for_sysroot() {
     let (need_objects, need_bytes) = admin_quota_limits();
     let mut table = TABLE.lock();
-    let Some(actor) = table
-        .actors
-        .iter_mut()
-        .find(|a| a.used && a.name_is(ADMIN_NAME))
-    else {
+    let Some(actor) = table.actors.iter_mut().find(|a| a.used) else {
         return;
     };
     let objects_low = actor.object_limit() < need_objects;
@@ -2879,11 +3230,69 @@ pub fn raise_admin_quota_for_sysroot() {
     mark_dirty();
 }
 
+/// Set while the compiler sysroot import is attaching names.
+///
+/// The admin usage is counted once. Each new object updates the totals.
+/// Without this, every file walks a volume that can hold a million
+/// inodes, and that walk holds `TABLE`.
+static USAGE_CACHE_ON: AtomicBool = AtomicBool::new(false);
+static USAGE_CACHE_AI: AtomicU32 = AtomicU32::new(u32::MAX);
+static USAGE_CACHE_OBJECTS: AtomicU32 = AtomicU32::new(0);
+static USAGE_CACHE_BYTES: AtomicU64 = AtomicU64::new(0);
+
+fn usage_cache_hit(ai: usize) -> bool {
+    USAGE_CACHE_ON.load(Ordering::Acquire) && USAGE_CACHE_AI.load(Ordering::Relaxed) == ai as u32
+}
+
+/// Counts admin's objects once. Later creates on that actor add to it
+/// until [`end_admin_usage_cache`] or a write that does not.
+pub fn begin_admin_usage_cache() {
+    let table = TABLE.lock();
+    let Some(ai) = table.actors.iter().position(|a| a.used) else {
+        return;
+    };
+    let (objects, bytes) = usage_scan(&table, ai);
+    USAGE_CACHE_AI.store(ai as u32, Ordering::Relaxed);
+    USAGE_CACHE_OBJECTS.store(objects, Ordering::Relaxed);
+    USAGE_CACHE_BYTES.store(bytes, Ordering::Relaxed);
+    // Publish while `TABLE` is still held so the next creator charges
+    // this total instead of racing a walk that already finished.
+    USAGE_CACHE_ON.store(true, Ordering::Release);
+    drop(table);
+}
+
+/// Drops the one-shot admin total. The next check walks the table again.
+pub fn end_admin_usage_cache() {
+    USAGE_CACHE_ON.store(false, Ordering::Release);
+}
+
+fn charge_usage(ai: usize, objects: u32, bytes: u64) {
+    if !usage_cache_hit(ai) {
+        return;
+    }
+    if objects != 0 {
+        USAGE_CACHE_OBJECTS.fetch_add(objects, Ordering::Relaxed);
+    }
+    if bytes != 0 {
+        USAGE_CACHE_BYTES.fetch_add(bytes, Ordering::Relaxed);
+    }
+}
+
 fn actor_usage(table: &Table, ai: usize) -> (u32, u64) {
+    if usage_cache_hit(ai) {
+        return (
+            USAGE_CACHE_OBJECTS.load(Ordering::Relaxed),
+            USAGE_CACHE_BYTES.load(Ordering::Relaxed),
+        );
+    }
     let actor = &table.actors[ai];
     if actor.used_objects > 0 || actor.used_bytes > 0 {
         return (actor.used_objects, actor.used_bytes);
     }
+    usage_scan(table, ai)
+}
+
+fn usage_scan(table: &Table, ai: usize) -> (u32, u64) {
     let mut objects = 0u32;
     let mut bytes = 0u64;
     for (index, obj) in table.objects.iter().enumerate() {
@@ -2933,15 +3342,14 @@ fn subtree_usage(table: &Table, root: u32) -> (u32, u64) {
 }
 
 /// Adds an actor whose credential was derived BEFORE `table` was locked
-/// (see [`PasswordCred`]); `password` is only compared against the default
-/// for the must-change flag.
+/// (see [`PasswordCred`]). The first actor is the administrator.
 fn add_actor(
     table: &mut Table,
     name: &str,
     password: &[u8],
     cred: &PasswordCred,
 ) -> Result<u32, SysError> {
-    if !component_ok(name) || name.len() > ACTOR_NAME {
+    if name == RESERVED_ACTOR_NAME || !component_ok(name) || name.len() > ACTOR_NAME {
         return Err(SysError::BadValue);
     }
     if table.actors.iter().any(|a| a.name_is(name)) {
@@ -2953,7 +3361,8 @@ fn add_actor(
     let Some(oi) = free_object(table) else {
         return Err(SysError::NoResource);
     };
-    let (max_objects, max_bytes) = if name == ADMIN_NAME {
+    let first = !table.actors.iter().any(|a| a.used);
+    let (max_objects, max_bytes) = if first {
         admin_quota_of(table)
     } else {
         (DEFAULT_MAX_OBJECTS, DEFAULT_MAX_BYTES)
@@ -2972,6 +3381,9 @@ fn add_actor(
     obj.kind = KIND_DIR;
     obj.parent = NO_PARENT;
     obj.actor = ai as u8;
+    if first {
+        ADMIN_ROOT.store(oi as u32, Ordering::Relaxed);
+    }
     // Root has an empty name; paths start at its children.
     Ok(oi as u32)
 }
@@ -3141,6 +3553,7 @@ pub fn import_promoted(parent: u32, name: &str, bytes: &[u8]) -> Result<u32, Sys
     if !super::large::create_from(id as usize, bytes) {
         return Err(SysError::NoResource);
     }
+    charge_usage(actor_of(id), 0, bytes.len() as u64);
     mark_dirty();
     Ok(id)
 }
@@ -3166,8 +3579,18 @@ pub fn import_shared(parent: u32, name: &str, bytes: &'static [u8]) -> Result<u3
     if !super::large::create_shared(id as usize, bytes) {
         return Err(SysError::NoResource);
     }
+    charge_usage(actor_of(id), 0, bytes.len() as u64);
     mark_dirty();
     Ok(id)
+}
+
+fn actor_of(id: u32) -> usize {
+    TABLE
+        .lock()
+        .objects
+        .get(id as usize)
+        .map(|obj| obj.actor as usize)
+        .unwrap_or(0)
 }
 
 fn free_object(table: &Table) -> Option<usize> {
@@ -3305,8 +3728,26 @@ fn parent_link(table: &Table) -> impl Fn(u32) -> Option<u32> + '_ {
     }
 }
 
+static POLICY: AtomicU32 = AtomicU32::new(NO_OBJECT);
+
+/// The policy file is exact. An ancestor token does not cover it.
 fn covers_object(table: &Table, ancestor: u32, object: u32) -> bool {
+    if object == POLICY.load(Ordering::Acquire) && ancestor != object {
+        return false;
+    }
     galexy_galf::cards::covers(parent_link(table), ancestor, object, OBJECT_SLOTS)
+}
+
+/// `/policy` is the sec table. The creator receives the only write token.
+pub(crate) fn claim_policy_path(name: &str, id: u32, tokens: &mut [Token; TOKEN_SLOTS]) {
+    let Ok(parsed) = parse_path(name) else {
+        return;
+    };
+    if parsed.dir || parsed.n != 1 || parsed.comps[0] != "policy" {
+        return;
+    }
+    POLICY.store(id, Ordering::Release);
+    let _ = galexy_galf::cards::push_token(tokens, id, RIGHT_READ | RIGHT_WRITE);
 }
 
 /// Whether `cred` holds `need` on `object` or an ancestor.
@@ -3340,6 +3781,22 @@ fn lookup(table: &Table, cred: &FsCred, parsed: &ParsedPath<'_>) -> Result<(u32,
     Ok((parent, found))
 }
 
+/// Object id and its parent for a path the caller can read.
+pub(crate) fn path_object(
+    root: u32,
+    tokens: &[Token; TOKEN_SLOTS],
+    name: &str,
+) -> Result<(u32, u32), SysError> {
+    let id = open_file(root, tokens, name)?;
+    let table = TABLE.lock();
+    let parent = table
+        .objects
+        .get(id as usize)
+        .map(|obj| obj.parent)
+        .unwrap_or(NO_PARENT);
+    Ok((id, parent))
+}
+
 /// Looks up a file for open. Directory → `Unsupported` after the token check.
 pub(crate) fn open_file(
     root: u32,
@@ -3370,6 +3827,9 @@ pub(crate) fn create(
     name: &str,
     replace: bool,
 ) -> Result<Option<u32>, SysError> {
+    let _vol = volume_guard();
+    // Replacing a file drops bytes the admin cache would still count.
+    end_admin_usage_cache();
     let parsed = parse_path(name)?;
     if parsed.n == 0 {
         return Err(SysError::Unsupported);
@@ -3420,6 +3880,8 @@ pub(crate) fn remove(
     tokens: &[Token; TOKEN_SLOTS],
     name: &str,
 ) -> Result<u32, SysError> {
+    let _vol = volume_guard();
+    end_admin_usage_cache();
     let parsed = parse_path(name)?;
     if parsed.n == 0 {
         return Err(SysError::Unsupported);
@@ -3484,9 +3946,13 @@ fn alloc_block() -> Option<u32> {
             pool.dirty[i] = true;
             pool.sealed[i] = false;
             pool.hold[i] = 0;
-            let mut cache = CACHE.lock();
-            let _ = cache_get(&mut cache, &mut pool, i as u32);
-            return Some(i as u32);
+            drop(pool);
+            let index = i as u32;
+            if !fill_cache(index) {
+                free_block(index);
+                return None;
+            }
+            return Some(index);
         }
     }
     None
@@ -3614,38 +4080,68 @@ fn replace_logical(obj: &mut Object, logical: u32, phys: u32) -> bool {
 }
 
 fn copy_block(from: u32, to: u32) -> bool {
+    if !fill_cache(from) {
+        return false;
+    }
+    let mut tmp = heap_block();
+    {
+        let cache = CACHE.lock();
+        let Some(src) = cache_slot(&cache, from) else {
+            return false;
+        };
+        tmp.copy_from_slice(&cache.data[src]);
+    }
+    if !fill_cache(to) {
+        return false;
+    }
     let mut pool = POOL.lock();
     let mut cache = CACHE.lock();
-    let Some(src) = cache_get(&mut cache, &mut pool, from) else {
+    let Some(dst) = cache_slot(&cache, to) else {
         return false;
     };
-    let mut tmp = [0u8; BLOCK_SIZE];
-    tmp.copy_from_slice(&cache.data[src]);
-    let Some(dst) = cache_get(&mut cache, &mut pool, to) else {
-        return false;
-    };
-    cache.data[dst] = tmp;
+    cache.data[dst].copy_from_slice(&tmp);
     pool.dirty[to as usize] = true;
     pool.sealed[to as usize] = false;
     true
 }
 
-fn make_mutable(obj: &mut Object, logical: usize) -> Option<u32> {
-    let phys = phys_at(obj, logical as u32)?;
-    let stable = POOL.lock().stable[phys as usize];
+/// Caller holds [`volume_guard`] and not `TABLE`.
+fn make_mutable(index: usize, logical: usize) -> Option<u32> {
+    let phys = {
+        let table = TABLE.lock();
+        if index >= table.objects.len() {
+            return None;
+        }
+        phys_at(&table.objects[index], logical as u32)?
+    };
+    if !fill_cache(phys) {
+        return None;
+    }
+    let stable = POOL
+        .lock()
+        .stable
+        .get(phys as usize)
+        .copied()
+        .unwrap_or(true);
     if !stable {
-        // Bring the block into the cache before clearing `sealed`. A miss
-        // on a dirty unsealed line is a fresh zero page; an evicted block
-        // that was already stored must be reloaded first.
         let mut pool = POOL.lock();
-        let mut cache = CACHE.lock();
-        cache_get(&mut cache, &mut pool, phys)?;
-        pool.dirty[phys as usize] = true;
-        pool.sealed[phys as usize] = false;
+        if (phys as usize) < pool.dirty.len() {
+            pool.dirty[phys as usize] = true;
+            pool.sealed[phys as usize] = false;
+        }
         return Some(phys);
     }
     let fresh = alloc_block()?;
-    if !copy_block(phys, fresh) || !replace_logical(obj, logical as u32, fresh) {
+    if !copy_block(phys, fresh) {
+        free_block(fresh);
+        return None;
+    }
+    let replaced = {
+        let mut table = TABLE.lock();
+        let now = phys_at(&table.objects[index], logical as u32);
+        now == Some(phys) && replace_logical(&mut table.objects[index], logical as u32, fresh)
+    };
+    if !replaced {
         free_block(fresh);
         return None;
     }
@@ -3653,16 +4149,30 @@ fn make_mutable(obj: &mut Object, logical: usize) -> Option<u32> {
     Some(fresh)
 }
 
-fn ensure_data_block(obj: &mut Object, slot: usize) -> Option<u32> {
-    if phys_at(obj, slot as u32).is_some() {
-        return make_mutable(obj, slot);
+fn ensure_data_block(index: usize, slot: usize) -> Option<u32> {
+    let exists = {
+        let table = TABLE.lock();
+        index < table.objects.len() && phys_at(&table.objects[index], slot as u32).is_some()
+    };
+    if exists {
+        return make_mutable(index, slot);
     }
     let b = alloc_block()?;
-    if !append_extent(obj, b) {
-        free_block(b);
-        return None;
+    let kept = {
+        let mut table = TABLE.lock();
+        if index >= table.objects.len() {
+            false
+        } else if phys_at(&table.objects[index], slot as u32).is_some() {
+            false
+        } else {
+            append_extent(&mut table.objects[index], b)
+        }
+    };
+    if kept {
+        return Some(b);
     }
-    Some(b)
+    free_block(b);
+    make_mutable(index, slot)
 }
 
 fn free_file_blocks(table: &mut Table, index: usize) {
@@ -3684,36 +4194,65 @@ fn free_extent_blocks(obj: &mut Object) {
 }
 
 fn write_block_bytes(phys: u32, off: usize, src: &[u8]) -> bool {
+    if src.is_empty() {
+        return true;
+    }
+    if !fill_cache(phys) {
+        return false;
+    }
     let mut pool = POOL.lock();
     let mut cache = CACHE.lock();
-    let Some(slot) = cache_get(&mut cache, &mut pool, phys) else {
+    let Some(slot) = cache_slot(&cache, phys) else {
         return false;
     };
-    cache.data[slot][off..off + src.len()].copy_from_slice(src);
-    pool.dirty[phys as usize] = true;
-    pool.sealed[phys as usize] = false;
+    let end = off.saturating_add(src.len());
+    if end > BLOCK_SIZE {
+        return false;
+    }
+    cache.data[slot][off..end].copy_from_slice(src);
+    if (phys as usize) < pool.dirty.len() {
+        pool.dirty[phys as usize] = true;
+        pool.sealed[phys as usize] = false;
+    }
     true
 }
 
 fn read_block_bytes(phys: u32, off: usize, dst: &mut [u8]) -> bool {
-    let mut pool = POOL.lock();
-    let mut cache = CACHE.lock();
-    let Some(slot) = cache_get(&mut cache, &mut pool, phys) else {
+    if dst.is_empty() {
+        return true;
+    }
+    if !fill_cache(phys) {
+        return false;
+    }
+    let cache = CACHE.lock();
+    let Some(slot) = cache_slot(&cache, phys) else {
         return false;
     };
-    dst.copy_from_slice(&cache.data[slot][off..off + dst.len()]);
+    let end = off.saturating_add(dst.len());
+    if end > BLOCK_SIZE {
+        return false;
+    }
+    dst.copy_from_slice(&cache.data[slot][off..end]);
     true
 }
 
 fn zero_block_tail(phys: u32, off: usize) -> bool {
+    if !fill_cache(phys) {
+        return false;
+    }
     let mut pool = POOL.lock();
     let mut cache = CACHE.lock();
-    let Some(slot) = cache_get(&mut cache, &mut pool, phys) else {
+    let Some(slot) = cache_slot(&cache, phys) else {
         return false;
     };
+    if off > BLOCK_SIZE {
+        return false;
+    }
     cache.data[slot][off..].fill(0);
-    pool.dirty[phys as usize] = true;
-    pool.sealed[phys as usize] = false;
+    if (phys as usize) < pool.dirty.len() {
+        pool.dirty[phys as usize] = true;
+        pool.sealed[phys as usize] = false;
+    }
     true
 }
 
@@ -3730,12 +4269,20 @@ fn headroom(table: &Table, index: usize) -> u32 {
     room.min(u32::MAX as u64) as u32
 }
 
-fn copy_small(obj: &Object, buf: &mut [u8]) -> bool {
+fn copy_small(index: usize, buf: &mut [u8]) -> bool {
+    let (extents, count) = {
+        let table = TABLE.lock();
+        if index >= table.objects.len() {
+            return false;
+        }
+        let obj = &table.objects[index];
+        (obj.extents, obj.extent_count)
+    };
     let mut copied = 0usize;
     while copied < buf.len() {
         let slot = copied / BLOCK_SIZE;
         let off = copied % BLOCK_SIZE;
-        let Some(b) = phys_at(obj, slot as u32) else {
+        let Some(b) = phys_in(&extents, count, slot as u32) else {
             return false;
         };
         let n = (BLOCK_SIZE - off).min(buf.len() - copied);
@@ -3747,14 +4294,33 @@ fn copy_small(obj: &Object, buf: &mut [u8]) -> bool {
     true
 }
 
+fn phys_in(extents: &[galexy_galf::Extent], count: u8, logical: u32) -> Option<u32> {
+    let mut at = 0u32;
+    for ext in extents.iter().take(count as usize) {
+        let end = at.saturating_add(ext.count);
+        if logical < end {
+            return Some(ext.start.saturating_add(logical - at));
+        }
+        at = end;
+    }
+    None
+}
+
 /// Moves a durable file into the RAM store. Extents are freed only after
-/// the copy lands.
-fn promote_large(table: &mut Table, index: usize) -> bool {
-    let pos = table.objects[index].len as usize;
+/// the copy lands. Caller holds [`volume_guard`].
+fn promote_large(index: usize) -> bool {
+    let pos = {
+        let table = TABLE.lock();
+        if index >= table.objects.len() {
+            return false;
+        }
+        table.objects[index].len as usize
+    };
     let mut buf = alloc::vec![0u8; pos];
-    if pos > 0 && !copy_small(&table.objects[index], &mut buf) {
+    if pos > 0 && !copy_small(index, &mut buf) {
         return false;
     }
+    let mut table = TABLE.lock();
     if !super::large::create_from(index, &buf) {
         return false;
     }
@@ -3765,12 +4331,16 @@ fn promote_large(table: &mut Table, index: usize) -> bool {
 /// Appends `src` to a file. Returns the byte count written (short on full
 /// file, exhausted block pool, or actor byte quota).
 pub(crate) fn append(index: u32, src: &[u8]) -> Option<usize> {
-    let mut table = TABLE.lock();
+    end_admin_usage_cache();
+    let _vol = volume_guard();
     let i = index as usize;
-    if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
-        return None;
+    {
+        let table = TABLE.lock();
+        if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
+            return None;
+        }
     }
-    Some(append_locked(&mut table, i, src))
+    Some(append_bytes(i, src))
 }
 
 /// Positional write: bytes inside the current length are overwritten in
@@ -3779,18 +4349,24 @@ pub(crate) fn append(index: u32, src: &[u8]) -> Option<usize> {
 /// `start` beyond the end is zero-filled first, so a seek past EOF followed
 /// by a write behaves like POSIX. Returns the byte count written.
 pub(crate) fn write_at(index: u32, start: usize, src: &[u8]) -> Option<usize> {
-    let mut table = TABLE.lock();
+    end_admin_usage_cache();
+    let _vol = volume_guard();
     let i = index as usize;
-    if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
-        return None;
-    }
-    let len = file_len(&table, i);
-    if super::large::len(i).is_some()
-        || (start as u64).saturating_add(src.len() as u64) > table.geo.file_max
-    {
-        if super::large::len(i).is_none() && !promote_large(&mut table, i) {
+    let (len, promote) = {
+        let table = TABLE.lock();
+        if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
+            return None;
+        }
+        let len = file_len(&table, i);
+        let promote = super::large::len(i).is_some()
+            || (start as u64).saturating_add(src.len() as u64) > table.geo.file_max;
+        (len, promote)
+    };
+    if promote {
+        if super::large::len(i).is_none() && !promote_large(i) {
             return Some(0);
         }
+        let table = TABLE.lock();
         return Some(super::large::write_at(i, start, src, headroom(&table, i)));
     }
     let mut done = 0usize;
@@ -3800,7 +4376,7 @@ pub(crate) fn write_at(index: u32, start: usize, src: &[u8]) -> Option<usize> {
             let pos = start + done;
             let slot = pos / BLOCK_SIZE;
             let off = pos % BLOCK_SIZE;
-            let Some(b) = make_mutable(&mut table.objects[i], slot) else {
+            let Some(b) = make_mutable(i, slot) else {
                 return Some(done);
             };
             let n = (BLOCK_SIZE - off).min(overwrite - done);
@@ -3810,10 +4386,10 @@ pub(crate) fn write_at(index: u32, start: usize, src: &[u8]) -> Option<usize> {
             done += n;
         }
     } else if start > len {
-        let zeros = [0u8; BLOCK_SIZE];
+        let zeros = heap_block();
         let mut gap = start - len;
         while gap > 0 {
-            let n = append_locked(&mut table, i, &zeros[..gap.min(BLOCK_SIZE)]);
+            let n = append_bytes(i, &zeros[..gap.min(BLOCK_SIZE)]);
             if n == 0 {
                 return Some(0);
             }
@@ -3821,48 +4397,67 @@ pub(crate) fn write_at(index: u32, start: usize, src: &[u8]) -> Option<usize> {
         }
     }
     if done < src.len() {
-        done += append_locked(&mut table, i, &src[done..]);
+        done += append_bytes(i, &src[done..]);
     }
     Some(done)
 }
 
-/// Append loop shared by `append` and `write_at`; `i` must be a file slot.
-fn append_locked(table: &mut Table, i: usize, src: &[u8]) -> usize {
-    if super::large::len(i).is_some()
-        || table.objects[i].len.saturating_add(src.len() as u64) > table.geo.file_max
-    {
-        if super::large::len(i).is_none() && !promote_large(table, i) {
+/// Append loop shared by `append` and `write_at`. Caller holds [`volume_guard`].
+fn append_bytes(i: usize, src: &[u8]) -> usize {
+    let large = {
+        let table = TABLE.lock();
+        if i >= table.objects.len() {
             return 0;
         }
-        return super::large::append(i, src, headroom(table, i));
+        super::large::len(i).is_some()
+            || table.objects[i].len.saturating_add(src.len() as u64) > table.geo.file_max
+    };
+    if large {
+        if super::large::len(i).is_none() && !promote_large(i) {
+            return 0;
+        }
+        let table = TABLE.lock();
+        return super::large::append(i, src, headroom(&table, i));
     }
-    let ai = table.objects[i].actor as usize;
     let mut written = 0usize;
     while written < src.len() {
-        let pos = table.objects[i].len as usize;
-        if pos as u64 >= table.geo.file_max {
-            break;
-        }
-        if !can_add_bytes(table, ai, 1) {
-            break;
-        }
-        let slot = pos / BLOCK_SIZE;
-        let off = pos % BLOCK_SIZE;
-        let Some(bi) = ensure_data_block(&mut table.objects[i], slot) else {
+        let step = {
+            let table = TABLE.lock();
+            if i >= table.objects.len() {
+                return written;
+            }
+            let pos = table.objects[i].len as usize;
+            if pos as u64 >= table.geo.file_max {
+                return written;
+            }
+            let ai = table.objects[i].actor as usize;
+            if !can_add_bytes(&table, ai, 1) {
+                return written;
+            }
+            let mut room = (BLOCK_SIZE - (pos % BLOCK_SIZE))
+                .min(src.len() - written)
+                .min((table.geo.file_max as usize).saturating_sub(pos));
+            let (_, used) = actor_usage(&table, ai);
+            let head = table.actors[ai].max_bytes.saturating_sub(used) as usize;
+            if head == 0 {
+                return written;
+            }
+            room = room.min(head);
+            Some((pos, pos / BLOCK_SIZE, pos % BLOCK_SIZE, room))
+        };
+        let Some((pos, slot, off, room)) = step else {
             break;
         };
-        let mut room = (BLOCK_SIZE - off)
-            .min(src.len() - written)
-            .min((table.geo.file_max as usize).saturating_sub(pos));
-        let (_, used) = actor_usage(table, ai);
-        let headroom = table.actors[ai].max_bytes.saturating_sub(used) as usize;
-        if headroom == 0 {
+        if room == 0 {
             break;
         }
-        room = room.min(headroom);
+        let Some(bi) = ensure_data_block(i, slot) else {
+            break;
+        };
         if !write_block_bytes(bi, off, &src[written..written + room]) {
             break;
         }
+        let mut table = TABLE.lock();
         table.objects[i].len = (pos + room) as u64;
         written += room;
     }
@@ -3871,25 +4466,30 @@ fn append_locked(table: &mut Table, i: usize, src: &[u8]) -> usize {
 
 /// Copies `dst.len()` bytes from file offset `start`.
 pub(crate) fn read_at(index: u32, start: usize, dst: &mut [u8]) -> Option<usize> {
-    let table = TABLE.lock();
+    let _vol = volume_guard();
     let i = index as usize;
-    if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
-        return None;
-    }
-    if super::large::len(i).is_some() {
-        return super::large::read(i, start, dst);
-    }
-    let len = table.objects[i].len as usize;
-    if start >= len || dst.is_empty() {
-        return Some(0);
-    }
+    let snap = {
+        let table = TABLE.lock();
+        if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
+            return None;
+        }
+        if super::large::len(i).is_some() {
+            return super::large::read(i, start, dst);
+        }
+        let len = table.objects[i].len as usize;
+        if start >= len || dst.is_empty() {
+            return Some(0);
+        }
+        Some((table.objects[i].extents, table.objects[i].extent_count, len))
+    }?;
+    let (extents, count, len) = snap;
     let mut copied = 0usize;
     let want = dst.len().min(len - start);
     while copied < want {
         let pos = start + copied;
         let slot = pos / BLOCK_SIZE;
         let off = pos % BLOCK_SIZE;
-        let b = phys_at(&table.objects[i], slot as u32)?;
+        let b = phys_in(&extents, count, slot as u32)?;
         let n = (BLOCK_SIZE - off).min(want - copied);
         if !read_block_bytes(b, off, &mut dst[copied..copied + n]) {
             return None;
@@ -3965,6 +4565,7 @@ pub(crate) fn rename(
     old: &str,
     new: &str,
 ) -> Result<(), SysError> {
+    let _vol = volume_guard();
     let old_parsed = parse_path(old)?;
     let new_parsed = parse_path(new)?;
     if old_parsed.n == 0 || new_parsed.n == 0 {
@@ -4055,14 +4656,17 @@ fn reassign_actor_subtree(table: &mut Table, root: u32, actor: u8) {
 }
 
 fn truncate_large(index: u32, new_len: usize) -> Result<(), SysError> {
-    let mut table = TABLE.lock();
     let i = index as usize;
-    if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
-        return Err(SysError::BadCap);
+    {
+        let table = TABLE.lock();
+        if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
+            return Err(SysError::BadCap);
+        }
     }
-    if super::large::len(i).is_none() && !promote_large(&mut table, i) {
+    if super::large::len(i).is_none() && !promote_large(i) {
         return Err(SysError::NoResource);
     }
+    let table = TABLE.lock();
     let old = super::large::len(i).unwrap_or(0) as usize;
     if new_len == old {
         return Ok(());
@@ -4089,55 +4693,79 @@ fn truncate_large(index: u32, new_len: usize) -> Result<(), SysError> {
 
 /// Sets a file's length, allocating or freeing data blocks as needed.
 pub(crate) fn truncate(index: u32, new_len: usize) -> Result<(), SysError> {
+    end_admin_usage_cache();
+    let _vol = volume_guard();
     if new_len > super::large::LARGE_FILE_MAX as usize {
         return Err(SysError::BadValue);
     }
-    if (new_len as u64) > TABLE.lock().geo.file_max || super::large::len(index as usize).is_some() {
+    let i = index as usize;
+    // Same temporary rule as the unlock re-read: the guard must die
+    // before `truncate_large`, which takes the table again and may wait
+    // on the disk.
+    let over_inline = {
+        let cap = TABLE.lock().geo.file_max;
+        (new_len as u64) > cap
+    };
+    if over_inline || super::large::len(i).is_some() {
         return truncate_large(index, new_len);
     }
-    let mut table = TABLE.lock();
-    let i = index as usize;
-    if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
-        return Err(SysError::BadCap);
-    }
-    let old = table.objects[i].len as usize;
+    let old = {
+        let table = TABLE.lock();
+        if i >= table.objects.len() || table.objects[i].kind != KIND_FILE {
+            return Err(SysError::BadCap);
+        }
+        table.objects[i].len as usize
+    };
     if new_len == old {
         return Ok(());
     }
     if new_len < old {
-        let keep = if new_len == 0 {
-            0
-        } else {
-            new_len.div_ceil(BLOCK_SIZE) as u32
-        };
-        shrink_extents(&mut table.objects[i], keep);
-        if new_len > 0 {
-            let off = new_len % BLOCK_SIZE;
-            if off != 0 {
-                let slot = (new_len - 1) / BLOCK_SIZE;
-                let Some(b) = make_mutable(&mut table.objects[i], slot) else {
-                    return Err(SysError::NoResource);
-                };
-                if !zero_block_tail(b, off) {
-                    return Err(SysError::NoResource);
+        let partial = {
+            let mut table = TABLE.lock();
+            let keep = if new_len == 0 {
+                0
+            } else {
+                new_len.div_ceil(BLOCK_SIZE) as u32
+            };
+            shrink_extents(&mut table.objects[i], keep);
+            if new_len > 0 {
+                let off = new_len % BLOCK_SIZE;
+                if off != 0 {
+                    Some(((new_len - 1) / BLOCK_SIZE, off))
+                } else {
+                    None
                 }
+            } else {
+                None
+            }
+        };
+        if let Some((slot, off)) = partial {
+            let Some(b) = make_mutable(i, slot) else {
+                return Err(SysError::NoResource);
+            };
+            if !zero_block_tail(b, off) {
+                return Err(SysError::NoResource);
             }
         }
+        let mut table = TABLE.lock();
         table.objects[i].len = new_len as u64;
         return Ok(());
     }
 
-    let ai = table.objects[i].actor as usize;
-    let grow = (new_len - old) as u64;
-    if !can_add_bytes(&table, ai, grow) {
-        return Err(SysError::NoResource);
-    }
-    let saved = table.objects[i].extents;
-    let saved_count = table.objects[i].extent_count;
+    let (saved, saved_count) = {
+        let table = TABLE.lock();
+        let ai = table.objects[i].actor as usize;
+        let grow = (new_len - old) as u64;
+        if !can_add_bytes(&table, ai, grow) {
+            return Err(SysError::NoResource);
+        }
+        (table.objects[i].extents, table.objects[i].extent_count)
+    };
     let mut pos = old;
     while pos < new_len {
         let slot = pos / BLOCK_SIZE;
-        let Some(bi) = ensure_data_block(&mut table.objects[i], slot) else {
+        let Some(bi) = ensure_data_block(i, slot) else {
+            let mut table = TABLE.lock();
             free_extents_after(&table.objects[i], saved_count, &saved);
             table.objects[i].extents = saved;
             table.objects[i].extent_count = saved_count;
@@ -4161,6 +4789,7 @@ pub(crate) fn truncate(index: u32, new_len: usize) -> Result<(), SysError> {
         }
         pos += n;
     }
+    let mut table = TABLE.lock();
     table.objects[i].len = new_len as u64;
     Ok(())
 }
@@ -4264,6 +4893,7 @@ pub(crate) fn stat(
     out[44..48].copy_from_slice(&((size >> 32) as u32).to_le_bytes());
     out[8] = owner_len;
     out[9..9 + owner_len as usize].copy_from_slice(&actor.name[..owner_len as usize]);
+    out[galexy_abi::STAT_ID..galexy_abi::STAT_ID + 4].copy_from_slice(&index.to_le_bytes());
     Ok(STAT_LEN)
 }
 

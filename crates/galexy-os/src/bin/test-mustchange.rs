@@ -8,7 +8,7 @@
 extern crate alloc;
 
 use bootloader_api::{entry_point, BootInfo};
-use galexy_abi::{SysError, Syscall, USER_LOGIN, USER_PASSWD};
+use galexy_abi::{Syscall, USER_LOGIN, USER_PASSWD};
 use galexy_os::{
     arch::mm, drivers::screen, exit_qemu, println, sched, serial_println, QemuExitCode,
 };
@@ -73,7 +73,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
     let (gen, must) = sched::test_auth_flags("chg1").expect("chg1 live after login");
     assert!(gen > 0, "session generation assigned");
-    assert!(must, "default admin password sets must-change");
+    assert!(!must, "the format pair admin/admin is not written");
     // The blob spins on this word so passwd cannot clear the flag first.
     unsafe {
         core::ptr::write_volatile(base.as_mut_ptr::<u64>().add(5), 1);
@@ -92,12 +92,12 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         }
     };
 
-    assert_eq!(report.create_err, SysError::AccessDenied as u64);
-    assert_eq!(report.pass_ok, 1, "passwd");
     assert_eq!(
-        report.create_ok, 1,
-        "create after passwd clears must-change"
+        report.create_err, 0,
+        "create does not wait on a default password"
     );
+    assert_eq!(report.pass_ok, 1, "passwd");
+    assert_eq!(report.create_ok, 1, "create still works after passwd");
 
     loop {
         x86_64::instructions::hlt();
@@ -107,27 +107,31 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         }
     }
 
-    println!("[test-mustchange] touch blocked until passwd");
+    println!("[test-mustchange] default password is not written");
     serial_println!("[test-mustchange] passed");
     exit_qemu(QemuExitCode::Success);
 }
 
 fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
-    let admin = b"admin";
+    let admin = b"owner";
+    let pass = b"testpass";
     let secret = b"secret";
     let path = b"Desktop/n";
+    let path2 = b"Desktop/m";
     let mut code = alloc::vec::Vec::new();
-    let data_len = admin.len() + admin.len() + secret.len() + path.len();
+    let data_len = admin.len() + pass.len() + secret.len() + path.len() + path2.len();
     code.push(0xEB);
     code.push(data_len as u8);
     let admin_addr = code_base + 2;
     code.extend_from_slice(admin);
     let pass_addr = admin_addr + admin.len() as u64;
-    code.extend_from_slice(admin);
-    let secret_addr = pass_addr + admin.len() as u64;
+    code.extend_from_slice(pass);
+    let secret_addr = pass_addr + pass.len() as u64;
     code.extend_from_slice(secret);
     let path_addr = secret_addr + secret.len() as u64;
     code.extend_from_slice(path);
+    let path2_addr = path_addr + path.len() as u64;
+    code.extend_from_slice(path2);
 
     mov_r64_imm(&mut code, 15, scratch);
     call_user_pass(
@@ -135,7 +139,7 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
         admin_addr,
         admin.len() as u64,
         pass_addr,
-        admin.len() as u64,
+        pass.len() as u64,
         USER_LOGIN,
     );
     mov_r64_imm(&mut code, 0, TRIPPED);
@@ -154,7 +158,7 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     call_passwd_self(&mut code, secret_addr, secret.len() as u64);
     store(&mut code, 2, 0x18);
 
-    call_create(&mut code, path_addr, path.len() as u64);
+    call_create(&mut code, path2_addr, path2.len() as u64);
     store(&mut code, 2, 0x20);
 
     mov_r64_imm(&mut code, 0, DONE);

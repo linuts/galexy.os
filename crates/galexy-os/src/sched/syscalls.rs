@@ -73,7 +73,8 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             Outcome::Handoff
         }
         n if n == Syscall::Write as u64 => {
-            match syscall_write_ex(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx) {
+            let poll = frame.r8 & galexy_abi::RECV_POLL != 0;
+            match syscall_write_ex(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx, poll) {
                 IoResult::Done(r) => {
                     stamp(frame, r);
                     Outcome::Resume
@@ -99,7 +100,8 @@ pub fn service(frame: &mut Context, sysno: u64) -> Outcome {
             IoResult::Park => Outcome::Handoff,
         },
         n if n == Syscall::Read as u64 => {
-            match syscall_read_ex(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx) {
+            let poll = frame.r8 & galexy_abi::RECV_POLL != 0;
+            match syscall_read_ex(Cap::from_bits(frame.rdi), frame.rsi, frame.rdx, poll) {
                 IoResult::Done(r) => {
                     stamp(frame, r);
                     Outcome::Resume
@@ -389,7 +391,7 @@ enum IoResult {
     Park,
 }
 
-fn syscall_write_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
+fn syscall_write_ex(cap: Cap, addr: u64, len: u64, poll: bool) -> IoResult {
     if cap.index() == galexy_abi::reserved::WIRE_INDEX {
         return IoResult::Done(syscall_wire_write(cap, addr, len));
     }
@@ -397,7 +399,7 @@ fn syscall_write_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
         return IoResult::Done(syscall_usb_arm(cap, addr, len));
     }
     if cap.index() != galexy_abi::reserved::CONSOLE_INDEX {
-        return syscall_write_file_ex(cap, addr, len);
+        return syscall_write_file_ex(cap, addr, len, poll);
     }
     IoResult::Done(syscall_write_console(cap, addr, len))
 }
@@ -438,27 +440,6 @@ fn syscall_usb_arm(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     }
 }
 
-/// One galfs object per listed port. The name is the port in decimal,
-/// which fits the existing object record. `DISK_VERSION` stays put.
-fn ensure_usb_port(port: u8) -> Result<(), SysError> {
-    let mut raw = [0u8; 3];
-    let n = if port >= 100 {
-        raw[0] = b'0' + port / 100;
-        raw[1] = b'0' + (port / 10) % 10;
-        raw[2] = b'0' + port % 10;
-        3
-    } else if port >= 10 {
-        raw[0] = b'0' + port / 10;
-        raw[1] = b'0' + port % 10;
-        2
-    } else {
-        raw[0] = b'0' + port;
-        1
-    };
-    let name = core::str::from_utf8(&raw[..n]).unwrap_or("");
-    crate::sched::galfs::ensure_card("usb", name).map(|_| ())
-}
-
 fn syscall_usb_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     if !cap.rights().contains(CapRights::READ) || !crate::sched::current_is_usb() {
         return SyscallResult::err(SysError::AccessDenied);
@@ -472,9 +453,6 @@ fn syscall_usb_read(cap: Cap, addr: u64, len: u64) -> SyscallResult {
     match crate::drivers::usb::xhci::read_device(&mut staged[..len as usize]) {
         Ok(0) => SyscallResult::ok(0),
         Ok(n) => {
-            if n > 0 {
-                let _ = ensure_usb_port(staged[0]);
-            }
             // SAFETY: `user_buffer` accepted `len` writable bytes and `n <= len`.
             unsafe {
                 crate::arch::user_copy::copy_to_user(staged.as_ptr(), addr, n);
@@ -661,7 +639,7 @@ fn syscall_write_console(cap: Cap, addr: u64, len: u64) -> SyscallResult {
 }
 
 /// Copies `src` onto a file/pipe cap. Pipes may park when full (M57).
-fn syscall_write_file_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
+fn syscall_write_file_ex(cap: Cap, addr: u64, len: u64, poll: bool) -> IoResult {
     if len > MAX_WRITE {
         return IoResult::Done(SyscallResult::err(SysError::BadValue));
     }
@@ -678,12 +656,18 @@ fn syscall_write_file_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
     match crate::sched::task_write_ex(cap, &staged[..len as usize]) {
         Ok(crate::sched::IoOp::Ready(n)) => IoResult::Done(SyscallResult::ok(n as u64)),
         Ok(crate::sched::IoOp::ParkPipe { id, read: false }) => {
+            if poll {
+                return IoResult::Done(SyscallResult::err(SysError::NoResource));
+            }
             match crate::sched::task_park_pipe(id, false, cap.bits(), addr, len as u32) {
                 Ok(()) => IoResult::Park,
                 Err(err) => IoResult::Done(SyscallResult::err(err)),
             }
         }
         Ok(crate::sched::IoOp::ParkLane { id, read: false }) => {
+            if poll {
+                return IoResult::Done(SyscallResult::err(SysError::NoResource));
+            }
             match crate::sched::task_park_lane(id, false, cap, addr, len as u32) {
                 Ok(()) => IoResult::Park,
                 Err(err) => IoResult::Done(SyscallResult::err(err)),
@@ -1095,14 +1079,26 @@ fn syscall_user(frame: &Context) -> SyscallResult {
                 return SyscallResult::err(SysError::BadValue);
             };
             let result = if crate::sched::galfs::volume_query() == 2 {
-                let mut admin = [0u8; 64];
-                let Some(a) = copy_user_str(frame.rdi, frame.rsi, &mut admin, false) else {
+                let mut name_raw = [0u8; MAX_NAME as usize];
+                let Some(n) = copy_user_str(frame.rdi, frame.rsi, &mut name_raw, true) else {
                     galexy_crypto::wipe_bytes(&mut pass);
-                    galexy_crypto::wipe_bytes(&mut admin);
                     return SyscallResult::err(SysError::BadValue);
                 };
-                let result = crate::sched::galfs::unlock_with(&pass[..p], Some(&admin[..a]));
-                galexy_crypto::wipe_bytes(&mut admin);
+                let mut pw = [0u8; 64];
+                let Some(a) = copy_user_password(frame.r10, &mut pw) else {
+                    galexy_crypto::wipe_bytes(&mut pass);
+                    galexy_crypto::wipe_bytes(&mut pw);
+                    return SyscallResult::err(SysError::BadValue);
+                };
+                let name = core::str::from_utf8(&name_raw[..n]).unwrap_or("");
+                let result = crate::sched::galfs::unlock_with(
+                    &pass[..p],
+                    Some(crate::sched::galfs::SetupUser {
+                        name,
+                        password: &pw[..a],
+                    }),
+                );
+                galexy_crypto::wipe_bytes(&mut pw);
                 result
             } else {
                 crate::sched::galfs::unlock_volume(&pass[..p])
@@ -1209,6 +1205,38 @@ fn syscall_user(frame: &Context) -> SyscallResult {
     }
 }
 
+/// Password blob at `addr`: one length byte, then that many password bytes.
+fn copy_user_password(addr: u64, out: &mut [u8]) -> Option<usize> {
+    if addr == 0 {
+        return None;
+    }
+    let mut len_b = [0u8; 1];
+    if user_buffer(addr, 1, false).is_err() {
+        return None;
+    }
+    // SAFETY: `user_buffer` accepted the length byte.
+    unsafe {
+        crate::arch::user_copy::copy_from_user(addr, len_b.as_mut_ptr(), 1);
+    }
+    let n = len_b[0] as usize;
+    if n == 0 || n > out.len() {
+        return None;
+    }
+    let start = addr.saturating_add(1);
+    if user_buffer(start, n as u64, false).is_err() {
+        return None;
+    }
+    // SAFETY: `user_buffer` accepted the password bytes.
+    unsafe {
+        crate::arch::user_copy::copy_from_user(start, out.as_mut_ptr(), n);
+    }
+    if !out[..n].iter().all(|b| b.is_ascii_graphic() || *b == b' ') {
+        galexy_crypto::wipe_bytes(&mut out[..n]);
+        return None;
+    }
+    Some(n)
+}
+
 /// Copies a user string into `out`. When `named`, applies [`file_name_ok`].
 fn copy_user_str(addr: u64, len: u64, out: &mut [u8], named: bool) -> Option<usize> {
     if len == 0 || len as usize > out.len() {
@@ -1279,7 +1307,7 @@ fn syscall_open(addr: u64, len: u64) -> SyscallResult {
     }
 }
 
-fn syscall_read_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
+fn syscall_read_ex(cap: Cap, addr: u64, len: u64, poll: bool) -> IoResult {
     if cap.index() == galexy_abi::reserved::WIRE_INDEX {
         return IoResult::Done(syscall_wire_read(cap, addr, len));
     }
@@ -1317,12 +1345,18 @@ fn syscall_read_ex(cap: Cap, addr: u64, len: u64) -> IoResult {
             IoResult::Done(SyscallResult::ok(n as u64))
         }
         Ok(crate::sched::IoOp::ParkPipe { id, read: true }) => {
+            if poll {
+                return IoResult::Done(SyscallResult::err(SysError::NoResource));
+            }
             match crate::sched::task_park_pipe(id, true, cap.bits(), addr, len as u32) {
                 Ok(()) => IoResult::Park,
                 Err(err) => IoResult::Done(SyscallResult::err(err)),
             }
         }
         Ok(crate::sched::IoOp::ParkLane { id, read: true }) => {
+            if poll {
+                return IoResult::Done(SyscallResult::err(SysError::NoResource));
+            }
             match crate::sched::task_park_lane(id, true, cap, addr, len as u32) {
                 Ok(()) => IoResult::Park,
                 Err(err) => IoResult::Done(SyscallResult::err(err)),

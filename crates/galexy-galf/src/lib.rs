@@ -32,7 +32,7 @@ pub const DISK_SLOT_COUNT: usize = 2;
 pub const DISK_MAGIC: [u8; 4] = *b"GALF";
 /// Inodes live in the pool. A sealed slot holds actors, shares, and the
 /// inode map. Older images are refused.
-pub const DISK_VERSION: u16 = 17;
+pub const DISK_VERSION: u16 = 18;
 
 pub use volume::{
     inode_address, map_address, map_ptr_offset, payload_len, read_actor, read_free,
@@ -92,8 +92,10 @@ pub const NO_BLOCK: u32 = u32::MAX;
 
 /// Bring-up volume passphrase (matches kernel `VOLUME_PASSPHRASE`).
 pub const DEFAULT_VOLUME_PASSPHRASE: &[u8] = b"galfs";
-/// Immortal boot actor name.
-pub const ADMIN_NAME: &str = "admin";
+/// Name a volume must not store. The administrator is the first actor.
+pub const RESERVED_ACTOR_NAME: &str = "admin";
+/// Name the slot fixtures use for that first actor.
+pub const ADMIN_NAME: &str = "owner";
 
 /// Max issue lines a check will record.
 pub const MAX_ISSUES: usize = 64;
@@ -946,12 +948,15 @@ fn open_pool_block(
 }
 
 fn collect_issues(table: &Table, report: &mut Report) {
-    let mut saw_admin = false;
+    let mut saw_actor = false;
     for (ai, actor) in table.actors.iter().enumerate() {
         if !actor.used {
             continue;
         }
-        if actor.name_len == 0 || actor.name_len as usize > ACTOR_NAME {
+        if actor.name_len == 0
+            || actor.name_len as usize > ACTOR_NAME
+            || actor.name_is(RESERVED_ACTOR_NAME)
+        {
             report.push(Issue::BadActorRoot { actor: ai as u16 });
             continue;
         }
@@ -964,11 +969,9 @@ fn collect_issues(table: &Table, report: &mut Report) {
         if obj.kind != KIND_DIR || obj.parent != NO_PARENT || obj.actor != ai as u8 {
             report.push(Issue::BadActorRoot { actor: ai as u16 });
         }
-        if actor.name_is(ADMIN_NAME) {
-            saw_admin = true;
-        }
+        saw_actor = true;
     }
-    if !saw_admin {
+    if !saw_actor {
         report.push(Issue::MissingAdmin);
     }
 
@@ -1175,7 +1178,7 @@ mod tests {
         assert_eq!(OBJECT_ON_DISK, 192);
         assert_eq!(SHARE_ON_DISK, 8);
         assert_eq!(SHARE_SLOTS, 32);
-        assert_eq!(DISK_VERSION, 17);
+        assert_eq!(DISK_VERSION, 18);
         assert_eq!(DESK_COMPILE_FILES, 41);
         assert!(
             volume_limits(MIN_DISK_BYTES as u64).inode_slots >= DESK_COMPILE_FILES,

@@ -220,38 +220,50 @@ machines: ACPI, x2APIC, PCIe, virtio 1.x, UEFI + GOP.
 Rules for Phase 10 (`docs/NET.md`; Milestones **78–85**). Binding
 once the first of those milestones lands; the plan is binding now.
 Phase 16 (Milestones **108–119**) is the later plan. 108 through
-116 have landed. 117, 118, and 119 stay open. This text does not
-check those boxes.
+119 have landed. This text does not check the KVM rows.
 
 - **A lane is the application object.** One TLS 1.3 session, one peer,
   `READ` and `WRITE`. Phase 10 has no `socket`, `bind`, `listen`,
   `accept`, `connect`, or `setsockopt`. `std::net` stays unsupported
   in that phase.
-- **A card is the call.** Milestones 108 and 109 keep `connect` as a
-  granted name. The value is still a lane. 112 is the address card,
-  113 the port, 114 bind, 115 listen, and 116 the datagram. Each is
-  one card. Read dials and sends the stored datagram. Write accepts
-  and binds. `std::net` and Python `socket` call those cards:
-  bind, listen, datagram send and receive, and an address or a
-  port. `setsockopt` stays refused. No new syscall. SSH is 117.
-  One program's outbound card is `/card/out/<program>` (118).
-  The share of that card survives reboot (119). It dials. It
-  does not accept. A program without it still asks per name.
+- **A line in `/policy` is the call.** `connect` stays a lane.
+  A `net dial` rule names the caller and the host. A `net listen`
+  rule names the caller and the port. A `net icmp` rule names ping.
+  A `net time` rule names the caller and one address or one DNS name.
+  `net time <ip>` sends one NTP packet to UDP port 123. `net time <name>`
+  looks that name up once on the pinned DNS-over-TLS resolver, then
+  sends that packet. Success prints civil UTC. No pin prints
+  `access denied` and sends nothing. No poll, no NTS, no plaintext DNS.
+  `usb use` names one device id. `std::net` and Python `socket`
+  call those rules: listen, datagram send and receive, and an
+  address or a port. Bind of the stored local address is admin.
+  `setsockopt` stays refused. No new syscall. SSH is 117: one
+  service, `net listen *:4598 name ssh`, current algorithms, SFTP
+  on that session. A script stamps the script file. A name matches
+  a ramdisk program only. An empty pin on an allowed dial is
+  plaintext. A stored pin stays TLS. DNS-over-TLS stays on port 853.
 - **The kernel moves frames.** virtio-net DMA follows the virtio-blk
   rule: one descriptor per physically contiguous run. The interrupt
   handler does not parse IP. TCP, UDP, and TLS live in the ring-3
   `net` service. virtio-net stays the device. `net` stays the only
   packet stack. No raw sockets and no promiscuous mode.
 - **Only `net` holds the wire** (Cap `0x8009`) and only `net` may call
-  `Syscall::Lane` (35). A dial right is a grant on a name, checked
+  `Syscall::Lane` (35). A dial right is a line in `/policy`, checked
   before any handshake.
 - **Names, not ports, through 111.** Locators stay inside `net`.
   They are not a syscall argument. A program may pass one exact
-  address or port only with the card from 112 or 113.
-- **Pinned keys, TLS 1.3 only.** No WebPKI default, no TLS 1.2, no
-  compression, no renegotiation, no 0-RTT in this phase. The handshake
-  is a maintained Rust crate, not a private implementation. Session
-  keys and private keys stay off serial, `dmesg`, and the console.
+  address or port only when a rule names that caller and that host.
+- **Pinned keys, TLS 1.3 only.** A lane has no WebPKI default. The
+  DNS resolver is the exception: the image carries the Mozilla
+  roots. `net pin <ip>` reads the domain off the certificate, tells
+  the seat, and later trusts a certificate that chains to those
+  roots, is currently valid, and is valid for that domain. A key
+  file replaces that check. SSH host keys and `net allow` do not
+  use the bundle. No
+  TLS 1.2, no compression, no renegotiation, no 0-RTT in this phase.
+  The handshake is a maintained Rust crate, not a private
+  implementation. Session keys and private keys stay off serial,
+  `dmesg`, and the console.
 - **Budgets are the ones in `NET.md`.** 32 lanes, 16 KiB each way, 8
   gates, a fixed frame pool. A flood must not stop a seat from
   answering `svc status`.
@@ -260,6 +272,14 @@ check those boxes.
   file and for nothing else. `DISK_VERSION` does not move because a
   file was added. A record version the service does not know is
   refused.
+- **One address type.** Milestones 120–124. A v4 value and a v6
+  value are that type. A dial rule, the reply, bind, listen,
+  the datagram, and the route use it. Opcodes 1–12 stay that path. Milestone 126 appends opcode 13
+  for one NTP query and adds no syscall. There is
+  no second stack and no v6 opcode. The parse refuses an ambiguous
+  form before any v6 packet. Listening stays a `net listen` rule.
+  Plaintext DNS and general browser TLS stay out. The boxes stay
+  open.
 
 ## USB (see, then a table)
 
@@ -277,9 +297,9 @@ now, the same way the network rules are.
   descriptor per physically contiguous run. Descriptors are
   interpreted by the `usb` service. A bad length is `BadValue`.
 - **Only `usb` holds the controller** (Cap `0x800B`). Listing
-  (Cap `0x800C`) shows the ports whose read card the seat holds.
-  Logged-out is denied. Listing does not attach a driver and does
-  not inject keys.
+  (Cap `0x800C`) shows a device when a `usb use` rule names the
+  caller and that device id. Logged-out is denied. Listing does
+  not attach a driver and does not inject keys.
 - **One driver table.** `crates/userspace/usb/src/drivers/mod.rs` is
   the only registration. A NIC driver delivers Ethernet frames to
   `net` and does not speak TCP.
@@ -298,19 +318,20 @@ not wait on Phase 10, and Phase 10 does not wait on it.
 - **No new syscall and no new Cap.** The seat starts one run and
   Cap-waits. Init does not supervise it. `Lane` stays 35.
   `MAX_PROC_CAPS` stays 16. Phase 14 did not bump `DISK_VERSION`.
-  The live version is 17 after Milestone 99. The target JSON stays
+  The live version is 18. The target JSON stays
   as it is.
 - **The allow-list is `scripts/python-allow.txt`.** A module that
   is not listed raises `ImportError`. `ssl`, `asyncio`, `pip`,
   `subprocess`, `ctypes`, and `os.fork` stay off that list.
-  `socket` names the card calls: `connect`, `bind`, `listen`,
+  `socket` names the rule calls: `connect`, `bind`, `listen`,
   `send`, and `recv`. `setsockopt` stays off.
-- **Python calls the cards.** `socket.connect` takes a name, one
-  stored address, or one stored `address:port`. `socket.bind`,
-  `socket.listen`, `socket.send`, and `socket.recv` are the bind,
-  listen, and datagram cards. A missing card asks. No is
-  `OSError`. `setsockopt` stays `OSError`. `ssl` stays refused.
-  TLS stays inside `net`. `std::net` is the same layer.
+- **Python calls the rules.** `socket.connect` takes a name, an
+  address, or `address:port` when a `net dial` rule names the
+  script and that host. `socket.listen`, `socket.send`, and
+  `socket.recv` are the listen and dial rules. `socket.bind` is
+  admin. A miss is `OSError`. `setsockopt` stays `OSError`.
+  `ssl` stays refused. TLS stays inside `net`. `std::net` is the
+  same layer.
 - **Two clocks stay two clocks.** `time.monotonic` is `Clock`.
   `time.time` is `Date`, and it raises when the date is unset.
 - **Budgets are the ones in `PYTHON.md`.** 2 GiB until a boot shows

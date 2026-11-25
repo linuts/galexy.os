@@ -2339,20 +2339,17 @@ unset.
       `-accel kvm` there instead of waiting on an empty serial log)
 - [ ] `PERF.md` numbers within budget under KVM (TCG release cells
       recorded; KVM cells empty for the same host reason)
-- [ ] Phase 16 — Milestones 104–117 (`docs/ROADMAP.md`). A boot shows
+- [x] Phase 16 — Milestones 104–117 (`docs/ROADMAP.md`). A boot shows
       4 and 8 CPUs online. A dial, a ping, and a USB list without a
       card are denied. Rust and Python connect by name only after the
       seat allows it. A name resolves over TLS and a program reaches a
       host that is not `10.0.2.2`. A raw IP, a port, `bind`, `listen`,
       and one datagram are cards (Milestones 112–116). SSH is 117:
       a host client reads one file over SFTP, and a legacy algorithm
-      is refused. Milestone 83 and Milestones 110–116 are checked.
-      Milestone 117 and the KVM rows stay open until their own runs.
-      Milestones 118 and 119 stay open. They are one program's
-      outbound card. This plan does not check them and does not tag
-      `v1.0`
-- [ ] Tag `v1.0` with the changelog. The tag needs the KVM cells and
-      Phase 16, including Milestone 117. This plan does not apply it
+      is refused. Milestone 83 and Milestones 110–117 are checked.
+      The KVM rows stay open
+- [ ] Tag `v1.0` with the changelog. Phase 16 has landed. The tag
+      still needs the KVM cells. This plan does not apply it
 
 ---
 
@@ -3090,12 +3087,16 @@ syscall.
 
 ## Phase 16 — Cards, then a reachable machine
 
-Milestones 103–116 have landed. Milestone 83 and Milestones 110–116
+Milestones 103–119 have landed. Milestone 83 and Milestones 110–119
 are checked. A passed address, a port, bind, listen, and one
-datagram are cards. Milestone 117 is SSH, and it stays open.
-Milestones 118 and 119 are one program's outbound card, and they
-stay open. The KVM rows under the `v1.0` gate stay open. Do not
-tag `v1.0`. `docs/ROADMAP.md` is the phase.
+datagram are cards. Milestone 117 is SSH. Milestone 118 is one
+outbound card. Milestone 119 stores that card in the share slot.
+The KVM rows under the `v1.0` gate stay open. Do not tag `v1.0`.
+`docs/ROADMAP.md` is the phase.
+
+Milestones 120–124 are one address type for v4 and v6. Those
+boxes stay open. This plan does not check them and does not tag
+`v1.0`.
 
 ## Milestone 104 — Prove four and eight CPUs
 
@@ -3390,124 +3391,370 @@ peer with a card. It is not DNS, and it is not a raw socket.
 
 ## Milestone 117 — SSH and SFTP
 
-SSH. It waits until Milestone 111 has reached a host past
-`10.0.2.2`, and until Milestone 115 has shown Milestone 83's
-handoff. One ring-3 Rust service. No new syscall. Milestones
-118 and 119 are the outbound card. This service accepts with
-write on `/card/ssh`. The outbound card does not accept.
+It waits until Milestone 111 has reached a host past `10.0.2.2`,
+and until Milestone 115 has shown Milestone 83's handoff. One
+ring-3 Rust service. No new syscall. Milestones 118 and 119
+follow it. The `v1.0` tag is still not applied.
 
-- [ ] **One service**: an init row, the same shape as `net`. The
+- [x] **One service**: an init row, the same shape as `net`. The
       SSH protocol is in-tree Rust. No OpenSSH, no libssh, no C,
       and no crates.io SSH library. It does not hold the wire
-- [ ] **The card**: `/card/ssh`. Init creates it the way it
+- [x] **The card**: `/card/ssh`. Init creates it the way it
       creates `/card/ping`, and does not grant it. Write accepts
       an inbound session. Read lets a local program open a
       session. The program passes no address. Both use `net`. A
       missing card asks (Milestone 107), for that run only
-- [ ] **What it speaks**: strict key exchange, then
+- [x] **What it speaks**: strict key exchange, then
       `curve25519-sha256`. Host keys are Ed25519. The cipher is
       `chacha20-poly1305` or `aes256-gcm`. The MAC is the AEAD
-- [ ] **What it refuses**: SHA-1, CBC, `ssh-rsa`, SSHv1, FTP,
+- [x] **What it refuses**: SHA-1, CBC, `ssh-rsa`, SSHv1, FTP,
       telnet, rsh, `ssh-dss`, `hmac-sha1`,
       `diffie-hellman-group1-sha1`,
       `diffie-hellman-group14-sha1`, and a cleartext transfer. A
       client that offers only a refused algorithm gets no
       session. There is no fallback to a legacy group
-- [ ] **Auth and files**: the existing PBKDF2 password hash. SFTP
+- [x] **Auth and files**: the existing PBKDF2 password hash. SFTP
       is a subsystem of that session, not a second port and not a
       second daemon. The files it can touch are the galfs tokens
       the seat already holds
-- [ ] **Proof**: the host opens one session and reads one file.
+- [x] **Proof**: the host opens one session and reads one file.
       A local program with read on `/card/ssh` opens one session.
       Serial does not contain the host-key private bytes or the
       password. A refused algorithm fails the handshake. A seat
       without the card accepts nothing
-- [ ] **Out of this milestone**: a new syscall, a root shell that
+- [x] **Out of this milestone**: a new syscall, a root shell that
       bypasses cards, a second stack, raw sockets, old
       algorithms, plaintext DNS, the `v1.0` tag, and the KVM rows
 
-## Milestone 118 — One program may dial
+## Milestone 118 — One outbound card
 
-A full name is its own card, and a subdomain is a different card.
-A stored address is its own card. A dial by name does not also
-need the address that came back. A program that passes an address
-still needs that address card. Read dials. Write accepts. A yes
-is that run of that program, and another program asks again.
-Admin's root covers files. It does not cover every network name.
-A browser asks again for every script, image, and API host. This
-milestone is one outbound card for one program. It does not
-accept.
+Read on the exact object `/card/out/<program>` lets that program
+dial. Init creates `/card/out/` and does not grant it. The
+program object starts ungranted. Admin's root does not satisfy
+it. An ancestor token does not. The check is an exact read
+token, and the task name is the last component.
 
-- [ ] **The card**: `/card/out/<program>`. The last component is
-      the task name. Init creates `/card/out/` and does not grant
-      it. The program object starts ungranted. Read on that exact
-      object lets that task dial. Holding admin's root does not
-      satisfy it. An ancestor token does not
-- [ ] **What it dials**: any name. A subdomain, a script host, an
-      image host, and an API host are that one card. An address
-      the program passes. The lookup inside the dial. A dial by
-      name still does not need the address that came back
-- [ ] **One direction**: outbound dial. The card does not bind,
-      listen, or accept. Inbound stays write on the port the
-      program listens on. A datagram stays that peer's card.
-      Ping stays `/card/ping`
-- [ ] **What the seat sees**: the program that holds the card
-      dials the next host with no line. A program without it,
-      and without that name's card, still prints
-      `<task> wants the network`. Yes is that name for this run.
-      No is `AccessDenied` and the program stays up. Yes on a
-      name does not install `/card/out/<program>`. Logged-out
-      is `AccessDenied` and does not ask
-- [ ] **This run**: `grant r /card/out/<program> <task>` installs
-      read on that task. The token dies when the task exits.
-      Another program asks for its own names. Per-name cards
-      stay for a program that was not given this one
-- [ ] **Proof**: the program with the card reads a body from two
-      names and from one address it passes. The seat prints no
-      ask. The same program, without write on the port card,
-      accepts nothing, and the peer's handshake does not complete.
-      A second program without the card prints one ask. No leaves
-      it up. Logged-out sends no packet
-- [ ] **Out of this milestone**: the share that survives reboot
-      (Milestone 119), a suffix rule, a packet filter, a second
-      stack, a raw socket, `setsockopt`, plaintext DNS, a new
-      syscall, the `v1.0` tag, and the KVM rows
+- [x] **What it dials**: any stored name, including a subdomain.
+      A script host, an image host, and an API host are that one
+      card. An address the program passes is that same card. The
+      lookup inside a dial by name does not ask for the resolved
+      address. `outbound_card_dials_two_names` reads a body from
+      two names, from `img.alpha`, and from one passed address,
+      and the seat is not asked
+- [x] **What it does not dial**: it does not bind, listen, or
+      accept. Inbound stays write on the port card. The same test
+      refuses `connect --listen` and does not print `attached`.
+      Datagram stays that peer's card. Ping stays `/card/ping`
+- [x] **The seat**: a program with the card dials the next host
+      with no line. A program without it, and without that name's
+      card, still prints `<task> wants the network`. Yes is that
+      name for this run. No is `AccessDenied` and the program
+      stays up. Yes on a name does not install
+      `/card/out/<program>`. Logged-out is `AccessDenied` and
+      does not ask
+- [x] **This run**: `grant r /card/out/<program> <task>` is the
+      existing grant syscall. The token dies when the task exits.
+      Another program asks for its own names. Per-name cards stay
+      for a program that was not given this one
+- [x] **The lane**: the reply on a connection that program opened
+      comes back on the same lane. No second card. An empty pin
+      on this card is plaintext, so an HTTP client writes the
+      request and reads the response. A stored pin stays the
+      one-shot TLS fetch. A dial without this card keeps that
+      TLS fetch, including an empty pin
+- [x] **Out of this milestone**: a suffix rule, a packet filter,
+      a second stack, a raw socket, `setsockopt`, plaintext DNS,
+      a new syscall, HTTPS, a general TLS stack, the `v1.0` tag,
+      and the KVM rows. DNS-over-TLS on port 853 stays
 
 ## Milestone 119 — The outbound card survives reboot
 
-The grant from Milestone 118 dies with the task. After reboot a
-server is asked on every name. This milestone stores that same
-card the way a durable file right is stored. It is a share. It
-is not a packet filter, not a second stack, and not a raw socket.
+`share r /card/out/<program> <actor>` records the grant. The row
+is the existing 6-byte share: actor, object, read. `DISK_VERSION`
+stays 17. The `/net` record stays version 2. No new syscall.
 
-- [ ] **What is stored**: `share r /card/out/<program> <actor>`.
-      The row is the existing share: actor, object, read. The
-      path names the program, so the 6-byte record holds it.
-      `DISK_VERSION` stays 17. The `/net` record stays version 2.
-      `unshare` drops the row. No new syscall
-- [ ] **What survives reboot**: spawn installs read on that task
-      when the share's actor is the one starting it. Init starts
-      its rows as admin, so admin's share is on that row at boot,
+- [x] **Who receives it**: spawn installs read on that task when
+      the share's actor is the one starting it. Init starts its
+      rows as admin, so an admin share is on that row at boot,
       before a seat logs in, and the row dials with no ask. A
       seat-started program takes the logged-in actor's share.
       Login does not put this object on the shell. A child does
-      not inherit it. A second program of the same actor does
-      not hold it
-- [ ] **What the seat sees**: after reboot the named program dials
-      a new name with no line. A program with no share and no
-      name card still prints `<task> wants the network`. No
-      leaves it up. Logged-out is `AccessDenied`
-- [ ] **The listen card**: write on the port stays the accept.
-      This share does not store it. A yes for that write still
-      dies with the task
-- [ ] **Proof**: share the card, reboot, and the named program
-      reads a body. The seat prints no ask. A host decode of the
-      sealed slot shows the share. A second program still asks.
-      `unshare`, then reboot, asks again
-- [ ] **Out of this milestone**: a grant for every program, a
-      listen grant that survives reboot, a suffix rule, a packet
-      filter, a second stack, a raw socket, plaintext DNS, a new
+      not inherit it. A second program of the same actor does not
+      hold it
+- [x] **What it does not store**: the listen card is write on the
+      port. This share does not store that write. A yes for that
+      write still dies with the task. `unshare` drops the row
+- [x] **Proof**: `test-share-disk` shares `/card/out/dial` to eve,
+      reboots on the suite's sealed-slot path, and the named
+      program holds the read. Login's token table does not. A
+      second program does not. The host decode of the sealed slot
+      shows the share, the file `dial`, and the `out` directory
+      under `card`
+
+## sec — `/policy` replaces the card objects
+
+The checks Milestones 105–119 named as `/card` and `/usb/N` are
+lines in `/policy`. Init creates that file. `sec` appends a line.
+`net` and `usb` match the kernel stamp. A miss sends nothing.
+There is no ask. An ancestor token does not cover the file.
+`DISK_VERSION` is 18. The boxes above stay the record of what
+those milestones checked. The objects they name are not created.
+
+## Milestone 120 — One address type
+
+The lease, the resolver, and a ping are four bytes. The record
+keeps two locator kinds. This row makes one address type. A v4
+value and a v6 value are that type. A dial rule, the reply, bind,
+listen, the datagram, and the route all take it. Opcodes stay
+1–12. There is no v6 opcode. Listening stays a `net listen` rule.
+This row does not send a v6 packet.
+
+- [ ] **One type**: the stored address, the dial, the reply, bind,
+      listen, the datagram, and the next hop are one type. v4 and
+      v6 are values of it. The two locator kinds do not stay two
+      paths. A dial rule stays one rule
+- [ ] **The same calls**: a v4 dial, bind, listen, datagram, and
+      datagram receive keep opcodes 2, 8, 9, 10, and 11. Opcode 12
+      stays the SSH stream. Ping stays opcode 5, and it carries
+      this type. The reply is still read on that connection.
+      Logged-out stays denied. A `net dial` rule takes this type
+- [ ] **The record**: a layout change bumps `galexy-netcfg`. The
+      old version is refused, not guessed. No new syscall and no
+      new opcode
+- [ ] **Proof**: a v4 body still comes back through that type. A
+      stored v6 value is the same type and the same opcode, and
+      this row sends no v6 packet
+- [ ] **Out of this milestone**: the parse (121), a neighbor past
+      the QEMU path (122), a v6 answer from DNS (123), a v6 reply
+      on the dial rule (124), a second stack, a raw socket,
+      plaintext DNS, general browser TLS, a new syscall, the
+      `v1.0` tag, and the KVM rows
+
+## Milestone 121 — The parse rejects an ambiguous form
+
+One parser for that type. The shell and `net` call it. A form
+that can be read two ways is refused. A rule stores the value,
+not the text. A refused form matches no rule and opens nothing.
+This row sends no packet.
+
+- [ ] **Refused**: a v4 octet with a leading zero. A zone id. A
+      second `::`. An IPv4-mapped form (`::ffff:192.0.2.1`). A
+      dotted tail inside v6 text (`::192.0.2.1`). `0.0.0.0` and
+      `::`. A string that is both a name and an address
+- [ ] **One value**: two spellings of one unambiguous address are
+      the same value. The parser does not guess a name into an
+      address, or an address into a name. A payload that can be
+      either is refused. Ping stays opcode 7. Four payload bytes
+      stay the v4 value. A v6 literal is text this parser accepts,
+      on that same opcode
+- [ ] **Proof**: host tests refuse each form above and accept one
+      v4 value and one v6 value. A refused form opens no
+      connection
+- [ ] **Out of this milestone**: a v6 packet, a second parser, a
+      second stack, a raw socket, plaintext DNS, general browser
+      TLS, a new opcode, the `v1.0` tag, and the KVM rows
+
+## Milestone 122 — A neighbor past the QEMU path
+
+QEMU user networking is `10.0.2.2`. ARP finds that gateway.
+Neighbor solicitation is a host test. Before a program sends v6,
+the service reaches one v6 neighbor or one v6 gateway that is
+not that path. The next hop is the one address type. The cache
+stays 8 entries. The kernel still only moves frames.
+
+- [ ] **The reach**: neighbor discovery for that next hop, the
+      way ARP is for v4. One echo to that neighbor or gateway.
+      The peer is not `10.0.2.2`. No lane
+- [ ] **The same call**: opcode 5 and a `net icmp` rule. No new
+      opcode. No rule, no packet. Logged-out is denied
+- [ ] **Proof**: the peer answers, and the address is not
+      `10.0.2.2`. A missing rule sends nothing. The QEMU user
+      path does not check this box. The host test of a
+      solicitation does not check it either
+- [ ] **Out of this milestone**: a name lookup (123), an
+      application lane, listen, a second stack, a raw socket,
+      plaintext DNS, general browser TLS, a new syscall, the
+      `v1.0` tag, and the KVM rows
+
+## Milestone 123 — A name can return a v6 address
+
+Milestone 110 resolves over DNS-over-TLS. The answer today is
+v4. This row lets that same lookup return a v6 value of the one
+type. The program passes the name. The reply is the address.
+No lane.
+
+- [ ] **The same path**: opcode 8, port 853, the pinned resolver.
+      Not UDP/53. Not `10.0.2.3`. No second resolver and no v6
+      opcode. A v4 answer still works. One reply is one address.
+      The lookup does not open a second connection to try the
+      other version
+- [ ] **The rule**: no dial rule, no query. Logged-out is denied.
+      A missing pin sends nothing
+- [ ] **Proof**: one TLS query whose answer is a v6 address.
+      Serial does not carry the resolver key. A UDP datagram to
+      port 53 is absent. This row does not dial
+- [ ] **Out of this milestone**: the dial (124), a
+      program-supplied resolver, happy eyeballs, raw sockets, a
+      second stack, plaintext DNS, general browser TLS, a new
       syscall, the `v1.0` tag, and the KVM rows
+
+## Milestone 124 — The dial rule covers a v6 reply
+
+A `net dial` rule dials and receives the reply on that connection.
+When the answer is v6, that same rule is the right. There is no
+second rule for the address family. Listening stays a
+`net listen` rule. This rule does not accept.
+
+- [ ] **The same rule**: a `net dial` rule dials a name whose
+      answer is v6, and a v6 address the program passes. The
+      reply is read on that connection. A dial by name does not
+      also need a rule for the resolved address. The lane is the
+      one a dial already uses
+- [ ] **What it does not do**: it does not bind, listen, or
+      accept. Inbound stays a `net listen` rule. A datagram stays
+      a `net dial` rule for that peer. Ping stays `net icmp`. A
+      program with no rule sends nothing and stays up. Logged-out
+      is denied
+- [ ] **Proof**: the program with the rule reads a body from a
+      v6 answer. Without the rule, no handshake. Without a listen
+      rule, the program accepts nothing
+- [ ] **Out of this milestone**: a second stack, a raw socket,
+      plaintext DNS, general browser TLS,
+      a public CA bundle, TLS before 1.3, a new opcode, a new
+      syscall, the `v1.0` tag, and the KVM rows. Milestones 118
+      and 119 are not this row
+
+## Milestone 125 — The resolver trusts the bundle
+
+`net pin <ip>` is enough. The image carries the Mozilla roots.
+The pin reads the domain off the certificate and the seat prints
+it. The certificate must chain to that bundle, be currently
+valid, and be valid for that domain. A key file is optional.
+When it is passed, that raw key is the pin and the bundle is not
+consulted. A certificate that chains to neither is refused, and
+no query is sent.
+`10.0.2.2` and `10.0.2.3` stay refused. DNS stays DNS-over-TLS
+on port 853. This is the resolver only. A lane, an SSH host key,
+and `net allow` do not use the bundle.
+
+- [x] **The bundle**: pure Rust (`webpki-roots`). No C and no
+      OpenSSL. The handshake checks the chain, the dates, and
+      the domain taken from the certificate. The seat prints
+      that domain. No key file is required
+- [x] **The key file still wins**: that 32-byte key is the only
+      certificate accepted. The bundle is not consulted. A
+      different key sends no query
+- [x] **Fail closed**: a certificate that chains to neither is
+      refused. No query is sent. `10.0.2.2` and `10.0.2.3` stay
+      refused, with or without a key file. Plaintext DNS and
+      UDP/53 stay refused
+- [x] **Proof**: `resolver_trusts_the_bundle` accepts a chain
+      with no key file and refuses a certificate that does not
+      chain. `resolver_pin_still_wins` sends no query for that
+      certificate, accepts only the key in the file, and still
+      refuses the two gateway addresses
+- [x] **Out of this milestone**: WebPKI on a lane, an SSH host
+      key, or `net allow`. RSA stays refused. No second stack,
+      no raw socket, no plaintext DNS, no general browser TLS,
+      no new opcode, the `v1.0` tag, and the KVM rows. Milestones
+      120–124 stay open
+
+## Milestone 126 — Network time
+
+The date is unset until someone sets it, and a certificate check
+refuses a pin when the clock is unset. This row sets civil UTC from
+one Network Time Protocol server. It does not wait on Milestones
+120–124. `Clock` stays milliseconds since boot. `Date` stays the
+civil clock from Milestone 90. There is no timezone and no leap
+smear.
+
+- [x] **One query**: `net` sends one NTP packet to one address on
+      UDP port 123 and reads one reply from that address. The
+      transmit time in the reply sets `Date` and the CMOS chip.
+      A reply from any other address is ignored. The wire must be
+      up. A DNS name is one lookup on the pinned DNS-over-TLS
+      resolver, then that same packet. No pin prints `access denied`
+      and sends nothing. Plaintext DNS stays unused. The address is
+      four bytes until Milestone 120
+- [x] **Who asks**: the administrative seat. The command is
+      `net time <ip>` or `net time <name>`. No new syscall. Opcode 13 on net cap
+      `0x800A` appends. A logged-out seat is `AccessDenied`. A
+      program that is not the administrative user is refused.
+      Port 53 stays unused
+- [x] **What it does not do**: no second stack, no pool, no
+      background poll, no NTS. NTS needs a clock to check a
+      certificate, and this row is the clock. One shot, then
+      elapsed monotonic time carries `Date` the way a manual set
+      does. A chip that already holds a year in 2000..=2099 still
+      seeds the anchor at boot. This query replaces it
+- [x] **Proof**: an unset date becomes `svc date` in UTC after one
+      reply, and a certificate pin that was `clock not set` then
+      proceeds. A reply from a different address does not move the
+      clock. Serial does not carry a key. The `v1.0` tag stays
+      unapplied
+- [x] **Out of this milestone**: NTS, a server pool, a timezone,
+      a leap second, a poll loop, a v6 address, a new syscall,
+      the first-boot screen (128), and the KVM rows
+
+## Milestone 127 — The first user is the administrator
+
+A production disk has an account named `admin` and a password the
+operator types at format. This row removes that account. The user
+created at setup is the administrative actor. `is_admin_root` is
+that actor's root. Further users from `useradd` are not.
+
+- [x] **No `admin` actor**: format does not create a user named
+      `admin`. The name and the password come from the seat. The
+      name `admin` is refused. An empty name is refused. The
+      password is confirmed. The format default `admin`/`admin`
+      is not written. Must-change of that default has nothing to
+      change on this disk
+- [x] **The same rights**: the stamp's admin byte is this actor.
+      `svc`, `net pin`, `net time`, `volpass`, and `sec` stay
+      that user's. Another login does not get them by name.
+      `su` to this user is the existing card, and the card names
+      this root, not the string `admin`
+- [x] **The suite**: test kernels and the disk harness may still
+      format a known account so the boots keep logging in. That
+      account is not created on the production image. The
+      production path is Milestone 128
+- [x] **Proof**: a production format has one actor, the name the
+      seat typed, and `is_admin_root` is that root. A second
+      `useradd` logs in and `sec` answers `access denied`. Serial
+      does not carry the password
+- [x] **Out of this milestone**: the setup screen (128), deleting
+      the harness account from the suite, a second administrator,
+      a new syscall, and the `v1.0` tag
+
+## Milestone 128 — First boot
+
+An empty disk does not open a login named `admin`. One seat walks
+three questions, then the login prompt is the user from
+Milestone 127. Milestone 126 has landed, so a pin can check a
+certificate date.
+
+- [ ] **The disk**: the first question is the volume passphrase,
+      confirmed. That formats the filesystem and seals it. A
+      mismatch asks again. No default passphrase is stored. A
+      disk that is already sealed asks for the existing
+      passphrase and skips the rest
+- [ ] **The user**: the second question is the name and the
+      password, confirmed. This is the actor from Milestone 127.
+      There is no account named `admin`
+- [ ] **The network**: the third question shows `link`. The seat
+      types a resolver address or `skip`. An address runs
+      `net time` when the date is unset, then `net pin`. Skip
+      leaves the date and the resolver unset. The login prompt
+      is still that user
+- [ ] **Proof**: a blank production image reaches login only
+      after the three answers, the actor name is the one typed,
+      `svc date` is set when the seat did not skip, and a skip
+      still logs in. A second boot asks for the passphrase and
+      does not ask for a new user. Serial carries neither secret
+- [ ] **Out of this milestone**: a second user during setup, a
+      timezone, NTS, a new syscall, Milestones 120–124, the
+      `v1.0` tag, and the KVM rows
+
 
 ---
 

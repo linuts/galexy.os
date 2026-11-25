@@ -59,16 +59,19 @@ fixed in a milestone PR with a changelog line.
   at 10 000 iterations.
 - Remote attacks: Phase 10 has landed (`docs/NET.md`). The kernel
   moves frames and does not parse IP. A lane, a ping, and a datagram
-  need the card. Remote login is Milestone 117 and is not in the tree.
-  One program's outbound card is Milestones 118 and 119 and is not
-  in the tree.
+  need a line in `/policy`. A dial rule does not listen. Remote
+  login is Milestone 117: one SSH service,
+  `net listen *:4598 name ssh`, and no second stack.
+- IPv6: Milestones 120–124 plan one address type. They are not in
+  the tree. No second stack, no raw socket, no plaintext DNS, and
+  no general browser TLS.
 - USB devices: Phase 13 has landed (`docs/USB.md`). xHCI lists a
   device, and Milestone 102 claims the QEMU boot keyboard. Other
   vendor drivers stay unwritten.
 - Python: `cargo run` carries RustPython as `python` when
   `target/galexy-python/python` was built (`docs/PYTHON.md`).
   A `.py` file runs with the seat's tokens. The interpreter adds
-  no syscall. `socket` calls the net cards. `pip` and `subprocess`
+  no syscall. `socket` calls the lines in `/policy`. `pip` and `subprocess`
   stay out.
 - Denial of service by the operator at the keyboard (the console budget
   and quotas are fairness, not security, mechanisms).

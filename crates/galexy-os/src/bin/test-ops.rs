@@ -69,7 +69,7 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     let size = u32::from_le_bytes([st[4], st[5], st[6], st[7]]);
     assert_eq!(size, 12);
     assert_eq!(st[8], 5);
-    assert_eq!(&st[9..14], b"admin");
+    assert_eq!(&st[9..14], b"owner");
 
     galfs::stat_as_admin("box", &mut st).expect("stat dir");
     assert_eq!(st[0], STAT_DIR);

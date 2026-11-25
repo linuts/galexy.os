@@ -8,10 +8,10 @@ use core::sync::atomic::Ordering;
 
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
-    close, create, dmesg_cap, grant, init_rpc, init_rpc_at, init_rpc_every, net_rpc, open, read,
-    reboot, revoke, self_cap, share, shutdown, spawn_with, stats_cap, sync, tasks_cap, threads_cap,
-    unshare, usb_rpc, user, user_lock, user_login, user_logout, user_name, user_name_pass,
-    user_passwd, user_quota, user_setquota, user_volpass, volume_query, write_console,
+    close, dmesg_cap, grant, init_rpc, init_rpc_at, init_rpc_every, net_rpc, open, read, reboot,
+    revoke, share, shutdown, sleep_ms, spawn_with, stat, stats_cap, sync, tasks_cap, threads_cap,
+    unshare, user, user_lock, user_login, user_logout, user_name, user_name_pass, user_passwd,
+    user_quota, user_setquota, user_volpass, volume_query, write_console,
 };
 
 /// Sectioned help — short command column + one-line blurb.
@@ -73,7 +73,11 @@ pub(crate) fn show_help() {
     help_row(b"fetch", b"dashboard (alias: dashboard)");
     help_row(b"fetch <name>", b"dial a granted name and print");
     help_row(b"net link", b"address, or down");
-    help_row(b"net allow ...", b"name, locator, key file");
+    help_row(b"net allow ...", b"name, locator, optional key file");
+    help_row(b"net pin <ip> [keyfile]", b"resolver; key file optional");
+    help_row(b"net time <ip or name>", b"one NTP query, then civil UTC");
+    help_row(b"ping <ip or name>", b"three echoes, then the times");
+    help_row(b"nslookup <name>", b"name and addresses from the pin");
     help_row(b"stats", b"uptime / frames / heap / galfs");
     help_row(b"dmesg", b"recent kernel log lines");
     help_row(b"tasks", b"tty, state, cpu, parent");
@@ -110,9 +114,11 @@ pub(crate) fn show_help() {
     write_console(b"  cmd &              background (jobs / fg)\n");
     write_console(b"  *                  names in the current directory\n");
     write_console(b"  a bare program shares this console (no background)\n");
-    write_console(b"  default admin/admin must passwd before other commands\n");
-    write_console(b"  a new disk asks for a volume passphrase, then an admin password\n");
-    write_console(b"  su admin restores a born-admin seat; login always needs a password\n");
+    write_console(b"  the user created at setup is the administrator\n");
+    write_console(b"  a new disk asks for a volume passphrase, then that account\n");
+    write_console(
+        b"  su back to that account restores a born-admin seat; login needs a password\n",
+    );
     write_console(b"  a bare program name loads it from the ramdisk\n");
     write_console(b"  sample programs are under testing/ (testing/hello)\n");
 }
@@ -216,9 +222,13 @@ pub(crate) fn dispatch(
         prompt(cwd);
         return None;
     }
+    if let Some(rest) = arg_of(line, b"sec") {
+        sec_cmd(cwd, rest);
+        return None;
+    }
     if let Some(rest) = arg_of(line, b"fetch") {
         if !rest.is_empty() {
-            fetch_name(cwd, rest);
+            launch_util(cwd, b"fetch", rest, false);
             return None;
         }
     }
@@ -226,12 +236,36 @@ pub(crate) fn dispatch(
         net_cmd(cwd, rest);
         return None;
     }
+    if let Some(rest) = arg_of(line, b"nslookup") {
+        let name = trim(rest);
+        if name.is_empty() {
+            write_console(b"nslookup <name>\n");
+            prompt(cwd);
+            return None;
+        }
+        let mut arg = [0u8; 80];
+        let prefix = b"lookup ";
+        if prefix.len() + name.len() > arg.len() {
+            write_console(b"bad\n");
+            prompt(cwd);
+            return None;
+        }
+        arg[..prefix.len()].copy_from_slice(prefix);
+        arg[prefix.len()..prefix.len() + name.len()].copy_from_slice(name);
+        launch_util(cwd, b"ping", &arg[..prefix.len() + name.len()], false);
+        return None;
+    }
     if let Some(rest) = arg_of(line, b"ping") {
-        ping_cmd(cwd, rest);
+        launch_util(cwd, b"ping", trim(rest), false);
         return None;
     }
     if let Some(rest) = arg_of(line, b"usb") {
-        usb_cmd(cwd, rest);
+        if rest.is_empty() || rest == b"list" {
+            launch_util(cwd, b"usb-list", b"", false);
+        } else {
+            write_console(b"usb: list\n");
+            prompt(cwd);
+        }
         return None;
     }
     if line == b"fetch" || line == b"dashboard" {
@@ -458,6 +492,46 @@ pub(crate) fn dispatch(
     if line == b"python" {
         let grants = galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_KEYBOARD;
         spawn_and_prompt(cwd, b"python", b"", grants, true);
+        return None;
+    }
+    // `ssh user@address` dials port 22. A port other than 22 is
+    // `ssh user@address:port`. The password is the peer account's.
+    // `ssh-open` with no address uses the stored peer.
+    if line == b"ssh-open" {
+        let grants = galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_KEYBOARD;
+        spawn_and_prompt(cwd, b"ssh-open", b"", grants, true);
+        return None;
+    }
+    if let Some(rest) = arg_of(line, b"ssh") {
+        let grants = galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_KEYBOARD;
+        if !rest.contains(&b'@') {
+            write_console(b"ssh <user>@<address>[:port]\n");
+            prompt(cwd);
+            return None;
+        }
+        spawn_and_prompt(cwd, b"ssh-open", rest, grants, true);
+        return None;
+    }
+    if let Some(rest) = arg_of(line, b"python") {
+        let grants = galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_KEYBOARD;
+        if rest.is_empty() {
+            spawn_and_prompt(cwd, b"python", b"", grants, true);
+            return None;
+        }
+        let mut path = [0u8; PATH_MAX];
+        let mut dotted = [0u8; PATH_MAX];
+        let shown = if rest.contains(&b'/') {
+            rest
+        } else if 2 + rest.len() > dotted.len() {
+            rest
+        } else {
+            dotted[0] = b'.';
+            dotted[1] = b'/';
+            dotted[2..2 + rest.len()].copy_from_slice(rest);
+            &dotted[..2 + rest.len()]
+        };
+        let program = program_name(cwd, shown, &mut path);
+        spawn_and_prompt(cwd, program, b"", grants, true);
         return None;
     }
     if !line.contains(&b' ') {
@@ -1156,8 +1230,6 @@ pub(crate) fn user_pass_op(
         pass_inline
     };
 
-    let default_admin =
-        op == galexy_abi::USER_LOGIN && name == b"admin" && pass == ADMIN_DEFAULT_PASS;
     let result = if op == galexy_abi::USER_LOGIN {
         user_login(name, pass)
     } else {
@@ -1165,10 +1237,7 @@ pub(crate) fn user_pass_op(
     };
     wipe(&mut pass_buf);
     if result.ok && op == galexy_abi::USER_LOGIN {
-        *must_change = default_admin;
-        if *must_change {
-            write_console(b"passwd: change the default password\n");
-        }
+        *must_change = false;
     }
     report_user(
         cwd,
@@ -1203,11 +1272,8 @@ pub(crate) fn passwd_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8], must_change: &mut
     };
     let result = user_passwd(name, &pass_buf[..plen]);
     wipe(&mut pass_buf);
-    if result.ok {
-        // Changing own password (empty name) clears the default-password gate.
-        if name.is_empty() || name == b"admin" {
-            *must_change = false;
-        }
+    if result.ok && name.is_empty() {
+        *must_change = false;
     }
     report_user(cwd, b"passwd", result, false);
 }
@@ -1215,18 +1281,6 @@ pub(crate) fn passwd_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8], must_change: &mut
 pub(crate) fn volpass_cmd(kbd: Cap, cwd: &mut Cwd, rest: &[u8]) {
     if !trim(rest).is_empty() {
         write_console(b"usage: volpass\n");
-        prompt(cwd);
-        return;
-    }
-    let mut name = [0u8; 64];
-    let got = user(&mut name, galexy_abi::USER_WHOAMI);
-    let n = if got.ok {
-        (got.value as usize).min(name.len())
-    } else {
-        0
-    };
-    if &name[..n] != b"admin" {
-        write_console(b"volpass: access denied\n");
         prompt(cwd);
         return;
     }
@@ -1888,71 +1942,113 @@ pub(crate) fn show(cap: Cap, cwd: &Cwd) {
     prompt(cwd);
 }
 
-fn fetch_name(cwd: &Cwd, name: &[u8]) {
-    let mut who = [0u8; 32];
-    let got = user(&mut who, galexy_abi::USER_WHOAMI);
-    let who = if got.ok {
-        trim(&who[..(got.value as usize).min(who.len())])
-    } else {
-        b"admin"
+fn push_u64(out: &mut [u8], n: &mut usize, mut value: u64) {
+    if value == 0 {
+        let _ = push_byte(out, n, b'0');
+        return;
+    }
+    let mut tmp = [0u8; 20];
+    let mut i = tmp.len();
+    while value > 0 {
+        i -= 1;
+        tmp[i] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    let _ = push_bytes(out, n, &tmp[i..]);
+}
+
+fn sec_cmd(cwd: &Cwd, rest: &[u8]) {
+    let rest = trim(rest);
+    let Some((kind, rest)) = split_word(rest) else {
+        write_console(b"sec <net|usb> <verb> <object> <subject>\n");
+        prompt(cwd);
+        return;
     };
-    let mut payload = [0u8; 96];
-    if name.len() + who.len() + 3 > payload.len() {
-        write_console(b"bad\n");
+    let Some((verb, rest)) = split_word(rest) else {
+        write_console(b"sec <net|usb> <verb> <object> <subject>\n");
+        prompt(cwd);
+        return;
+    };
+    let Some((object, subject)) = split_word(rest) else {
+        write_console(b"sec <net|usb> <verb> <object> <subject>\n");
+        prompt(cwd);
+        return;
+    };
+    if !subject.is_empty() && split_word(subject).is_some_and(|(_, more)| !more.is_empty()) {
+        write_console(b"bad value\n");
         prompt(cwd);
         return;
     }
-    payload[0] = galexy_abi::NET_OP_DIAL;
-    payload[1] = name.len() as u8;
-    payload[2..2 + name.len()].copy_from_slice(name);
-    let at = 2 + name.len();
-    payload[at] = who.len() as u8;
-    payload[at + 1..at + 1 + who.len()].copy_from_slice(who);
-    let n = at + 1 + who.len();
-    finish_net(cwd, &payload[..n], true);
-}
-
-fn usb_cmd(cwd: &Cwd, rest: &[u8]) {
-    if rest.is_empty() || rest == b"list" {
-        let mut reply = [0u8; galexy_abi::CHAN_MSG_MAX];
-        let got = usb_rpc(&[galexy_abi::USB_OP_LIST], &mut reply);
-        if !got.ok {
-            write_console(b"access denied\n");
-            prompt(cwd);
-            return;
-        }
-        let n = (got.value as usize).min(reply.len());
-        if n == 0 {
-            write_console(b"none\n");
+    let mut line = [0u8; 160];
+    let mut n = 0usize;
+    if !push_bytes(&mut line, &mut n, kind)
+        || !push_byte(&mut line, &mut n, b' ')
+        || !push_bytes(&mut line, &mut n, verb)
+        || !push_byte(&mut line, &mut n, b' ')
+        || !push_bytes(&mut line, &mut n, object)
+        || !push_byte(&mut line, &mut n, b' ')
+    {
+        write_console(b"bad value\n");
+        prompt(cwd);
+        return;
+    }
+    if !push_subject(cwd, subject, &mut line, &mut n) {
+        write_console(b"bad value\n");
+        prompt(cwd);
+        return;
+    }
+    let mut reply = [0u8; 64];
+    let got = init_rpc(galexy_abi::INIT_OP_SEC, &line[..n], &mut reply);
+    if !got.ok {
+        write_console(b"access denied\n");
+    } else {
+        let rn = (got.value as usize).min(reply.len());
+        if rn == 0 {
+            write_console(b"bad\n");
         } else {
-            write_console(&reply[..n]);
+            write_console(&reply[..rn]);
         }
-        prompt(cwd);
-        return;
     }
-    write_console(b"usb: list\n");
     prompt(cwd);
 }
 
-fn ping_cmd(cwd: &Cwd, rest: &[u8]) {
-    let text = trim(rest);
-    if let Some(ip) = parse_ip(text) {
-        let mut payload = [0u8; 5];
-        payload[0] = galexy_abi::NET_OP_PING;
-        payload[1..5].copy_from_slice(&ip);
-        finish_net(cwd, &payload, false);
-        return;
+fn push_subject(cwd: &Cwd, subject: &[u8], line: &mut [u8], n: &mut usize) -> bool {
+    if subject.is_empty() || subject == b"*" || subject == b"/*" {
+        return false;
     }
-    if dns_name(text) {
-        let mut payload = [0u8; galexy_abi::INIT_RPC_MAX];
-        payload[0] = galexy_abi::NET_OP_PING;
-        payload[1] = text.len() as u8;
-        payload[2..2 + text.len()].copy_from_slice(text);
-        finish_net(cwd, &payload[..2 + text.len()], false);
-        return;
+    if subject.contains(&b'/') {
+        let folder = subject.ends_with(b"/*");
+        let path = if folder {
+            &subject[..subject.len() - 2]
+        } else {
+            subject
+        };
+        if path.is_empty() {
+            return false;
+        }
+        let mut buf = [0u8; galexy_abi::STAT_LEN];
+        let got = stat(path, &mut buf);
+        if !got.ok || got.value < galexy_abi::STAT_LEN as u64 {
+            return false;
+        }
+        let mut id_bytes = [0u8; 4];
+        id_bytes.copy_from_slice(&buf[galexy_abi::STAT_ID..galexy_abi::STAT_ID + 4]);
+        let id = u32::from_le_bytes(id_bytes);
+        let word = if folder { b"parent" as &[u8] } else { b"id" };
+        push_bytes(line, n, word) && push_byte(line, n, b' ') && push_u32(line, n, id)
+    } else {
+        if subject.len() > galexy_abi::SEC_NAME_MAX || subject.contains(&b'/') {
+            return false;
+        }
+        let _ = cwd;
+        push_bytes(line, n, b"name") && push_byte(line, n, b' ') && push_bytes(line, n, subject)
     }
-    write_console(b"ping <ip or name>\n");
-    prompt(cwd);
+}
+
+fn push_u32(out: &mut [u8], n: &mut usize, value: u32) -> bool {
+    let start = *n;
+    push_u64(out, n, u64::from(value));
+    *n > start
 }
 
 fn net_cmd(cwd: &Cwd, rest: &[u8]) {
@@ -1966,6 +2062,10 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
     }
     if let Some(tail) = arg_of(rest, b"pin") {
         net_pin(cwd, tail);
+        return;
+    }
+    if let Some(tail) = arg_of(rest, b"time") {
+        net_time(cwd, tail);
         return;
     }
     if let Some(tail) = arg_of(rest, b"resolve") {
@@ -1988,14 +2088,6 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
         net_listen(cwd, tail);
         return;
     }
-    if let Some(tail) = arg_of(rest, b"grant") {
-        net_actor(cwd, galexy_abi::NET_OP_GRANT, tail);
-        return;
-    }
-    if let Some(tail) = arg_of(rest, b"revoke") {
-        net_actor(cwd, galexy_abi::NET_OP_REVOKE, tail);
-        return;
-    }
     if let Some(tail) = arg_of(rest, b"serve") {
         let mut payload = [0u8; 80];
         payload[0] = galexy_abi::NET_OP_SERVE;
@@ -2006,89 +2098,8 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
         finish_net(cwd, &payload[..1 + n], true);
         return;
     }
-    write_console(
-        b"net: link, pin, allow, resolve, addr, port, peer, listen, grant, revoke, serve\n",
-    );
+    write_console(b"net: link, pin, time, allow, resolve, addr, port, peer, listen, serve\n");
     prompt(cwd);
-}
-
-fn net_actor(cwd: &Cwd, op: u8, tail: &[u8]) {
-    let Some(sp) = tail.iter().position(|b| *b == b' ') else {
-        write_console(b"bad\n");
-        prompt(cwd);
-        return;
-    };
-    let name = trim(&tail[..sp]);
-    let actor = trim(&tail[sp + 1..]);
-    if name.is_empty() || actor.is_empty() || name.len() > 64 {
-        write_console(b"bad\n");
-        prompt(cwd);
-        return;
-    }
-    let mut path = [0u8; 80];
-    let prefix = b"/card/";
-    if prefix.len() + name.len() > path.len() {
-        write_console(b"bad\n");
-        prompt(cwd);
-        return;
-    }
-    path[..prefix.len()].copy_from_slice(prefix);
-    path[prefix.len()..prefix.len() + name.len()].copy_from_slice(name);
-    let path = &path[..prefix.len() + name.len()];
-    let mut own = [0u8; 32];
-    let target = if actor_is_self(actor) {
-        match own_task_name(&mut own) {
-            Some(n) => &own[..n],
-            None => actor,
-        }
-    } else {
-        actor
-    };
-    let grant_op = op == galexy_abi::NET_OP_GRANT;
-    let rights = if grant_op {
-        galexy_abi::TOKEN_READ
-    } else {
-        galexy_abi::TOKEN_READ | galexy_abi::TOKEN_WRITE
-    };
-    let result = if grant_op {
-        grant(path, rights, target)
-    } else {
-        revoke(path, rights, target)
-    };
-    if result.ok {
-        write_console(b"ok\n");
-    } else {
-        write_console(b"missing\n");
-    }
-    prompt(cwd);
-}
-
-fn actor_is_self(actor: &[u8]) -> bool {
-    let mut who = [0u8; 32];
-    let got = user(&mut who, galexy_abi::USER_WHOAMI);
-    if !got.ok {
-        return false;
-    }
-    let n = (got.value as usize).min(who.len());
-    trim(&who[..n]) == actor
-}
-
-fn own_task_name(out: &mut [u8]) -> Option<usize> {
-    let mut buf = [0u8; 128];
-    let got = read(self_cap(), &mut buf);
-    if !got.ok || got.value == 0 {
-        return None;
-    }
-    let text = &buf[..(got.value as usize).min(buf.len())];
-    let key = b"name=";
-    let at = text.windows(key.len()).position(|w| w == key)? + key.len();
-    let rest = &text[at..];
-    let end = rest.iter().position(|b| *b == b' ').unwrap_or(rest.len());
-    if end == 0 || end > out.len() {
-        return None;
-    }
-    out[..end].copy_from_slice(&rest[..end]);
-    Some(end)
 }
 
 fn net_allow(cwd: &Cwd, tail: &[u8]) {
@@ -2114,8 +2125,8 @@ fn net_allow(cwd: &Cwd, tail: &[u8]) {
             &rest[sp + 1..]
         };
     }
-    if nparts != 3 {
-        write_console(b"net allow <name> <ip:port> <keyfile>\n");
+    if nparts < 2 {
+        write_console(b"net allow <name> <ip:port> [keyfile]\n");
         prompt(cwd);
         return;
     }
@@ -2139,10 +2150,15 @@ fn net_allow(cwd: &Cwd, tail: &[u8]) {
         };
         (ip, port, 4)
     };
-    let Some(key) = read_key(cwd, parts[2]) else {
-        write_console(b"bad key\n");
-        prompt(cwd);
-        return;
+    let key = if nparts == 3 {
+        let Some(key) = read_key(cwd, parts[2]) else {
+            write_console(b"bad key\n");
+            prompt(cwd);
+            return;
+        };
+        key
+    } else {
+        [0u8; 32]
     };
     let name = parts[0];
     if name.len() > 32 {
@@ -2166,13 +2182,44 @@ fn net_allow(cwd: &Cwd, tail: &[u8]) {
     finish_net(cwd, &payload[..at], false);
 }
 
-fn net_pin(cwd: &Cwd, tail: &[u8]) {
-    let Some(sp) = tail.iter().position(|b| *b == b' ') else {
-        write_console(b"net pin <ip> <keyfile>\n");
+fn net_time(cwd: &Cwd, tail: &[u8]) {
+    let tail = trim(tail);
+    if tail.is_empty() || tail.contains(&b' ') {
+        write_console(b"net time <ip or name>\n");
         prompt(cwd);
         return;
+    }
+    if let Some(ip) = parse_ip(tail) {
+        let mut payload = [0u8; 5];
+        payload[0] = galexy_abi::NET_OP_TIME;
+        payload[1..5].copy_from_slice(&ip);
+        finish_net(cwd, &payload, false);
+        return;
+    }
+    if !dns_name(tail) {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    }
+    let mut payload = [0u8; 256];
+    payload[0] = galexy_abi::NET_OP_TIME;
+    payload[1] = tail.len() as u8;
+    payload[2..2 + tail.len()].copy_from_slice(tail);
+    finish_net(cwd, &payload[..2 + tail.len()], false);
+}
+
+fn net_pin(cwd: &Cwd, tail: &[u8]) {
+    let tail = trim(tail);
+    if tail.is_empty() {
+        write_console(b"net pin <ip> [keyfile]\n");
+        prompt(cwd);
+        return;
+    }
+    let (ip_text, key_path) = match tail.iter().position(|b| *b == b' ') {
+        Some(sp) => (trim(&tail[..sp]), Some(trim(&tail[sp + 1..]))),
+        None => (tail, None),
     };
-    let Some(ip) = parse_ip(trim(&tail[..sp])) else {
+    let Some(ip) = parse_ip(ip_text) else {
         write_console(b"bad\n");
         prompt(cwd);
         return;
@@ -2182,16 +2229,31 @@ fn net_pin(cwd: &Cwd, tail: &[u8]) {
         prompt(cwd);
         return;
     }
-    let Some(key) = read_key(cwd, trim(&tail[sp + 1..])) else {
-        write_console(b"bad key\n");
-        prompt(cwd);
-        return;
+    let key = if let Some(path) = key_path {
+        if path.is_empty() {
+            write_console(b"net pin <ip> [keyfile]\n");
+            prompt(cwd);
+            return;
+        }
+        let Some(key) = read_key(cwd, path) else {
+            write_console(b"bad key\n");
+            prompt(cwd);
+            return;
+        };
+        Some(key)
+    } else {
+        None
     };
     let mut payload = [0u8; 40];
     payload[0] = galexy_abi::NET_OP_PIN;
     payload[1..5].copy_from_slice(&ip);
-    payload[5..37].copy_from_slice(&key);
-    finish_net(cwd, &payload[..37], false);
+    let n = if let Some(key) = key {
+        payload[5..37].copy_from_slice(&key);
+        37
+    } else {
+        5
+    };
+    finish_net(cwd, &payload[..n], false);
 }
 
 fn net_resolve(cwd: &Cwd, tail: &[u8]) {
@@ -2355,35 +2417,17 @@ fn send_allow(cwd: &Cwd, name: &[u8], port: u16, kind: u8, ip: [u8; 4], key: [u8
     finish_net(cwd, &payload[..at], false);
 }
 
-fn reply_is_ok(text: &[u8]) -> bool {
-    text.windows(2).any(|w| w == b"ok")
-}
-
-fn create_card(payload: &[u8]) {
-    if payload.len() < 2 {
-        return;
-    }
-    let nlen = payload[1] as usize;
-    if payload.len() < 2 + nlen || nlen == 0 {
-        return;
-    }
-    let name = &payload[2..2 + nlen];
-    let mut path = [0u8; 80];
-    let prefix = b"/card/";
-    if prefix.len() + name.len() > path.len() {
-        return;
-    }
-    path[..prefix.len()].copy_from_slice(prefix);
-    path[prefix.len()..prefix.len() + name.len()].copy_from_slice(name);
-    let made = create(&path[..prefix.len() + name.len()]);
-    if made.ok {
-        let _ = close(Cap::from_bits(made.value));
-    }
-}
-
 fn finish_net(cwd: &Cwd, payload: &[u8], body: bool) {
     let mut reply = [0u8; galexy_abi::CHAN_MSG_MAX];
-    let got = net_rpc(payload, &mut reply);
+    let mut got = net_rpc(payload, &mut reply);
+    // The listener holds the one net call while it asks. A miss is
+    // NoResource, not a denial. Try again once it has let go.
+    let mut tries = 0u8;
+    while !got.ok && SysError::from_code(got.value) == SysError::NoResource && tries < 8 {
+        let _ = sleep_ms(50);
+        got = net_rpc(payload, &mut reply);
+        tries += 1;
+    }
     if !got.ok {
         write_console(b"access denied\n");
         prompt(cwd);
@@ -2394,9 +2438,6 @@ fn finish_net(cwd: &Cwd, payload: &[u8], body: bool) {
         write_console(b"bad\n");
         prompt(cwd);
         return;
-    }
-    if payload.first() == Some(&galexy_abi::NET_OP_ALLOW) && reply_is_ok(&reply[8..n]) {
-        create_card(payload);
     }
     let mut bits = [0u8; 8];
     bits.copy_from_slice(&reply[..8]);
@@ -2428,6 +2469,28 @@ fn parse_locator(text: &[u8]) -> Option<([u8; 4], u16)> {
 
 /// A dotted DNS name. Four payload bytes stay an IPv4 address, so a
 /// three-byte name is not a name on this opcode.
+fn parse_ip(text: &[u8]) -> Option<[u8; 4]> {
+    let mut ip = [0u8; 4];
+    let mut last = 0usize;
+    for (i, part) in text.split(|b| *b == b'.').enumerate() {
+        if i > 3 {
+            return None;
+        }
+        let n = parse_u16(part)?;
+        if n > 255 {
+            return None;
+        }
+        ip[i] = n as u8;
+        last = i;
+    }
+    if last != 3 {
+        return None;
+    }
+    Some(ip)
+}
+
+/// A dotted DNS name. Four payload bytes stay an IPv4 address, so a
+/// three-byte name is not a name on this opcode.
 fn dns_name(name: &[u8]) -> bool {
     if name.is_empty() || name.len() == 3 || name.len() > 234 {
         return false;
@@ -2453,26 +2516,6 @@ fn dns_name(name: &[u8]) -> bool {
         }
     }
     label != 0 && dot
-}
-
-fn parse_ip(text: &[u8]) -> Option<[u8; 4]> {
-    let mut ip = [0u8; 4];
-    let mut last = 0usize;
-    for (i, part) in text.split(|b| *b == b'.').enumerate() {
-        if i > 3 {
-            return None;
-        }
-        let n = parse_u16(part)?;
-        if n > 255 {
-            return None;
-        }
-        ip[i] = n as u8;
-        last = i;
-    }
-    if last != 3 {
-        return None;
-    }
-    Some(ip)
 }
 
 fn parse_u16(text: &[u8]) -> Option<u16> {

@@ -29,6 +29,11 @@ const HEAP_MAX_PAGES: usize = 64 * 1024;
 
 /// Currently mapped heap size in bytes (grows over time).
 static HEAP_CURRENT_SIZE: AtomicUsize = AtomicUsize::new(HEAP_SIZE);
+/// Bytes already handed to the allocator. A second CPU that still sees
+/// the old [`HEAP_CURRENT_SIZE`] must not `extend` that range again:
+/// `extend` frees `[top, top+n)`, and freeing a range that is already a
+/// hole panics with "Freed node aliases existing hole".
+static HEAP_GIVEN: AtomicUsize = AtomicUsize::new(HEAP_SIZE);
 /// Set once by [`init`]; growth before that is a bug.
 static READY: AtomicBool = AtomicBool::new(false);
 /// Set while a growth step is in progress (a second OOM allocation must not
@@ -139,7 +144,7 @@ fn grow() -> bool {
         // of hanging. Bounded by spins, not ticks: with IF=0 on every CPU
         // the tick counter may not advance.
         let mut spins: u64 = 0;
-        while GROWING.load(Ordering::Relaxed) {
+        while GROWING.load(Ordering::Acquire) {
             super::shootdown::service_pending();
             core::hint::spin_loop();
             spins += 1;
@@ -149,14 +154,16 @@ fn grow() -> bool {
         }
         return true; // progress happened; the caller's retry may fit now
     }
-    let current = HEAP_CURRENT_SIZE.load(Ordering::Relaxed);
-    let current_pages = current / 4096;
+    let current = HEAP_CURRENT_SIZE.load(Ordering::Acquire);
+    let given = HEAP_GIVEN.load(Ordering::Acquire);
+    let base = current.max(given);
+    let current_pages = base / 4096;
     if current_pages + GROW_CHUNK_PAGES > HEAP_MAX_PAGES {
         GROWING.store(false, Ordering::Release);
         return false;
     }
 
-    let start = VirtAddr::new(HEAP_START + current as u64);
+    let start = VirtAddr::new(HEAP_START + base as u64);
     // Map the chunk under the gate: the mapper lock + frame allocator are
     // IRQ-gated by their own APIs; the gate here keeps the whole map loop
     // atomic against the timer switch (the caller holds no locks we need).
@@ -193,15 +200,20 @@ fn grow() -> bool {
     }
     let seq = super::shootdown::shootdown_others(&vas[..mapped]);
 
-    // SAFETY: [HEAP_START + current, +mapped*4096) was mapped above and has
-    // never been handed to the allocator; `extend` claims it as one hole.
-    interrupts::without_interrupts(|| unsafe { INNER.lock().extend(mapped * 4096) });
-    let new_size = current + mapped * 4096;
-    HEAP_CURRENT_SIZE.store(new_size, Ordering::Relaxed);
+    // SAFETY: [HEAP_START + base, +mapped*4096) was mapped above. `extra`
+    // is only the part the allocator has not already been given, so a
+    // stale `HEAP_CURRENT_SIZE` cannot free the same hole twice.
+    let end = base + mapped * 4096;
+    let extra = end.saturating_sub(HEAP_GIVEN.load(Ordering::Acquire));
+    if extra > 0 {
+        interrupts::without_interrupts(|| unsafe { INNER.lock().extend(extra) });
+        HEAP_GIVEN.store(end, Ordering::Release);
+    }
+    HEAP_CURRENT_SIZE.store(end, Ordering::Release);
     GROWING.store(false, Ordering::Release);
     serial_println!(
         "[heap] grown: {} KiB (+{} KiB, {} pages, shootdown seq {})",
-        new_size / 1024,
+        end / 1024,
         mapped * 4,
         mapped,
         seq

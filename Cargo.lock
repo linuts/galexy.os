@@ -580,6 +580,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "galexy-sec"
+version = "0.1.0"
+dependencies = [
+ "galexy-abi",
+]
+
+[[package]]
+name = "galexy-ssh"
+version = "0.1.0"
+dependencies = [
+ "chacha20",
+ "cipher",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "poly1305",
+ "sha2",
+ "subtle",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
 name = "galexy-usb"
 version = "0.1.0"
 
@@ -724,6 +746,7 @@ dependencies = [
  "galexy-core",
  "galexy-netcfg",
  "galexy-rt",
+ "galexy-sec",
 ]
 
 [[package]]
@@ -866,12 +889,15 @@ name = "net"
 version = "0.1.0"
 dependencies = [
  "galexy-abi",
+ "galexy-core",
  "galexy-net",
  "galexy-netcfg",
  "galexy-rt",
+ "galexy-sec",
  "getrandom 0.4.3",
  "rustls",
  "rustls-pure",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -1111,13 +1137,17 @@ version = "0.1.0"
 dependencies = [
  "bootloader",
  "galexy-abi",
+ "galexy-core",
  "galexy-crypto",
  "galexy-galf",
  "galexy-os",
+ "galexy-ssh",
  "gxld",
  "rcgen",
  "rustls",
+ "rustls-pure",
  "tar",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -1397,6 +1427,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
 
 [[package]]
+name = "ssh"
+version = "0.1.0"
+dependencies = [
+ "galexy-abi",
+ "galexy-rt",
+ "galexy-ssh",
+ "getrandom 0.4.3",
+]
+
+[[package]]
 name = "stdmin"
 version = "0.1.0"
 dependencies = [
@@ -1599,6 +1639,7 @@ version = "0.1.0"
 dependencies = [
  "galexy-abi",
  "galexy-rt",
+ "galexy-sec",
  "galexy-usb",
 ]
 
@@ -1677,6 +1718,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7265c9301c16a8711c992c2d8da90ee77ef54b1ed51482d6dfeb00dc756b1297"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]

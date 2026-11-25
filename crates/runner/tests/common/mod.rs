@@ -166,7 +166,7 @@ fn qemu_command_opts(
     virtio_kbd: bool,
     kernel_log: bool,
     smp: u8,
-    hostfwd: Option<u16>,
+    hostfwd: Option<(u16, u16)>,
 ) -> Command {
     let mut cmd = Command::new("qemu-system-x86_64");
     cmd.arg("-M")
@@ -208,9 +208,11 @@ pub fn attach_user_net(cmd: &mut Command) {
     attach_user_net_port(cmd, None);
 }
 
-fn attach_user_net_port(cmd: &mut Command, hostfwd: Option<u16>) {
+fn attach_user_net_port(cmd: &mut Command, hostfwd: Option<(u16, u16)>) {
     let spec = match hostfwd {
-        Some(port) => format!("user,id=net0,hostfwd=tcp:127.0.0.1:{port}-:{port}"),
+        Some((host, guest)) => {
+            format!("user,id=net0,hostfwd=tcp:127.0.0.1:{host}-:{guest}")
+        }
         None => "user,id=net0".to_string(),
     };
     cmd.arg("-netdev")
@@ -880,11 +882,11 @@ pub fn uart_login_serial(image: &Image) -> String {
     let mut scratch = [0u8; 1024];
     let mut stream = stream;
 
-    // DEL drops the extra `x`, so the name is `admin`. CR is Enter.
+    // DEL drops the extra `x`, so the name is `owner`. CR is Enter.
     let steps: &[(&str, Option<&[u8]>)] = &[
-        ("Login as:", Some(b"admix\x7fn\r")),
-        ("Password:", Some(b"admin\r")),
-        ("passwd: change the default password", None),
+        ("Login as:", Some(b"ownex\x7fr\r")),
+        ("Password:", Some(b"testpass\r")),
+        ("owner@galexy>", None),
     ];
     for (needle, then) in steps {
         if !uart_read_until(
@@ -1456,7 +1458,75 @@ pub fn boot_and_type_fwd(
     port: u16,
 ) -> String {
     let serial_path = serial_log_path("typing-fwd");
-    let cmd = qemu_command_opts(&image.bios, &serial_path, "q35", true, true, 2, Some(port));
+    let cmd = qemu_command_opts(
+        &image.bios,
+        &serial_path,
+        "q35",
+        true,
+        true,
+        2,
+        Some((port, port)),
+    );
+    boot_and_type_cmd(
+        cmd,
+        &serial_path,
+        sync_pairs,
+        ready_marker,
+        final_marker,
+        key_delay,
+        timeout,
+    )
+}
+
+/// Like [`boot_and_type`], with the CMOS clock held at `rtc`.
+///
+/// `1990-01-01` is outside the years the chip may seed, so `Date` stays
+/// unset until something sets it.
+pub fn boot_and_type_rtc(
+    image: &Image,
+    sync_pairs: &[(&str, &str)],
+    ready_marker: &str,
+    final_marker: &str,
+    key_delay: Duration,
+    timeout: Duration,
+    rtc: &str,
+) -> String {
+    let serial_path = serial_log_path("typing-rtc");
+    let mut cmd = qemu_command_opts(&image.bios, &serial_path, "q35", true, true, 2, None);
+    cmd.arg("-rtc").arg(rtc);
+    boot_and_type_cmd(
+        cmd,
+        &serial_path,
+        sync_pairs,
+        ready_marker,
+        final_marker,
+        key_delay,
+        timeout,
+    )
+}
+
+/// Like [`boot_and_type_fwd`], with the host port and the guest port
+/// different. The serial log is named `typing-ssh`.
+pub fn boot_and_type_ssh(
+    image: &Image,
+    sync_pairs: &[(&str, &str)],
+    ready_marker: &str,
+    final_marker: &str,
+    key_delay: Duration,
+    timeout: Duration,
+    host_port: u16,
+    guest_port: u16,
+) -> String {
+    let serial_path = serial_log_path("typing-ssh");
+    let cmd = qemu_command_opts(
+        &image.bios,
+        &serial_path,
+        "q35",
+        true,
+        true,
+        2,
+        Some((host_port, guest_port)),
+    );
     boot_and_type_cmd(
         cmd,
         &serial_path,

@@ -1,7 +1,7 @@
 //! Integration test: durable home shares survive a disk-backed reboot.
 //!
 //! Boot 1: create dan/eve, share dan's Desktop (LIST|READ) to eve, sync.
-//! Boot 2: load image, apply_shares for eve, prove the card is installed.
+//! Boot 2: load image, apply_shares for eve, prove the share is installed.
 
 #![no_std]
 #![no_main]

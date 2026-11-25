@@ -23,7 +23,7 @@ Milestones 72–77 run a Cranelift `rustc` on Galexy and put it on the
 login image: `rustc hello.rs -o /hello`, then `/hello`.
 Milestones 91–96 put RustPython on that same boot: `python hello.py`,
 and `python` with no file is the REPL.
-The QEMU suite is 153 runner tests plus host tests (`test-big` boots
+The QEMU suite is 154 runner tests plus host tests (`test-big` boots
 only under KVM; the rustc and python boots run when those ELFs were
 present at image build). Phase 10 adds `wire_test_passes`,
 `lane_test_passes`, `net_udp_and_tcp_reach_the_host`,
@@ -45,8 +45,12 @@ we stand. Known gap today: the KVM column is empty on this host. When
 `target/galexy-rustc/rustc` and
 `target/galexy-python/python` were built, a normal `cargo run` logs
 into a seat that has both. The network is a ring-3 `net` service: DHCP, ICMP echo (`ping` of an
-address or a DNS name), and a granted TLS 1.3 lane. `std::net` and
-Python `socket` call those cards. There is no socket syscall. USB lists
+address or a DNS name), one NTP query (`net time <ip>` or a pinned DNS name), and a granted TLS 1.3 lane. `net pin <ip>`
+reads the domain off the certificate, prints it, and trusts the
+Mozilla roots for that domain. A key file is optional, and
+that bundle is the resolver only. `std::net` and
+Python `socket` call those cards. There is no socket syscall. One
+address type for v4 and v6 is Milestones 120–124 and has not landed. USB lists
 the devices on xHCI. The boot keyboard is claimed; a tablet is not.
 Python is upstream RustPython as a login-shell command, not CPython.
 `lane.read` dials a granted name when the interpreter was rebuilt.
@@ -134,24 +138,27 @@ with the window). After login, `dmesg` still shows them.
 This disk has no passphrase yet.
 New passphrase: *****
 Confirm: *****
-Admin password: *****
+Account name: ada
+Password: *****
 Confirm: *****
 
 Galexy.OS v1.0.0 (tty1)
 
-New volume. Log in as admin with the password you just chose.
+New volume. Log in as the account you just created.
 
-Login as: admin
+Login as: ada
 Password: *****
 ```
 
 A fresh disk has no volume passphrase until that prompt, and no
-account password until the one after it. An empty line asks again.
-The login screen waits until the volume is open. The account name is
-**`admin`**. The password is the one you chose, not a default. Later
-boots ask `Volume passphrase:` for the one you chose. After login a
-fastfetch-style **command center** dashboard prints (OS / TTY / user /
-uptime / heap / galfs / tasks), then the prompt is `admin@galexy> `.
+account until the name and password after it. The name is clear. The
+password is masked and confirmed. An empty name is refused. The name
+`admin` is refused. An empty line asks again. The login screen waits
+until the volume is open. There is no account named `admin` and no
+default password. Later boots ask `Volume passphrase:` for the one you
+chose. After login a fastfetch-style **command center** dashboard
+prints (OS / TTY / user / uptime / heap / galfs / tasks), then the
+prompt is `ada@galexy> `.
 The bottom status bar keeps a live strip (uptime, heap, galfs, live
 programs, frames). Headless, that strip is the terminal's last row. The input
 line stays on the row above it, and the cursor stays on that line. Up/down arrows recall session history
@@ -279,20 +286,23 @@ built.
 
 **Disk.** `cargo run --release` creates and attaches `galfs.img` in the repo root
 (gitignored, virtio-blk). A fresh image has no volume passphrase. The
-shell asks you to choose one and confirm it, then says to log in as
-`admin` / `admin` and run `passwd`. `volpass` (admin, after `passwd`)
-changes that passphrase and re-wraps the volume key. Test kernels still
-auto-unlock with `galfs`. `GALEXY_GALFS_IMG=/path` relocates the image;
+shell asks you to choose one and confirm it, then asks for the
+account name and a confirmed password. That user is the administrator.
+`volpass` (that user) changes the passphrase and re-wraps the volume
+key. Test kernels and a diskless boot still format `owner` / `testpass`
+and auto-unlock with `galfs`. `GALEXY_GALFS_IMG=/path` relocates the image;
 `GALEXY_GALFS_IDE=1` attaches it as the IDE slave instead. If a boot
 refuses the disk after a GALF version bump (`[galfs] disk corrupt;
 refusing silent format`, or `fsck` reports a foreign version), delete `galfs.img`
 and boot again — the kernel never silently reformats a volume it can
 read but not parse.
 
-**Accounts.** Fresh format: `admin` / `admin`, and the first command
-must be `passwd`. Every F-key seat (F1–F12) is its own login; nothing
-is logged in at boot. `useradd`, `grant`, `share`, `su` are in
-`docs/AUTH.md`.
+**Accounts.** A fresh production disk stores the name and password the
+seat typed. That first user is the administrator. Further `useradd`
+accounts are not. The suite logs in as `owner` / `testpass` on a
+diskless boot and on test kernels. Every F-key seat (F1–F12) is its
+own login; nothing is logged in at boot. `useradd`, `grant`, `share`,
+`su` are in `docs/AUTH.md`.
 
 **Where the evidence goes.**
 
@@ -376,16 +386,15 @@ crates/
   seal. The login table stays. Milestones 97–99. It can land beside
   Phase 13, and it does not gate `v1.0`. Plan:
   [`docs/GALFS.md`](docs/GALFS.md)
-- **Phase 16** — Milestones 104–116 landed. One kernel boots at
+- **Phase 16** — Milestones 104–119 landed. One kernel boots at
   `-smp 4` and `-smp 8` (the suite stays at 2, and the cap stays 8).
-  A network name and a listed USB port are galfs cards. A foreground
-  program without the card asks the shell. `TcpStream::connect` and
-  Python `socket.connect` are that ask, then a lane. An address, a
-  port, bind, listen, and a datagram are cards (112–116). SSH is
-  117, and that box stays open. One program's outbound card is
-  118 and 119, and those boxes stay open.
-  The `v1.0` tag still waits on the KVM cells as well. Plan:
-  [`docs/ROADMAP.md`](docs/ROADMAP.md)
+  Dial, listen, ICMP, and USB use are lines in `/policy`.
+  `TcpStream::connect` and Python `socket.connect` are that rule,
+  then a lane. A miss sends nothing. SSH and SFTP accept on
+  `net listen *:4598 name ssh` (117). A script keeps the script's
+  object, not `python`. One address type is 120–124, and those
+  boxes stay open. The `v1.0` tag still waits on the KVM cells.
+  Plan: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - **Phase 11** ✅ — Rust on Galexy: `x86_64-unknown-galexy` target, `gxld`
   static linker (LINKER.md, ✅ Milestone 69), `std` PAL (✅ Milestone
   70), compiler-sized limits and ring-3 `gxld` (✅ Milestone 71),

@@ -9,8 +9,10 @@
 
 use galexy_abi::{Cap, INIT_RPC_HDR, USB_OP_LIST};
 use galexy_rt::{
-    chan_recv_poll, chan_send, channel, entry, sleep_ms, usb_arm, usb_read, write_console,
+    chan_recv_poll, chan_send, channel, close, entry, open, read, sleep_ms, usb_arm, usb_read,
+    write_console,
 };
+use galexy_sec::Stamp;
 use galexy_usb::{decode_string, dispatch, ids_of, interface_count, list_line};
 
 mod drivers;
@@ -31,7 +33,6 @@ fn main() -> i32 {
     let _peer = ends[1];
     let mut lines = [[0u8; LINE]; MAX_DEV];
     let mut lens = [0usize; MAX_DEV];
-    let mut ports = [0u8; MAX_DEV];
     let mut count = 0usize;
     let mut logged_miss = false;
     loop {
@@ -44,11 +45,10 @@ fn main() -> i32 {
             }
         } else if got.value > 0 {
             let n = (got.value as usize).min(rec.len());
-            if let Some((line, len, port)) = accept(&rec[..n]) {
+            if let Some((line, len, _port)) = accept(&rec[..n]) {
                 if count < MAX_DEV {
                     lines[count][..len].copy_from_slice(&line[..len]);
                     lens[count] = len;
-                    ports[count] = port;
                     count += 1;
                 }
             }
@@ -63,18 +63,20 @@ fn main() -> i32 {
                 0
             };
             if op == USB_OP_LIST {
-                let mask = u16::from_le_bytes([msg[2], msg[3]]);
+                let mut policy = [0u8; 1024];
+                let plen = policy_text(&mut policy);
+                let stamp = Stamp::from_header(&msg[..n]);
                 let mut reply = [0u8; galexy_abi::CHAN_MSG_MAX];
                 let mut at = 0usize;
                 let mut shown = 0usize;
                 for i in 0..count {
-                    let port = ports[i];
-                    let bit = if port == 0 || port > 16 {
-                        0
-                    } else {
-                        1u16 << (port - 1)
+                    let Some(stamp) = stamp else {
+                        break;
                     };
-                    if mask & bit == 0 {
+                    let Some(id) = device_id(&lines[i][..lens[i]]) else {
+                        continue;
+                    };
+                    if !galexy_sec::allows(&policy[..plen], &stamp, galexy_sec::VERB_USB, id) {
                         continue;
                     }
                     let len = lens[i];
@@ -159,4 +161,44 @@ fn accept(buf: &[u8]) -> Option<([u8; LINE], usize, u8)> {
         write_console(b"unclaimed\n");
     });
     Some((line, n, port))
+}
+
+fn policy_text(buf: &mut [u8]) -> usize {
+    let got = open(b"/policy");
+    if !got.ok {
+        return 0;
+    }
+    let cap = Cap::from_bits(got.value);
+    let n = read(cap, buf);
+    let _ = close(cap);
+    if n.ok {
+        (n.value as usize).min(buf.len())
+    } else {
+        0
+    }
+}
+
+/// `VVVV:PPPP` from `port addr VVVV:PPPP ...`.
+fn device_id(line: &[u8]) -> Option<&[u8]> {
+    let mut at = 0usize;
+    for _ in 0..2 {
+        while at < line.len() && line[at] == b' ' {
+            at += 1;
+        }
+        while at < line.len() && line[at] != b' ' {
+            at += 1;
+        }
+    }
+    while at < line.len() && line[at] == b' ' {
+        at += 1;
+    }
+    let start = at;
+    while at < line.len() && line[at] != b' ' && line[at] != b'\n' {
+        at += 1;
+    }
+    if at == start {
+        None
+    } else {
+        Some(&line[start..at])
+    }
 }

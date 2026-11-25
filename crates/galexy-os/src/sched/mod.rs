@@ -37,6 +37,7 @@ pub use iowait::current_is_usb;
 pub use iowait::current_slot;
 pub use iowait::current_tty;
 pub use iowait::fault_task_name;
+pub(crate) use iowait::halt_for_device;
 pub use iowait::io_block_waiting;
 pub use iowait::on_timer_tick;
 pub use iowait::park_io_block;
@@ -226,9 +227,9 @@ pub fn init() {
 /// Paths match `test-rustc-hello`: the target JSON at the admin root,
 /// and each `srlib/*` file under
 /// `/lib/rustlib/x86_64-unknown-galexy/lib`. One kernel import per
-/// file. An rlib or rmeta keeps the ramdisk mapping until something
-/// writes it. The JSON is small and is copied into the v12 pool.
-/// None of those bodies are sealed to disk.
+/// file. The JSON and every rlib stay ramdisk mappings until something
+/// writes them. None of those bodies are copied into the v12 pool, and
+/// none are sealed to disk.
 ///
 /// A locked volume is skipped. The pre-unlock RAM table is thrown away
 /// when the sealed disk is loaded, which is why `rustc` then cannot
@@ -238,7 +239,17 @@ pub fn init() {
 /// rlib header from an earlier seal) is replaced from the ramdisk.
 /// A stored admin quota below the pool is raised first, so an older
 /// sealed disk can name `libcore`'s metadata.
+///
+/// The work takes the galfs table lock. It runs with interrupts off.
+/// The main loop used to hold that lock with interrupts on, the timer
+/// switched to the shell, and the shell's next filesystem call spun
+/// with interrupts clear (galexy.os#86). The seat looked frozen after
+/// the passphrase was accepted.
 pub fn install_compiler_sysroot() {
+    x86_64::instructions::interrupts::without_interrupts(install_compiler_sysroot_gated);
+}
+
+fn install_compiler_sysroot_gated() {
     if galfs::volume_locked() {
         return;
     }
@@ -252,6 +263,10 @@ pub fn install_compiler_sysroot() {
         return;
     }
     galfs::raise_admin_quota_for_sysroot();
+    // One walk of the inode table, then each new name updates that total.
+    // Recounting on every file turns a million-slot volume into a long
+    // freeze with the table lock held.
+    galfs::begin_admin_usage_cache();
     let root = galfs::admin_root();
     let lib = sysroot_mkdir(root, "lib");
     let rustlib = sysroot_mkdir(lib, "rustlib");
@@ -260,19 +275,22 @@ pub fn install_compiler_sysroot() {
     for name in &names {
         let bytes = ramdisk::find(name).unwrap_or_else(|| panic!("ramdisk file vanished: {name}"));
         if let Some(file_name) = name.strip_prefix("srlib/") {
-            place_sysroot_file(libs, file_name, bytes, &sysroot_lib_path(file_name), true);
+            place_sysroot_file(libs, file_name, bytes, &sysroot_lib_path(file_name));
         } else {
-            place_sysroot_file(root, name, bytes, name, false);
+            place_sysroot_file(root, name, bytes, name);
         }
     }
+    galfs::end_admin_usage_cache();
     serial_println!("rustc-sysroot: {} entries", names.len());
 }
 
 /// Imports the sysroot when an unlock asked for it and the volume is open.
 ///
-/// The unlock syscall only sets the flag. This runs from the main loop,
-/// with interrupts on. The libraries stay ramdisk mappings, so the
-/// attach itself does not grow the heap by the size of the sysroot.
+/// The unlock syscall only sets the flag. This runs from the main loop.
+/// The libraries stay ramdisk mappings, so the attach itself does not
+/// grow the heap by the size of the sysroot. The import disables
+/// interrupts while it holds the table lock; see
+/// [`install_compiler_sysroot`].
 pub fn install_compiler_sysroot_if_due() {
     if !galfs::take_compiler_sysroot_due() {
         return;
@@ -287,31 +305,26 @@ fn sysroot_lib_path(name: &str) -> alloc::string::String {
     path
 }
 
-/// Writes `bytes` at `name` under `parent`. An existing file of the same
-/// length is kept. A different length is removed via `remove_path` (an
-/// admin-root path) and written again.
-fn place_sysroot_file(
-    parent: u32,
-    name: &str,
-    bytes: &'static [u8],
-    remove_path: &str,
-    promoted: bool,
-) {
+/// Attaches `bytes` at `name` under `parent`. An existing file of the
+/// same length is kept. A different length is removed via `remove_path`
+/// (an admin-root path) and attached again.
+///
+/// The bytes stay the ramdisk mapping. Copying the target JSON into the
+/// v12 pool returned 0 on a sealed disk (`short write`, 0 of 749) and
+/// panicked the login. A failure is logged. The seat stays up.
+fn place_sysroot_file(parent: u32, name: &str, bytes: &'static [u8], remove_path: &str) {
     if let Some(id) = galfs::find_under(parent, name) {
         if galfs::object_len(id) == Some(bytes.len()) {
             return;
         }
-        galfs::remove_as_admin(remove_path)
-            .unwrap_or_else(|err| panic!("remove {remove_path}: {err:?}"));
+        if let Err(err) = galfs::remove_as_admin(remove_path) {
+            serial_println!("rustc-sysroot: remove {} failed: {:?}", remove_path, err);
+            return;
+        }
     }
-    if promoted {
-        galfs::import_shared(parent, name, bytes)
-            .unwrap_or_else(|err| panic!("import {name}: {err:?}"));
-    } else {
-        let id = galfs::create_file_under(parent, name)
-            .unwrap_or_else(|err| panic!("create {name}: {err:?}"));
-        let wrote = galfs::append_file(id, bytes).unwrap_or(0);
-        assert_eq!(wrote, bytes.len(), "short write {name}");
+    if let Err(err) = galfs::import_shared(parent, name, bytes) {
+        serial_println!("rustc-sysroot: import {} failed: {:?}", name, err);
+        let _ = galfs::remove_as_admin(remove_path);
     }
 }
 

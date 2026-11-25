@@ -4,7 +4,8 @@ Direction-level plan. Concrete check-off items live in `TODO.md`.
 
 ## Where we stand (October 2026)
 
-Through Milestone 116. Milestone 117 (SSH) is open. Milestones 118 and 119 (one program's outbound card) are open. The bar is a **secure, fast, modern-only,
+Through Milestone 119. Milestone 125 has landed: the DNS resolver trusts the Mozilla bundle in the image. Milestone 126 has landed: `net time <ip>` or a pinned DNS name sets civil UTC from one NTP reply. Milestone 127 has landed: the user created at setup is the administrator. Milestones 120–124 (one address type) stay open. Next is 128, that first boot.
+The bar is a **secure, fast, modern-only,
 full-feature, ready** OS. Each row says what is true today and which
 milestone closes the gap.
 
@@ -12,9 +13,9 @@ milestone closes the gap.
 | --- | --- | --- |
 | **Secure** | Capabilities everywhere (26 syscalls, no ambient PID / fd); PBKDF2 passwords, lockout, idle logout, must-change; sealed dual-slot GALF (ChaCha20 + HMAC); W^X user maps, NX, guard pages, kstack canary, stack/secret wipe; TOCTOU-safe copies; lock-order table; audit lines without secrets; zero `static mut`; SMEP / SMAP / UMIP when CPUID reports them; kernel KASLR in P4 indexes 1..=24; Spectre v1 mask on dispatch; per-actor KDF cost (GALF v12) | KPTI / IBRS / MDS / CET waived for v1.0 (single-tenant guest, kernel half stays mapped; `THREAT.md`) |
 | **Fast** | Deadline one-shot LAPIC, tickless idle, idle steal, park/wake for sleep / keyboard / pipe / virtio-blk; IF=0 syscall path never allocates; console budget; release profile (`opt-level = 3`, fat LTO); KVM when `KVM_CREATE_VCPU` succeeds; `test-bench` numbers in `PERF.md`; pipe ends move at spawn | GALF v17 writes the changed 4 KiB blocks plus one 64 KiB metadata slot, and that slot is one virtio data request (Milestone **97**). One desk compile names 41 objects (Milestone **99**). PCID and a new heap allocator stay waived (`PERF.md`: yield does not switch CR3 and does not allocate). ATA PIO stays the legacy disk fallback. Desktop-class throughput stays a non-goal. The landing host's KVM column is empty: a snapshot restore dropped VMXON while `CR4.VMXE` stayed set |
-| **Modern only** | `-M q35` default; PCIe ECAM when `MCFG` is present; virtio 1.x + MSI-X; virtio-input keyboard; HPET (else PIT) calibration with a CPUID 0x15/0x16 cross-check; x2APIC and TSC-deadline when CPUID reports them; 8259 mask-only when the FADT says the pair is absent | Named fallbacks stay: PS/2, PIO IDE on `-M pc`, legacy virtio I/O BAR, port PCI config. QEMU TCG through 8.2 does not enumerate x2APIC; TCG still does not enumerate TSC-deadline. 5-level paging, huge user pages, and a GPU beyond GOP stay out. The network is Phase 10 and Phase 16 through Milestone 116. USB is Phase 13, and Milestone 102 claims the QEMU boot keyboard |
-| **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, pipelines, background jobs, tab completion; utilities including `edit`, `head`, `tail`, `wc`, `grep`, `uptime`; per-task heap, argv, `Clock`, capability channels; galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; init owns shutdown, `svc`, and the service table; on-OS Cranelift `rustc` at the login shell (`rustc hello.rs -o /hello`, then `/hello`); RustPython as `python` on that same `cargo run` image (`python hello.py`, and `python` with no file is the REPL) | Network landed through Milestone **116** (`docs/NET.md`): a lane and a card, not a socket syscall. USB landed as **Phase 13** (`docs/USB.md`), and Milestone **102** claims the QEMU keyboard. Other vendor drivers stay unwritten |
-| **Ready** | 93 QEMU test kernels, 153 runner tests (BIOS + UEFI, `q35` + `pc`, including `edit`, `test-userheap`, `test-channel`, `test-bench`, `test-lockgrow`, `test-dmasplit`, `test-wire`, `test-lane`, `test-usb`, legacy virtio, PS/2 typing, `svc status`, shutdown-through-init, a sealed-disk `passwd` reboot, `rustc_hello_typing_e2e`, `python_hello_runs`, `python_repl_typing_e2e`, `python_hello_typing_e2e`, `fetch_grant_typing_e2e`, `net_flood_deadline_leaves_the_seat`, `ping_gateway_replies`, and `usb_list_shows_the_keyboard`), host suites green; CI workflow (`host` + `qemu` jobs, release images); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 and 63–77 are closed. Phases 10 and 13 have landed, and Milestones 97–116 have landed. Milestone 117 (SSH) is open. Milestones 118 and 119 (one program's outbound card) are open. The `review-rc1` tag and the `v1.0` tag are the owner's call. `v1.0` waits on a KVM pass (`KVM_CREATE_VCPU` fails on the landing host; `PERF.md` KVM cells) |
+| **Modern only** | `-M q35` default; PCIe ECAM when `MCFG` is present; virtio 1.x + MSI-X; virtio-input keyboard; HPET (else PIT) calibration with a CPUID 0x15/0x16 cross-check; x2APIC and TSC-deadline when CPUID reports them; 8259 mask-only when the FADT says the pair is absent | Named fallbacks stay: PS/2, PIO IDE on `-M pc`, legacy virtio I/O BAR, port PCI config. QEMU TCG through 8.2 does not enumerate x2APIC; TCG still does not enumerate TSC-deadline. 5-level paging, huge user pages, and a GPU beyond GOP stay out. The network is Phase 10 and Phase 16 through Milestone 119. Milestone 125 is the resolver bundle, and it is not a lane trust. USB is Phase 13, and Milestone 102 claims the QEMU boot keyboard |
+| **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, pipelines, background jobs, tab completion; utilities including `edit`, `head`, `tail`, `wc`, `grep`, `uptime`; per-task heap, argv, `Clock`, capability channels; galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; init owns shutdown, `svc`, and the service table; on-OS Cranelift `rustc` at the login shell (`rustc hello.rs -o /hello`, then `/hello`); RustPython as `python` on that same `cargo run` image (`python hello.py`, and `python` with no file is the REPL); SSH and SFTP on `net listen *:4598 name ssh`. Dial, listen, ICMP, and USB use are lines in `/policy` | Network landed through Milestone **119** (`docs/NET.md`): a lane and a rule, not a socket syscall. Milestone **125** trusts the resolver to the Mozilla roots. A lane does not. USB landed as **Phase 13** (`docs/USB.md`), and Milestone **102** claims the QEMU keyboard. Other vendor drivers stay unwritten |
+| **Ready** | 93 QEMU test kernels, 156 runner tests (BIOS + UEFI, `q35` + `pc`, including `edit`, `test-userheap`, `test-channel`, `test-bench`, `test-lockgrow`, `test-dmasplit`, `test-wire`, `test-lane`, `test-usb`, legacy virtio, PS/2 typing, `svc status`, shutdown-through-init, a sealed-disk `passwd` reboot, `rustc_hello_typing_e2e`, `python_hello_runs`, `python_repl_typing_e2e`, `python_hello_typing_e2e`, `fetch_grant_typing_e2e`, `net_flood_deadline_leaves_the_seat`, `ping_gateway_replies`, `usb_list_shows_the_keyboard`, `milestone_117_ssh_reads_a_file`, `outbound_card_dials_two_names`, and `net_time_sets_the_date`), host suites green; CI workflow (`host` + `qemu` jobs, release images); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 and 63–77 are closed. Phases 10 and 13 have landed, and Milestones 97–119 have landed. The `review-rc1` tag and the `v1.0` tag are the owner's call. `v1.0` waits on a KVM pass (`KVM_CREATE_VCPU` fails on the landing host; `PERF.md` KVM cells) |
 
 Order of work: **51 → 52** (`review-rc1`), then **63 → 64 → 65 → 66 →
 67**. Security first because every later change should land
@@ -35,24 +36,29 @@ can land beside the USB work that has already landed. It does not move the
 `v1.0` tag. The `v1.0` tag waits on
 the KVM cells.
 The QEMU keyboard is claimed. Other vendor USB drivers and NIC
-drivers stay unwritten. Python `socket` calls the net cards.
-`ssl` stays refused. Milestones **112–116** have landed: one
-address, one port, one local bind, one listen, and one datagram.
+drivers stay unwritten. Python `socket` calls the lines in
+`/policy`. `ssl` stays refused. Milestones **112–116** have
+landed: one address, one port, one local bind, one listen, and
+one datagram.
 
 Milestones **83** and **97–116** have since landed.
 `serve_hands_the_lane_to_its_listener` hands the next inbound lane
 to the listener that attached the gate. Milestones **104–107** are
-four and eight CPUs, a card on each network name and each listed
-USB port, and a foreground ask the shell answers. Milestone
-**108** is `TcpStream::connect`. Milestone **109** is
-`socket.connect`. Milestones **110–114** resolve a name over
-DNS-over-TLS, dial that address past `10.0.2.2`, and grant one
-address, one port, and one local bind. Milestone **115** listens
-with write on the port card. Milestone **116** sends one datagram
-to the stored peer and receives one from that peer. **117** is SSH.
-**118** and **119** are one program's outbound card. The `v1.0` tag still
-waits on the KVM cells and on 117. This plan does not check 118 or
-119, and it does not apply the tag.
+four and eight CPUs, and a line in `/policy` for a dial, a
+listen, a ping, and a USB device. Milestone **108** is
+`TcpStream::connect`. Milestone **109** is `socket.connect`.
+Milestones **110–114** resolve a name over DNS-over-TLS, dial
+that address past `10.0.2.2`, and rule one address, one port,
+and an admin bind. Milestone **115** listens with a `net listen`
+rule. Milestone **116** sends one datagram to the peer a dial
+rule names and receives one from that peer. **117** is SSH, and
+it has landed: `net listen *:4598 name ssh`. A script stamps the
+script file. **125** is the resolver bundle: `net pin <ip>`
+is enough, and a lane does not use it. **120** through **124**
+are one address type.
+The `v1.0` tag still
+waits on the KVM cells. This plan does not
+apply it.
 
 ## Phase 0 — Boot & TTY ✅
 
@@ -480,8 +486,10 @@ Non-goals: BSD sockets, Winsock, `std::net`, in-kernel TCP/IP,
 cleartext application I/O, a public CA bundle, TLS before 1.3, 0-RTT,
 QUIC as a second API, iptables, a second NIC. QUIC may later ride the
 same lane Cap. USB is Phase 13, not a carrier for this phase. Phase 16
-grants a card for a passed address, a port, `bind`, `listen`, and one
+rules a passed address, a port, listen, and one
 datagram. Phase 10 does not. Those calls landed in Milestones 112–116.
+The DNS resolver trusts the Mozilla bundle in the image. That trust
+is the resolver only. It is not a lane, and it is not a Phase 10 right.
 
 ## Phase 13 — USB (before `v1.0`) ✅
 
@@ -678,16 +686,18 @@ Non-goals: `async` / `await`, several virtio commands in flight,
 ATA PIO as the fast path, a journal, POSIX, mmap, sparse files,
 hard links.
 
-## Phase 16 — Cards, then a reachable machine
+## Phase 16 — A rule, then a reachable machine
 
 Milestones **104–109** landed. **108** and **109** connect by a
-granted name, and the value is a lane. Milestones **110–116** are
-the real stack. Milestone **117** is SSH. Milestones **118** and
-**119** are one program's outbound card. Nothing here tags
-`v1.0`. The KVM rows stay open. Checkboxes live in `TODO.md`.
-The reading copies are `DESIGN.md` (CPUs), `NET.md` (firewall,
-the stack, SSH), `USB.md` (device cards), `GALFS.md` (the card
-those two reuse), and `PYTHON.md` (the ask).
+name, and the value is a lane. Milestones **110–119** are the
+real stack. Milestone **117** is SSH, and it has landed. Dial,
+listen, ICMP, and USB use are lines in `/policy`. A script stamps
+the script file. Milestones **120–124** are one address type, and
+they stay open. Nothing here tags `v1.0`. The KVM rows stay open.
+Checkboxes live in `TODO.md`. The reading copies are `DESIGN.md`
+(CPUs), `NET.md` (firewall, the stack, SSH), `USB.md` (who may
+list a device), `GALFS.md` (`/policy` is exact), and `PYTHON.md`
+(a script's rule).
 
 `boot_aps` walks every enabled MADT local-APIC id, and `MAX_CPUS`
 is 8. The suite and `cargo run` stay at `-smp 2`. `test-cpus`
@@ -697,28 +707,25 @@ is not capped. x2APIC processor records (MADT `0xA` / `0xB`) are
 ignored, and the IPI destination is a `u8`. Milestone 104 did
 not lift that ceiling.
 
-A network name and a listed USB port are galfs cards, the same
-token storage already uses. The check for a dial, a ping, or an
-accept is in `net`, and it is default deny. Cap `0x800B` stays
-with the task named `usb`. The list on `0x800C` is what the seat
-token gates. There is no rule language. The firewall is the card.
+A dial, a ping, a listen, and a USB list are lines in `/policy`.
+The check is in `net` and `usb`, and it is default deny. Cap
+`0x800B` stays with the task named `usb`. The list on `0x800C`
+prints a device when a `usb use` rule names the caller and that
+device id. An ancestor token does not rewrite `/policy`.
 
-A foreground program without the card asks. The shell prints
-`<name> wants the network` or `<name> wants storage`. Yes
-installs a token for that run. A grant for every program
-stays out. Milestone 119 stores one program's outbound card as
-a share, and that card survives reboot. No is `AccessDenied`.
-Milestones 108 and 109 keep the
-names `std::net::TcpStream::connect` and Python `socket.connect`.
-Each asks, then dials a granted name through `net`. The value is
-still a lane. The lane boot was run. There is no socket syscall
-and no second stack. The PAL does not parse TCP. Milestones
-112–114 grant one stored address, one stored port, and one
-local bind. Milestone 115 listens with write on the port card.
-Milestone 116 sends one datagram to the stored peer and receives
-one datagram from that same peer. Rust `std::net` and Python
-`socket` call the address, port, bind, listen, and datagram cards.
-`setsockopt` stays refused. That is not a Berkeley socket.
+A miss is `access denied` and the program stays up. There is no
+yes/no ask. The rule is the file, so it survives reboot.
+Milestones 108 and 109 keep the names `std::net::TcpStream::connect`
+and Python `socket.connect`. Each dials through `net` when a rule
+names the caller and that host. The value is still a lane. The
+lane boot was run. There is no socket syscall and no second stack.
+The PAL does not parse TCP. Milestones 112–114 are one address,
+one port, and an admin bind of the stored local address. Milestone
+115 listens with a `net listen` rule. Milestone 116 sends one
+datagram to the peer a `net dial` rule names and receives one
+datagram from that same peer. Rust `std::net` and Python `socket`
+call those rules. `setsockopt` stays refused. That is not a
+Berkeley socket.
 Milestone 83's inbound handoff is
 `serve_hands_the_lane_to_its_listener`: the attaching seat
 receives the TLS body, and another admin seat receives `held`.
@@ -729,38 +736,48 @@ is that run. `net` resolves a name over TLS to a pinned resolver
 back. The destination is not the QEMU user gateway `10.0.2.2`.
 The gateway may be the next hop. virtio-net stays the device.
 `net` stays the only packet stack. Outbound TCP and TLS stay
-inside `net`. An address card, a port card, and a bind of the
+inside `net`. An address, a port, and an admin bind of the
 stored local address are in that same run. Milestone 83 hands
-the next lane to the listener that holds the write bit. Milestone
-115 is the listen card: write on the stored port, one forwarded
-host connection, and a second listener that receives nothing.
-Milestone 116 is one datagram to the stored peer.
+the next lane to the listener a listen rule names. Milestone
+115 is that rule: one forwarded host connection, and a second
+listener that receives nothing. Milestone 116 is one datagram
+to the peer a dial rule names.
 
-SSH does not start before that stack. Milestone 117 is one
-ring-3 Rust service. `/card/ssh` write accepts. Read lets a
-local program open a session. No new syscall. No OpenSSH, no
-libssh, no C, and no crates.io SSH library. Strict key exchange,
-Curve25519, Ed25519 host keys, ChaCha20-Poly1305 or AES-256-GCM.
-Auth is the existing password hash. SFTP is a subsystem and uses
-the galfs tokens the seat already holds.
+Milestone 117 is one ring-3 Rust service on that stack.
+`net listen *:4598 name ssh` accepts. A dial rule lets a local
+program open a session with `ssh user@address`, or
+`ssh user@address:port` when the port is not 22. The password is
+the peer account's password. No new syscall. No OpenSSH, no libssh,
+no C, and no crates.io SSH library. Strict key exchange,
+Curve25519, Ed25519 host keys, ChaCha20-Poly1305. Auth is the
+existing password hash. SFTP is a subsystem and uses the galfs
+tokens the seat already holds. `milestone_117_ssh_reads_a_file`
+is the run.
 
-A full name is its own card, and a subdomain is another card, so
-a browser asks for every host on a page. A stored address is its
-own card. A dial by name does not also need the resolved address.
-A program that passes an address still needs that address card.
-Read dials. Write accepts. A yes is that run of that program.
-Admin's root covers files. It does not cover every name.
-Milestone 118 is `/card/out/<program>`. Read on that exact object
-lets that one task dial any name, and an address it passes. The
-seat sees no line. A program without the card still asks per
-name. No leaves it up. The card does not accept. Inbound stays
-write on the port it listens on. Milestone 119 stores that card
-with `share`, the same row as a durable file right. After reboot
-the named program dials with no ask, including an init row before
-a seat logs in. Login does not put the card on the shell. A
-child does not inherit it. The `v1.0` tag still waits on the KVM
-cells and on 117. This plan does not check 118 or 119, and it
-does not apply the tag.
+A `net dial` rule names one host, one `*.domain`, or one folder
+of programs. The reply is the same lane. An empty pin is
+plaintext, so an HTTP client writes the request and reads the
+response. A stored pin stays TLS. The rule does not listen. A
+program with no rule is `access denied`. The line is the file, so
+the next boot still has it. `outbound_card_dials_two_names` is
+that run. The `v1.0` tag still waits on the KVM cells. This plan
+does not apply it.
+
+Milestones 120–124 are one address type for v4 and v6. The dial
+rule, the reply, bind, listen, the datagram, and the route use
+that type. There is no second stack and no v6 opcode. Parsing
+that refuses an ambiguous form, a neighbor past the QEMU path, a
+DNS-over-TLS answer that can be v6, and the same dial rule for a
+v6 reply come before any other v6 traffic. Listening stays a
+`net listen` rule. General browser TLS stays out. Those boxes
+stay open. This plan does not tag `v1.0`.
+
+Milestone 125 is the resolver. The image carries the Mozilla roots.
+`net pin <ip>` reads the domain off the certificate, tells the seat,
+and trusts a certificate that chains to those roots, is currently
+valid, and is valid for that domain. A key file is that raw key,
+and the bundle is not consulted. Lanes, SSH host keys, and
+`net allow` do not use it.
 
 What this phase does not add:
 
@@ -768,13 +785,42 @@ What this phase does not add:
 - iptables, nftables, eBPF, NAT, raw frames, raw sockets, or promiscuous mode
 - A second stack, a C stack, or a Berkeley socket. `setsockopt` stays refused.
   `TcpStream::connect` and `socket.connect` are the name layer above.
-  A passed IP, port, local bind, listen, or datagram is the card from 112–116, and both runtimes call it. A datagram receive is that same card. `setsockopt` stays refused
+  A passed IP, port, listen, or datagram is the rule from 112–116, and both runtimes call it. Bind of the stored local address is admin. A datagram receive is the dial rule for that peer. `setsockopt` stays refused
 - Plaintext DNS (UDP/53)
 - Telnet, FTP, rsh, SSHv1, `ssh-rsa`, CBC, SHA-1, or TLS before 1.3
 - OpenSSH, libssh, a crates.io SSH library, CPython, or a TCP stack inside `rustc` or Python
-- A second grant language beside the galfs token. A grant for every program stays out. One program's outbound card is a share of `/card/out/<program>` (Milestones 118 and 119)
-- Checking Milestone 117, Milestones 118 or 119, or the KVM `v1.0` boxes
+- A second grant language beside `/policy` and the galfs token
+- Checking the KVM `v1.0` boxes
+- A v6-only opcode or general browser TLS. WebPKI on a lane stays out. The DNS resolver's Mozilla bundle is Milestone 125 and stops there
 - The `v1.0` tag
+
+## Next — first boot
+
+Milestones **126** and **127** have landed. Milestone **128** does
+not wait on 120–124. Checkboxes live in `TODO.md`. This does not
+tag `v1.0`.
+
+126 is one NTP query. `net time <ip>` sends one packet to UDP
+port 123 and sets `Date` from the reply. `net time <name>` looks
+that name up once on the pinned DNS-over-TLS resolver and sends
+the same packet. The administrative seat asks, and a `net time`
+line in `/policy` names that seat and the address or the name. No
+pin prints `access denied` and sends nothing. There is no poll
+loop and no NTS: NTS needs a clock, and this row is the clock.
+`Clock` stays milliseconds since boot. `net_time_sets_the_date`
+is the run.
+
+127 has landed. A production disk has no account named `admin`.
+The user created at setup is the administrative actor.
+`is_admin_root` is that root. `useradd` does not make another
+one. The suite logs in as `owner` / `testpass`. That account is
+not on a fresh production disk.
+
+128 is the first boot of an empty disk. One seat sets the volume
+passphrase, then that user's name and password, then the resolver
+address or `skip`. A pin runs `net time` first when the date is
+unset. The login prompt is that user. A sealed disk asks for the
+passphrase and does not ask again.
 
 ## Standing principles
 

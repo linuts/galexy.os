@@ -12,7 +12,7 @@ dongle are still unwritten.
 
 ## What you can see
 
-A seat lists the ports whose read card it holds. Logged-out is
+A seat lists the devices a `usb use` rule names. Logged-out is
 denied. A row is a device the controller enumerated, not a claim
 that a driver is attached.
 
@@ -51,14 +51,15 @@ usb  (ring 3, init child)
     │  device and configuration descriptors
     │  the driver table (the boot keyboard; vendor rows stay unwritten)
     │
-    └── list ── ports whose read card the seat holds, on Cap 0x800C
+    └── list ── devices a usb use rule names, on Cap 0x800C
 ```
 
 `0x800C` is a control Cap in the init style. `send` parks for a
-reply. The kernel stamps the same 20-byte header. Logged-out is
+reply. The kernel stamps the same 44-byte header. Logged-out is
 `AccessDenied`. Opcode 1 is `list`. The reply is one device per
-line: bus address, vendor, product, class, subclass, protocol,
-string. Later opcodes append. They do not reuse the net opcodes.
+line when a `usb use` rule names the caller and that `VVVV:PPPP`:
+bus address, vendor, product, class, subclass, protocol, string.
+Later opcodes append. They do not reuse the net opcodes.
 
 ## Budgets
 
@@ -172,28 +173,27 @@ attached.
 A driver that skips the row does not build. The table is the list
 the service walks. There is nowhere else to register.
 
-## Cards (Milestone 106)
+## Who may list (Milestone 106)
 
 Cap `0x800B` (the controller) accepts a read, and a one-byte arm
 write, only when `current_is_usb()` is true. That is
 `thread.name() == "usb"`, plus `READ` or `WRITE` on the cap. Cap
 `0x800C` (list) parks any task whose `fs_root` is set. Logged-out
-is `AccessDenied`. Init creates `/usb/1` through `/usb/16` and
-does not grant them. `DISK_VERSION` stays 17. A port is one to three decimal
-digits and fits `NAME_CAP`.
+is `AccessDenied`. The kernel stamps the same 44-byte header it
+stamps for init. There is no `/usb/N` object.
 
-Each listed device is one object, `/usb/<port>` under the admin
-root (the same object as `/admin@usb/<port>`). The kernel stamps
-a mask of ports 1..=16 into header bytes 2 and 3 (bit 0 is port
-1). The service prints a line only when that bit is set. A seat
-with no bit, and a device on the bus, gets `access denied`. An
-empty bus stays `none`. Admin's root token covers the objects, so
-admin sees the list line.
+`usb` reads `/policy`. A line is printed when a `usb use` rule
+names the caller and that device's `VVVV:PPPP`. A bus with devices
+and no matching rule replies `access denied`. An empty bus stays
+empty. `usb list` is the `usb-list` program, so the rule names
+`usb-list`, not the shell. A new `/policy` also carries
+`usb use 0627:0001 name usb-list`, so the QEMU keyboard and tablet
+show up. A later boot keeps the file.
 
-The seat-facing claim is that list. The HID arm stays inside the
-service: the driver row plus the port byte, on `0x800B`, with no
-seat token. Holding the card does not hand HID reports to another
-program. Login still types through the armed keyboard.
+The HID arm stays inside the service: the driver row plus the
+port byte, on `0x800B`, with no seat token. A list rule does not
+hand HID reports to another program. Login still types through
+the armed keyboard.
 
 ## Changing this subsystem
 

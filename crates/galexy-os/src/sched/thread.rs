@@ -25,7 +25,13 @@ use x86_64::{PhysAddr, VirtAddr};
 /* ---------------- preemptive threads ---------------- */
 
 /// Per-thread kernel stack size.
-pub(crate) const THREAD_STACK_SIZE: usize = 32 * 1024;
+///
+/// Volume unlock runs PBKDF2-HMAC-SHA256 on the caller's kernel stack.
+/// That nest (pbkdf2, hmac, sha256 compress, plus the syscall frame) is
+/// about 36 KiB. A 32 KiB stack continued into the previous allocation
+/// and zeroed init's saved `iret` frame, so the next return to init
+/// raised `#GP` and the seat froze. 64 KiB covers that nest.
+pub(crate) const THREAD_STACK_SIZE: usize = 64 * 1024;
 
 /// 16-byte-aligned buffer (FXSAVE requires it).
 #[repr(align(16))]
@@ -366,6 +372,11 @@ pub(in crate::sched) struct Thread {
     pub(in crate::sched) fs_root: u32,
     /// Tokens that authorize galfs paths. Utilities inherit; bare spawns do not.
     pub(in crate::sched) fs_tokens: [galfs::Token; galfs::TOKEN_SLOTS],
+    /// galfs object this task was executed as. [`galfs::NO_OBJECT`] for a
+    /// ramdisk program. A script stamps the script, not the interpreter.
+    pub(in crate::sched) entry_object: u32,
+    /// Parent of [`Thread::entry_object`]. A folder rule matches this.
+    pub(in crate::sched) entry_parent: u32,
     /// Set when the task was created as admin. Survives [`task_su`] so the
     /// seat can return to admin after switching to another actor.
     pub(in crate::sched) born_admin: bool,
@@ -490,7 +501,87 @@ unsafe impl Send for Thread {}
 /// All preemptive threads, in round-robin order. Touched by the main loop
 /// and the timer handler — access is IRQ-gated (see lock audit). Slots stay
 /// in the vec (indexes must not shift); a freed record can be overwritten.
-pub(in crate::sched) static THREADS: Mutex<Vec<Thread>> = Mutex::new(Vec::new());
+///
+/// Holding this lock counts as a device-wait lock: a disk transfer must not
+/// run, and must not turn interrupts on, while it is held.
+pub(in crate::sched) static THREADS: ThreadTable = ThreadTable::new();
+
+static THREAD_DEPTH: [AtomicUsize; crate::arch::cpu::MAX_CPUS] =
+    [const { AtomicUsize::new(0) }; crate::arch::cpu::MAX_CPUS];
+
+pub(in crate::sched) struct ThreadTable {
+    inner: Mutex<Vec<Thread>>,
+}
+
+impl ThreadTable {
+    pub(in crate::sched) const fn new() -> Self {
+        Self {
+            inner: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub(in crate::sched) fn lock(&self) -> ThreadGuard<'_> {
+        ThreadGuard::claimed(self.inner.lock())
+    }
+
+    pub(in crate::sched) fn try_lock(&self) -> Option<ThreadGuard<'_>> {
+        Some(ThreadGuard::claimed(self.inner.try_lock()?))
+    }
+}
+
+pub(in crate::sched) struct ThreadGuard<'a> {
+    inner: core::mem::ManuallyDrop<crate::sync::MutexGuard<'a, Vec<Thread>>>,
+    cpu: Option<usize>,
+}
+
+impl<'a> ThreadGuard<'a> {
+    fn claimed(inner: crate::sync::MutexGuard<'a, Vec<Thread>>) -> Self {
+        let cpu = match crate::arch::cpu::try_current_index() {
+            Some(cpu) if cpu < crate::arch::cpu::MAX_CPUS => Some(cpu),
+            _ => None,
+        };
+        if let Some(cpu) = cpu {
+            THREAD_DEPTH[cpu].fetch_add(1, Ordering::Release);
+            crate::sync::io_depth_inc(cpu);
+        }
+        Self {
+            inner: core::mem::ManuallyDrop::new(inner),
+            cpu,
+        }
+    }
+}
+
+impl Drop for ThreadGuard<'_> {
+    fn drop(&mut self) {
+        unsafe { core::mem::ManuallyDrop::drop(&mut self.inner) };
+        if let Some(cpu) = self.cpu {
+            THREAD_DEPTH[cpu].fetch_sub(1, Ordering::Release);
+            crate::sync::io_depth_dec(cpu);
+        }
+    }
+}
+
+impl core::ops::Deref for ThreadGuard<'_> {
+    type Target = Vec<Thread>;
+    fn deref(&self) -> &Vec<Thread> {
+        &self.inner
+    }
+}
+
+impl core::ops::DerefMut for ThreadGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Vec<Thread> {
+        &mut self.inner
+    }
+}
+
+pub(in crate::sched) fn threads_held_here() -> bool {
+    match crate::arch::cpu::try_current_index() {
+        Some(cpu) if cpu < crate::arch::cpu::MAX_CPUS => {
+            THREAD_DEPTH[cpu].load(Ordering::Acquire) > 0
+        }
+        _ => false,
+    }
+}
 
 /// Per-CPU rotation state (SMP, M18): each CPU keeps its OWN round-robin —
 /// the global rotation statics would double-enter a task the moment two
@@ -989,6 +1080,8 @@ pub(crate) fn register_user_task(init: TaskInit<'_>) -> u8 {
             heap_pages: 0,
             io_extra: AtomicU64::new(0),
             ask_buf: [0; 96],
+            entry_object: galfs::NO_OBJECT,
+            entry_parent: galfs::NO_OBJECT,
             ask_len: 0,
             ask_arg: [0; 96],
             ask_arg_len: 0,
@@ -1132,6 +1225,8 @@ pub(in crate::sched) fn register_thread(leader: &LeaderSnapshot, kstack: Vec<u8>
             heap_pages: 0,
             io_extra: AtomicU64::new(0),
             ask_buf: [0; 96],
+            entry_object: galfs::NO_OBJECT,
+            entry_parent: galfs::NO_OBJECT,
             ask_len: 0,
             ask_arg: [0; 96],
             ask_arg_len: 0,
@@ -1216,6 +1311,8 @@ pub fn spawn_thread(name: &str, entry: extern "C" fn()) -> u8 {
             heap_pages: 0,
             io_extra: AtomicU64::new(0),
             ask_buf: [0; 96],
+            entry_object: galfs::NO_OBJECT,
+            entry_parent: galfs::NO_OBJECT,
             ask_len: 0,
             ask_arg: [0; 96],
             ask_arg_len: 0,
@@ -1552,6 +1649,8 @@ pub(crate) fn spawn_user_with_grants(
             heap_pages: 0,
             io_extra: AtomicU64::new(0),
             ask_buf: [0; 96],
+            entry_object: galfs::NO_OBJECT,
+            entry_parent: galfs::NO_OBJECT,
             ask_len: 0,
             ask_arg: [0; 96],
             ask_arg_len: 0,

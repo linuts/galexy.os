@@ -489,7 +489,7 @@ fn wait_reg(op: u64, ms: u64, pred: impl Fn(u32) -> bool) -> bool {
             break;
         }
         if enabled || crate::arch::timer_ticks() != start {
-            interrupts::enable_and_hlt();
+            crate::sched::halt_for_device();
             interrupts::disable();
         } else {
             core::hint::spin_loop();
@@ -874,7 +874,7 @@ fn wait_flag(xfer: bool) -> bool {
         if crate::arch::timer_ticks().saturating_sub(start) > 500 {
             return false;
         }
-        interrupts::enable_and_hlt();
+        crate::sched::halt_for_device();
         interrupts::disable();
     }
 }

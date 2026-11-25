@@ -464,7 +464,7 @@ fn wait_tx(want: u16) -> bool {
         if crate::arch::timer_ticks().saturating_sub(start) > 2000 {
             return false;
         }
-        x86_64::instructions::interrupts::enable_and_hlt();
+        crate::sched::halt_for_device();
         x86_64::instructions::interrupts::disable();
     }
 }

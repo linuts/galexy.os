@@ -523,20 +523,19 @@ Demo limits above are the shipped contract. A second indirect block
 is not scheduled; object `len` is already `u64`. New code must not
 invent a second ambient “path implies permission” API beside tokens.
 
-## Cards outside the tree (Milestones 105, 106, 118, and 119)
+## `/policy` is exact
 
-A token stays an object id and rights. A network name is
-`/card/<name>` and ping is `/card/ping`. A listed USB port is
-`/usb/<port>`. Both live under the admin root, so
-`/admin@card/<name>` and `/admin@usb/<port>` are the same
-objects. `NAME_CAP` is 64. A port is one to three digits. Neither
-needed a `DISK_VERSION` bump. The actor strings inside `/net`
-are not an authority. Cap `0x800B` stays with the task named
-`usb`; the seat token gates the list, not that cap. Repair of
-anything other than a bad share stays unwritten.
+A token stays an object id and rights. Dial, listen, ICMP, and
+USB use are not tokens. They are lines in `/policy`. Init creates
+that file. The creator, and init on the next boot, hold read and
+write on that object and not by way of an ancestor. `covers`
+returns false for `/policy` unless the token names the file
+itself, so admin's root does not rewrite the table. `net` and
+`usb` hold read. `DISK_VERSION` is 18. A dev disk reformats.
+The actor strings inside `/net` are not an authority. Cap
+`0x800B` stays with the task named `usb`. The list on `0x800C`
+is the stamp matched against `/policy`. Repair of anything other
+than a bad share stays unwritten.
 
-Milestones 118 and 119 add `/card/out/<program>`. Read on that
-exact object lets that one task dial. The durable row is a share
-of that object, the same 6-byte record as a file right. `DISK_VERSION`
-stays 17. Login does not put this object on the shell. Spawn
-installs it on the named task. The boxes stay open.
+`share r` and `unshare` are the existing 6-byte metadata row.
+They store a file token. They do not store a dial.

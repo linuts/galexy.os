@@ -25,8 +25,11 @@ if [[ ! -x "$SYSROOT/bin/rustc" ]]; then
     echo "build-galexy-python: nightly rustc missing at $SYSROOT/bin/rustc" >&2
     exit 1
 fi
-if ! rustup toolchain list | grep -q '^galexy'; then
-    echo "build-galexy-python: rustup toolchain 'galexy' is missing (cargo xtask sysroot)" >&2
+# `toolchain list` still prints a dangling `rustup toolchain link`.
+# `cargo +galexy` then says the toolchain is not installed. `which`
+# follows the link and fails when the directory is gone.
+if ! rustup which --toolchain galexy rustc >/dev/null 2>&1; then
+    echo "build-galexy-python: rustup toolchain 'galexy' is missing or its directory is gone (cargo xtask sysroot)" >&2
     exit 1
 fi
 
@@ -96,9 +99,43 @@ export PATH="$LLVM_BIN:$PATH"
 # also have no LLVM bitcode, so LTO stays off.
 export RUSTFLAGS="-Z codegen-backend=cranelift --cfg getrandom_backend=\"rdrand\" -C link-arg=--image-base=0xc8000000000 -C link-arg=--no-pie"
 export CARGO_PROFILE_RELEASE_LTO=off
+# This nightly's cargo default is `-Zembed-metadata=no`: the rlib is a
+# metadata stub and the full metadata is a sibling `.rmeta`. A
+# dependent that starts before that file is ready reports
+# `can't find crate` (`parking_lot`, `ascii`, and the rest of this
+# graph). Embed metadata so the rlib is loadable on its own and
+# dependents wait for it. The flag changes the unit fingerprint, so
+# a target directory left by that failure rebuilds. Incremental stays
+# off so a session from the failure is not resumed. The guest rustc
+# bootstrap still splits metadata; this is only the host build of python.
+export CARGO_INCREMENTAL=0
 unset CARGO_ENCODED_RUSTFLAGS
+# This nightly's rustc worker stack is 17 MiB (`DEFAULT_STACK_SIZE` in
+# rustc_session). Compiling `icu_normalizer` while `icu_casemap` and
+# `rustpython-unicode` are also in codegen faults that stack. rustc's
+# own SIGSEGV handler prints
+# `…/bin/../lib/librustc_driver-*.so(+offset)` and truncates the trace
+# at 256 frames. That is this host compiler, not the OOM killer
+# (SIGKILL, no handler, and the other jobs would not still be
+# running) and not a cranelift rejection of the crate: the same
+# compiler and target compile `icu_normalizer` 2.2.0 when it is alone.
+# The handler's advice is to double the stack. A smaller inherited
+# value would shrink the 17 MiB default, so raise it. One cargo job,
+# and no inherited jobserver, so those three rustc processes are not
+# in codegen together. Finished crates stay. No `cargo clean`.
+case ${RUST_MIN_STACK:-} in
+    ''|*[!0-9]*) export RUST_MIN_STACK=35651584 ;;
+    *)
+        if [[ "$RUST_MIN_STACK" -lt 35651584 ]]; then
+            export RUST_MIN_STACK=35651584
+        fi
+        ;;
+esac
+export CARGO_BUILD_JOBS=1
+unset CARGO_MAKEFLAGS MAKEFLAGS MFLAGS
 
 cargo +galexy build --release \
+    -Zembed-metadata=yes \
     --target x86_64-unknown-galexy \
     --manifest-path "$SRC/Cargo.toml" \
     -p galexy-python --bin python
@@ -113,7 +150,8 @@ if [[ "${GALEXY_SKIP_PYTHON_CHECK:-}" != "1" ]]; then
     cd "$ROOT"
     # The Galexy link args above are for the target ELF. A host
     # `cargo test` must not inherit `--image-base`.
-    unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_PROFILE_RELEASE_LTO
+    unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_PROFILE_RELEASE_LTO CARGO_INCREMENTAL \
+        RUST_MIN_STACK CARGO_BUILD_JOBS
     cargo test -p xtask python_elf::pinned_python_elf_is_loadable -- --exact
 )
 fi

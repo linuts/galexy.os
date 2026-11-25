@@ -800,10 +800,13 @@ ramdisk programs; `mv` prefers `rename` (syscall 17) and falls back to
 copy+remove. `user(addr, len, op)` (syscall 16) manages actors:
 `USER_WHOAMI` / `USER_USERS` write names into a buffer; `USER_ADD`
 creates an actor plus empty Desktop; `USER_DEL` removes an empty actor
-(never `admin`, never one a live task still uses); `USER_SU` replaces
+(never the administrator, never the reserved name `admin`, never one
+a live task still uses); `USER_SU` replaces
 the caller's tokens with ALL on the target (so a switched seat cannot
 keep writing the previous actor's tree). Add/del require the caller's
-root to be `admin`. A seat born as admin may `su admin` to return.
+root to be the administrator, the first actor. A seat born as that
+actor may `su` back to that root. The card names the root, not the
+string `admin`.
 `rename(old, new)` (syscall 17) moves a galfs dirent (REMOVE on source,
 CREATE on dest parent; no byte copy). `truncate(cap, size)` (syscall 18)
 sets a galfs file length (WRITE; shrink frees blocks, grow zero-fills).
@@ -812,8 +815,9 @@ low at bytes 4..8, size high at bytes 44..48, owner, held token
 rights; needs LIST). Directory listing remains the
 `FILES` snapshot — `open` on a directory is `Unsupported`. The shell
 exposes `whoami`, `users`, `useradd`, `userdel`, `su`, `truncate`, and
-`stat` (and resets cwd on `su`). Boot formats one immortal actor,
-`admin`, with Desktop. When the primary IDE slave is present,
+`stat` (and resets cwd on `su`). A diskless boot and a test kernel
+format one harness actor, `owner`, with Desktop. A production disk
+does not: the seat names that actor. When the primary IDE slave is present,
 `galfs::init` loads the newest valid GALF **v15** sealed slot (dual
 64 KiB images: wrapped volume key + ChaCha20-HMAC payload of
 actors/objects/shares + per-actor quotas and PBKDF2
@@ -1155,18 +1159,19 @@ processor records. A ninth CPU was not booted.
 
 Programs keep the names they already call.
 `std::net::TcpStream::connect` and Python `socket.connect` are a
-compatibility layer. Each asks (Milestone 107), then dials a
-granted name through `net`. The value is still a lane. There is
-no socket syscall and no second stack. The PAL does not parse
-TCP, and rustls stays in `net`.
+compatibility layer. Each dials through `net` when a `net dial`
+rule names the caller and that host. A script stamps the script
+file, so the rule is on that file. The reply comes back on the
+same lane. The value is still a lane. There is no socket syscall
+and no second stack. The PAL does not parse TCP, and rustls stays
+in `net`.
 
-This is not a Berkeley socket. Milestones 112–116 grant bind,
-listen, one datagram, an address, and a port, each with a card.
-Both runtimes call those cards. `setsockopt` stays refused.
-`connect` on the login image is the Rust proof.
-`python_lane_typing_e2e` is the Python proof: `lane.read` prints
-the body, a denied `socket.connect` is `OSError`, and yes prints
-the body. Reaching a host past `10.0.2.2` is Milestone 111.
+This is not a Berkeley socket. A dial, a listen, and a datagram
+are lines in `/policy`. Both runtimes call those lines.
+`setsockopt` stays refused. `connect` on the login image is the
+Rust proof. `python_lane_typing_e2e` is the Python proof:
+`lane.read` prints the body, and a connect with no rule is
+`OSError`. Reaching a host past `10.0.2.2` is Milestone 111.
 
 ### A real network (Milestones 110–119)
 
@@ -1174,18 +1179,34 @@ the body. Reaching a host past `10.0.2.2` is Milestone 111.
 back. The destination is not the QEMU user gateway `10.0.2.2`.
 virtio-net stays the device. `net` stays the only packet stack.
 Outbound TCP and TLS stay inside `net`. The PAL does not parse
-TCP. A path or an address is not authority. The card is. Read
-dials. Write accepts. Logged-out is denied. A grant from the
-ask lasts for that run.
+TCP. A path or an address is not authority. The line in
+`/policy` is. A dial rule dials. A listen rule accepts.
+Logged-out is denied. A rule is the file, so it survives reboot.
 
-A passed IP, a passed port, `bind`, `listen`, and one datagram
-are the cards from Milestones 112–116. Rust `std::net` and Python
-`socket` call them. A datagram receive uses that same card. Port
-53 stays refused. `setsockopt` stays refused.
-Inbound from outside is Milestone 115: write on the port card,
-then Milestone 83 hands the lane to that one listener. SSH is
-Milestone 117, after that stack: one ring-3 Rust service,
-`/card/ssh`, no new syscall. The `v1.0` tag is not applied here.
+A passed IP, a passed port, `listen`, and one datagram are those
+rules. Rust `std::net` and Python `socket` call them. Bind of the
+stored local address is admin. A datagram receive uses the dial
+rule for that peer. Port 53 stays refused. `setsockopt` stays
+refused. Inbound from outside is Milestone 115: a `net listen`
+rule, then Milestone 83 hands the lane to that one listener. SSH
+is Milestone 117, on that stack: one ring-3 Rust service,
+`net listen *:4598 name ssh`, no new syscall. A script keeps the
+script's object. The `v1.0` tag is not applied here.
+
+### One address type (Milestones 120–124)
+
+v4 and v6 are one address type. A dial rule, the reply, bind,
+listen, the datagram, and the route use it. Opcodes stay 1–12.
+There is no second stack and no v6 opcode. Milestone 121 is the
+parse that refuses an ambiguous form. Milestone 122 reaches a v6
+neighbor or gateway that is not the QEMU path `10.0.2.2`.
+Milestone 123 can return a v6 address over the existing
+DNS-over-TLS path, port 853. Milestone 124 covers a v6 reply with
+the same `net dial` rule. The reply is read on that connection.
+Listening stays a `net listen` rule. Plaintext DNS, raw sockets,
+and general browser TLS stay out. The DNS resolver trusts the
+CA bundle in the image. That bundle is not a lane trust. The
+boxes for 120–124 stay open. The reading copy is `NET.md`.
 
 A full name is its own card, and a subdomain is another card.
 A stored address is its own card. A dial by name does not also
@@ -1318,8 +1339,9 @@ IRQ that already has IF=0) around the acquire.
 
 | Lock | May hold while taking | IRQ-gate |
 | --- | --- | --- |
-| `THREADS` | galfs `TABLE` (then large-file `STORE`), then `VOLUME_KEY`, then `VOLUME_PASS`, then `CHANS`. A sleep of `net` may take virtio-net `RXQ` while `THREADS` is held. A sleep of `usb` may take the xHCI `CTRL` lock while `THREADS` is held. `task_lane` may take `LANES` while `THREADS` is held. Snapshots still copy into fixed arrays and allocate after the drop. A galfs write may allocate the RAM large-file store while `THREADS` is held (Milestone 71): heap growth drops `INNER` before the shootdown, and every spin lock acks (`arch/mm/heap.rs`) | yes |
-| galfs `TABLE` | large-file `STORE`; `DISK_BUF` only while encoding; `arch::rand` while sealing; not `THREADS`. The PBKDF2 for `login` / `passwd` / `useradd` runs before the lock is taken (`PasswordCred`) | yes. Syscalls arrive IF=0; the main-loop entries (`sync_to_disk`, `wipe_volume_key`, `seal_and_lock`) gate themselves — a preempted main-loop holder on the BSP deadlocked the shell's next galfs syscall on the same CPU (galexy.os#86) |
+| `THREADS` | galfs `TABLE` (then large-file `STORE`), then `VOLUME_KEY`, then `VOLUME_PASS`, then `CHANS`. A sleep of `net` may take virtio-net `RXQ` while `THREADS` is held. A sleep of `usb` may take the xHCI `CTRL` lock while `THREADS` is held. `task_lane` may take `LANES` while `THREADS` is held. Snapshots still copy into fixed arrays and allocate after the drop. No syscall waits on disk or turns interrupts on while it holds `THREADS` or a galfs lock (`TABLE`, pool, cache, `DISK_BUF`, volume key, meta loc, load scratch). Those locks drop before the device transfer. `VOL` is taken before `THREADS` and stays held across the gap so metadata does not race; it is not taken while `THREADS` is already held. The timer takes `THREADS` on every CPU except the one halted in virtio-blk: that CPU holds `DEV` and must not switch, and its transfer stack is not a place for the switch frame. Uptime advances before that return. Every other CPU takes `THREADS`. `XFER_CPU` is that CPU. Heap growth of the RAM large-file store drops `INNER` before the shootdown, and every spin lock acks (`arch/mm/heap.rs`) | yes |
+| galfs `VOL` | `THREADS`, then `TABLE`. Never taken while `THREADS` is already held. Held across the disk wait; it is not a lock the timer takes | with the caller (IF=0 until the device wait; `XFER_CPU` pins that CPU) |
+| galfs `TABLE` | large-file `STORE`; `DISK_BUF` only while encoding; `arch::rand` while sealing; not `THREADS`, and not across a disk wait. The PBKDF2 for `login` / `passwd` / `useradd` runs before the lock is taken (`PasswordCred`) | yes. Syscalls arrive IF=0; the main-loop entries (`sync_to_disk`, `wipe_volume_key`, `seal_and_lock`, `install_compiler_sysroot`) gate themselves — a preempted main-loop holder on the BSP deadlocked the shell's next galfs syscall on the same CPU (galexy.os#86) |
 | `arch::rand` | nothing else. Never takes `TABLE` | with the caller (`TABLE` may already be held inside `encode_table`) |
 | large-file `STORE` | nothing else. Never take `TABLE` or `THREADS` while holding it | with the caller (`TABLE`, already IF=0 on the syscall path) |
 | `VOLUME_KEY` | `VOLUME_PASS` | with the caller |
@@ -1446,7 +1468,7 @@ main image and are listed at the end.
 | `test-scratch`, `test-rm`, `test-seek` | `scratch_test_passes`, `rm_test_passes`, `seek_test_passes` | M27 / M30 / M36 scratch files, remove, seek |
 | `test-galfs`, `test-paths`, `test-cards` | `galfs_test_passes`, `paths_test_passes`, `cards_test_passes` | M34–M35 tokens and grant, M45 path policy and confused deputy |
 | `test-blocks`, `test-quota`, `test-shares`, `test-indirect`, `test-ops`, `test-fsck` | `blocks_test_passes`, `quota_test_passes`, `shares_test_passes`, `indirect_test_passes`, `ops_test_passes`, `fsck_test_passes` | M39 / M45 galfs for real usage |
-| `test-galfs-disk`, `test-galfs-part`, `test-share-disk` | `galfs_disk_persists_*`, `assert_galfs_disk_persists`, `galfs_disk_persists_partition_offset`, `share_disk_persists_across_reboot` | M38 / M46 disk-backed galfs, cache modes, virtio, partition offset. M97: the virtio boot's slot write is `sync data_reqs=1`. M99: the format line is `desk files 41` |
+| `test-galfs-disk`, `test-galfs-part`, `test-share-disk` | `galfs_disk_persists_*`, `assert_galfs_disk_persists`, `galfs_disk_persists_partition_offset`, `share_disk_persists_across_reboot` | M38 / M46 disk-backed galfs, cache modes, virtio, partition offset. M97: the virtio boot's slot write is `sync data_reqs=1`. M99: the format line is `desk files 41`. A durable share of `dan@Desktop` to eve survives reboot. `/policy` is not that share |
 | `test-galfs-corrupt`, `test-galfs-idempotent`, `test-crash` | `galfs_disk_recovers_*`, `galfs_disk_refuses_format_when_both_slots_corrupt`, `galfs_idempotent_after_recover`, `crash_injection_picks_consistent_slot` | M39 / M45 crash safety |
 | `test-ata` | `ata_absent_returns_unsupported` | M45 ATA error propagation |
 | `test-dmasplit` | `dmasplit_test_passes` | virtio-blk DMA splits at physical discontinuities (both transports); sentinel frame stays untouched |
@@ -1469,14 +1491,17 @@ main image and are listed at the end.
 | `test-badelf`, `test-negative` | `badelf_test_passes`, `negative_test_passes` | M51 hostile ELF oracle and negative suite; M63 loader returns `SysError` and caps image pages |
 | `test-smep`, `test-smap`, `test-umip`, `test-kaslr` | `smep_test_passes`, `smap_test_passes`, `umip_test_passes`, `kaslr_kernel_base_differs_across_boots` | M63 SMEP, SMAP, UMIP, kernel KASLR (`kaslr` boots the image twice) |
 | `test-soak`, `test-fairness`, `test-pathological`, `test-bench` | `soak_test_passes`, `fairness_test_passes`, `pathological_test_passes`, `bench_test_passes` | M51 soak (exact table closure per round), steal fairness under load, console-budget flood; M64 `test-bench` prints `[bench] name=… us=…` and the runner asserts KVM ceilings |
-| main image | `main_kernel_boots_and_timer_ticks`, `uefi_image_boots_and_timer_ticks`, `shell_*_typing_e2e`, `shell_run_hello_typing_e2e_uefi`, `shell_tty_switch_e2e`, `util_typing_e2e_on`, `assert_passwords_masked`, `uart_console_login_e2e`, `shell_stdmin_typing_e2e` | M21 / M29 / M33 / M40 / M43 / M50 / M54 seats, shell, utilities, masked prompts; `shell_password_paste_typing_e2e` (M51 pathological input), `default_image_has_no_crash_seam_e2e` (M52 default-build audit), `uart_console_login_e2e` (COM1 is the console: DEL, CR, masked password); `shell_stdmin_typing_e2e` (M68 `std` on the galexy target); `shell_edit_complete_typing_e2e` (M100: `pri` lists `println` and `print`) |
+| main image | `main_kernel_boots_and_timer_ticks`, `uefi_image_boots_and_timer_ticks`, `shell_*_typing_e2e`, `shell_run_hello_typing_e2e_uefi`, `shell_tty_switch_e2e`, `util_typing_e2e_on`, `assert_passwords_masked`, `uart_console_login_e2e`, `shell_stdmin_typing_e2e` | M21 / M29 / M33 / M40 / M43 / M50 / M54 seats, shell, utilities, masked prompts; `shell_password_paste_typing_e2e` (M51 pathological input), `default_image_has_no_crash_seam_e2e` (M52 default-build audit), `uart_console_login_e2e` (COM1 is the console: DEL, CR, masked password); `shell_stdmin_typing_e2e` (M68 `std` on the galexy target); `shell_edit_complete_typing_e2e` (M100: `pri` lists `println` and `print`); `outbound_card_dials_two_names` (M118: one dial rule, two names, a subdomain, one address, listen refused); `resolver_pin_still_wins` (M125: no key reads the certificate domain, a cert outside the bundle sends no query, the key file sends one) |
 | `gxld` image | `gxld_image_run_hello_typing_e2e`, `gxld_image_util_typing_e2e` | M69 linker differential |
 
 Host suites (no QEMU): `galexy-abi` (table integrity), `galexy-core`
 (`Ring`, tar, `parse_path` exhaustive sweep), `galexy-crypto`
 (vectors), `galexy-galf` (slot round trip, generation monotonicity,
 token algebra properties, v13 image check including a 64 MiB file),
-`galfs-fsck`, `gxld`.
+`galfs-fsck`, `gxld`. `resolver_trusts_the_bundle` accepts a chain
+with no key when the certificate names the domain taken from it,
+including when that domain is not the pinned address, and refuses
+a certificate outside the Mozilla roots.
 
 ## User heap, clock, and channels (Milestone 66)
 
@@ -1511,7 +1536,7 @@ armed minute is RAM-only. The chip keeps the date across reboot.
 
 Init creates one channel and keeps both ends. The kernel records that
 id. A logged-in seat `send`s on reserved index `0x8008`. The kernel
-prepends a 20-byte header (admin, tty, debug id, session generation),
+prepends a 44-byte header (admin, tty, task name, the executed file, that file's parent, debug id, session generation),
 queues it from the end init does not recv on, and parks the sender
 until init `send`s the reply on its recv end. One RPC is in flight.
 Pre-login is `AccessDenied`. No control channel is `Unsupported`, and

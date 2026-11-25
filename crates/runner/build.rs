@@ -3,6 +3,8 @@ use std::process::Command;
 
 #[path = "login_compilers.rs"]
 mod login_compilers;
+#[path = "toolchain_link.rs"]
+mod toolchain_link;
 
 fn main() {
     watch_userspace();
@@ -36,66 +38,77 @@ fn main() {
     // Ramdisk: a tar archive handed to the bootloader via set_ramdisk;
     // the kernel reads it at boot through BootInfo.ramdisk_addr.
     let ramdisk_path = out_dir.join("ramdisk.tar");
-    {
-        // Host-side context for each file (name → bytes).
-        let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
-        // Userspace ELFs for `x86_64-unknown-galexy` (`build.rs` invokes
-        // cargo; they are not artifact deps — see `build_userspace`).
-        for (name, bytes) in build_userspace(&out_dir) {
-            entries.push((name, bytes));
-        }
-        // Plumbing marker. It lives under testing/ so `ls /` on a
-        // release image does not show it, and the desk archive drops
-        // the whole testing/ prefix.
-        entries.push((
-            "testing/banner.txt".into(),
-            b"galexy ramdisk plumbing works".to_vec(),
-        ));
-
-        let mut tar = tar::Builder::new(std::fs::File::create(&ramdisk_path).unwrap());
-        for (name, bytes) in &entries {
-            let mut header = tar::Header::new_gnu();
-            header.set_size(bytes.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            tar.append_data(&mut header, name, bytes as &[u8]).unwrap();
-        }
-        tar.finish().unwrap();
-    }
-
-    // Supervisor e2e ramdisk: same entries, shell rebuilt with crash-seam.
     let crash_ramdisk = out_dir.join("ramdisk-crash.tar");
-    {
-        let crash_shell = build_crash_shell(&out_dir);
-        write_ramdisk_variant(&ramdisk_path, &crash_ramdisk, |name, body| {
-            if name == "shell" {
-                crash_shell.clone()
-            } else {
-                body
-            }
-        });
-    }
-
-    // Milestone 69 differential: every program re-linked by `gxld` (same
-    // objects, same rlibs, `-Clinker` swapped). Boot tests on this image
-    // must behave exactly like the rust-lld image.
     let gxld_ramdisk = out_dir.join("ramdisk-gxld.tar");
-    {
-        let gxld_bins = build_gxld_userspace(&out_dir);
-        let mut swapped = 0usize;
-        write_ramdisk_variant(&ramdisk_path, &gxld_ramdisk, |name, body| {
-            match gxld_bins.get(name) {
-                Some(bytes) => {
-                    swapped += 1;
-                    bytes.clone()
-                }
-                None => body,
+    // A second `cargo run` used to re-enter this script and rebuild every
+    // userspace crate (`CARGO_INCREMENTAL=0` makes that a full codegen).
+    // The packed bytes are reused when the sources are unchanged.
+    let userspace_fp = userspace_fingerprint();
+    let userspace_stamp = out_dir.join("userspace.stamp");
+    let userspace_fresh = stamp_eq(&userspace_stamp, &userspace_fp)
+        && ramdisk_path.is_file()
+        && crash_ramdisk.is_file()
+        && gxld_ramdisk.is_file();
+    if userspace_fresh {
+        println!("cargo:warning=userspace ramdisk is current; not rebuilding it");
+    } else {
+        {
+            // Host-side context for each file (name → bytes).
+            let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+            // Userspace ELFs for `x86_64-unknown-galexy` (`build.rs` invokes
+            // cargo; they are not artifact deps — see `build_userspace`).
+            for (name, bytes) in build_userspace(&out_dir) {
+                entries.push((name, bytes));
             }
-        });
-        assert!(
-            swapped >= 4,
-            "gxld ramdisk: expected to swap hello/init/shell/util, swapped {swapped}"
-        );
+            // Plumbing marker. It lives under testing/ so `ls /` on a
+            // release image does not show it, and the desk archive drops
+            // the whole testing/ prefix.
+            entries.push((
+                "testing/banner.txt".into(),
+                b"galexy ramdisk plumbing works".to_vec(),
+            ));
+
+            let mut tar = tar::Builder::new(std::fs::File::create(&ramdisk_path).unwrap());
+            for (name, bytes) in &entries {
+                let mut header = tar_header(bytes.len() as u64, 0o644);
+                tar.append_data(&mut header, name, bytes as &[u8]).unwrap();
+            }
+            tar.finish().unwrap();
+        }
+
+        // Supervisor e2e ramdisk: same entries, shell rebuilt with crash-seam.
+        {
+            let crash_shell = build_crash_shell(&out_dir);
+            write_ramdisk_variant(&ramdisk_path, &crash_ramdisk, |name, body| {
+                if name == "shell" {
+                    crash_shell.clone()
+                } else {
+                    body
+                }
+            });
+        }
+
+        // Milestone 69 differential: every program re-linked by `gxld` (same
+        // objects, same rlibs, `-Clinker` swapped). Boot tests on this image
+        // must behave exactly like the rust-lld image.
+        {
+            let gxld_bins = build_gxld_userspace(&out_dir);
+            let mut swapped = 0usize;
+            write_ramdisk_variant(&ramdisk_path, &gxld_ramdisk, |name, body| {
+                match gxld_bins.get(name) {
+                    Some(bytes) => {
+                        swapped += 1;
+                        bytes.clone()
+                    }
+                    None => body,
+                }
+            });
+            assert!(
+                swapped >= 4,
+                "gxld ramdisk: expected to swap hello/init/shell/util, swapped {swapped}"
+            );
+        }
+        std::fs::write(&userspace_stamp, &userspace_fp).unwrap();
     }
 
     // Ramdisk measurement (Milestone 51): the SHA-256 of each packed tar is
@@ -276,6 +289,12 @@ fn write_rustc_ramdisk(dest: &Path) -> bool {
     if !bin.is_file() {
         return false;
     }
+    let fp = rustc_ramdisk_fingerprint(&root);
+    let stamp = dest.with_extension("stamp");
+    if dest.is_file() && stamp_eq(&stamp, &fp) {
+        println!("cargo:warning=rustc ramdisk is current; not rebuilding it");
+        return true;
+    }
     let elf = std::fs::read(&bin).unwrap_or_else(|e| panic!("read {}: {e}", bin.display()));
     assert!(elf.starts_with(b"\x7fELF"), "galexy rustc is not an ELF");
     let spec = repo_root().join("targets/x86_64-unknown-galexy.json");
@@ -326,13 +345,11 @@ fn write_rustc_ramdisk(dest: &Path) -> bool {
     entries.extend(refs);
     let mut tar = tar::Builder::new(std::fs::File::create(dest).unwrap());
     for (name, bytes) in &entries {
-        let mut header = tar::Header::new_gnu();
-        header.set_size(bytes.len() as u64);
-        header.set_mode(0o644);
-        header.set_cksum();
+        let mut header = tar_header(bytes.len() as u64, 0o644);
         tar.append_data(&mut header, name, bytes as &[u8]).unwrap();
     }
     tar.finish().unwrap();
+    std::fs::write(&stamp, &fp).unwrap();
     true
 }
 
@@ -349,10 +366,7 @@ fn write_python_ramdisk(dest: &Path) -> bool {
     let elf = std::fs::read(&bin).unwrap_or_else(|e| panic!("read {}: {e}", bin.display()));
     assert!(elf.starts_with(b"\x7fELF"), "galexy python is not an ELF");
     let mut tar = tar::Builder::new(std::fs::File::create(dest).unwrap());
-    let mut header = tar::Header::new_gnu();
-    header.set_size(elf.len() as u64);
-    header.set_mode(0o755);
-    header.set_cksum();
+    let mut header = tar_header(elf.len() as u64, 0o755);
     tar.append_data(&mut header, "python", elf.as_slice())
         .unwrap();
     tar.finish().unwrap();
@@ -378,6 +392,7 @@ fn build_guest_gxld(out_dir: &Path) -> Vec<u8> {
         cmd.arg("--release");
     }
     let _ = std::fs::remove_file(std_target.join(".rustc_info.json"));
+    drop_incremental(&std_target);
     cmd.env(
         "RUSTC_WRAPPER",
         repo_root().join("scripts/galexy-rustc-wrapper.py"),
@@ -388,7 +403,7 @@ fn build_guest_gxld(out_dir: &Path) -> Vec<u8> {
         .status()
         .unwrap_or_else(|e| panic!("spawn cargo for guest gxld: {e}"));
     if !status.success() {
-        panic!("guest gxld build failed");
+        panic_guest_cargo("guest gxld", status);
     }
     let profile = if release { "release" } else { "debug" };
     let elf = std_target
@@ -534,10 +549,7 @@ fn append_ramdisk(
     );
     let mut tar = tar::Builder::new(std::fs::File::create(dest).unwrap());
     for (name, body) in &entries {
-        let mut header = tar::Header::new_gnu();
-        header.set_size(body.len() as u64);
-        header.set_mode(0o644);
-        header.set_cksum();
+        let mut header = tar_header(body.len() as u64, 0o644);
         tar.append_data(&mut header, name, body as &[u8]).unwrap();
     }
     tar.finish().unwrap();
@@ -579,10 +591,7 @@ fn filter_ramdisk(source: &Path, dest: &Path, keep: impl Fn(&str) -> bool) {
             continue;
         }
         kept += 1;
-        let mut header = tar::Header::new_gnu();
-        header.set_size(body.len() as u64);
-        header.set_mode(0o644);
-        header.set_cksum();
+        let mut header = tar_header(body.len() as u64, 0o644);
         tar.append_data(&mut header, name, body as &[u8]).unwrap();
     }
     tar.finish().unwrap();
@@ -608,13 +617,88 @@ fn write_ramdisk_variant(
     }
     let mut tar = tar::Builder::new(std::fs::File::create(dest).unwrap());
     for (name, body) in &entries {
-        let mut header = tar::Header::new_gnu();
-        header.set_size(body.len() as u64);
-        header.set_mode(0o644);
-        header.set_cksum();
+        let mut header = tar_header(body.len() as u64, 0o644);
         tar.append_data(&mut header, name, body as &[u8]).unwrap();
     }
     tar.finish().unwrap();
+}
+
+fn tar_header(len: u64, mode: u32) -> tar::Header {
+    let mut header = tar::Header::new_gnu();
+    header.set_size(len);
+    header.set_mode(mode);
+    // A fresh mtime would change the archive hash on every script run and
+    // recompile the runner even when the packed bytes did not change.
+    header.set_mtime(0);
+    header.set_cksum();
+    header
+}
+
+fn stamp_eq(path: &Path, fp: &str) -> bool {
+    std::fs::read_to_string(path).ok().as_deref() == Some(fp)
+}
+
+fn userspace_fingerprint() -> String {
+    let mut text = String::new();
+    text.push_str(if is_release() { "release\n" } else { "debug\n" });
+    let root = repo_root();
+    for rel in [
+        "crates/userspace",
+        "crates/gxld/src",
+        "std-pal",
+        "crates/galexy-abi/src",
+        "crates/runner/build.rs",
+        "targets/x86_64-unknown-galexy.json",
+        "scripts/galexy-std-sysroot.py",
+        "scripts/galexy-rustc-wrapper.py",
+    ] {
+        stamp_tree(&root.join(rel), &root, &mut text);
+    }
+    hex_digest(&galexy_crypto::sha256(text.as_bytes()))
+}
+
+fn rustc_ramdisk_fingerprint(root: &Path) -> String {
+    let mut text = String::new();
+    text.push_str(if is_release() { "release\n" } else { "debug\n" });
+    let repo = repo_root();
+    stamp_tree(&root.join("rustc"), &repo, &mut text);
+    stamp_tree(
+        &repo.join("targets/x86_64-unknown-galexy.json"),
+        &repo,
+        &mut text,
+    );
+    stamp_tree(&root.join("sysroot/lib/rustlib"), &repo, &mut text);
+    stamp_tree(&repo.join("crates/gxld"), &repo, &mut text);
+    stamp_tree(&repo.join("crates/runner/build.rs"), &repo, &mut text);
+    hex_digest(&galexy_crypto::sha256(text.as_bytes()))
+}
+
+fn stamp_tree(path: &Path, root: &Path, out: &mut String) {
+    if path.is_dir() {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return;
+        };
+        let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+        paths.sort();
+        for child in paths {
+            if child.file_name().is_some_and(|name| name == "target") {
+                continue;
+            }
+            stamp_tree(&child, root, out);
+        }
+        return;
+    }
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    out.push_str(&format!("{} {} {}\n", rel.display(), modified, meta.len()));
 }
 
 fn hex_digest(digest: &[u8; 32]) -> String {
@@ -692,10 +776,9 @@ fn ensure_login_compilers() {
         eprintln!("[runner] building rustc for cargo run");
         run_host_script("scripts/build-galexy-rustc.sh");
     }
-    if !galexy_toolchain_linked() {
-        eprintln!("[runner] linking the galexy sysroot");
-        run_xtask_sysroot();
-    }
+    // Python's `cargo +galexy` needs this link. A name still printed by
+    // `rustup toolchain list` after the directory disappeared is not one.
+    ensure_galexy_toolchain(&root);
     if !root.join("target/galexy-python/python").is_file() {
         eprintln!("[runner] building python for cargo run");
         run_host_script("scripts/build-galexy-python.sh");
@@ -714,13 +797,66 @@ fn cargo_subcommand() -> Option<String> {
     Some(String::from_utf8_lossy(sub).into_owned())
 }
 
+/// `cargo +galexy` works. `toolchain list` is the wrong question: it
+/// still names a link whose directory was removed, and the python
+/// build then dies with `toolchain 'galexy' is not installed`.
 fn galexy_toolchain_linked() -> bool {
-    let Ok(out) = Command::new("rustup").args(["toolchain", "list"]).output() else {
+    let Ok(out) = Command::new("rustup")
+        .args([
+            "which",
+            "--toolchain",
+            toolchain_link::TOOLCHAIN_NAME,
+            "rustc",
+        ])
+        .output()
+    else {
         return false;
     };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .any(|line| line.split_whitespace().next() == Some("galexy"))
+    toolchain_link::which_rustc_usable(out.status.success(), &String::from_utf8_lossy(&out.stdout))
+}
+
+/// The rustc ELF is already built by the time this runs. Relink a
+/// complete `target/galexy-toolchain` in place. Build std only when
+/// that directory is gone or incomplete.
+fn ensure_galexy_toolchain(root: &Path) {
+    if galexy_toolchain_linked() {
+        return;
+    }
+    eprintln!("[runner] linking the galexy sysroot");
+    let dir = root.join("target/galexy-toolchain");
+    if toolchain_link::sysroot_dir_ready(&dir) {
+        link_rustup_toolchain(&dir);
+        if galexy_toolchain_linked() {
+            return;
+        }
+        panic!(
+            "rustup toolchain link {} {} did not leave a usable rustc",
+            toolchain_link::TOOLCHAIN_NAME,
+            dir.display()
+        );
+    }
+    run_xtask_sysroot();
+}
+
+fn link_rustup_toolchain(dir: &Path) {
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    eprintln!(
+        "[runner] rustup toolchain link {} {}",
+        toolchain_link::TOOLCHAIN_NAME,
+        dir.display()
+    );
+    let status = Command::new("rustup")
+        .args(["toolchain", "link", toolchain_link::TOOLCHAIN_NAME])
+        .arg(&dir)
+        .status()
+        .unwrap_or_else(|e| panic!("spawn rustup toolchain link: {e}"));
+    if !status.success() {
+        panic!(
+            "rustup toolchain link {} {} failed ({status})",
+            toolchain_link::TOOLCHAIN_NAME,
+            dir.display()
+        );
+    }
 }
 
 fn run_host_script(rel: &str) {
@@ -881,6 +1017,11 @@ fn watch_tree(dir: &Path) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
+                // A nested `target/` (or a toolchain tree) changes on every
+                // build. Watching it makes `runner(build)` run every `cargo run`.
+                if path.file_name().is_some_and(|name| name == "target") {
+                    continue;
+                }
                 watch_tree(&path);
             } else {
                 println!("cargo:rerun-if-changed={}", path.display());
@@ -909,12 +1050,61 @@ fn watch_userspace() {
 
 /// `-Zbuild-std` for the galexy JSON target. `core,alloc` for `no_std`
 /// programs; `std,panic_abort` for `stdmin`.
+///
+/// Nightly cargo's default is `-Zembed-metadata=no`: the rlib is a stub
+/// and the real metadata is a sibling `.rmeta`. `core`'s is about 66 MiB,
+/// and cargo pipelines on that file. `webpki-roots` is `no_std`, so the
+/// `net` graph starts it as soon as `core`'s metadata exists, while `core`
+/// is still codegening. On nightly-2026-10-08 (`1d81eb4ad`) that
+/// `resolve_crate` SIGSEGVs. The next run ICEs in
+/// `rustc_span::hygiene::HygieneData::outer_expn` (`hygiene.rs:450`,
+/// index 8192, table length 1) while parsing `core`, from the incremental
+/// session the crash left. Embedding metadata makes dependents wait for
+/// the finished rlib. Incremental is off so that session is not resumed.
+/// The guest `rustc` bootstrap still splits metadata; this is only the
+/// host build of galexy crates.
 fn galexy_cargo_args(cmd: &mut Command, build_std: &str) {
     cmd.arg("--target")
         .arg(galexy_target())
         .arg(format!("-Zbuild-std={build_std}"))
         .arg("-Zbuild-std-features=compiler-builtins-mem")
-        .arg("-Zjson-target-spec");
+        .arg("-Zjson-target-spec")
+        .arg("-Zembed-metadata=yes");
+    cmd.env("CARGO_INCREMENTAL", "0");
+}
+
+/// Drop a previous galexy incremental session. A SIGSEGV while `core`'s
+/// `.rmeta` was in flight leaves spans whose syntax context is a raw id
+/// (8192) and whose hygiene table is still the root context.
+fn drop_incremental(target_dir: &Path) {
+    for profile in ["debug", "release"] {
+        let _ = std::fs::remove_dir_all(
+            target_dir
+                .join(galexy_target_dir_name())
+                .join(profile)
+                .join("incremental"),
+        );
+        let _ = std::fs::remove_dir_all(target_dir.join(profile).join("incremental"));
+    }
+}
+
+fn panic_guest_cargo(what: &str, status: std::process::ExitStatus) -> ! {
+    let rustc = Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .and_then(|text| text.lines().next().map(str::to_string))
+        .unwrap_or_else(|| "nightly-2026-10-08".to_string());
+    panic!(
+        "{what} build failed ({status}) with {rustc}. \
+         Cargo's default -Zembed-metadata=no puts core's metadata in a \
+         sibling .rmeta and pipelines it. webpki-roots is no_std, so it \
+         starts while core is still compiling; resolve_crate SIGSEGVs, and \
+         the next run ICEs at rustc_span hygiene.rs:450 (index 8192, len 1) \
+         while parsing core. This invocation passes -Zembed-metadata=yes and \
+         CARGO_INCREMENTAL=0. The compiler output above is the failure."
+    );
 }
 
 fn galexy_std_sysroot(out_dir: &Path) -> PathBuf {
@@ -1067,7 +1257,7 @@ const NOSTD_PACKAGES: [&str; 7] = [
 /// `std` programs built with `-Zbuild-std=std,panic_abort` on the Galexy
 /// PAL overlay. They share one target dir (one std build), separate from
 /// the `no_std` one.
-const STD_PACKAGES: [&str; 4] = ["stdmin", "stdtest", "bigtest", "net"];
+const STD_PACKAGES: [&str; 5] = ["stdmin", "stdtest", "bigtest", "net", "ssh"];
 
 /// [`NOSTD_PACKAGES`] plus [`STD_PACKAGES`], as ramdisk entries.
 fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
@@ -1103,6 +1293,7 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
 
     let sysroot = galexy_std_sysroot(out_dir);
     let std_target = out_dir.join("std-target");
+    drop_incremental(&std_target);
     for pkg in STD_PACKAGES {
         let manifest = repo_root().join(format!("crates/userspace/{pkg}/Cargo.toml"));
         let mut cmd = nested_cargo();
@@ -1124,7 +1315,7 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
             repo_root().join("scripts/galexy-rustc-wrapper.py"),
         );
         cmd.env("GALEXY_SYSROOT", &sysroot);
-        if pkg == "net" {
+        if pkg == "net" || pkg == "ssh" {
             // getrandom has no galexy backend. The service supplies rdrand.
             let mut flags = std::env::var("RUSTFLAGS").unwrap_or_default();
             // Soft crypto. The galexy target is soft-float and has no SSE,
@@ -1146,7 +1337,7 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
             .status()
             .unwrap_or_else(|e| panic!("spawn cargo for {pkg}: {e}"));
         if !status.success() {
-            panic!("{pkg} build failed");
+            panic_guest_cargo(pkg, status);
         }
         let elf = std_target
             .join(galexy_target_dir_name())
@@ -1155,6 +1346,15 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
         let bytes = std::fs::read(&elf).unwrap_or_else(|e| panic!("read {}: {e}", elf.display()));
         assert!(bytes.starts_with(b"\x7fELF"), "{pkg} is not an ELF");
         bins.insert(ramdisk_entry_name(pkg), strip_debug(bytes));
+        if pkg == "ssh" {
+            for extra in ["ssh-open", "ssh-read"] {
+                let path = elf.with_file_name(extra);
+                let extra_bytes =
+                    std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+                assert!(extra_bytes.starts_with(b"\x7fELF"), "{extra} is not an ELF");
+                bins.insert(extra.into(), strip_debug(extra_bytes));
+            }
+        }
         // `stdline` is a second bin of the `stdmin` package, so one
         // `cargo build -p stdmin` produces both ELFs.
         if pkg == "stdmin" {
@@ -1168,7 +1368,10 @@ fn build_userspace(out_dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>
             let connect = elf.with_file_name("connect");
             let connect_bytes = std::fs::read(&connect)
                 .unwrap_or_else(|e| panic!("read {}: {e}", connect.display()));
-            assert!(connect_bytes.starts_with(b"\x7fELF"), "connect is not an ELF");
+            assert!(
+                connect_bytes.starts_with(b"\x7fELF"),
+                "connect is not an ELF"
+            );
             bins.insert("connect".into(), strip_debug(connect_bytes));
         }
     }

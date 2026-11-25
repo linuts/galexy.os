@@ -13,6 +13,7 @@ galexy-rt = { path = "../galexy-rt" }
 galexy-abi = { path = "../../galexy-abi" }
 galexy-core = { path = "../../galexy-core" }
 galexy-netcfg = { path = "../../galexy-netcfg" }
+galexy-sec = { path = "../../galexy-sec" }
 
 [build-dependencies]
 galexy-abi = { path = "../../galexy-abi" }

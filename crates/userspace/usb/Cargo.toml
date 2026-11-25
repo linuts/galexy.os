@@ -12,6 +12,7 @@ path = "src/main.rs"
 galexy-rt = { path = "../galexy-rt" }
 galexy-abi = { path = "../../galexy-abi" }
 galexy-usb = { path = "../../galexy-usb" }
+galexy-sec = { path = "../../galexy-sec" }
 
 [build-dependencies]
 galexy-abi = { path = "../../galexy-abi" }

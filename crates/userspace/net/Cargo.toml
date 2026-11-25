@@ -11,10 +11,13 @@ path = "src/main.rs"
 [dependencies]
 galexy-rt = { path = "../galexy-rt", features = ["std"] }
 galexy-abi = { path = "../../galexy-abi" }
+galexy-core = { path = "../../galexy-core" }
 galexy-net = { path = "../../galexy-net" }
 galexy-netcfg = { path = "../../galexy-netcfg" }
+galexy-sec = { path = "../../galexy-sec" }
 rustls = { version = "0.23", default-features = false, features = ["std"] }
 rustls-pure = "0.15"
+webpki-roots = "1"
 getrandom = "0.4"
 
 [build-dependencies]

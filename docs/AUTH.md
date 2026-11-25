@@ -47,15 +47,16 @@ payload, see `GALFS.md`):
 4. Test kernels and the disk harness auto-unlock with `galfs`.
    Production `galexy-os` calls `set_auto_unlock(false)` before
    `galfs::init`. An empty image (no GALF magic) stays locked until
-   the seat chooses a passphrase and confirms it, then chooses the
-   admin password. `USER_UNLOCK` formats the disk with that password
-   in place of the format default. A sealed image asks for the existing passphrase
+   the seat chooses a passphrase and confirms it, then names the
+   administrator and confirms that password. `USER_UNLOCK` on a fresh
+   disk takes the name in `rdi`/`rsi` and the password as a length-byte
+   blob at `r10`. The name `admin` is refused. A sealed image asks for the existing passphrase
    (`Volume passphrase:`). The login screen does not appear until that
    passphrase opens the volume. An empty line asks again. A wrong
    passphrase logs `[galfs] unlock failed; RAM-only`, does **not** mark
    the disk corrupt (a later passphrase can retry), and `sync` returns
    `Unsupported`. `USER_LOGIN` is `AccessDenied` while the volume is
-   locked, so the pre-unlock RAM admin cannot start a session.
+   locked, so a pre-unlock seat has no actor and cannot start a session.
 5. Admin changes the passphrase with `volpass` (`USER_VOLPASS`).
    The volume must already be unlocked. The shell confirms the new
    passphrase, the kernel checks the current one, and the next seal
@@ -73,13 +74,21 @@ payload, see `GALFS.md`):
    on every sealed image. Poly1305 waits for a versioned cutover.
 8. Non-goals: per-file keys, secure erase, TPM seal.
 
-Older images (including sealed v7) are refused (format recreates admin).
+Older images (including sealed v7) are refused. A new format does not
+create an account named `admin`.
+
+Milestone **127** is that account. The user named at first boot is the
+administrative actor, and `is_admin_root` is that actor's root. Milestone
+**128** is still the rest of the screen: after the passphrase and that
+user, the resolver or skip. Test kernels and a diskless boot still
+format `owner` / `testpass` so the suite can log in. That account is
+not written on a fresh production disk.
 
 ## Pieces
 
 | Piece | Meaning |
 | --- | --- |
-| Actor | Named account (`admin`, `eve`, …) with one root + Desktop |
+| Actor | Named account (the first one is the administrator, then `eve`, …) with one root + Desktop |
 | Password | Proves control of that actor; stored as salt + hash on the actor |
 | Token | `(object, RIGHT_*)` on a task — the only way to touch galfs |
 | Session | Current `fs_root` + token table + grants on the running task |
@@ -94,7 +103,11 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
 
 ## Boot
 
-1. Format creates immortal `admin` with `Desktop/` and password `admin`.
+1. A production format does not create a user named `admin`. The seat
+   types the name and a password, and confirms the password. An empty
+   name is refused. The name `admin` is refused. The format pair
+   `admin`/`admin` is not written, so the must-change gate has nothing
+   to change. The first actor is the administrator and gets `Desktop/`.
 2. **Every F-key shell (F1–F12)** starts **logged out**: no root, no
    tokens, grants = console + keyboard only (no loader, no queries, no
    power). A fresh disk asks for a passphrase before the login screen:
@@ -104,20 +117,21 @@ a shareable **login card**. Paths of the form `/eve@/` name that root for
    Choose a passphrase. It seals the filesystem. Login waits until it is set.
    New passphrase: ********
    Confirm: ********
-   Admin password: ********
+   Account name: ada
+   Password: ********
    Confirm: ********
 
    Galexy.OS v1.0.0 (tty1)
 
-   New volume. Log in as admin with the password you just chose.
+   New volume. Log in as the account you just created.
 
-   Login as: _
+   Login as: ada
    Password: ********
    ```
 
-   The sealed image does not contain the format password `admin`.
-   Choosing that word at the admin prompt is refused. A diskless boot
-   still formats a RAM admin with that password and requires `passwd`.
+   The account name is clear. The password is masked. A diskless boot
+   and a test kernel still format the harness account `owner` with
+   password `testpass`. That account is not on the production image.
 
    A later boot of that disk:
 
@@ -211,24 +225,22 @@ password material:
 still inside a cool-down. Pre-login seats have no query cap; the serial
 line is the signal there.
 
-After format, `admin` / `admin` is the default. A seat that logs in with
-that pair must run `passwd` before other shell commands (`help`,
-`whoami`, and `logout` remain available). The kernel enforces the same
-gate through the actor's must-change flag (below), so a program that
-bypasses the shell still cannot mutate galfs until `passwd` succeeds.
+The format pair `admin`/`admin` is not stored. Login does not raise
+the must-change gate.
 
 ```text
-useradd <name> [password]     # admin only; prompts if password omitted
+useradd <name> [password]     # administrator only; prompts if password omitted
 passwd [name]                 # always masked Password: + Confirm:
-volpass                        # admin; current + new + confirm (masked)
+volpass                        # administrator; current + new + confirm (masked)
 ```
 
 `passwd` never takes an inline secret. Mismatched confirmations print
 `passwd: passwords do not match` and leave the hash unchanged.
-`volpass` never takes an inline secret. It is refused until `passwd`
-clears the default-password gate. A mismatch prints
+`volpass` never takes an inline secret. The kernel refuses it unless
+the caller is the administrator. A mismatch prints
 `volpass: passphrases do not match`. A wrong current passphrase prints
-`volpass: passphrase incorrect`.
+`volpass: passphrase incorrect`. The name `admin` is not an account;
+`useradd admin` is `unsupported`.
 
 ## Access cards (tokens)
 
@@ -247,7 +259,9 @@ revoke a /eve@/ shell2
 - `grant` may set the one-shot flag (`TOKEN_ONCE`, rights bit 7, shell
   letter not required). The first card-based `su` that token authorizes
   logs `[auth] card once user=… revoked` and drops that token. `su` as
-  admin, or `su admin` on a born-admin seat, does not consume a card.
+  the administrator, or `su` back to that root on a born-admin seat,
+  does not consume a card. The card names the root, not the string
+  `admin`.
   Durable shares are not one-shot; they are re-applied at the next login.
 - Password login is always available as `login eve <pass>` when you do
   not hold a card.
@@ -265,10 +279,11 @@ actors’ objects: list, open, grant, and share of `/eve@/…` need a card
 (or `su eve` first). `useradd`, `userdel`, and `passwd <other>` stay
 admin-only.
 
-Returning to admin after `su` elsewhere uses `su admin` when the seat
-was born/logged-in as admin (`born_admin` survives `su` away — it is
-only cleared by `logout` or a password `login` as a non-admin), or
-`login admin <pass>`. Non-admin sessions have no Power grant: `shutdown`
+Returning to the administrator after `su` elsewhere uses `su` to that
+name when the seat was born or logged in as that actor (`born_admin`
+survives `su` away — it is only cleared by `logout` or a password
+`login` as someone else), or `login` with that password. Other
+sessions have no Power grant: `shutdown`
 / `reboot` return access denied. The same admin bit, stamped by the
 kernel on the init control header, gates `svc start|stop|restart`
 through init; `svc status` is open to any logged-in seat
@@ -294,32 +309,29 @@ target. `dmesg` (query cap `0x8007`) shows the same lines
 after login. Repeated `login fail` lines collapse in that ring.
 
 ```text
-[auth] session login user=admin gen=1 tty=1
-[auth] session lock user=admin tty=1
-[auth] idle lock user=admin tty=1
-[auth] session unlock user=admin tty=1
+[auth] session login user=owner gen=1 tty=1
+[auth] session lock user=owner tty=1
+[auth] idle lock user=owner tty=1
+[auth] session unlock user=owner tty=1
 [auth] session logout gen=2 tty=1
 [auth] session su user=eve gen=3 tty=1
-[auth] passwd user=admin
-[auth] passwd fail user=admin err=2
+[auth] passwd user=owner
+[auth] passwd fail user=owner err=2
 [auth] useradd user=eve
 [auth] useradd fail user=eve err=2
 [auth] userdel user=eve
 [auth] userdel fail user=eve err=4
-[auth] grant actor=admin path=Desktop rights=0x5 target=shell2
-[auth] revoke actor=admin path=Desktop rights=0x5 target=shell2
+[auth] grant actor=owner path=Desktop rights=0x5 target=shell2
+[auth] revoke actor=owner path=Desktop rights=0x5 target=shell2
 ```
 
 A secret prompt (`login`, volume unlock, `passwd`, `volpass`, confirm) echoes `*`
 and the COM1 mirror of that write is stars, not the secret. Esc or
 Ctrl-C cancels the prompt. Ctrl-D is ignored; it is not end-of-file.
 
-While `admin`’s password is still `admin`, the actor carries a
-must-change flag (bit 15 of the on-disk object quota; the quota value
-itself masks that bit off). Password login copies it onto the task.
-Create, write, remove, rename, truncate, grant, share, `useradd`,
-`userdel`, and `su` return `AccessDenied` until `passwd`. Reboot keeps
-the flag because it lives in the sealed actor record.
+The must-change bit (bit 31 of the actor's object quota; the quota
+value itself masks that bit off) is clear. Format does not set it,
+and `passwd` clears it. There is no default password to change.
 
 ## Spawn policy (least privilege)
 
@@ -393,7 +405,7 @@ expect to find, and where the remaining edges are:
 | No echo at any password prompt; no secret on serial, console, or `dmesg` | M43 | `assert_passwords_masked`, `shell_secret_prompt_typing_e2e`, `audit_strings` | inline `login user pass` remains for scripts (seam table in `DESIGN.md`) |
 | Lockout: five misses lock actor and TTY; `Locked` does not check the password | M43 (#62) | `lockout_test_passes` | cool-down is ticks, not wall clock (by design) |
 | Idle logout; last logout or power wipes the volume key | M43 / M44 | `idle_test_passes`, `unlock_test_passes`, `shutdown_test_powers_off` | — |
-| Kernel-enforced must-change for the default admin password | M43 | `mustchange_test_passes`, `shell_must_change_typing_e2e` | — |
+| The format pair `admin`/`admin` is not written; the must-change bit stays clear | M127 | `mustchange_test_passes`, `shell_must_change_typing_e2e` | — |
 | Sealed GALF: volume key wrapped under a passphrase KEK; wrong passphrase stays RAM-only; raw image carries no plaintext | M44 | `unlock_test_passes`, `galfs_disk_*`, `galexy_galf::slots_test`, `passwd_on_sealed_disk_typing_e2e` | test harness passphrase `galfs`; a production disk has none until first login; Poly1305 waived (HMAC tag) |
 | Authorization is tokens, never identity; grant/share need every right on the object or an ancestor; revoke is exact-object | M34–M45 | `galfs`, `cards`, `shares`, `galexy_galf::cards_test` | — |
 | Pre-login seat cannot spawn; bare spawn has empty tokens; utilities inherit, optionally masked | M41–M43, kernel rule in M51 | `negative_test_passes`, `shell_nested_spawn_refused_e2e` | no in-tree spawner sets the rights mask yet |

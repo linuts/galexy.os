@@ -712,6 +712,51 @@ impl ScreenWriter {
         }
     }
 
+    /// Ends the open line, writes `text` as its own lines, then reprints
+    /// the cells that were on the open line. The cursor column is restored.
+    fn park_open_line(&mut self, text: &str) -> OpenLine {
+        let cols = self.max_char_x().min(TTY_COLS);
+        let row = self.char_y.min(TTY_ROWS - 1);
+        let saved_x = self.char_x.min(cols);
+        let mut chars = ['\0'; TTY_COLS];
+        let mut width = saved_x;
+        {
+            let grids = GRIDS.lock();
+            let focus = self.focus.min(super::keyboard::TTY_COUNT - 1);
+            let cells = &grids.cells[focus][row];
+            for (i, cell) in cells.iter().enumerate().take(cols) {
+                chars[i] = cell.ch;
+                if cell.ch != '\0' {
+                    width = i + 1;
+                }
+            }
+        }
+        width = width.max(saved_x);
+        self.write_char('\n');
+        for c in text.chars() {
+            self.write_char(c);
+        }
+        if !text.ends_with('\n') {
+            self.write_char('\n');
+        }
+        let mut line = OpenLine {
+            bytes: [0; TTY_COLS],
+            len: 0,
+        };
+        for ch in chars.iter().take(width) {
+            let ch = if *ch == '\0' { ' ' } else { *ch };
+            self.write_char(ch);
+            if ch.is_ascii() && line.len < line.bytes.len() {
+                line.bytes[line.len] = ch as u8;
+                line.len += 1;
+            }
+        }
+        if saved_x < width {
+            self.char_x = saved_x;
+        }
+        line
+    }
+
     fn dispatch_char(&mut self, c: char) {
         match self.ansi.state {
             AnsiState::Esc => {
@@ -1956,14 +2001,57 @@ pub fn out_str(s: &str) {
     });
 }
 
+/// No task owns the open line. A real slot is never this value.
+const LINE_FREE: usize = usize::MAX;
+
+/// Task slot that left the cursor mid-line on each TTY.
+static LINE_OWNER: [AtomicUsize; super::keyboard::TTY_COUNT] =
+    [const { AtomicUsize::new(LINE_FREE) }; super::keyboard::TTY_COUNT];
+
+/// The prompt and any `*` already drawn, parked by a foreign write.
+pub struct OpenLine {
+    bytes: [u8; TTY_COLS],
+    len: usize,
+}
+
+impl OpenLine {
+    /// The parked line, without a trailing newline.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+}
+
 /// Writes `s` into TTY `tty`. Pixels update only when that TTY is visible.
 pub fn out_str_tty(tty: u8, s: &str) {
+    let _ = out_str_tty_from(tty, s, LINE_FREE);
+}
+
+/// Writes `text` for `writer`.
+///
+/// When the cursor is mid-line and `writer` is not the task that opened
+/// that line, `text` is drawn on the following lines and the open line
+/// is reprinted under it. The cells already show `*` for a secret, so
+/// the reprint does not reveal it. The returned bytes are that line, so
+/// the serial mirror can print the same sequence.
+pub fn out_str_tty_from(tty: u8, text: &str, writer: usize) -> Option<OpenLine> {
     let tty = (tty as usize).min(super::keyboard::TTY_COUNT - 1);
+    let mut parked = None;
     with_lock(|screen| {
         let home = screen.focus;
         screen.focus_on(tty);
-        for c in s.chars() {
-            screen.write_char(c);
+        let owner = LINE_OWNER[tty].load(Ordering::Relaxed);
+        if screen.char_x > 0 && owner != writer {
+            parked = Some(screen.park_open_line(text));
+        } else {
+            for c in text.chars() {
+                screen.write_char(c);
+            }
+            let next = if screen.char_x == 0 {
+                LINE_FREE
+            } else {
+                writer
+            };
+            LINE_OWNER[tty].store(next, Ordering::Relaxed);
         }
         screen.finish_output();
         // Persist this TTY's cursor even when focus never changed (the
@@ -1972,6 +2060,7 @@ pub fn out_str_tty(tty: u8, s: &str) {
         screen.save_focus();
         screen.focus_on(home);
     });
+    parked
 }
 
 /// TTY currently painted on the framebuffer. `0` before [`init`].

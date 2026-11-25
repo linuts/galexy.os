@@ -168,7 +168,7 @@ after a PAL change should `rm target/.rustc_info.json` too.
 | `thread` + `thread_local_key` | `ThreadSpawn` (new slot, same CR3, fresh user stack, kernel stack); per-thread pointer in the FS base via user-mode `wrfsbase` (CR4.FSGSBASE is already on; the kernel never touches FS in ring 3). Join is process-Cap `Wait` |
 | `sync` | `std`'s generic futex implementations over `Futex` |
 | `random` | `rdrand` in the PAL |
-| `net` | `TcpStream::connect` dials a granted name, one stored address, or one stored port (Milestones 108 and 112–113). The value is a lane. `TcpListener::bind` and `accept` are the bind and listen cards. `listen_port` is that same listen. `send_card` and `recv_card` are the datagram card. Port 53 stays refused. `setsockopt` stays `unsupported`. The PAL does not parse TCP (`docs/NET.md`) |
+| `net` | `TcpStream::connect` dials a name, an address, or a port when a `net dial` rule names the caller and that host. The value is a lane. `TcpListener::bind` is admin. `accept` and `listen_port` need a `net listen` rule. `send_card` and `recv_card` need a `net dial` rule for that peer. Port 53 stays refused. `setsockopt` stays `unsupported`. The PAL does not parse TCP (`docs/NET.md`) |
 
 Key-based TLS stays. `has-thread-local` is still false, so compiled
 code does not emit `#[thread_local]`. `gxld` does link `.tdata`/`.tbss`
@@ -297,6 +297,44 @@ sibling `.rmeta`. A `no_std` hello needs only `libcore` and
 why one file may be 80 MiB. The shared pool is 128 MiB so a `std`
 sysroot fits beside that metadata. The on-disk v13 file cap stays 64 MiB.
 
+The host build of galexy crates does not use that split.
+`crates/runner/build.rs` passes `-Zembed-metadata=yes` and
+`CARGO_INCREMENTAL=0`. Nightly cargo would otherwise pipeline the
+66 MiB `core` `.rmeta`. `webpki-roots` is `no_std`, so the `net`
+build starts it while `core` is still compiling. On
+nightly-2026-10-08 (`1d81eb4ad`) that `resolve_crate` SIGSEGVs, and
+the next `cargo run` ICEs in `rustc_span` `hygiene.rs:450`
+(`index out of bounds: the len is 1 but the index is 8192`) while
+parsing `core`. The std-target build drops its incremental
+directory first, so a session left by that crash is not resumed.
+The guest bootstrap above still passes `-Zembed-metadata=no`.
+The login Python build (`scripts/build-galexy-python.sh`) passes the
+same `-Zembed-metadata=yes` and `CARGO_INCREMENTAL=0`. Without them
+this nightly writes a metadata stub into the rlib and the full
+metadata into a sibling `.rmeta`. A dependent that starts before
+that `.rmeta` is ready reports `can't find crate` (`parking_lot`,
+`ascii`, and the rest of the RustPython graph). Embedding metadata
+makes the rlib loadable on its own, so those dependents wait for
+the finished crate. The flag is part of the unit fingerprint, so
+a target directory left by the failed build rebuilds those crates.
+No `cargo clean`.
+The same script sets `RUST_MIN_STACK` to 35651584 (twice this
+nightly's 17 MiB rustc worker stack) when a smaller value is
+inherited, and `CARGO_BUILD_JOBS=1`. rustc's SIGSEGV handler prints
+`bin/../lib/librustc_driver-*.so(+offset)` and truncates the trace
+at 256 frames. On this nightly that library is
+`librustc_driver-f344ad00d19f4329.so`. The handler is what runs for
+a stack-guard fault. The OOM killer sends SIGKILL, which cannot
+print the trace, and it would not leave `icu_casemap` and
+`rustpython-unicode` compiling. A `cargo +galexy` of
+`icu_normalizer` 2.2.0 (the pin) with Cranelift for this target
+finishes on that same compiler when the rustc is alone. The
+doubled stack is the value the handler prints for the 17 MiB
+default. One job keeps the other Unicode crates out of codegen
+beside it. Neither value is part of the crate fingerprint, so a
+crate that already finished is left in place. The guest kernel
+stack is unchanged.
+
 Cranelift's codegen for this OS uses SSE. The kernel enables
 `CR4.OSFXSR` on every CPU (an AP's trampoline otherwise reloads CR4
 with only PAE) and new threads restore a masked `MXCSR`. The feature
@@ -368,7 +406,15 @@ the stack at image+1GiB).
   (`scripts/build-galexy-rustc.sh`, including a clone of
   `1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6` into `$HOME/galexy-rust`
   when that checkout is absent) and then boots `galexy-os-desk`.
-  The same run builds `python` when that ELF is missing. Later
+  The same run builds `python` when that ELF is missing.
+  `scripts/build-galexy-python.sh` compiles with `cargo +galexy`,
+  the host sysroot `cargo xtask sysroot` links at
+  `target/galexy-toolchain`. `rustup toolchain list` still prints
+  `galexy` after that directory is removed, and `cargo +galexy`
+  then reports `toolchain 'galexy' is not installed`. The runner
+  asks `rustup which` for `bin/rustc`. A complete directory is
+  relinked. A missing one is `cargo xtask sysroot` again. Either
+  way `target/galexy-rustc/rustc` is left as it is. Later
   runs reuse the ELFs. `GALEXY_SKIP_COMPILERS=1` skips both and
   boots the small image. That image's shell prints
   `rustc: not in this image` and `scripts/build-galexy-rustc.sh`.
@@ -472,7 +518,8 @@ testable in reasonable time. Those stages have since landed (Milestones
 were built. Phase 10 (`docs/NET.md`, Milestones 78–85) and Phase 13
 (`docs/USB.md`, Milestones 86–88) have landed. The `v1.0` tag waits
 on a KVM pass. `TcpStream::connect` and Python `socket.connect`
-are a granted name, a stored address, or a stored port, and the
-value is a lane. Bind, listen, and one datagram send and receive
-are the cards from Milestones 112–116, in both runtimes. Socket
+are a name, an address, or a port when a `net dial` rule names
+the caller, and the value is a lane. Listen and one datagram
+send and receive
+are the rules from Milestones 112–116, in both runtimes. Socket
 options stay unsupported.
