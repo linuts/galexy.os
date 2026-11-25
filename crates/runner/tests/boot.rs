@@ -1536,12 +1536,12 @@ fn disk_wait_keeps_the_seat_scheduled() {
             owned.push(((*code).to_string(), (*echo).to_string()));
         }
     }
-    owned.extend(type_line("cd Desktop", "admin@galexy:/Desktop> "));
-    owned.extend(type_line("echo hello > note", "admin@galexy:/Desktop> "));
-    owned.extend(type_line("sync", "admin@galexy:/Desktop> "));
-    owned.extend(type_line("echo world > note", "admin@galexy:/Desktop> "));
+    owned.extend(type_line("cd Desktop", "owner@galexy:/Desktop> "));
+    owned.extend(type_line("echo hello > note", "owner@galexy:/Desktop> "));
+    owned.extend(type_line("sync", "owner@galexy:/Desktop> "));
+    owned.extend(type_line("echo world > note", "owner@galexy:/Desktop> "));
     owned.extend(type_line("cat note", "world"));
-    owned.extend(type_line("cd /", "admin@galexy> "));
+    owned.extend(type_line("cd /", "owner@galexy> "));
     owned.extend(type_line("svc date", " utc"));
     owned.extend(type_line("svc status shell", "shell running"));
     owned.extend(type_line("shutdown", "[init] power"));
@@ -1613,9 +1613,9 @@ fn sealed_volume_date_pin_shutdown() {
             owned.push(((*code).to_string(), (*echo).to_string()));
         }
     }
-    owned.extend(type_line("cd Desktop", "admin@galexy:/Desktop> "));
-    owned.extend(type_line("echo hello > note", "admin@galexy:/Desktop> "));
-    owned.extend(type_line("sync", "admin@galexy:/Desktop> "));
+    owned.extend(type_line("cd Desktop", "owner@galexy:/Desktop> "));
+    owned.extend(type_line("echo hello > note", "owner@galexy:/Desktop> "));
+    owned.extend(type_line("sync", "owner@galexy:/Desktop> "));
     owned.extend(type_line("shutdown", "[init] power"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
@@ -1646,7 +1646,7 @@ fn sealed_volume_date_pin_shutdown() {
     for (code, echo) in LOGIN_ADMIN_TESTPASS_KEYS {
         owned.push(((*code).to_string(), (*echo).to_string()));
     }
-    owned.extend(type_line("cd Desktop", "admin@galexy:/Desktop> "));
+    owned.extend(type_line("cd Desktop", "owner@galexy:/Desktop> "));
     owned.extend(type_line("cat note", "hello"));
     owned.extend(type_line("svc date", " utc"));
     owned.extend(type_line("net pin 1.1.1.1", "ok "));
@@ -1883,7 +1883,7 @@ fn mustchange_test_passes() {
         "test-mustchange should exit with Success; serial:\n{serial}"
     );
     assert!(
-        serial.contains("[auth] session login user=admin"),
+        serial.contains("[auth] session login user=owner"),
         "session generation line missing; serial:\n{serial}"
     );
     assert!(
@@ -1998,15 +1998,15 @@ fn idle_test_passes() {
         "test-idle should exit with Success; serial:\n{serial}"
     );
     assert!(
-        serial.contains("[auth] idle lock user=admin tty=1"),
+        serial.contains("[auth] idle lock user=owner tty=1"),
         "idle lock line missing; serial:\n{serial}"
     );
     assert!(
-        serial.contains("[auth] session lock user=admin tty=1"),
+        serial.contains("[auth] session lock user=owner tty=1"),
         "explicit lock line missing; serial:\n{serial}"
     );
     assert!(
-        serial.contains("[auth] session unlock user=admin tty=1"),
+        serial.contains("[auth] session unlock user=owner tty=1"),
         "unlock line missing; serial:\n{serial}"
     );
     assert!(
@@ -2458,14 +2458,14 @@ fn python_repl_typing_e2e() {
         &[
             ("python", ">>>"),
             ("print(\"py-repl\")", "py-repl"),
-            ("exit()", "admin@galexy>"),
+            ("exit()", "owner@galexy>"),
         ],
         "py-repl",
         Duration::from_secs(360),
     );
     let banner = serial.find(">>>").expect("python drew no REPL");
     let marker = serial.rfind("py-repl").expect("REPL did not print");
-    let prompt = serial.rfind("admin@galexy>").expect("prompt missing");
+    let prompt = serial.rfind("owner@galexy>").expect("prompt missing");
     assert!(
         banner < marker && marker < prompt,
         "prompt did not return after the REPL; serial:\n{serial}"
@@ -2500,15 +2500,15 @@ fn python_hello_typing_e2e() {
         &[
             (
                 "echo print(\"hello from python on galexy\") > hello.py",
-                "admin@galexy>",
+                "owner@galexy>",
             ),
             ("python hello.py", "hello from python on galexy"),
-            ("echo alpha > note.txt", "admin@galexy>"),
+            ("echo alpha > note.txt", "owner@galexy>"),
             (
                 "echo open(\"out.txt\",\"w\").write(open(\"note.txt\").read()) > copy.py",
-                "admin@galexy>",
+                "owner@galexy>",
             ),
-            ("python copy.py", "admin@galexy>"),
+            ("python copy.py", "owner@galexy>"),
             ("cat out.txt", "alpha"),
             ("tasks", "tasks: "),
         ],
@@ -2838,20 +2838,23 @@ fn runshell_test_passes() {
 /// syscall (mirrored to COM1 by the kernel).
 const HELLO_TEXT: &str = "Hello from a real Rust user program!";
 
-/// Login screen: username then masked password (`*` echo).
+/// Login screen: harness account `owner`, password `testpass`.
 const LOGIN_ADMIN_KEYS: &[(&str, &str)] = &[
-    ("a", "a"),
-    ("d", "d"),
-    ("m", "m"),
-    ("i", "i"),
+    ("o", "o"),
+    ("w", "w"),
     ("n", "n"),
+    ("e", "e"),
+    ("r", "r"),
     ("ret", "Password: "),
+    ("t", "*"),
+    ("e", "*"),
+    ("s", "*"),
+    ("t", "*"),
+    ("p", "*"),
     ("a", "*"),
-    ("d", "*"),
-    ("m", "*"),
-    ("i", "*"),
-    ("n", "*"),
-    ("ret", "admin@galexy> "),
+    ("s", "*"),
+    ("s", "*"),
+    ("ret", "owner@galexy> "),
 ];
 
 /// After boot login with the format default, change it so other commands work.
@@ -2881,32 +2884,16 @@ const CLEAR_DEFAULT_PASSWD: &[(&str, &str)] = &[
     ("a", "*"),
     ("s", "*"),
     ("s", "*"),
-    ("ret", "admin@galexy> "),
+    ("ret", "owner@galexy> "),
 ];
 
-/// Login screen using the post-`passwd` password (`testpass`).
-const LOGIN_ADMIN_TESTPASS_KEYS: &[(&str, &str)] = &[
-    ("a", "a"),
-    ("d", "d"),
-    ("m", "m"),
-    ("i", "i"),
-    ("n", "n"),
-    ("ret", "Password: "),
-    ("t", "*"),
-    ("e", "*"),
-    ("s", "*"),
-    ("t", "*"),
-    ("p", "*"),
-    ("a", "*"),
-    ("s", "*"),
-    ("s", "*"),
-    ("ret", "admin@galexy> "),
-];
+/// Same login as [`LOGIN_ADMIN_KEYS`]. The harness password is already
+/// `testpass`, so there is no separate post-`passwd` account.
+const LOGIN_ADMIN_TESTPASS_KEYS: &[(&str, &str)] = LOGIN_ADMIN_KEYS;
 
 fn with_login<'a>(keys: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
     LOGIN_ADMIN_KEYS
         .iter()
-        .chain(CLEAR_DEFAULT_PASSWD.iter())
         .chain(keys.iter())
         .copied()
         .collect()
@@ -2941,11 +2928,19 @@ fn assert_passwords_masked(serial: &str) {
                 if line.starts_with('[') || looks_like_uptime_log(line) {
                     continue;
                 }
+                // A service line (`ssh: denied`) can land while the
+                // password is still being typed. Stars are the echo.
+                if !line.contains('*') && line.contains(':') {
+                    continue;
+                }
                 if line.contains("galexy>")
                     || line.starts_with("Login")
                     || line.starts_with("Password:")
                     || line.starts_with("Confirm:")
                     || line.starts_with("Admin password:")
+                    || line.starts_with("Account name:")
+                    || line.starts_with("The name admin is not an account")
+                    || line.starts_with("A name is required")
                     || line.starts_with("Choose the admin password")
                     || line.starts_with("Choose a different password")
                     || line.starts_with("A password is required")
@@ -2998,7 +2993,7 @@ fn looks_like_uptime_log(line: &str) -> bool {
     b[i..].starts_with(b"s: ")
 }
 
-/// After boot login + passwd, CLI `login admin` with masked `testpass`.
+/// After boot login, CLI `login owner` with masked `testpass`.
 const LOGIN_CLI_PROMPT_KEYS: &[(&str, &str)] = &[
     ("l", "l"),
     ("o", "o"),
@@ -3006,11 +3001,11 @@ const LOGIN_CLI_PROMPT_KEYS: &[(&str, &str)] = &[
     ("i", "i"),
     ("n", "n"),
     ("spc", " "),
-    ("a", "a"),
-    ("d", "d"),
-    ("m", "m"),
-    ("i", "i"),
+    ("o", "o"),
+    ("w", "w"),
     ("n", "n"),
+    ("e", "e"),
+    ("r", "r"),
     ("ret", "Password: "),
     ("t", "*"),
     ("e", "*"),
@@ -3020,7 +3015,7 @@ const LOGIN_CLI_PROMPT_KEYS: &[(&str, &str)] = &[
     ("a", "*"),
     ("s", "*"),
     ("s", "*"),
-    ("ret", "admin@galexy> "),
+    ("ret", "owner@galexy> "),
 ];
 
 /// Qcode + expected-echo pairs for typing `testing/hello` + Enter.
@@ -3201,7 +3196,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("o", "o"),
     ("t", "t"),
     ("e", "e"),
-    ("ret", "admin@galexy> "),
+    ("ret", "owner@galexy> "),
     ("c", "c"),
     ("a", "a"),
     ("t", "t"),
@@ -3228,7 +3223,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("o", "o"),
     ("t", "t"),
     ("e", "e"),
-    ("ret", "admin@galexy> "),
+    ("ret", "owner@galexy> "),
     ("c", "c"),
     ("a", "a"),
     ("t", "t"),
@@ -3247,14 +3242,14 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("b", "b"),
     ("o", "o"),
     ("x", "x"),
-    ("ret", "admin@galexy> "),
+    ("ret", "owner@galexy> "),
     ("c", "c"),
     ("d", "d"),
     ("spc", " "),
     ("b", "b"),
     ("o", "o"),
     ("x", "x"),
-    ("ret", "admin@galexy:/box> "),
+    ("ret", "owner@galexy:/box> "),
     ("e", "e"),
     ("c", "c"),
     ("h", "h"),
@@ -3272,7 +3267,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("e", "e"),
     ("a", "a"),
     ("f", "f"),
-    ("ret", "admin@galexy:/box> "),
+    ("ret", "owner@galexy:/box> "),
     ("l", "l"),
     ("s", "s"),
     ("ret", "leaf\n"),
@@ -3290,7 +3285,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("spc", " "),
     ("dot", "."),
     ("dot", "."),
-    ("ret", "admin@galexy> "),
+    ("ret", "owner@galexy> "),
     ("l", "l"),
     ("s", "s"),
     ("ret", "box/"),
@@ -3334,7 +3329,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("o", "o"),
     ("t", "t"),
     ("e", "e"),
-    ("ret", "admin@galexy> "),
+    ("ret", "owner@galexy> "),
     ("c", "c"),
     ("a", "a"),
     ("t", "t"),
@@ -3357,7 +3352,7 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("b", "b"),
     ("o", "o"),
     ("x", "x"),
-    ("ret", "admin@galexy:/box> "),
+    ("ret", "owner@galexy:/box> "),
     ("r", "r"),
     ("m", "m"),
     ("spc", " "),
@@ -3365,20 +3360,20 @@ const UTIL_KEYS: &[(&str, &str)] = &[
     ("e", "e"),
     ("a", "a"),
     ("f", "f"),
-    ("ret", "admin@galexy:/box> "),
+    ("ret", "owner@galexy:/box> "),
     ("c", "c"),
     ("d", "d"),
     ("spc", " "),
     ("dot", "."),
     ("dot", "."),
-    ("ret", "admin@galexy> "),
+    ("ret", "owner@galexy> "),
     ("r", "r"),
     ("m", "m"),
     ("spc", " "),
     ("b", "b"),
     ("o", "o"),
     ("x", "x"),
-    ("ret", "admin@galexy> "),
+    ("ret", "owner@galexy> "),
 ];
 
 /// Typing `shell` must not start a nested console (reserved name).
@@ -3391,7 +3386,7 @@ const SHELL_RESERVE_KEYS: &[(&str, &str)] = &[
     ("ret", "shell: reserved"),
 ];
 
-/// Default admin/admin must `passwd` before other commands.
+/// The format pair is not written, so `touch` runs. `useradd admin` is refused.
 #[test]
 fn shell_must_change_typing_e2e() {
     let mut keys = LOGIN_ADMIN_KEYS.to_vec();
@@ -3403,30 +3398,42 @@ fn shell_must_change_typing_e2e() {
         ("h", "h"),
         ("spc", " "),
         ("x", "x"),
-        ("ret", "passwd: change the default password first"),
-    ]);
-    keys.extend(CLEAR_DEFAULT_PASSWD.iter().copied());
-    keys.extend([
-        ("t", "t"),
-        ("o", "o"),
+        ("ret", "owner@galexy> "),
         ("u", "u"),
-        ("c", "c"),
-        ("h", "h"),
+        ("s", "s"),
+        ("e", "e"),
+        ("r", "r"),
+        ("a", "a"),
+        ("d", "d"),
+        ("d", "d"),
         ("spc", " "),
-        ("x", "x"),
-        ("ret", "admin@galexy> "),
+        ("a", "a"),
+        ("d", "d"),
+        ("m", "m"),
+        ("i", "i"),
+        ("n", "n"),
+        ("ret", "Password: "),
+        ("n", "*"),
+        ("o", "*"),
+        ("p", "*"),
+        ("e", "*"),
+        ("ret", "useradd: unsupported"),
     ]);
     let serial = boot_and_type(
         &image("galexy-os"),
         &keys,
         "[boot] main loop ready",
-        "admin@galexy> ",
+        "useradd: unsupported",
         Duration::from_millis(30),
         Duration::from_secs(120),
     );
     assert!(
-        serial.contains("passwd: change the default password first"),
-        "must-change did not block touch; serial:\n{serial}"
+        !serial.contains("passwd: change the default password"),
+        "the format pair was still written; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("useradd: unsupported"),
+        "the name admin was accepted; serial:\n{serial}"
     );
     assert_passwords_masked(&serial);
 }
@@ -3438,23 +3445,23 @@ fn shell_must_change_typing_e2e() {
 #[test]
 fn shell_password_paste_typing_e2e() {
     let mut keys: Vec<(&str, &str)> = vec![
-        ("a", "a"),
-        ("d", "d"),
-        ("m", "m"),
-        ("i", "i"),
+        ("o", "o"),
+        ("w", "w"),
         ("n", "n"),
+        ("e", "e"),
+        ("r", "r"),
         ("ret", "Password: "),
     ];
     // 64 keys fill the buffer (each echoes a star); the 65th overflows.
     keys.extend(core::iter::repeat_n(("x", "*"), 64));
     keys.push(("x", "password too long"));
-    keys.push(("a", "a"));
+    keys.push(("o", "o"));
     keys.extend(LOGIN_ADMIN_KEYS.iter().skip(1).copied());
     let serial = boot_and_type(
         &image("galexy-os"),
         &keys,
         "[boot] main loop ready",
-        "admin@galexy> ",
+        "owner@galexy> ",
         Duration::from_millis(30),
         Duration::from_secs(150),
     );
@@ -3540,8 +3547,8 @@ fn uart_console_login_e2e() {
         "COM1 was not routed; serial:\n{serial}"
     );
     assert!(
-        serial.contains("passwd: change the default password"),
-        "UART login never reached the default-password prompt; serial:\n{serial}"
+        serial.contains("owner@galexy>"),
+        "UART login never reached the harness prompt; serial:\n{serial}"
     );
     assert_passwords_masked(&serial);
 }
@@ -3554,7 +3561,7 @@ fn shell_secret_prompt_typing_e2e() {
         &image("galexy-os"),
         &keys,
         "[boot] main loop ready",
-        "admin@galexy> ",
+        "owner@galexy> ",
         Duration::from_millis(30),
         Duration::from_secs(120),
     );
@@ -3687,7 +3694,7 @@ fn default_image_has_no_crash_seam_e2e() {
         &image("galexy-os"),
         &keys,
         "[boot] main loop ready",
-        "admin@galexy> ",
+        "owner@galexy> ",
         Duration::from_millis(30),
         Duration::from_secs(60),
     );
@@ -3713,14 +3720,14 @@ const PIPE_GLOB_KEYS: &[(&str, &str)] = &[
     ("b", "b"),
     ("o", "o"),
     ("x", "x"),
-    ("ret", "admin@galexy> "),
+    ("ret", "owner@galexy> "),
     ("c", "c"),
     ("d", "d"),
     ("spc", " "),
     ("b", "b"),
     ("o", "o"),
     ("x", "x"),
-    ("ret", "admin@galexy:/box> "),
+    ("ret", "owner@galexy:/box> "),
     ("c", "c"),
     ("d", "d"),
     ("spc", " "),
@@ -3737,7 +3744,7 @@ const PIPE_GLOB_KEYS: &[(&str, &str)] = &[
     ("spc", " "),
     ("a", "a"),
     ("a", "a"),
-    ("ret", "admin@galexy:/box> "),
+    ("ret", "owner@galexy:/box> "),
     ("t", "t"),
     ("o", "o"),
     ("u", "u"),
@@ -3746,7 +3753,7 @@ const PIPE_GLOB_KEYS: &[(&str, &str)] = &[
     ("spc", " "),
     ("b", "b"),
     ("b", "b"),
-    ("ret", "admin@galexy:/box> "),
+    ("ret", "owner@galexy:/box> "),
     ("e", "e"),
     ("c", "c"),
     ("h", "h"),
@@ -3777,7 +3784,7 @@ const USERLAND_KEYS: &[(&str, &str)] = &[
     ("b", "b"),
     ("e", "e"),
     ("tab", "bell "),
-    ("ret", "admin@galexy> "),
+    ("ret", "owner@galexy> "),
     ("e", "e"),
     ("c", "c"),
     ("h", "h"),
@@ -3852,7 +3859,7 @@ const USERLAND_KEYS: &[(&str, &str)] = &[
     ("i", "i"),
     ("spc", " "),
     ("shift+7", "&"),
-    ("ret", "admin@galexy> "),
+    ("ret", "owner@galexy> "),
     ("j", "j"),
     ("o", "o"),
     ("b", "b"),
@@ -3900,7 +3907,7 @@ fn shell_pipeline_glob_typing_e2e() {
         .find("cd: no such directory")
         .unwrap_or_else(|| panic!("failed cd did not report; serial:\n{serial}"));
     assert!(
-        serial[missed..].contains("admin@galexy:/box> "),
+        serial[missed..].contains("owner@galexy:/box> "),
         "failed cd changed the prompt; serial:\n{serial}"
     );
     assert!(
@@ -3999,7 +4006,7 @@ const EDIT_KEYS: &[(&str, &str)] = &[
     ("y", "@2,2@"),
     ("o", "@2,3@"),
     ("ctrl+o", "Wrote 5"),
-    ("ctrl+x", "admin@galexy> "),
+    ("ctrl+x", "owner@galexy> "),
     ("e", "e"),
     ("d", "d"),
     ("i", "i"),
@@ -4013,7 +4020,7 @@ const EDIT_KEYS: &[(&str, &str)] = &[
     ("ctrl+e", "@1,3@"),
     ("shift+1", "@1,4@"),
     ("ctrl+o", "Wrote 6"),
-    ("ctrl+x", "admin@galexy> "),
+    ("ctrl+x", "owner@galexy> "),
     ("c", "c"),
     ("a", "a"),
     ("t", "t"),
@@ -4038,7 +4045,7 @@ const EDIT_KEYS: &[(&str, &str)] = &[
     ("tab", "@1,9@"),
     ("shift+1", "@1,10@"),
     ("ctrl+o", "Wrote 2"),
-    ("ctrl+x", "admin@galexy> "),
+    ("ctrl+x", "owner@galexy> "),
     ("c", "c"),
     ("a", "a"),
     ("t", "t"),
@@ -4069,7 +4076,7 @@ fn shell_edit_complete_typing_e2e() {
         ("i", "i"),
         ("ctrl+t", "@1,8@"),
         ("ctrl+x", "Unsaved"),
-        ("ctrl+x", "admin@galexy> "),
+        ("ctrl+x", "owner@galexy> "),
         ("e", "e"),
         ("d", "d"),
         ("i", "i"),
@@ -4084,13 +4091,13 @@ fn shell_edit_complete_typing_e2e() {
         ("r", "r"),
         ("i", "i"),
         ("ctrl+x", "Unsaved"),
-        ("ctrl+x", "admin@galexy> "),
+        ("ctrl+x", "owner@galexy> "),
     ]);
     let serial = boot_and_type(
         &image("galexy-os"),
         &keys,
         "[boot] main loop ready",
-        "admin@galexy> ",
+        "owner@galexy> ",
         Duration::from_millis(30),
         Duration::from_secs(180),
     );
@@ -4136,13 +4143,13 @@ fn shell_edit_lang_typing_e2e() {
         ("ctrl+t", "println"),
         ("shift+bracket_left", "unclosed"),
         ("ctrl+x", "Unsaved"),
-        ("ctrl+x", "admin@galexy> "),
+        ("ctrl+x", "owner@galexy> "),
     ]);
     let serial = boot_and_type(
         &image("galexy-os"),
         &keys,
         "[boot] main loop ready",
-        "admin@galexy> ",
+        "owner@galexy> ",
         Duration::from_millis(30),
         Duration::from_secs(180),
     );
@@ -4187,13 +4194,13 @@ fn shell_nano_alias_typing_e2e() {
         ("t", "t"),
         ("e", "e"),
         ("ret", "@1,1@"),
-        ("ctrl+x", "admin@galexy> "),
+        ("ctrl+x", "owner@galexy> "),
     ]);
     let serial = boot_and_type(
         &image("galexy-os"),
         &keys,
         "[boot] main loop ready",
-        "admin@galexy> ",
+        "owner@galexy> ",
         Duration::from_millis(30),
         Duration::from_secs(180),
     );
@@ -4329,7 +4336,7 @@ fn rustc_print_cfg_typing_e2e() {
         ("c", "c"),
         ("f", "f"),
         ("g", "g"),
-        ("ret", "admin@galexy>"),
+        ("ret", "owner@galexy>"),
     ]);
     let serial = boot_and_type(
         &image("galexy-os-rustc"),
@@ -4343,7 +4350,7 @@ fn rustc_print_cfg_typing_e2e() {
         .find("target_os=\"galexy\"")
         .expect("rustc --print cfg did not report target_os");
     let prompt = serial
-        .rfind("admin@galexy>")
+        .rfind("owner@galexy>")
         .expect("prompt missing after rustc");
     assert!(
         cfg < prompt,
@@ -4444,7 +4451,7 @@ fn rustc_hello_typing_e2e() {
         ("dot", "."),
         ("r", "r"),
         ("s", "s"),
-        ("ret", "admin@galexy>"),
+        ("ret", "owner@galexy>"),
         ("r", "r"),
         ("u", "u"),
         ("s", "s"),
@@ -4469,7 +4476,7 @@ fn rustc_hello_typing_e2e() {
         ("l", "l"),
         ("l", "l"),
         ("o", "o"),
-        ("ret", "admin@galexy>"),
+        ("ret", "owner@galexy>"),
         ("slash", "/"),
         ("h", "h"),
         ("e", "e"),
@@ -4494,7 +4501,7 @@ fn rustc_hello_typing_e2e() {
         "/hello did not print; serial:\n{serial}"
     );
     assert!(
-        serial.rfind("admin@galexy>").is_some(),
+        serial.rfind("owner@galexy>").is_some(),
         "prompt missing; serial:\n{serial}"
     );
     assert!(
@@ -4623,10 +4630,10 @@ fn shell_rustc_default_out_typing_e2e() {
         .collect::<Vec<_>>();
     owned.extend(type_line(
         "echo fn main(){println!(\"testing!!!\");} > test.rs",
-        "admin@galexy>",
+        "owner@galexy>",
     ));
-    owned.extend(type_line("rustc test.rs", "admin@galexy>"));
-    owned.extend(type_line("ls", "admin@galexy>"));
+    owned.extend(type_line("rustc test.rs", "owner@galexy>"));
+    owned.extend(type_line("ls", "owner@galexy>"));
     owned.extend(type_line("test", "testing!!!"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
@@ -4640,10 +4647,10 @@ fn shell_rustc_default_out_typing_e2e() {
         Duration::from_millis(30),
         Duration::from_secs(900),
     );
-    let ls_at = serial.rfind("admin@galexy> ls").expect("ls was not typed");
+    let ls_at = serial.rfind("owner@galexy> ls").expect("ls was not typed");
     let listing = &serial[ls_at..];
     let listing_end = listing
-        .find("admin@galexy> test")
+        .find("owner@galexy> test")
         .expect("test was not typed after ls");
     let listing = &listing[..listing_end];
     assert!(
@@ -4729,7 +4736,7 @@ const RUSTC_TEST_RS_KEYS: &[(&str, &str)] = &[
     ("dot", "."),
     ("r", "r"),
     ("s", "s"),
-    ("ret", "admin@galexy>"),
+    ("ret", "owner@galexy>"),
     ("r", "r"),
     ("u", "u"),
     ("s", "s"),
@@ -4746,7 +4753,7 @@ const RUSTC_TEST_RS_KEYS: &[(&str, &str)] = &[
     ("spc", " "),
     ("slash", "/"),
     ("t", "t"),
-    ("ret", "admin@galexy>"),
+    ("ret", "owner@galexy>"),
     ("slash", "/"),
     ("t", "t"),
     ("ret", "t-ok"),
@@ -4819,7 +4826,7 @@ fn util_typing_e2e_on(image_name: &str) {
         "typed `echo >>` did not append; serial:\n{serial}"
     );
     assert!(
-        serial.contains("admin@galexy:/box> "),
+        serial.contains("owner@galexy:/box> "),
         "typed `cd box` did not enter the directory; serial:\n{serial}"
     );
     assert!(
@@ -4850,26 +4857,29 @@ fn util_typing_e2e_on(image_name: &str) {
 
 /// Login name and a shell command, edited in the middle of the line.
 ///
-/// `admn`, Left, Backspace, `m`, `i` is `admin`. `echo xqy`, Left, Left,
+/// `ownr`, Left, Backspace, `n`, `e` is `owner`. `echo xqy`, Left, Left,
 /// Right, Backspace submits `echo xy`. The Delete key is DEL and is the
 /// same backspace. The old editor panicked when the cursor and the length
 /// disagreed, which init reported as `[user task panicked]`.
 const LINE_EDIT_LOGIN: &[(&str, &str)] = &[
-    ("a", "a"),
-    ("d", "d"),
-    ("m", "m"),
+    ("o", "o"),
+    ("w", "w"),
     ("n", "n"),
+    ("r", "r"),
     ("left", "\u{1b}[1D"),
     ("backspace", "\u{1b}[2D"),
-    ("m", "\u{1b}[1D"),
-    ("i", "\u{1b}[1D"),
+    ("n", "\u{1b}[1D"),
+    ("e", "\u{1b}[1D"),
     ("ret", "Password: "),
+    ("t", "*"),
+    ("e", "*"),
+    ("s", "*"),
+    ("t", "*"),
+    ("p", "*"),
     ("a", "*"),
-    ("d", "*"),
-    ("m", "*"),
-    ("i", "*"),
-    ("n", "*"),
-    ("ret", "admin@galexy> "),
+    ("s", "*"),
+    ("s", "*"),
+    ("ret", "owner@galexy> "),
 ];
 
 const LINE_EDIT_ECHO: &[(&str, &str)] = &[
@@ -4963,15 +4973,13 @@ const HELP_DURING_MUST_CHANGE: &[(&str, &str)] = &[
 
 #[test]
 fn shell_help_typing_e2e() {
-    // Login only — do not clear the default password so this also proves
-    // `help` is allowed under the must-change gate.
     let mut keys = LOGIN_ADMIN_KEYS.to_vec();
     keys.extend(HELP_DURING_MUST_CHANGE.iter().copied());
     let serial = boot_and_type(
         &image("galexy-os"),
         &keys,
         "[boot] main loop ready",
-        "default admin/admin must passwd",
+        "the user created at setup is the administrator",
         Duration::from_millis(30),
         Duration::from_secs(90),
     );
@@ -4980,10 +4988,6 @@ fn shell_help_typing_e2e() {
         "QMP typing must land on virtio-input; serial:\n{serial}"
     );
     assert_passwords_masked(&serial);
-    assert!(
-        serial.contains("change the default password"),
-        "must-change banner missing after admin/admin; serial:\n{serial}"
-    );
     assert!(
         serial.contains("Galexy.OS shell\n"),
         "typed `help` missing title; serial:\n{serial}"
@@ -5011,7 +5015,7 @@ fn shell_help_typing_e2e() {
         "typed `help` missing keys blurb; serial:\n{serial}"
     );
     assert!(
-        serial.contains("default admin/admin must passwd"),
+        serial.contains("the user created at setup is the administrator"),
         "typed `help` missing notes; serial:\n{serial}"
     );
 }
@@ -5201,8 +5205,8 @@ fn volume_locked_blocks_login_typing_e2e() {
     );
 }
 
-/// Fresh disk: volume passphrase `galfs`, then admin password `testpass`.
-/// Masked. The format password `admin` is refused by this prompt.
+/// Fresh disk: volume passphrase `galfs`, then account `owner` / `testpass`.
+/// The name is clear. The password is masked.
 const CREATE_VOLUME_KEYS: &[(&str, &str)] = &[
     ("g", "*"),
     ("a", "*"),
@@ -5215,7 +5219,13 @@ const CREATE_VOLUME_KEYS: &[(&str, &str)] = &[
     ("l", "*"),
     ("f", "*"),
     ("s", "*"),
-    ("ret", "Admin password: "),
+    ("ret", "Account name: "),
+    ("o", "o"),
+    ("w", "w"),
+    ("n", "n"),
+    ("e", "e"),
+    ("r", "r"),
+    ("ret", "Password: "),
     ("t", "*"),
     ("e", "*"),
     ("s", "*"),
@@ -5273,7 +5283,7 @@ const VOLPASS_KEYS: &[(&str, &str)] = &[
     ("u", "*"),
     ("l", "*"),
     ("t", "*"),
-    ("ret", "admin@galexy> "),
+    ("ret", "owner@galexy> "),
 ];
 
 /// `cargo run` boots `galexy-os-desk` with both compilers. Typing the
@@ -5291,7 +5301,7 @@ fn cargo_run_compilers_typing_e2e() {
         "galexy-os-desk",
         &[
             ("python", ">>>"),
-            ("exit()", "admin@galexy>"),
+            ("exit()", "owner@galexy>"),
             ("rustc", "error:"),
         ],
         "error:",
@@ -5462,14 +5472,14 @@ const SYNC_WHOAMI_KEYS: &[(&str, &str)] = &[
     ("y", "y"),
     ("n", "n"),
     ("c", "c"),
-    ("ret", "admin@galexy> "),
+    ("ret", "owner@galexy> "),
     ("w", "w"),
     ("h", "h"),
     ("o", "o"),
     ("a", "a"),
     ("m", "m"),
     ("i", "i"),
-    ("ret", "admin\n"),
+    ("ret", "owner\n"),
 ];
 
 #[test]
@@ -5509,23 +5519,23 @@ fn passwd_on_sealed_disk_typing_e2e() {
         "fresh disk did not guide the passphrase choice; serial:\n{serial}"
     );
     assert!(
-        serial.contains("Log in as admin with the password you just chose"),
+        serial.contains("Log in as the account you just created"),
         "fresh volume did not guide the first login; serial:\n{serial}"
     );
     assert!(
-        serial.contains("Admin password:"),
-        "fresh volume did not ask for an admin password; serial:\n{serial}"
+        serial.contains("Account name:"),
+        "fresh volume did not ask for the account name; serial:\n{serial}"
     );
     assert!(
         serial.contains("[galfs] volume passphrase changed"),
         "volpass did not re-wrap the volume; serial:\n{serial}"
     );
     let audit = serial
-        .find("[auth] passwd user=admin")
+        .find("[auth] passwd user=owner")
         .unwrap_or_else(|| panic!("passwd audit line missing; serial:\n{serial}"));
     let after = &serial[audit..];
     assert!(
-        after.contains("admin@galexy> "),
+        after.contains("owner@galexy> "),
         "no prompt after passwd (galexy.os#86 shape); serial:\n{serial}"
     );
     assert!(
@@ -5551,7 +5561,7 @@ fn passwd_on_sealed_disk_typing_e2e() {
         ("a", "a"),
         ("m", "m"),
         ("i", "i"),
-        ("ret", "admin\n"),
+        ("ret", "owner\n"),
     ]);
     let serial2 = common::boot_and_type_galfs(
         &image("galexy-os"),
@@ -5577,13 +5587,137 @@ fn passwd_on_sealed_disk_typing_e2e() {
         "the new password must clear the must-change gate across reboot; serial:\n{serial2}"
     );
     assert!(
-        serial2.contains("[auth] session login user=admin"),
+        serial2.contains("[auth] session login user=owner"),
         "boot 2 login with the new password failed; serial:\n{serial2}"
     );
 }
 
+/// Milestone 127: the production image stores the name the seat typed.
+/// That actor is the administrator. A later `useradd` does not get `sec`.
+#[test]
+fn first_user_is_the_administrator() {
+    let disk = common::fresh_galfs_image("first-user");
+    let mut owned: Vec<(String, String)> = Vec::new();
+    for (code, echo) in [
+        ("g", "*"),
+        ("a", "*"),
+        ("l", "*"),
+        ("f", "*"),
+        ("s", "*"),
+        ("ret", "Confirm: "),
+        ("g", "*"),
+        ("a", "*"),
+        ("l", "*"),
+        ("f", "*"),
+        ("s", "*"),
+        ("ret", "Account name: "),
+        ("ret", "Account name: "),
+    ] {
+        owned.push((code.to_string(), echo.to_string()));
+    }
+    owned.extend(type_line("admin", "Account name: "));
+    owned.extend(type_line("ada", "Password: "));
+    owned.extend(masked_word("seatpass"));
+    owned.push(("ret".to_string(), "Confirm: ".to_string()));
+    owned.extend(masked_word("nope"));
+    owned.push(("ret".to_string(), "Account name: ".to_string()));
+    owned.extend(type_line("ada", "Password: "));
+    owned.extend(masked_word("seatpass"));
+    owned.push(("ret".to_string(), "Confirm: ".to_string()));
+    owned.extend(masked_word("seatpass"));
+    owned.push(("ret".to_string(), "Login as: ".to_string()));
+    owned.extend(type_line("ada", "Password: "));
+    owned.extend(masked_word("seatpass"));
+    owned.push(("ret".to_string(), "ada@galexy> ".to_string()));
+    owned.extend(type_line("whoami", "ada\n"));
+    owned.extend(type_line("users", "ada@galexy> "));
+    owned.extend(type_line("useradd eve", "Password: "));
+    owned.extend(masked_word("evepass"));
+    owned.push(("ret".to_string(), "ada@galexy> ".to_string()));
+    owned.extend(type_line("logout", "Login as: "));
+    owned.extend(type_line("eve", "Password: "));
+    owned.extend(masked_word("evepass"));
+    owned.push(("ret".to_string(), "eve@galexy> ".to_string()));
+    owned.extend(type_line(
+        "sec net dial 10.0.2.2:22 ssh-open",
+        "access denied",
+    ));
+    let keys: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(code, echo)| (code.as_str(), echo.as_str()))
+        .collect();
+    let serial = common::boot_and_type_galfs(
+        &image("galexy-os"),
+        &disk,
+        &keys,
+        "New passphrase: ",
+        "access denied",
+        Duration::from_millis(30),
+        Duration::from_secs(240),
+    );
+    let _ = std::fs::remove_file(&disk);
+    assert_passwords_masked(&serial);
+    assert!(
+        !serial.contains("[PANIC]"),
+        "production format panicked; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[galfs] formatted sealed disk"),
+        "the fresh disk was not sealed; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("A name is required."),
+        "an empty name was accepted; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("The name admin is not an account."),
+        "the name admin was accepted; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("passwords do not match"),
+        "a mismatched password was stored; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[auth] session login user=ada"),
+        "the seat's account did not log in; serial:\n{serial}"
+    );
+    let listed = serial
+        .find("users\nada\n")
+        .unwrap_or_else(|| panic!("users did not list only ada; serial:\n{serial}"));
+    let added = serial
+        .find("useradd eve")
+        .unwrap_or_else(|| panic!("useradd was not typed; serial:\n{serial}"));
+    assert!(
+        listed < added
+            && !serial[listed..added].contains("eve")
+            && !serial[listed..added].contains("owner"),
+        "the fresh disk had another actor; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[auth] useradd user=eve"),
+        "the first user could not create an account; serial:\n{serial}"
+    );
+    assert!(
+        serial.contains("[auth] session login user=eve"),
+        "the second user did not log in; serial:\n{serial}"
+    );
+    let eve = serial
+        .rfind("[auth] session login user=eve")
+        .expect("eve login");
+    assert!(
+        serial[eve..].contains("access denied"),
+        "sec did not refuse the second user; serial:\n{serial}"
+    );
+    for secret in ["seatpass", "evepass", "nope"] {
+        assert!(
+            !serial.contains(secret),
+            "serial carried {secret}; serial:\n{serial}"
+        );
+    }
+}
+
 /// The reviewer tour: a fresh disk, two seats, and a card that makes
-/// admin's Desktop visible to eve. The foreign path is `/admin@Desktop`.
+/// admin's Desktop visible to eve. The foreign path is `/owner@Desktop`.
 #[test]
 fn reviewer_demo_typing_e2e() {
     let disk = common::fresh_galfs_image("demo");
@@ -5593,15 +5727,15 @@ fn reviewer_demo_typing_e2e() {
             owned.push(((*code).to_string(), (*echo).to_string()));
         }
     }
-    owned.extend(type_line("cd Desktop", "admin@galexy:/Desktop> "));
-    owned.extend(type_line("echo hi > note", "admin@galexy:/Desktop> "));
-    owned.extend(type_line("cd /", "admin@galexy> "));
+    owned.extend(type_line("cd Desktop", "owner@galexy:/Desktop> "));
+    owned.extend(type_line("echo hi > note", "owner@galexy:/Desktop> "));
+    owned.extend(type_line("cd /", "owner@galexy> "));
     owned.extend(type_line("useradd eve", "Password: "));
     owned.extend([
         ("e".to_string(), "*".to_string()),
         ("v".to_string(), "*".to_string()),
         ("e".to_string(), "*".to_string()),
-        ("ret".to_string(), "admin@galexy> ".to_string()),
+        ("ret".to_string(), "owner@galexy> ".to_string()),
         ("f2".to_string(), "[tty] 2".to_string()),
         // tty2 asked for a passphrase at boot, before tty1 chose one.
         // Enter continues; the volume is already open.
@@ -5614,21 +5748,21 @@ fn reviewer_demo_typing_e2e() {
         ("e".to_string(), "*".to_string()),
         ("ret".to_string(), "eve@galexy> ".to_string()),
     ]);
-    owned.extend(type_line("cd /admin@Desktop", "cd: no such directory"));
+    owned.extend(type_line("cd /owner@Desktop", "cd: no such directory"));
     owned.push(("f1".to_string(), "[tty] 1".to_string()));
-    owned.extend(type_line("grant lr /Desktop shell2", "admin@galexy> "));
+    owned.extend(type_line("grant lr /Desktop shell2", "owner@galexy> "));
     owned.push(("f2".to_string(), "[tty] 2".to_string()));
     owned.extend(type_line(
-        "cd /admin@Desktop",
-        "eve@galexy:/admin@Desktop> ",
+        "cd /owner@Desktop",
+        "eve@galexy:/owner@Desktop> ",
     ));
     owned.extend(type_line("ls", "note\n"));
     owned.extend(type_line("cat note", "hi\n"));
     owned.push(("f1".to_string(), "[tty] 1".to_string()));
-    owned.extend(type_line("revoke lr /Desktop shell2", "admin@galexy> "));
+    owned.extend(type_line("revoke lr /Desktop shell2", "owner@galexy> "));
     owned.push(("f2".to_string(), "[tty] 2".to_string()));
     owned.extend(type_line("cd ..", "eve@galexy> "));
-    owned.extend(type_line("cd /admin@Desktop", "cd: no such directory"));
+    owned.extend(type_line("cd /owner@Desktop", "cd: no such directory"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
         .map(|(code, echo)| (code.as_str(), echo.as_str()))
@@ -5653,15 +5787,15 @@ fn reviewer_demo_typing_e2e() {
         "grant did not reach the parked seat; serial:\n{serial}"
     );
     assert!(
-        serial.contains("[auth] grant actor=admin path=Desktop rights=0x5 target=shell2"),
+        serial.contains("[auth] grant actor=owner path=Desktop rights=0x5 target=shell2"),
         "grant audit line missing; serial:\n{serial}"
     );
     assert!(
-        serial.contains("[auth] revoke actor=admin path=Desktop rights=0x5 target=shell2"),
+        serial.contains("[auth] revoke actor=owner path=Desktop rights=0x5 target=shell2"),
         "revoke audit line missing; serial:\n{serial}"
     );
     let revoked = serial
-        .rfind("[auth] revoke actor=admin path=Desktop")
+        .rfind("[auth] revoke actor=owner path=Desktop")
         .expect("revoke line");
     assert!(
         serial[revoked..].contains("cd: no such directory"),
@@ -5738,7 +5872,7 @@ fn shell_run_hello_typing_e2e() {
         .find("[pf] ring-3 task fault")
         .expect("typed `crash` never faulted the shell");
     let after_fault = &serial[fault_at..];
-    let prompt_at = after_fault.find("admin@galexy> ").unwrap_or_else(|| {
+    let prompt_at = after_fault.find("owner@galexy> ").unwrap_or_else(|| {
         panic!("login after fault never produced admin prompt; serial:\n{serial}")
     });
     assert!(
@@ -6237,7 +6371,7 @@ fn usb_list_shows_the_keyboard() {
         ("e".to_string(), "*".to_string()),
         ("v".to_string(), "*".to_string()),
         ("e".to_string(), "*".to_string()),
-        ("ret".to_string(), "admin@galexy> ".to_string()),
+        ("ret".to_string(), "owner@galexy> ".to_string()),
     ]);
     // The USB keyboard's F-keys are not console switches. Log eve in
     // on this seat. The password is typed through the same HID pipe.
@@ -6430,7 +6564,7 @@ fn net_time_sets_the_date() {
         ("e".into(), "*".into()),
         ("v".into(), "*".into()),
         ("e".into(), "*".into()),
-        ("ret".into(), "admin@galexy> ".into()),
+        ("ret".into(), "owner@galexy> ".into()),
         ("f2".into(), "[tty] 2".into()),
     ]);
     owned.extend(type_line("eve", "Password: "));
@@ -6778,7 +6912,7 @@ fn ping_name_resolves() {
         ("e".into(), "*".into()),
         ("v".into(), "*".into()),
         ("e".into(), "*".into()),
-        ("ret".into(), "admin@galexy> ".into()),
+        ("ret".into(), "owner@galexy> ".into()),
         ("f2".into(), "[tty] 2".into()),
     ]);
     owned.extend(type_line("eve", "Password: "));
@@ -7048,12 +7182,12 @@ fn fetch_grant_typing_e2e() {
     let save_wrong = format!("echo {wrong} > b");
     let serial = net_lines(
         &[
-            (save_pin.as_str(), "admin@galexy>"),
+            (save_pin.as_str(), "owner@galexy>"),
             ("net allow echo 10.0.2.2:4582 k", "ok"),
             ("fetch echo", "access denied"),
             ("sec net dial echo:4582 fetch", "ok"),
             ("fetch echo", "lane ok"),
-            (save_wrong.as_str(), "admin@galexy>"),
+            (save_wrong.as_str(), "owner@galexy>"),
             ("net allow bad 10.0.2.2:4582 b", "ok"),
             ("sec net dial bad:4582 fetch", "ok"),
             ("fetch bad", "changed"),
@@ -7094,7 +7228,7 @@ fn cards_and_asks_typing_e2e() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
-    owned.extend(type_line(save_pin.as_str(), "admin@galexy>"));
+    owned.extend(type_line(save_pin.as_str(), "owner@galexy>"));
     owned.extend(type_line("net allow echo 10.0.2.2:4584 k", "ok"));
     owned.extend(type_line("dial echo", "still up"));
     owned.extend(type_line("sec net dial echo:4584 dial", "ok"));
@@ -7104,7 +7238,7 @@ fn cards_and_asks_typing_e2e() {
         ("e".to_string(), "*".to_string()),
         ("v".to_string(), "*".to_string()),
         ("e".to_string(), "*".to_string()),
-        ("ret".to_string(), "admin@galexy> ".to_string()),
+        ("ret".to_string(), "owner@galexy> ".to_string()),
         ("f2".to_string(), "[tty] 2".to_string()),
     ]);
     owned.extend(type_line("eve", "Password: "));
@@ -7119,16 +7253,16 @@ fn cards_and_asks_typing_e2e() {
     owned.extend(type_line("net serve echo", "access denied"));
     owned.extend(type_line("dial echo", "lane ok"));
     owned.push(("f1".to_string(), "[tty] 1".to_string()));
-    owned.extend(type_line("cd Desktop", "admin@galexy:/Desktop> "));
-    owned.extend(type_line("echo hi > note", "admin@galexy:/Desktop> "));
-    owned.extend(type_line("cd /", "admin@galexy> "));
+    owned.extend(type_line("cd Desktop", "owner@galexy:/Desktop> "));
+    owned.extend(type_line("echo hi > note", "owner@galexy:/Desktop> "));
+    owned.extend(type_line("cd /", "owner@galexy> "));
     owned.push(("f2".to_string(), "[tty] 2".to_string()));
     owned.extend(type_line(
-        "cat /admin@Desktop/note /admin@Desktop/note",
+        "cat /owner@Desktop/note /owner@Desktop/note",
         "wants storage",
     ));
     owned.extend(type_line("no", "cat: failed"));
-    owned.extend(type_line("cat /admin@Desktop/note", "wants storage"));
+    owned.extend(type_line("cat /owner@Desktop/note", "wants storage"));
     owned.extend(type_line("yes", "hi"));
     let keys: Vec<(&str, &str)> = owned
         .iter()
@@ -7197,7 +7331,7 @@ fn connect_asks_then_dials() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
-    owned.extend(type_line(save_pin.as_str(), "admin@galexy>"));
+    owned.extend(type_line(save_pin.as_str(), "owner@galexy>"));
     owned.extend(type_line("net allow echo 10.0.2.2:4586 k", "ok"));
     owned.extend(type_line("sec net dial echo:4586 connect", "ok"));
     owned.extend(type_line("useradd eve", "Password: "));
@@ -7205,7 +7339,7 @@ fn connect_asks_then_dials() {
         ("e".to_string(), "*".to_string()),
         ("v".to_string(), "*".to_string()),
         ("e".to_string(), "*".to_string()),
-        ("ret".to_string(), "admin@galexy> ".to_string()),
+        ("ret".to_string(), "owner@galexy> ".to_string()),
         ("f2".to_string(), "[tty] 2".to_string()),
     ]);
     owned.extend(type_line("eve", "Password: "));
@@ -7290,11 +7424,11 @@ fn python_lane_typing_e2e() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
-    owned.extend(type_line(save_pin.as_str(), "admin@galexy>"));
+    owned.extend(type_line(save_pin.as_str(), "owner@galexy>"));
     owned.extend(type_line("net allow echo 10.0.2.2:4582 k", "ok"));
     owned.extend(type_line(
         "echo print(lane.read(\"echo\")) > lane.py",
-        "admin@galexy>",
+        "owner@galexy>",
     ));
     owned.extend(type_line("sec net dial echo:4582 /lane.py", "ok"));
     owned.extend(type_line("python lane.py", "lane ok"));
@@ -7303,7 +7437,7 @@ fn python_lane_typing_e2e() {
         ("e".to_string(), "*".to_string()),
         ("v".to_string(), "*".to_string()),
         ("e".to_string(), "*".to_string()),
-        ("ret".to_string(), "admin@galexy> ".to_string()),
+        ("ret".to_string(), "owner@galexy> ".to_string()),
         ("f2".to_string(), "[tty] 2".to_string()),
     ]);
     owned.extend(type_line("eve", "Password: "));
@@ -7372,13 +7506,13 @@ fn serve_hands_the_lane_to_its_listener() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
-    owned.extend(type_line(save_pin.as_str(), "admin@galexy>"));
+    owned.extend(type_line(save_pin.as_str(), "owner@galexy>"));
     owned.extend(type_line("net allow echo 10.0.2.2:4591 k", "ok"));
     owned.extend(type_line("sec net listen *:4591 shell", "ok"));
     owned.extend(type_line("sec net listen *:4591 shell2", "ok"));
     owned.extend(type_line("net serve echo", "attached"));
     owned.push(("f2".to_string(), "[tty] 2".to_string()));
-    owned.extend(type_line("admin", "Password: "));
+    owned.extend(type_line("owner", "Password: "));
     owned.extend([
         ("t".to_string(), "*".to_string()),
         ("e".to_string(), "*".to_string()),
@@ -7388,7 +7522,7 @@ fn serve_hands_the_lane_to_its_listener() {
         ("a".to_string(), "*".to_string()),
         ("s".to_string(), "*".to_string()),
         ("s".to_string(), "*".to_string()),
-        ("ret".to_string(), "admin@galexy> ".to_string()),
+        ("ret".to_string(), "owner@galexy> ".to_string()),
     ]);
     owned.extend(type_line("net serve echo", "held"));
     owned.push(("f1".to_string(), "[tty] 1".to_string()));
@@ -7660,7 +7794,7 @@ fn milestones_110_through_114() {
         ("e".into(), "*".into()),
         ("v".into(), "*".into()),
         ("e".into(), "*".into()),
-        ("ret".into(), "admin@galexy> ".into()),
+        ("ret".into(), "owner@galexy> ".into()),
         ("f2".into(), "[tty] 2".into()),
     ]);
     owned.extend(type_line("eve", "Password: "));
@@ -7785,7 +7919,7 @@ fn milestones_115_and_116() {
         ("e".into(), "*".into()),
         ("v".into(), "*".into()),
         ("e".into(), "*".into()),
-        ("ret".into(), "admin@galexy> ".into()),
+        ("ret".into(), "owner@galexy> ".into()),
         ("f2".into(), "[tty] 2".into()),
     ]);
     owned.extend(type_line("eve", "Password: "));
@@ -7972,7 +8106,7 @@ fn socket_compat_cards() {
         ("e".into(), "*".into()),
         ("v".into(), "*".into()),
         ("e".into(), "*".into()),
-        ("ret".into(), "admin@galexy> ".into()),
+        ("ret".into(), "owner@galexy> ".into()),
         ("f2".into(), "[tty] 2".into()),
     ]);
     owned.extend(type_line("eve", "Password: "));
@@ -8122,7 +8256,7 @@ fn python_socket_cards() {
         ("e".into(), "*".into()),
         ("v".into(), "*".into()),
         ("e".into(), "*".into()),
-        ("ret".into(), "admin@galexy> ".into()),
+        ("ret".into(), "owner@galexy> ".into()),
         ("f2".into(), "[tty] 2".into()),
     ]);
     owned.extend(type_line("eve", "Password: "));
@@ -8464,7 +8598,7 @@ fn outbound_card_dials_two_names() {
         ("e".to_string(), "*".to_string()),
         ("v".to_string(), "*".to_string()),
         ("e".to_string(), "*".to_string()),
-        ("ret".to_string(), "admin@galexy> ".to_string()),
+        ("ret".to_string(), "owner@galexy> ".to_string()),
     ]);
     owned.extend([("f2".to_string(), "[tty] 2".to_string())]);
     owned.extend(type_line("eve", "Password: "));
@@ -8770,12 +8904,12 @@ fn milestone_117_ssh_reads_a_file() {
         .into_iter()
         .map(|(code, echo)| (code.to_string(), echo.to_string()))
         .collect();
-    owned.extend(type_line("echo hi > note", "admin@galexy> "));
+    owned.extend(type_line("echo hi > note", "owner@galexy> "));
     owned.extend(type_line("net allow ssh 10.0.2.2:4598", "ok"));
     owned.extend(type_line("sec net dial 10.0.2.2:4598 ssh-open", "ok"));
     owned.extend(type_line("echo hold", "ssh: file"));
     owned.extend(type_line(
-        "ssh admin@10.0.2.2:4598",
+        "ssh owner@10.0.2.2:4598",
         "Are you sure you want to continue connecting (yes/no)? ",
     ));
     owned.extend(type_line("yes", "Password: "));
@@ -8884,7 +9018,7 @@ fn host_ssh_server(port: u16, stop: Arc<AtomicBool>) {
                 Err(_) => continue,
             };
             let pass = [b't', b'e', b's', b't', b'p', b'a', b's', b's'];
-            let _ = session.accept_password(|user, password| user == "admin" && password == pass);
+            let _ = session.accept_password(|user, password| user == "owner" && password == pass);
         }
         while conn.wants_write() {
             let _ = conn.write_tls(&mut sock);
@@ -8936,7 +9070,7 @@ fn host_sftp_read(port: u16) -> Result<Vec<u8>, String> {
         galexy_ssh::Session::client(&mut tls).map_err(|err| format!("handshake {err:?}"))?;
     let mut password = b"testpass".to_vec();
     session
-        .login("admin", &mut password)
+        .login("owner", &mut password)
         .map_err(|err| format!("login {err:?}"))?;
     session
         .sftp_read("note")

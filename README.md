@@ -138,24 +138,27 @@ with the window). After login, `dmesg` still shows them.
 This disk has no passphrase yet.
 New passphrase: *****
 Confirm: *****
-Admin password: *****
+Account name: ada
+Password: *****
 Confirm: *****
 
 Galexy.OS v1.0.0 (tty1)
 
-New volume. Log in as admin with the password you just chose.
+New volume. Log in as the account you just created.
 
-Login as: admin
+Login as: ada
 Password: *****
 ```
 
 A fresh disk has no volume passphrase until that prompt, and no
-account password until the one after it. An empty line asks again.
-The login screen waits until the volume is open. The account name is
-**`admin`**. The password is the one you chose, not a default. Later
-boots ask `Volume passphrase:` for the one you chose. After login a
-fastfetch-style **command center** dashboard prints (OS / TTY / user /
-uptime / heap / galfs / tasks), then the prompt is `admin@galexy> `.
+account until the name and password after it. The name is clear. The
+password is masked and confirmed. An empty name is refused. The name
+`admin` is refused. An empty line asks again. The login screen waits
+until the volume is open. There is no account named `admin` and no
+default password. Later boots ask `Volume passphrase:` for the one you
+chose. After login a fastfetch-style **command center** dashboard
+prints (OS / TTY / user / uptime / heap / galfs / tasks), then the
+prompt is `ada@galexy> `.
 The bottom status bar keeps a live strip (uptime, heap, galfs, live
 programs, frames). Headless, that strip is the terminal's last row. The input
 line stays on the row above it, and the cursor stays on that line. Up/down arrows recall session history
@@ -283,20 +286,23 @@ built.
 
 **Disk.** `cargo run --release` creates and attaches `galfs.img` in the repo root
 (gitignored, virtio-blk). A fresh image has no volume passphrase. The
-shell asks you to choose one and confirm it, then says to log in as
-`admin` / `admin` and run `passwd`. `volpass` (admin, after `passwd`)
-changes that passphrase and re-wraps the volume key. Test kernels still
-auto-unlock with `galfs`. `GALEXY_GALFS_IMG=/path` relocates the image;
+shell asks you to choose one and confirm it, then asks for the
+account name and a confirmed password. That user is the administrator.
+`volpass` (that user) changes the passphrase and re-wraps the volume
+key. Test kernels and a diskless boot still format `owner` / `testpass`
+and auto-unlock with `galfs`. `GALEXY_GALFS_IMG=/path` relocates the image;
 `GALEXY_GALFS_IDE=1` attaches it as the IDE slave instead. If a boot
 refuses the disk after a GALF version bump (`[galfs] disk corrupt;
 refusing silent format`, or `fsck` reports a foreign version), delete `galfs.img`
 and boot again — the kernel never silently reformats a volume it can
 read but not parse.
 
-**Accounts.** Fresh format: `admin` / `admin`, and the first command
-must be `passwd`. Every F-key seat (F1–F12) is its own login; nothing
-is logged in at boot. `useradd`, `grant`, `share`, `su` are in
-`docs/AUTH.md`.
+**Accounts.** A fresh production disk stores the name and password the
+seat typed. That first user is the administrator. Further `useradd`
+accounts are not. The suite logs in as `owner` / `testpass` on a
+diskless boot and on test kernels. Every F-key seat (F1–F12) is its
+own login; nothing is logged in at boot. `useradd`, `grant`, `share`,
+`su` are in `docs/AUTH.md`.
 
 **Where the evidence goes.**
 

@@ -4,7 +4,7 @@ Direction-level plan. Concrete check-off items live in `TODO.md`.
 
 ## Where we stand (October 2026)
 
-Through Milestone 119. Milestone 125 has landed: the DNS resolver trusts the Mozilla bundle in the image. Milestone 126 has landed: `net time <ip>` or a pinned DNS name sets civil UTC from one NTP reply. Milestones 120–124 (one address type) stay open. Next, and not waiting on them: 127 makes the first user the administrator, and 128 is that first boot.
+Through Milestone 119. Milestone 125 has landed: the DNS resolver trusts the Mozilla bundle in the image. Milestone 126 has landed: `net time <ip>` or a pinned DNS name sets civil UTC from one NTP reply. Milestone 127 has landed: the user created at setup is the administrator. Milestones 120–124 (one address type) stay open. Next is 128, that first boot.
 The bar is a **secure, fast, modern-only,
 full-feature, ready** OS. Each row says what is true today and which
 milestone closes the gap.
@@ -796,8 +796,9 @@ What this phase does not add:
 
 ## Next — first boot
 
-Milestone **126** has landed. Milestones **127–128** do not wait
-on 120–124. Checkboxes live in `TODO.md`. This does not tag `v1.0`.
+Milestones **126** and **127** have landed. Milestone **128** does
+not wait on 120–124. Checkboxes live in `TODO.md`. This does not
+tag `v1.0`.
 
 126 is one NTP query. `net time <ip>` sends one packet to UDP
 port 123 and sets `Date` from the reply. `net time <name>` looks
@@ -809,11 +810,11 @@ loop and no NTS: NTS needs a clock, and this row is the clock.
 `Clock` stays milliseconds since boot. `net_time_sets_the_date`
 is the run.
 
-127 removes the account named `admin` from a production disk. The
-user created at setup is the administrative actor.
+127 has landed. A production disk has no account named `admin`.
+The user created at setup is the administrative actor.
 `is_admin_root` is that root. `useradd` does not make another
-one. The suite may keep a harness account. The production image
-does not.
+one. The suite logs in as `owner` / `testpass`. That account is
+not on a fresh production disk.
 
 128 is the first boot of an empty disk. One seat sets the volume
 passphrase, then that user's name and password, then the resolver

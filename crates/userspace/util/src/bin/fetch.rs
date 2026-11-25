@@ -20,7 +20,7 @@ fn main() -> i32 {
     let who = if got.ok {
         trim(&who[..(got.value as usize).min(who.len())])
     } else {
-        b"admin"
+        b"owner"
     };
     let mut payload = [0u8; 96];
     if name.len() + who.len() + 3 > payload.len() {

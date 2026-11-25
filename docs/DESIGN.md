@@ -800,10 +800,13 @@ ramdisk programs; `mv` prefers `rename` (syscall 17) and falls back to
 copy+remove. `user(addr, len, op)` (syscall 16) manages actors:
 `USER_WHOAMI` / `USER_USERS` write names into a buffer; `USER_ADD`
 creates an actor plus empty Desktop; `USER_DEL` removes an empty actor
-(never `admin`, never one a live task still uses); `USER_SU` replaces
+(never the administrator, never the reserved name `admin`, never one
+a live task still uses); `USER_SU` replaces
 the caller's tokens with ALL on the target (so a switched seat cannot
 keep writing the previous actor's tree). Add/del require the caller's
-root to be `admin`. A seat born as admin may `su admin` to return.
+root to be the administrator, the first actor. A seat born as that
+actor may `su` back to that root. The card names the root, not the
+string `admin`.
 `rename(old, new)` (syscall 17) moves a galfs dirent (REMOVE on source,
 CREATE on dest parent; no byte copy). `truncate(cap, size)` (syscall 18)
 sets a galfs file length (WRITE; shrink frees blocks, grow zero-fills).
@@ -812,8 +815,9 @@ low at bytes 4..8, size high at bytes 44..48, owner, held token
 rights; needs LIST). Directory listing remains the
 `FILES` snapshot — `open` on a directory is `Unsupported`. The shell
 exposes `whoami`, `users`, `useradd`, `userdel`, `su`, `truncate`, and
-`stat` (and resets cwd on `su`). Boot formats one immortal actor,
-`admin`, with Desktop. When the primary IDE slave is present,
+`stat` (and resets cwd on `su`). A diskless boot and a test kernel
+format one harness actor, `owner`, with Desktop. A production disk
+does not: the seat names that actor. When the primary IDE slave is present,
 `galfs::init` loads the newest valid GALF **v15** sealed slot (dual
 64 KiB images: wrapped volume key + ChaCha20-HMAC payload of
 actors/objects/shares + per-actor quotas and PBKDF2

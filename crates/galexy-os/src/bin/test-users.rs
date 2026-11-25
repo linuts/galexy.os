@@ -88,9 +88,9 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
         }
     };
 
-    assert_eq!(&report.who[..report.who_n as usize], b"admin");
+    assert_eq!(&report.who[..report.who_n as usize], b"owner");
     let users = &report.users[..report.users_n as usize];
-    assert!(users.windows(6).any(|w| w == b"admin\n"));
+    assert!(users.windows(6).any(|w| w == b"owner\n"));
     assert_eq!(report.add_ok, 1);
     assert_eq!(report.login_ok, 1);
     assert_eq!(&report.who2[..report.who2_n as usize], b"eve");
@@ -105,13 +105,13 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
     assert_eq!(&report.who_su[..report.who_su_n as usize], b"eve");
     assert_eq!(
         report.su_admin_ok, 1,
-        "born-admin seat must su admin after su away"
+        "born-admin seat must su owner after su away"
     );
-    assert_eq!(&report.who_back[..report.who_back_n as usize], b"admin");
+    assert_eq!(&report.who_back[..report.who_back_n as usize], b"owner");
     assert_eq!(
         report.su_admin_as_eve_err,
         SysError::AccessDenied as u64,
-        "password-login as eve must not su admin"
+        "password-login as eve must not su owner"
     );
 
     loop {
@@ -129,11 +129,11 @@ fn test_main_entry(boot_info: &'static mut BootInfo) -> ! {
 
 fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     let eve = b"eve";
-    let admin = b"admin";
+    let admin = b"owner";
     let bob = b"bob";
     let secret = b"secret";
     let wrong = b"wrong";
-    let admin_pass = b"admin";
+    let admin_pass = b"testpass";
     let mut code = alloc::vec::Vec::new();
     let data_len =
         eve.len() + admin.len() + bob.len() + secret.len() + wrong.len() + admin_pass.len();
@@ -219,8 +219,8 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     );
     store(&mut code, 2, 0xa8);
 
-    // Default admin password blocks userdel until passwd. A failed
-    // passwd leaves del_ok at 0.
+    // The harness password is already testpass, so userdel does not wait
+    // on a default-password gate. A failed passwd leaves del_ok at 0.
     call_passwd_self(&mut code, secret_addr, secret.len() as u64);
 
     call_user_name(&mut code, eve_addr, eve.len() as u64, USER_DEL);
@@ -256,7 +256,7 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     code.extend_from_slice(&[0x48, 0x89, 0xC8]);
     store(&mut code, 0, 0xc0);
 
-    // admin → su eve → whoami eve → su admin → whoami admin
+    // owner → su eve → whoami eve → su owner → whoami owner
     // Report layout: su_eve_ok@0xc8 who_su_n@0xd0 who_su@0xd8
     // su_admin_ok@0xe8 who_back_n@0xf0 who_back@0xf8
     // su_admin_as_eve_err@0x108
@@ -269,7 +269,7 @@ fn build_blob(code_base: u64, scratch: u64) -> alloc::vec::Vec<u8> {
     call_user(&mut code, scratch + 0xf8, 16, USER_WHOAMI);
     store(&mut code, 0, 0xf0);
 
-    // login eve (clears born_admin) → su admin must AccessDenied
+    // login eve (clears born_admin) → su owner must AccessDenied
     call_user_pass(
         &mut code,
         eve_addr,
