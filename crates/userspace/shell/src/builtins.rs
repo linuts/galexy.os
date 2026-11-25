@@ -74,9 +74,9 @@ pub(crate) fn show_help() {
     help_row(b"fetch <name>", b"dial a granted name and print");
     help_row(b"net link", b"address, or down");
     help_row(b"net allow ...", b"name, locator, optional key file");
-    help_row(b"net pin <ip> [keyfile]", b"resolver; key file optional");
+    help_row(b"net dns <ip> [keyfile]", b"resolver; key file optional");
     help_row(b"ping <ip or name>", b"three echoes, then the times");
-    help_row(b"nslookup <name>", b"name and addresses from the pin");
+    help_row(b"nslookup <name>", b"name and addresses from the resolver");
     help_row(b"stats", b"uptime / frames / heap / galfs");
     help_row(b"dmesg", b"recent kernel log lines");
     help_row(b"tasks", b"tty, state, cpu, parent");
@@ -2076,8 +2076,8 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
         net_allow(cwd, tail);
         return;
     }
-    if let Some(tail) = arg_of(rest, b"pin") {
-        net_pin(cwd, tail);
+    if let Some(tail) = arg_of(rest, b"dns") {
+        net_dns(cwd, tail);
         return;
     }
     if let Some(tail) = arg_of(rest, b"resolve") {
@@ -2110,7 +2110,7 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
         finish_net(cwd, &payload[..1 + n], true);
         return;
     }
-    write_console(b"net: link, pin, allow, resolve, addr, port, peer, listen, serve\n");
+    write_console(b"net: link, dns, allow, resolve, addr, port, peer, listen, serve\n");
     prompt(cwd);
 }
 
@@ -2194,10 +2194,10 @@ fn net_allow(cwd: &Cwd, tail: &[u8]) {
     finish_net(cwd, &payload[..at], false);
 }
 
-fn net_pin(cwd: &Cwd, tail: &[u8]) {
+fn net_dns(cwd: &Cwd, tail: &[u8]) {
     let tail = trim(tail);
     if tail.is_empty() {
-        write_console(b"net pin <ip> [keyfile]\n");
+        write_console(b"net dns <ip> [keyfile]\n");
         prompt(cwd);
         return;
     }
@@ -2217,7 +2217,7 @@ fn net_pin(cwd: &Cwd, tail: &[u8]) {
     }
     let key = if let Some(path) = key_path {
         if path.is_empty() {
-            write_console(b"net pin <ip> [keyfile]\n");
+            write_console(b"net dns <ip> [keyfile]\n");
             prompt(cwd);
             return;
         }

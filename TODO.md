@@ -3626,7 +3626,7 @@ second rule for the address family. Listening stays a
 
 ## Milestone 125 — The resolver trusts the bundle
 
-`net pin <ip>` is enough. The image carries the Mozilla roots.
+`net dns <ip>` is enough. The image carries the Mozilla roots.
 The pin reads the domain off the certificate and the seat prints
 it. The certificate must chain to that bundle, be currently
 valid, and be valid for that domain. A key file is optional.
@@ -3708,7 +3708,7 @@ that actor's root. Further users from `useradd` are not.
       is not written. Must-change of that default has nothing to
       change on this disk
 - [ ] **The same rights**: the stamp's admin byte is this actor.
-      `svc`, `net pin`, `net time`, `volpass`, and `sec` stay
+      `svc`, `net dns`, `net time`, `volpass`, and `sec` stay
       that user's. Another login does not get them by name.
       `su` to this user is the existing card, and the card names
       this root, not the string `admin`
@@ -3741,7 +3741,7 @@ certificate date.
       There is no account named `admin`
 - [ ] **The network**: the third question shows `link`. The seat
       types a resolver address or `skip`. An address runs
-      `net time` when the date is unset, then `net pin`. Skip
+      `net time` when the date is unset, then `net dns`. Skip
       leaves the date and the resolver unset. The login prompt
       is still that user
 - [ ] **Proof**: a blank production image reaches login only

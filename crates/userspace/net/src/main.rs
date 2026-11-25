@@ -1021,7 +1021,7 @@ fn probe_leaf(
     }
 }
 
-/// One short line for a refused `net pin`. Lookup and dial keep their
+/// One short line for a refused `net dns`. Lookup and dial keep their
 /// own replies; this text is only what `reply_pin` prints.
 fn reply_pin(rx: Cap, why: &str) {
     let seen = pin_rx_line();

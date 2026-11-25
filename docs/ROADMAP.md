@@ -53,7 +53,7 @@ and an admin bind. Milestone **115** listens with a `net listen`
 rule. Milestone **116** sends one datagram to the peer a dial
 rule names and receives one from that peer. **117** is SSH, and
 it has landed: `net listen *:4598 name ssh`. A script stamps the
-script file. **125** is the resolver bundle: `net pin <ip>`
+script file. **125** is the resolver bundle: `net dns <ip>`
 is enough, and a lane does not use it. **120** through **124**
 are one address type.
 The `v1.0` tag still
@@ -771,7 +771,7 @@ v6 reply come before any other v6 traffic. Listening stays a
 stay open. This plan does not tag `v1.0`.
 
 Milestone 125 is the resolver. The image carries the Mozilla roots.
-`net pin <ip>` reads the domain off the certificate, tells the seat,
+`net dns <ip>` reads the domain off the certificate, tells the seat,
 and trusts a certificate that chains to those roots, is currently
 valid, and is valid for that domain. A key file is that raw key,
 and the bundle is not consulted. Lanes, SSH host keys, and
