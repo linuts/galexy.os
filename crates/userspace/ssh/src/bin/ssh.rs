@@ -42,7 +42,6 @@ fn main() {
         if one_session(lane, &host) {
             write_console(b"ssh: file\n");
         }
-        let _ = sleep_ms(8_000);
     }
 }
 

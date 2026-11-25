@@ -9,9 +9,9 @@ use core::sync::atomic::Ordering;
 use galexy_abi::{Cap, SysError, SyscallResult};
 use galexy_rt::{
     close, dmesg_cap, grant, init_rpc, init_rpc_at, init_rpc_every, net_rpc, open, read, reboot,
-    revoke, share, shutdown, spawn_with, stat, stats_cap, sync, tasks_cap, threads_cap, unshare,
-    user, user_lock, user_login, user_logout, user_name, user_name_pass, user_passwd, user_quota,
-    user_setquota, user_volpass, volume_query, write_console,
+    revoke, share, shutdown, sleep_ms, spawn_with, stat, stats_cap, sync, tasks_cap, threads_cap,
+    unshare, user, user_lock, user_login, user_logout, user_name, user_name_pass, user_passwd,
+    user_quota, user_setquota, user_volpass, volume_query, write_console,
 };
 
 /// Sectioned help — short command column + one-line blurb.
@@ -75,6 +75,7 @@ pub(crate) fn show_help() {
     help_row(b"net link", b"address, or down");
     help_row(b"net allow ...", b"name, locator, optional key file");
     help_row(b"net pin <ip> [keyfile]", b"resolver; key file optional");
+    help_row(b"net time <ip or name>", b"one NTP query, then civil UTC");
     help_row(b"ping <ip or name>", b"three echoes, then the times");
     help_row(b"nslookup <name>", b"name and addresses from the pin");
     help_row(b"stats", b"uptime / frames / heap / galfs");
@@ -493,8 +494,9 @@ pub(crate) fn dispatch(
         spawn_and_prompt(cwd, b"python", b"", grants, true);
         return None;
     }
-    // `ssh user@address` prompts for a password and waits. The address
-    // is the dial. `ssh-open` with no address uses the stored peer.
+    // `ssh user@address` dials port 22. A port other than 22 is
+    // `ssh user@address:port`. The password is the peer account's.
+    // `ssh-open` with no address uses the stored peer.
     if line == b"ssh-open" {
         let grants = galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_KEYBOARD;
         spawn_and_prompt(cwd, b"ssh-open", b"", grants, true);
@@ -503,7 +505,7 @@ pub(crate) fn dispatch(
     if let Some(rest) = arg_of(line, b"ssh") {
         let grants = galexy_abi::SPAWN_INHERIT | galexy_abi::SPAWN_GRANT_KEYBOARD;
         if !rest.contains(&b'@') {
-            write_console(b"ssh <user>@<address>\n");
+            write_console(b"ssh <user>@<address>[:port]\n");
             prompt(cwd);
             return None;
         }
@@ -2062,6 +2064,10 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
         net_pin(cwd, tail);
         return;
     }
+    if let Some(tail) = arg_of(rest, b"time") {
+        net_time(cwd, tail);
+        return;
+    }
     if let Some(tail) = arg_of(rest, b"resolve") {
         net_resolve(cwd, tail);
         return;
@@ -2092,7 +2098,7 @@ fn net_cmd(cwd: &Cwd, rest: &[u8]) {
         finish_net(cwd, &payload[..1 + n], true);
         return;
     }
-    write_console(b"net: link, pin, allow, resolve, addr, port, peer, listen, serve\n");
+    write_console(b"net: link, pin, time, allow, resolve, addr, port, peer, listen, serve\n");
     prompt(cwd);
 }
 
@@ -2174,6 +2180,32 @@ fn net_allow(cwd: &Cwd, tail: &[u8]) {
     payload[at..at + 32].copy_from_slice(&key);
     at += 32;
     finish_net(cwd, &payload[..at], false);
+}
+
+fn net_time(cwd: &Cwd, tail: &[u8]) {
+    let tail = trim(tail);
+    if tail.is_empty() || tail.contains(&b' ') {
+        write_console(b"net time <ip or name>\n");
+        prompt(cwd);
+        return;
+    }
+    if let Some(ip) = parse_ip(tail) {
+        let mut payload = [0u8; 5];
+        payload[0] = galexy_abi::NET_OP_TIME;
+        payload[1..5].copy_from_slice(&ip);
+        finish_net(cwd, &payload, false);
+        return;
+    }
+    if !dns_name(tail) {
+        write_console(b"bad\n");
+        prompt(cwd);
+        return;
+    }
+    let mut payload = [0u8; 256];
+    payload[0] = galexy_abi::NET_OP_TIME;
+    payload[1] = tail.len() as u8;
+    payload[2..2 + tail.len()].copy_from_slice(tail);
+    finish_net(cwd, &payload[..2 + tail.len()], false);
 }
 
 fn net_pin(cwd: &Cwd, tail: &[u8]) {
@@ -2387,7 +2419,15 @@ fn send_allow(cwd: &Cwd, name: &[u8], port: u16, kind: u8, ip: [u8; 4], key: [u8
 
 fn finish_net(cwd: &Cwd, payload: &[u8], body: bool) {
     let mut reply = [0u8; galexy_abi::CHAN_MSG_MAX];
-    let got = net_rpc(payload, &mut reply);
+    let mut got = net_rpc(payload, &mut reply);
+    // The listener holds the one net call while it asks. A miss is
+    // NoResource, not a denial. Try again once it has let go.
+    let mut tries = 0u8;
+    while !got.ok && SysError::from_code(got.value) == SysError::NoResource && tries < 8 {
+        let _ = sleep_ms(50);
+        got = net_rpc(payload, &mut reply);
+        tries += 1;
+    }
     if !got.ok {
         write_console(b"access denied\n");
         prompt(cwd);
@@ -2447,6 +2487,35 @@ fn parse_ip(text: &[u8]) -> Option<[u8; 4]> {
         return None;
     }
     Some(ip)
+}
+
+/// A dotted DNS name. Four payload bytes stay an IPv4 address, so a
+/// three-byte name is not a name on this opcode.
+fn dns_name(name: &[u8]) -> bool {
+    if name.is_empty() || name.len() == 3 || name.len() > 234 {
+        return false;
+    }
+    let mut label = 0usize;
+    let mut dot = false;
+    for b in name {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' => {
+                label += 1;
+                if label > 63 {
+                    return false;
+                }
+            }
+            b'.' => {
+                if label == 0 {
+                    return false;
+                }
+                dot = true;
+                label = 0;
+            }
+            _ => return false,
+        }
+    }
+    label != 0 && dot
 }
 
 fn parse_u16(text: &[u8]) -> Option<u16> {

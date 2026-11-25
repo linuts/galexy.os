@@ -1,13 +1,14 @@
-//! Local SSH client. `ssh user@address` dials that address when a
-//! `sec` rule names `ssh-open`. The password is typed, not an argument.
+//! Local SSH client. `ssh user@address` dials that address on port 22
+//! when a `sec` rule names `ssh-open`. A port other than 22 is
+//! `ssh user@address:port`. The password is the peer account's
+//! password, typed, not an argument.
 //!
 //! An empty pin asks once. Yes stores the peer key. A later dial has to
 //! present that same key.
 
 use galexy_abi::{Cap, TOKEN_READ, USER_WHOAMI};
 use galexy_rt::{
-    arg, close, create, create_replace, keyboard_cap, open, read, user, write, write_console,
-    yield_now,
+    close, create, create_replace, keyboard_cap, open, read, user, write, write_console, yield_now,
 };
 use galexy_ssh::{fingerprint, unseen_key, wipe, Session};
 use ssh::Lane;
@@ -16,7 +17,10 @@ const KNOWN: &[u8] = b"ssh.known";
 
 fn main() {
     ssh::touch();
-    let typed = trim_arg(arg());
+    // `std` owns the spawn blob. `galexy_rt::arg` stays empty here, so an
+    // address typed at the shell would dial the stored name.
+    let owned = spawn_arg();
+    let typed = trim_arg(&owned);
     let mut name = [0u8; 32];
     let (user_name, dial) = if typed.is_empty() {
         let who = user(&mut name, USER_WHOAMI);
@@ -31,11 +35,11 @@ fn main() {
         )
     } else {
         let Some(at) = typed.iter().position(|b| *b == b'@') else {
-            write_console(b"ssh <user>@<address>\n");
+            write_console(b"ssh <user>@<address>[:port]\n");
             return;
         };
         if at == 0 || at + 1 >= typed.len() {
-            write_console(b"ssh <user>@<address>\n");
+            write_console(b"ssh <user>@<address>[:port]\n");
             return;
         }
         let user_len = at.min(name.len());
@@ -73,6 +77,15 @@ fn main() {
     } else {
         write_console(b"access denied\n");
     }
+}
+
+/// The address from the shell. `std` puts this task's name first.
+fn spawn_arg() -> Vec<u8> {
+    let mut args = std::env::args();
+    let _ = args.next();
+    args.next()
+        .map(|text| text.into_bytes())
+        .unwrap_or_default()
 }
 
 /// Dials the stored peer. An unseen key asks, and yes is the only

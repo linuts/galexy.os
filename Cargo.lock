@@ -889,6 +889,7 @@ name = "net"
 version = "0.1.0"
 dependencies = [
  "galexy-abi",
+ "galexy-core",
  "galexy-net",
  "galexy-netcfg",
  "galexy-rt",
@@ -1136,6 +1137,7 @@ version = "0.1.0"
 dependencies = [
  "bootloader",
  "galexy-abi",
+ "galexy-core",
  "galexy-crypto",
  "galexy-galf",
  "galexy-os",

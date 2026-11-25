@@ -229,6 +229,11 @@ Phase 16 (Milestones **108–119**) is the later plan. 108 through
 - **A line in `/policy` is the call.** `connect` stays a lane.
   A `net dial` rule names the caller and the host. A `net listen`
   rule names the caller and the port. A `net icmp` rule names ping.
+  A `net time` rule names the caller and one address or one DNS name.
+  `net time <ip>` sends one NTP packet to UDP port 123. `net time <name>`
+  looks that name up once on the pinned DNS-over-TLS resolver, then
+  sends that packet. Success prints civil UTC. No pin prints
+  `access denied` and sends nothing. No poll, no NTS, no plaintext DNS.
   `usb use` names one device id. `std::net` and Python `socket`
   call those rules: listen, datagram send and receive, and an
   address or a port. Bind of the stored local address is admin.
@@ -269,7 +274,8 @@ Phase 16 (Milestones **108–119**) is the later plan. 108 through
   refused.
 - **One address type.** Milestones 120–124. A v4 value and a v6
   value are that type. A dial rule, the reply, bind, listen,
-  the datagram, and the route use it. Opcodes stay 1–12. There is
+  the datagram, and the route use it. Opcodes 1–12 stay that path. Milestone 126 appends opcode 13
+  for one NTP query and adds no syscall. There is
   no second stack and no v6 opcode. The parse refuses an ambiguous
   form before any v6 packet. Listening stays a `net listen` rule.
   Plaintext DNS and general browser TLS stay out. The boxes stay

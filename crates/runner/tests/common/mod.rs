@@ -1478,6 +1478,33 @@ pub fn boot_and_type_fwd(
     )
 }
 
+/// Like [`boot_and_type`], with the CMOS clock held at `rtc`.
+///
+/// `1990-01-01` is outside the years the chip may seed, so `Date` stays
+/// unset until something sets it.
+pub fn boot_and_type_rtc(
+    image: &Image,
+    sync_pairs: &[(&str, &str)],
+    ready_marker: &str,
+    final_marker: &str,
+    key_delay: Duration,
+    timeout: Duration,
+    rtc: &str,
+) -> String {
+    let serial_path = serial_log_path("typing-rtc");
+    let mut cmd = qemu_command_opts(&image.bios, &serial_path, "q35", true, true, 2, None);
+    cmd.arg("-rtc").arg(rtc);
+    boot_and_type_cmd(
+        cmd,
+        &serial_path,
+        sync_pairs,
+        ready_marker,
+        final_marker,
+        key_delay,
+        timeout,
+    )
+}
+
 /// Like [`boot_and_type_fwd`], with the host port and the guest port
 /// different. The serial log is named `typing-ssh`.
 pub fn boot_and_type_ssh(
