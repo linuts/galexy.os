@@ -4,7 +4,7 @@ Direction-level plan. Concrete check-off items live in `TODO.md`.
 
 ## Where we stand (October 2026)
 
-Through Milestone 119. Milestone 125 has landed: the DNS resolver trusts the Mozilla bundle in the image. Milestones 120–124 (one address type) stay open. Next, and not waiting on them: Milestone 126 sets civil UTC from one NTP server, 127 makes the first user the administrator, and 128 is that first boot.
+Through Milestone 119. Milestone 125 has landed: the DNS resolver trusts the Mozilla bundle in the image. Milestone 126 has landed: `net time <ip>` or a pinned DNS name sets civil UTC from one NTP reply. Milestones 120–124 (one address type) stay open. Next, and not waiting on them: 127 makes the first user the administrator, and 128 is that first boot.
 The bar is a **secure, fast, modern-only,
 full-feature, ready** OS. Each row says what is true today and which
 milestone closes the gap.
@@ -15,7 +15,7 @@ milestone closes the gap.
 | **Fast** | Deadline one-shot LAPIC, tickless idle, idle steal, park/wake for sleep / keyboard / pipe / virtio-blk; IF=0 syscall path never allocates; console budget; release profile (`opt-level = 3`, fat LTO); KVM when `KVM_CREATE_VCPU` succeeds; `test-bench` numbers in `PERF.md`; pipe ends move at spawn | GALF v17 writes the changed 4 KiB blocks plus one 64 KiB metadata slot, and that slot is one virtio data request (Milestone **97**). One desk compile names 41 objects (Milestone **99**). PCID and a new heap allocator stay waived (`PERF.md`: yield does not switch CR3 and does not allocate). ATA PIO stays the legacy disk fallback. Desktop-class throughput stays a non-goal. The landing host's KVM column is empty: a snapshot restore dropped VMXON while `CR4.VMXE` stayed set |
 | **Modern only** | `-M q35` default; PCIe ECAM when `MCFG` is present; virtio 1.x + MSI-X; virtio-input keyboard; HPET (else PIT) calibration with a CPUID 0x15/0x16 cross-check; x2APIC and TSC-deadline when CPUID reports them; 8259 mask-only when the FADT says the pair is absent | Named fallbacks stay: PS/2, PIO IDE on `-M pc`, legacy virtio I/O BAR, port PCI config. QEMU TCG through 8.2 does not enumerate x2APIC; TCG still does not enumerate TSC-deadline. 5-level paging, huge user pages, and a GPU beyond GOP stay out. The network is Phase 10 and Phase 16 through Milestone 119. Milestone 125 is the resolver bundle, and it is not a lane trust. USB is Phase 13, and Milestone 102 claims the QEMU boot keyboard |
 | **Full feature** | Ring-3 userland from a tar ramdisk; 12 TTYs; login seats under init; shell with history, line editing, pipelines, background jobs, tab completion; utilities including `edit`, `head`, `tail`, `wc`, `grep`, `uptime`; per-task heap, argv, `Clock`, capability channels; galfs with quotas, shares, rename / truncate / stat, host fsck; process Caps, wait / kill / give; sleep; dmesg; init owns shutdown, `svc`, and the service table; on-OS Cranelift `rustc` at the login shell (`rustc hello.rs -o /hello`, then `/hello`); RustPython as `python` on that same `cargo run` image (`python hello.py`, and `python` with no file is the REPL); SSH and SFTP on `net listen *:4598 name ssh`. Dial, listen, ICMP, and USB use are lines in `/policy` | Network landed through Milestone **119** (`docs/NET.md`): a lane and a rule, not a socket syscall. Milestone **125** trusts the resolver to the Mozilla roots. A lane does not. USB landed as **Phase 13** (`docs/USB.md`), and Milestone **102** claims the QEMU keyboard. Other vendor drivers stay unwritten |
-| **Ready** | 93 QEMU test kernels, 155 runner tests (BIOS + UEFI, `q35` + `pc`, including `edit`, `test-userheap`, `test-channel`, `test-bench`, `test-lockgrow`, `test-dmasplit`, `test-wire`, `test-lane`, `test-usb`, legacy virtio, PS/2 typing, `svc status`, shutdown-through-init, a sealed-disk `passwd` reboot, `rustc_hello_typing_e2e`, `python_hello_runs`, `python_repl_typing_e2e`, `python_hello_typing_e2e`, `fetch_grant_typing_e2e`, `net_flood_deadline_leaves_the_seat`, `ping_gateway_replies`, `usb_list_shows_the_keyboard`, `milestone_117_ssh_reads_a_file`, and `outbound_card_dials_two_names`), host suites green; CI workflow (`host` + `qemu` jobs, release images); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 and 63–77 are closed. Phases 10 and 13 have landed, and Milestones 97–119 have landed. The `review-rc1` tag and the `v1.0` tag are the owner's call. `v1.0` waits on a KVM pass (`KVM_CREATE_VCPU` fails on the landing host; `PERF.md` KVM cells) |
+| **Ready** | 93 QEMU test kernels, 156 runner tests (BIOS + UEFI, `q35` + `pc`, including `edit`, `test-userheap`, `test-channel`, `test-bench`, `test-lockgrow`, `test-dmasplit`, `test-wire`, `test-lane`, `test-usb`, legacy virtio, PS/2 typing, `svc status`, shutdown-through-init, a sealed-disk `passwd` reboot, `rustc_hello_typing_e2e`, `python_hello_runs`, `python_repl_typing_e2e`, `python_hello_typing_e2e`, `fetch_grant_typing_e2e`, `net_flood_deadline_leaves_the_seat`, `ping_gateway_replies`, `usb_list_shows_the_keyboard`, `milestone_117_ssh_reads_a_file`, `outbound_card_dials_two_names`, and `net_time_sets_the_date`), host suites green; CI workflow (`host` + `qemu` jobs, release images); clippy and rustfmt clean on the pinned nightly; `LICENSE` (MIT), `SECURITY.md`, `CHANGELOG.md`, PR template; docs for threat model, ABI stability, budgets, auth, galfs, process, scheduling, compiler, linker, demo; `review-smoke.sh` | Milestones 51–52 and 63–77 are closed. Phases 10 and 13 have landed, and Milestones 97–119 have landed. The `review-rc1` tag and the `v1.0` tag are the owner's call. `v1.0` waits on a KVM pass (`KVM_CREATE_VCPU` fails on the landing host; `PERF.md` KVM cells) |
 
 Order of work: **51 → 52** (`review-rc1`), then **63 → 64 → 65 → 66 →
 67**. Security first because every later change should land
@@ -794,16 +794,20 @@ What this phase does not add:
 - A v6-only opcode or general browser TLS. WebPKI on a lane stays out. The DNS resolver's Mozilla bundle is Milestone 125 and stops there
 - The `v1.0` tag
 
-## Next — time, then first boot
+## Next — first boot
 
-Milestones **126–128**. They do not wait on 120–124. Checkboxes
-live in `TODO.md`. This does not tag `v1.0`.
+Milestone **126** has landed. Milestones **127–128** do not wait
+on 120–124. Checkboxes live in `TODO.md`. This does not tag `v1.0`.
 
 126 is one NTP query. `net time <ip>` sends one packet to UDP
-port 123 and sets `Date` from the reply. The administrative seat
-asks. There is no name lookup, no poll loop, and no NTS: NTS
-needs a clock, and this row is the clock. `Clock` stays
-milliseconds since boot.
+port 123 and sets `Date` from the reply. `net time <name>` looks
+that name up once on the pinned DNS-over-TLS resolver and sends
+the same packet. The administrative seat asks, and a `net time`
+line in `/policy` names that seat and the address or the name. No
+pin prints `access denied` and sends nothing. There is no poll
+loop and no NTS: NTS needs a clock, and this row is the clock.
+`Clock` stays milliseconds since boot. `net_time_sets_the_date`
+is the run.
 
 127 removes the account named `admin` from a production disk. The
 user created at setup is the administrative actor.

@@ -108,6 +108,7 @@ Opcodes on `0x800A`, appended and then stable, same rule as init:
 | 10 `datagram` | a `net dial` rule names the caller and that peer | Send one datagram to the stored peer. Port 53 is refused |
 | 11 `recv` | a `net dial` rule names the caller and that peer | Receive one datagram from that peer. Port 53 is refused. A packet from any other peer is ignored |
 | 12 `stream` | a `net dial` rule to dial, a `net listen` rule to accept | One direction byte (`TOKEN_READ` dials, `TOKEN_WRITE` accepts) and then the name. The program passes no address. An empty pin replies `unseen` and the peer key. Direction 3 stores that key after the seat answers yes. Direction 4 drops it. A second acceptor is `held` |
+| 13 `time` | admin, and a `net time` rule names the caller and the address or the DNS name | One NTP packet to that IPv4 address on UDP port 123, or to the address from one DNS-over-TLS lookup of that name. The transmit time in the reply sets `Date` and the CMOS chip. The reply is `YYYY-MM-DD HH:MM:SS utc`. A missing rule, or a seat that is not the administrator, replies `access denied` and sends nothing. A name with no pinned resolver prints that same `access denied` and sends nothing. A reply from any other address is ignored. No poll, no NTS, no plaintext DNS. The address is four bytes until Milestone 120 |
 
 `fetch <name>` is the `fetch` program and dials that name. `ping <ip>`, `ping <name>`, and `nslookup <name>` are the `ping` program on opcode 5. The shell starts them. A rule names `ping` or `fetch`, not the shell. None of them is a syscall.
 `svc status net` still means "is the process up," through init.
@@ -434,12 +435,20 @@ sec net dial *.google.com:80 /Desktop/myapp
 sec net dial 10.0.2.2:22 /Desktop/*
 sec net listen *:4598 ssh
 sec net icmp * ping
+sec net time 10.0.2.2 shell
+sec net time cloudflare-dns.com shell
+sec net time * shell
 sec usb use 0627:0001 usb-list
 ```
 
 A dial object is `host:port`. The host is an address, a name, or
 `*.domain` (one label). A listen object is `*:port` or `ip:port`.
-An ICMP object is `*` or one address. A USB object is `VVVV:PPPP`.
+An ICMP object is `*` or one address. A time object is `*`, one
+address, or one DNS name. The port is 123 and is not written on
+the line. A name is one lookup on the pinned DNS-over-TLS resolver,
+then one packet to that address. No pin prints `access denied` and
+sends nothing. A USB
+object is `VVVV:PPPP`.
 A name matches a ramdisk program only. A desktop file named `ssh`
 does not match `name ssh`. A rule is the file, so it survives
 reboot. `DISK_VERSION` is 18. A dev disk reformats.
@@ -534,8 +543,9 @@ promiscuous mode, a second stack, telnet, FTP, rsh, SSHv1,
 ## One address (Milestones 120–124)
 
 v4 and v6 are one address type. A dial rule, the reply, bind,
-listen, the datagram, and the route take that type. Opcodes stay
-1–12. There is no v6 opcode and no second stack. Listening stays
+listen, the datagram, and the route take that type. Opcodes 1–12
+stay that path. Milestone 126 appends opcode 13 for one NTP query
+and adds no v6 opcode and no second stack. Listening stays
 a `net listen` rule. The boxes for 120–124 stay open. This plan
 does not tag `v1.0`.
 
@@ -571,10 +581,16 @@ not bind, listen, or accept. Inbound stays a `net listen` rule.
 The lane is the one a dial already uses.
 
 Milestone 126 is the clock. `net time <ip>` sends one NTP packet
-to UDP port 123 and sets civil UTC from the reply. It does not
-wait on 120–124. The address is not a name: the clock is why a
-name cannot be looked up yet. NTS is later, because NTS needs a
-clock. The box is open.
+to UDP port 123 and sets civil UTC from the reply. `net time <name>`
+resolves that name once over the pinned DNS-over-TLS resolver and
+sends the same query to that address. It does not wait on 120–124.
+A `net time` line in `/policy` names the caller and that address or
+that name. A miss sends nothing and prints `access denied`. A name
+with no pin prints that same `access denied` and sends nothing.
+Success, for an address or a name, prints `YYYY-MM-DD HH:MM:SS utc`.
+NTS is later, because NTS needs a clock. `net_time_sets_the_date` is
+the run. Opcode 13 on net cap `0x800A` is this query. It is not a v6
+opcode, and it is not a new syscall. Plaintext DNS stays unused.
 
 Milestone 125 is the resolver. `net pin <ip>` is enough. The seat
 reads the domain off the certificate and prints it. The certificate
